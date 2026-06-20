@@ -1,0 +1,17 @@
+# Binaries
+/nama_backend
+/nama_backend.exe
+*.exe
+*.test
+*.out
+
+# Go build/test cache and vendored deps
+/vendor/
+
+# Environment overrides
+.env
+.env.local
+
+# Editor/OS noise
+.DS_Store
+*.swp
