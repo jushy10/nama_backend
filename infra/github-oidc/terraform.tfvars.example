@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and fill in, then apply (once, with admin creds).
+
+github_owner = "jushy10"
+github_repo  = "nama_backend"
+
+# If your account already has a GitHub OIDC provider, set this false so it's
+# reused instead of recreated (only one is allowed per account).
+# create_oidc_provider = true
+
+# Restrict which workflow runs may assume the role. Default (omit) =
+# ["repo:jushy10/nama_backend:pull_request"].
+# allowed_github_subjects = ["repo:jushy10/nama_backend:pull_request"]
+
+# Fill these only after switching infra/ to the S3 backend:
+# state_bucket = "my-tfstate-bucket"
+# lock_table   = "my-tfstate-locks"
