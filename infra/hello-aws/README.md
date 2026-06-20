@@ -52,9 +52,24 @@ One-time setup — add these under **Settings → Secrets and variables → Acti
 | Secret | `AWS_SECRET_ACCESS_KEY` | that user's secret access key |
 | Variable | `AWS_REGION` | e.g. `us-east-1` (optional; defaults to `us-east-1`) |
 
-The IAM user needs permission for SSM (`ssm:PutParameter`, `GetParameter`,
-`DeleteParameter`, `AddTagsToResource`) and `sts:GetCallerIdentity`. Push to a
-branch, open a PR, and the plan runs; merge to `main` and it applies.
+The IAM user needs only a **least-privilege** policy — use
+[`ci-iam-policy.json`](ci-iam-policy.json) in this folder. It allows SSM actions
+on parameters under `/nama/*` and `sts:GetCallerIdentity`, nothing more, so a
+leaked key can't touch anything else in the account.
+
+Attach it to the user with the CLI:
+
+```sh
+aws iam put-user-policy \
+  --user-name nama-ci \
+  --policy-name nama-hello-aws-deploy \
+  --policy-document file://ci-iam-policy.json
+```
+
+…or in the console: **IAM → Users → (your user) → Add permissions → Create inline
+policy → JSON**, then paste the file.
+
+Then push to a branch and open a PR (the plan runs); merge to `main` and it applies.
 
 ### Security & state notes
 
