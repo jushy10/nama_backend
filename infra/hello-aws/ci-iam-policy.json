@@ -26,6 +26,22 @@
       "Effect": "Allow",
       "Action": "sts:GetCallerIdentity",
       "Resource": "*"
+    },
+    {
+      "Sid": "TerraformStateBucket",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::YOUR_STATE_BUCKET"
+    },
+    {
+      "Sid": "TerraformStateObjectsAndLock",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::YOUR_STATE_BUCKET/hello-aws/*"
     }
   ]
 }

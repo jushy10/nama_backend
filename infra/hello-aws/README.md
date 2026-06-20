@@ -21,11 +21,11 @@ aws configure          # or: aws configure sso
 aws sts get-caller-identity   # should print your account id
 ```
 
-Then:
+Then (after the one-time state-bucket setup under [Remote state](#remote-state-s3)):
 
 ```sh
 cd infra/hello-aws
-terraform init      # downloads the AWS provider
+terraform init -backend-config="bucket=YOUR_STATE_BUCKET"   # provider + remote state
 terraform plan      # preview — should say "Plan: 1 to add"
 terraform apply     # type "yes"; creates the parameter
 terraform output    # prints your account id, identity, region
@@ -50,6 +50,7 @@ One-time setup — add these under **Settings → Secrets and variables → Acti
 | --- | --- | --- |
 | Secret | `AWS_ACCESS_KEY_ID` | an IAM user's access key id |
 | Secret | `AWS_SECRET_ACCESS_KEY` | that user's secret access key |
+| Variable | `TF_STATE_BUCKET` | your Terraform state bucket (see [Remote state](#remote-state-s3)) |
 | Variable | `AWS_REGION` | e.g. `us-east-1` (optional; defaults to `us-east-1`) |
 
 The IAM user needs only a **least-privilege** policy — use
@@ -69,27 +70,34 @@ aws iam put-user-policy \
 ```
 
 …or in the console: **IAM → Users → (your user) → Add permissions → Create inline
-policy → JSON**, then paste the file.
+policy → JSON**, then paste the file. **Replace `YOUR_STATE_BUCKET`** (in two
+places) with your real bucket name from the next section first.
 
 Then push to a branch and open a PR (the plan runs); merge to `main` and it applies.
 
-### Security & state notes
+## Remote state (S3)
 
-- **Static keys are the simple option, not the most secure one.** Long-lived AWS
-  keys live in GitHub here. The better upgrade is **GitHub OIDC** — swap the
-  `aws-access-key-id`/`aws-secret-access-key` inputs for a `role-to-assume` and
-  drop the secrets entirely. Do that once you're comfortable.
-- **State is local to the CI runner.** The first `apply` creates the parameter;
-  because the state isn't persisted, repeat CI deploys need a remote backend. To
-  make deploys repeatable, create an S3 bucket once and add a backend block:
+State is stored in S3 (`backend "s3"` in `versions.tf`) so deploys are repeatable
+and safe to run from CI and your laptop: versioned, encrypted, and locked against
+concurrent runs via native S3 locking (`use_lockfile`, no DynamoDB table needed).
 
-  ```hcl
-  # in versions.tf
-  terraform {
-    backend "s3" {
-      bucket = "your-unique-tfstate-bucket"
-      key    = "hello-aws/terraform.tfstate"
-      region = "us-east-1"
-    }
-  }
-  ```
+Create the bucket **once** (name must be globally unique). In the console:
+
+1. **S3 → Create bucket** → a unique name, region **us-east-1**.
+2. Leave **Block all public access** on, and default encryption on (both are the
+   defaults). Create.
+3. Open the bucket → **Properties → Bucket Versioning → Edit → Enable**.
+
+Then wire the name in:
+
+- GitHub: set the `TF_STATE_BUCKET` repository variable to the bucket name.
+- IAM: in `ci-iam-policy.json`, replace `YOUR_STATE_BUCKET` (two places) before
+  attaching the policy, so the CI user can read/write state and the lock file.
+- Locally: `terraform init -backend-config="bucket=YOUR_STATE_BUCKET"`.
+
+### Security note
+
+**Static keys are the simple option, not the most secure one.** Long-lived AWS
+keys live in GitHub here. The better upgrade is **GitHub OIDC** — swap the
+`aws-access-key-id`/`aws-secret-access-key` inputs for a `role-to-assume` and drop
+the secrets entirely. Do that once you're comfortable.

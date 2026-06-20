@@ -6,12 +6,10 @@ name: deploy-hello-aws
 #
 # Auth uses AWS access keys stored as GitHub repository SECRETS:
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-# and an optional AWS_REGION repository VARIABLE (defaults to us-east-1).
+# and these repository VARIABLES:
+#   TF_STATE_BUCKET  (required) — S3 bucket holding Terraform state
+#   AWS_REGION       (optional) — defaults to us-east-1
 # OIDC (no long-lived keys) is the more secure upgrade — see infra/hello-aws/README.md.
-#
-# NOTE: Terraform state is local to the CI runner, so `apply` is meant as a
-# one-shot demo of CI->AWS. For repeatable, stateful deploys, add an S3 backend
-# (see infra/hello-aws/README.md).
 
 on:
   push:
@@ -52,10 +50,10 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.9.8"
+          terraform_version: "1.10.5"
 
       - name: Init
-        run: terraform init -input=false
+        run: terraform init -input=false -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
 
       - name: Plan
         run: terraform plan -input=false -no-color
