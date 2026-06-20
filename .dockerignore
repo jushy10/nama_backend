@@ -1,0 +1,15 @@
+# Keep the Docker build context small and fast.
+# Anything listed here is NOT sent to the Docker builder.
+.git
+.github
+docs
+frontend
+*.md
+Dockerfile
+.dockerignore
+*.exe
+*.test
+*.out
+.env
+.env.local
+.DS_Store

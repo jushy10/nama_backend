@@ -1,0 +1,67 @@
+# CI/CD for the TypeScript frontend -> Amazon S3 + CloudFront.
+#
+# This pipeline stays DORMANT until you add a `frontend/` folder (the `paths`
+# filter below only triggers on changes inside it). When it runs it:
+#   1. Builds the static site (npm ci && npm run build).
+#   2. Logs in to AWS via OIDC (same keyless auth as the backend).
+#   3. Uploads the build to your S3 bucket.
+#   4. Invalidates the CloudFront cache so users get the new version immediately.
+#
+# Assumes the frontend lives in a `frontend/` subfolder and `npm run build`
+# outputs to `frontend/dist` (the Vite default). Adjust the two paths if not.
+
+name: Deploy frontend to S3 + CloudFront
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/deploy-frontend.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  # Set these after you create the bucket + distribution (see the setup doc).
+  S3_BUCKET: REPLACE_WITH_YOUR_BUCKET_NAME
+  BUILD_DIR: frontend/dist
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install and build
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # --delete removes old files from S3 that no longer exist in the build.
+      - name: Upload to S3
+        run: aws s3 sync "$BUILD_DIR" "s3://$S3_BUCKET" --delete
+
+      # Without this, CloudFront keeps serving the OLD cached files for hours.
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}" \
+            --paths "/*"

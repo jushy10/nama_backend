@@ -1,0 +1,96 @@
+# CI/CD for the Go backend -> Amazon ECS (Fargate).
+#
+# What happens on every push to main that touches backend code:
+#   1. CI:  run the Go tests. If they fail, nothing deploys.
+#   2. Auth: log in to AWS using GitHub OIDC (no stored AWS keys).
+#   3. Build: build a Docker image and push it to ECR (the image registry).
+#   4. CD:  point the ECS service at the new image and wait until it's healthy.
+#
+# One-time AWS setup + the secrets/values referenced below are explained in
+# docs/aws-cicd-setup.md.
+
+name: Deploy backend to ECS
+
+on:
+  push:
+    branches: [main]
+    # Only run when something that affects the backend image changes.
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - "ecs-task-definition.json"
+      - ".github/workflows/deploy-backend.yml"
+
+# These permissions are what let GitHub request a short-lived OIDC token
+# that AWS trusts. id-token: write is REQUIRED for the OIDC login to work.
+permissions:
+  id-token: write
+  contents: read
+
+# Edit these to match the names you create in AWS (see the setup doc).
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: nama-backend
+  ECS_CLUSTER: nama-cluster
+  ECS_SERVICE: nama-backend-service
+  ECS_TASK_DEFINITION: ecs-task-definition.json
+  CONTAINER_NAME: nama-backend
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      # ---- CI: tests must pass before we build or deploy anything ----
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Run tests
+        run: go test ./...
+
+      # ---- Auth: assume an IAM role via OIDC (no long-lived keys) ----
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ---- Build the image and push it, tagged with the git commit SHA ----
+      - name: Build and push image
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      # ---- Inject the new image into the task definition template ----
+      - name: Render task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ env.ECS_TASK_DEFINITION }}
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build.outputs.image }}
+
+      # ---- CD: roll out the new task definition and wait for stability ----
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
