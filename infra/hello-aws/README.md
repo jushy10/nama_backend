@@ -1,9 +1,8 @@
-# infra/hello-aws/ — start here
+# infra/hello-aws/ — minimal Terraform connected to AWS
 
 The smallest possible Terraform that talks to your AWS account. It needs **no VPC,
-subnets, or other setup** — apply it the moment your credentials work, to confirm
-the connection and learn the plan → apply → destroy loop. The real database
-infrastructure lives one level up and can wait until you're ready.
+subnets, or other setup** — apply it as soon as your credentials work, to confirm
+the connection and learn the plan → apply → destroy loop.
 
 ## What it does
 
@@ -12,7 +11,17 @@ infrastructure lives one level up and can wait until you're ready.
 - **Creates** one free **SSM Parameter Store** entry (`/nama/hello`) — proves
   Terraform can create/update/destroy real resources. Costs nothing.
 
-## Run
+## Run it locally
+
+First authenticate (one-time): install the tools and configure credentials.
+
+```sh
+# Windows: winget install Amazon.AWSCLI Hashicorp.Terraform
+aws configure          # or: aws configure sso
+aws sts get-caller-identity   # should print your account id
+```
+
+Then:
 
 ```sh
 cd infra/hello-aws
@@ -22,28 +31,48 @@ terraform apply     # type "yes"; creates the parameter
 terraform output    # prints your account id, identity, region
 ```
 
-Confirm it really landed in AWS:
+Confirm it really landed in AWS, then clean up:
 
 ```sh
 aws ssm get-parameter --name /nama/hello
-```
-
-Try an **update**: change `greeting` in `variables.tf` (or a `terraform.tfvars`),
-re-run `terraform apply`, and watch Terraform modify the existing parameter in place.
-
-## Clean up
-
-```sh
 terraform destroy   # removes the parameter; nothing lingers or bills
 ```
 
-## Next steps (later)
+## Deploy it from GitHub Actions
 
-When you're ready for the database and CI access:
+The [`deploy-hello-aws`](../../.github/workflows/deploy-hello-aws.yml) workflow runs
+Terraform in CI: **plan** on pull requests that touch `infra/hello-aws/**`, and
+**apply** on pushes to `main`.
 
-- [`../`](../README.md) — secure RDS PostgreSQL (needs a VPC + private subnets).
-- [`../github-oidc/`](../github-oidc/README.md) — IAM role so GitHub Actions can run `terraform plan`.
+One-time setup — add these under **Settings → Secrets and variables → Actions**:
 
-Each is a **separate root** with its own state — `cd` into it and run `terraform`
-there. This `hello-aws` root stays independent, so you can keep it or destroy it
-without affecting the others.
+| Kind | Name | Value |
+| --- | --- | --- |
+| Secret | `AWS_ACCESS_KEY_ID` | an IAM user's access key id |
+| Secret | `AWS_SECRET_ACCESS_KEY` | that user's secret access key |
+| Variable | `AWS_REGION` | e.g. `us-east-1` (optional; defaults to `us-east-1`) |
+
+The IAM user needs permission for SSM (`ssm:PutParameter`, `GetParameter`,
+`DeleteParameter`, `AddTagsToResource`) and `sts:GetCallerIdentity`. Push to a
+branch, open a PR, and the plan runs; merge to `main` and it applies.
+
+### Security & state notes
+
+- **Static keys are the simple option, not the most secure one.** Long-lived AWS
+  keys live in GitHub here. The better upgrade is **GitHub OIDC** — swap the
+  `aws-access-key-id`/`aws-secret-access-key` inputs for a `role-to-assume` and
+  drop the secrets entirely. Do that once you're comfortable.
+- **State is local to the CI runner.** The first `apply` creates the parameter;
+  because the state isn't persisted, repeat CI deploys need a remote backend. To
+  make deploys repeatable, create an S3 bucket once and add a backend block:
+
+  ```hcl
+  # in versions.tf
+  terraform {
+    backend "s3" {
+      bucket = "your-unique-tfstate-bucket"
+      key    = "hello-aws/terraform.tfstate"
+      region = "us-east-1"
+    }
+  }
+  ```
