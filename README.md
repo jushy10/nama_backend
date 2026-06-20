@@ -54,6 +54,19 @@ pytest
 
 Tests run against an in-memory SQLite database — no setup, no files.
 
+## Database
+
+The app picks its backend from the `DATABASE_URL` environment variable. Unset →
+local SQLite (`sqlite:///./nama.db`). To run on PostgreSQL (e.g. the RDS instance
+in [`infra/`](infra/README.md)):
+
+```sh
+pip install -e ".[postgres]"   # adds the psycopg driver
+export DATABASE_URL="postgresql+psycopg://USER:PASSWORD@HOST:5432/nama?sslmode=require"
+```
+
+Tests ignore `DATABASE_URL` and always use in-memory SQLite, so they stay fast.
+
 ## Contributing
 
 `main` is protected — push to a feature branch and open a pull request.

@@ -59,6 +59,40 @@ Then in `prod/`: set the backend `key` to `prod/terraform.tfstate`, set
 [`.github/workflows/infra.yml`](../.github/workflows/infra.yml). Each environment
 has its own isolated state.
 
+## Database (RDS PostgreSQL)
+
+`environments/dev` provisions a **private** PostgreSQL instance via the
+[`rds-postgres`](modules/rds-postgres) module:
+
+- `db.t4g.micro`, encrypted, **not publicly accessible** (no internet path), in
+  the account's default VPC. TLS is enforced (`rds.force_ssl`).
+- The master password is **generated** and the full SQLAlchemy URL is stored as
+  an **SSM SecureString** at `/nama/dev/database-url`. Nothing secret is in code.
+- Two security groups: a `db` SG that only accepts Postgres from an `app` SG, and
+  that empty `app` SG (output `app_security_group_id`) for you to attach to
+  compute later.
+
+### Connecting the app
+
+The app reads `DATABASE_URL` (see [`app/db.py`](../app/db.py)). Because the DB is
+**private, your laptop can't reach it directly.** Two ways to connect:
+
+- **App runs in AWS (the intended path):** deploy the FastAPI app into the VPC
+  (ECS/EC2/Lambda), attach `app_security_group_id`, and inject the
+  `/nama/dev/database-url` SecureString as the `DATABASE_URL` env var.
+- **Local testing:** open an SSH/SSM tunnel through a bastion in the VPC, then
+  point `DATABASE_URL` at `localhost:<forwarded-port>`.
+
+### Cost & teardown
+
+`db.t4g.micro` is free-tier eligible for 12 months; otherwise ~$12–15/mo while
+running. It bills whether or not you use it — `terraform destroy` (or remove the
+`module "database"` block and apply) when you're done experimenting.
+`deletion_protection` is off and `skip_final_snapshot` is on for easy teardown.
+
+> Provisioning RDS takes several minutes, so the `apply` step runs longer than
+> the SSM-only deploys did.
+
 ## Bootstrap (one-time per account)
 
 1. **State bucket** — an S3 bucket, **versioned**, **encrypted**, **public access
@@ -66,7 +100,9 @@ has its own isolated state.
    this one by hand (console or CLI).
 2. **CI user + policy** — attach [`ci-iam-policy.json`](ci-iam-policy.json) to the
    deploy IAM user, replacing `YOUR_STATE_BUCKET`. It grants SSM on `/nama/*`,
-   read/write on the state bucket, and `sts:GetCallerIdentity` — nothing else.
+   read/write on the state bucket, `sts:GetCallerIdentity`, and (for the database)
+   `rds:*` plus the EC2 security-group/VPC actions. Re-paste it whenever this file
+   changes.
 3. **GitHub** — under **Settings → Secrets and variables → Actions**:
    - Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
    - Variables: `TF_STATE_BUCKET` (required), `AWS_REGION` (optional)
