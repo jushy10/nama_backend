@@ -91,6 +91,14 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  ingress {
+    description = "HTTPS from anywhere"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -163,14 +171,55 @@ resource "aws_lb_target_group" "this" {
   }
 }
 
+# Port 80: forward to the app when there's no cert, otherwise redirect to HTTPS.
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.this.arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
+    type             = var.certificate_arn == null ? "forward" : "redirect"
+    target_group_arn = var.certificate_arn == null ? aws_lb_target_group.this.arn : null
+
+    dynamic "redirect" {
+      for_each = var.certificate_arn == null ? [] : [1]
+      content {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+  }
+}
+
+# Port 443: only when a certificate is supplied.
+resource "aws_lb_listener" "https" {
+  count = var.certificate_arn == null ? 0 : 1
+
+  load_balancer_arn = aws_lb.this.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = var.certificate_arn
+
+  default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.this.arn
+  }
+}
+
+# DNS: point domain_name at the load balancer.
+resource "aws_route53_record" "this" {
+  count = var.domain_name == null || var.route53_zone_id == null ? 0 : 1
+
+  zone_id = var.route53_zone_id
+  name    = var.domain_name
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.this.dns_name
+    zone_id                = aws_lb.this.zone_id
+    evaluate_target_health = true
   }
 }
 

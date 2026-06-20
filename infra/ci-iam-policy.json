@@ -82,6 +82,15 @@
       "Resource": "*"
     },
     {
+      "Sid": "ManageDnsAndCerts",
+      "Effect": "Allow",
+      "Action": [
+        "route53:*",
+        "acm:*"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "ManageNamaRoles",
       "Effect": "Allow",
       "Action": [

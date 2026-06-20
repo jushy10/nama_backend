@@ -15,3 +15,21 @@ variable "greeting" {
   type        = string
   default     = "hello from terraform"
 }
+
+variable "domain_name" {
+  description = "Public hostname for the app."
+  type        = string
+  default     = "api.namainsights.com"
+}
+
+variable "parent_domain" {
+  description = "Registered domain / Route 53 hosted zone."
+  type        = string
+  default     = "namainsights.com"
+}
+
+variable "create_hosted_zone" {
+  description = "Create the hosted zone. false = use existing (domain registered via Route 53)."
+  type        = bool
+  default     = false
+}

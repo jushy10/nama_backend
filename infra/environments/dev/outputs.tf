@@ -37,3 +37,8 @@ output "ecr_repository_url" {
   description = "Push the app's Docker image here."
   value       = module.app.ecr_repository_url
 }
+
+output "name_servers" {
+  description = "Set these at your registrar — only populated if Terraform created the hosted zone."
+  value       = module.dns.name_servers
+}

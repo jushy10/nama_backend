@@ -124,12 +124,25 @@ until CI pushes one**. So:
 4. Once a task is healthy, hit `terraform output app_url` (an `http://…elb…`
    address). `GET /healthz` should return `{"status":"ok"}`.
 
+### Custom domain + HTTPS
+
+The [`dns-cert`](modules/dns-cert) module issues a free, auto-renewing ACM
+certificate (DNS-validated) and the app module adds an HTTPS listener + an
+`api.namainsights.com` record pointing at the ALB, with HTTP redirecting to HTTPS.
+
+- The hosted zone for `namainsights.com` already exists (registered via Route 53),
+  so `create_hosted_zone = false` and it all comes up in one apply.
+- If you ever move to a registrar outside AWS, set `create_hosted_zone = true`;
+  Terraform creates the zone and outputs `name_servers` to set at the registrar,
+  then a second apply validates the cert once DNS is live.
+- Change the hostname via the `domain_name` / `parent_domain` variables.
+
 ### Cost & teardown
 
 This tier is **not** free: the ALB is ~$16/mo and the Fargate task ~$9/mo while
-running, on top of RDS. `terraform destroy` (or remove the `module "app"` block
-and apply) when you're done. HTTPS/a custom domain (ACM + a 443 listener) is a
-later upgrade — for now the app is served over plain HTTP.
+running, on top of RDS. The ACM cert and Route 53 queries are negligible (the
+hosted zone is ~$0.50/mo). `terraform destroy` (or remove the `module "app"` block
+and apply) when you're done.
 
 ## Bootstrap (one-time per account)
 

@@ -59,6 +59,24 @@ variable "image_tag" {
   default     = "latest"
 }
 
+variable "certificate_arn" {
+  description = "ACM cert ARN. When set, adds an HTTPS (443) listener and redirects HTTP to it."
+  type        = string
+  default     = null
+}
+
+variable "domain_name" {
+  description = "Hostname to point at the load balancer (e.g. api.namainsights.com). Null = no DNS record."
+  type        = string
+  default     = null
+}
+
+variable "route53_zone_id" {
+  description = "Hosted zone ID for the domain_name record."
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   description = "Extra tags (merged with the environment's default_tags)."
   type        = map(string)

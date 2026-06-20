@@ -1,6 +1,6 @@
 output "url" {
   description = "Public URL of the app."
-  value       = "http://${aws_lb.this.dns_name}"
+  value       = var.domain_name != null ? "https://${var.domain_name}" : "http://${aws_lb.this.dns_name}"
 }
 
 output "alb_dns_name" {
