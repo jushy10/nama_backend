@@ -14,3 +14,28 @@ module "hello" {
   value       = var.greeting
   description = "Created by Terraform as a connectivity smoke test."
 }
+
+# Default VPC + its subnets — so we don't have to build networking by hand.
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+# Private PostgreSQL database (no public endpoint). The app reads its connection
+# URL from the SSM parameter below; attach module.database.app_security_group_id
+# to whatever compute needs to reach it.
+module "database" {
+  source = "../../modules/rds-postgres"
+
+  name       = "nama-dev"
+  vpc_id     = data.aws_vpc.default.id
+  subnet_ids = data.aws_subnets.default.ids
+
+  database_url_ssm_name = "/nama/dev/database-url"
+}

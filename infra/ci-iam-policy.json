@@ -42,6 +42,32 @@
         "s3:DeleteObject"
       ],
       "Resource": "arn:aws:s3:::YOUR_STATE_BUCKET/*"
+    },
+    {
+      "Sid": "ManageRds",
+      "Effect": "Allow",
+      "Action": "rds:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageDbNetworking",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeVpcs",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeAvailabilityZones",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSecurityGroupRules",
+        "ec2:CreateSecurityGroup",
+        "ec2:DeleteSecurityGroup",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "Resource": "*"
     }
   ]
 }
