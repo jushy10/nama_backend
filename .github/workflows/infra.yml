@@ -1,4 +1,5 @@
-name: infra
+name: Infrastructure
+run-name: Infrastructure · ${{ (github.event_name == 'pull_request') && 'plan' || 'apply' }} · ${{ github.ref_name }}
 
 # Terraform for every environment under infra/environments/.
 #   - Pull requests touching infra/**  -> terraform plan  (preview only)
@@ -28,6 +29,7 @@ concurrency:
 
 jobs:
   terraform:
+    name: ${{ matrix.environment }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -42,7 +44,8 @@ jobs:
       # Keep the Terraform provider region in sync with the SDK region.
       TF_VAR_region: ${{ vars.AWS_REGION || 'us-east-1' }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the repository
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -51,16 +54,17 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.10.5"
 
-      - name: Init
+      - name: Terraform init
         run: terraform init -input=false -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
 
-      - name: Plan
+      - name: Terraform plan
         run: terraform plan -input=false -no-color
 
-      - name: Apply
+      - name: Terraform apply
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: terraform apply -auto-approve -input=false -no-color

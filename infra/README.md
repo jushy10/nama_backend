@@ -47,7 +47,7 @@ infra/
 2. **Or write a new module** under `modules/<name>/` with `main.tf`,
    `variables.tf`, `outputs.tf`, and a `versions.tf` declaring `required_providers`.
    Then call it as above.
-3. Open a PR → the `infra` workflow runs `terraform plan`. Merge → it applies.
+3. Open a PR → the **Infrastructure** workflow runs `terraform plan`. Merge → it applies.
 
 ## How to add a new environment (e.g. prod)
 
@@ -115,13 +115,14 @@ until CI pushes one**. So:
 1. **Update `nama-ci`'s policy** (it now needs ECS/ECR/ELB/logs + IAM for
    `nama-*` roles) — re-paste [`ci-iam-policy.json`](ci-iam-policy.json), or use
    the managed `PowerUserAccess` policy **plus** the `ManageNamaRoles` statement.
-2. **Merge → the `infra` workflow applies.** The ECS service comes up but its
-   tasks can't start yet (no image) — that's expected.
-3. **The [`app-image`](../.github/workflows/app-image.yml) workflow** builds the
-   Docker image, pushes it to ECR, and rolls the service. It runs automatically
+2. **Merge → the [Infrastructure](../.github/workflows/infra.yml) workflow applies.**
+   The ECS service comes up but its tasks can't start yet (no image) — expected.
+3. **The [Build & Deploy App](../.github/workflows/app-image.yml) workflow** builds
+   the Docker image, pushes it to ECR, and rolls the service. It runs automatically
    on the same merge (it touches `app/**`/`Dockerfile`) and **waits for the ECR
-   repo to exist**, so it no longer needs a manual re-run after `infra`. The ECR
-   repo keeps only recent images (untagged expire after 7 days; last 10 kept).
+   repo to exist**, so it no longer needs a manual re-run after the Infrastructure
+   run. The ECR repo keeps only recent images (untagged expire after 7 days; last
+   10 kept).
 4. Once a task is healthy, hit `terraform output app_url` (an `http://…elb…`
    address). `GET /healthz` should return `{"status":"ok"}`.
 
@@ -176,4 +177,4 @@ terraform apply
 - **Promotion flow** — apply `dev` automatically, gate `prod` behind a manual
   approval using a GitHub Environment.
 - **Quality gates** — add `terraform fmt -check`, `validate`, and `tflint` steps
-  to the `infra` workflow.
+  to the Infrastructure workflow.

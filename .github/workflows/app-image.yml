@@ -1,10 +1,11 @@
-name: app-image
+name: Build & Deploy App
+run-name: Build & deploy app · ${{ github.ref_name }}
 
 # Build the app's Docker image, push it to ECR, and roll the ECS service.
 # Runs on pushes to main that touch the app or Dockerfile, or on demand.
 #
 # Requires the infra to exist first (the ECR repo + ECS service are created by
-# the `infra` workflow). Auth uses the same AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+# the Infrastructure workflow). Auth uses the same AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
 # secrets and the AWS_REGION variable.
 
 on:
@@ -30,11 +31,13 @@ env:
 
 jobs:
   build-and-deploy:
+    name: Build & deploy
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the repository
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -55,7 +58,7 @@ jobs:
             echo "Waiting for ECR repository '$ECR_REPOSITORY' ($i/60)…"
             sleep 15
           done
-          echo "Timed out. Make sure the infra workflow has run to create it."
+          echo "Timed out. Make sure the Infrastructure workflow has run to create it."
           exit 1
 
       - name: Log in to Amazon ECR
