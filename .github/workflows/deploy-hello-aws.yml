@@ -1,0 +1,65 @@
+name: deploy-hello-aws
+
+# Deploy infra/hello-aws to AWS with Terraform.
+#   - Pull requests touching it  -> terraform plan  (preview only, no changes)
+#   - Push to main               -> terraform apply (creates/updates resources)
+#
+# Auth uses AWS access keys stored as GitHub repository SECRETS:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+# and an optional AWS_REGION repository VARIABLE (defaults to us-east-1).
+# OIDC (no long-lived keys) is the more secure upgrade — see infra/hello-aws/README.md.
+#
+# NOTE: Terraform state is local to the CI runner, so `apply` is meant as a
+# one-shot demo of CI->AWS. For repeatable, stateful deploys, add an S3 backend
+# (see infra/hello-aws/README.md).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/hello-aws/**"
+      - ".github/workflows/deploy-hello-aws.yml"
+  pull_request:
+    paths:
+      - "infra/hello-aws/**"
+      - ".github/workflows/deploy-hello-aws.yml"
+
+concurrency:
+  group: deploy-hello-aws
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: infra/hello-aws
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Keep the Terraform provider's region in sync with the SDK region.
+      TF_VAR_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Plan
+        run: terraform plan -input=false -no-color
+
+      - name: Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve -input=false -no-color

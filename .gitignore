@@ -23,6 +23,14 @@ dist/
 .env
 .env.local
 
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+
 # Editor/OS noise
 .DS_Store
 *.swp
