@@ -2,6 +2,10 @@
 
 Provisions a secure PostgreSQL database on Amazon RDS for `nama_backend`.
 
+> **New to this / just want to confirm Terraform reaches your AWS account?**
+> Start with [`hello-aws/`](hello-aws/README.md) — a minimal, input-free root you
+> can `terraform apply` immediately. Come back here once that works.
+
 ## What it creates
 
 | Resource | Purpose | Security property |
