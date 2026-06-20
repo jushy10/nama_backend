@@ -1,3 +1,0 @@
-# Optional — the defaults work out of the box. Copy to terraform.tfvars to override.
-# region   = "us-east-1"
-# greeting = "hello from terraform"

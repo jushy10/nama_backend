@@ -41,7 +41,7 @@
         "s3:PutObject",
         "s3:DeleteObject"
       ],
-      "Resource": "arn:aws:s3:::YOUR_STATE_BUCKET/hello-aws/*"
+      "Resource": "arn:aws:s3:::YOUR_STATE_BUCKET/*"
     }
   ]
 }
