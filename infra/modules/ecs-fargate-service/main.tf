@@ -16,6 +16,42 @@ resource "aws_ecr_repository" "this" {
   tags = var.tags
 }
 
+# Housekeeping so old images don't pile up (ECR charges for storage):
+#  1. Untagged images (orphaned layers) are removed after 7 days.
+#  2. Keep only the 10 most recent images overall — this prunes old tagged
+#     builds while always keeping the newest (which `latest` points at), so the
+#     running image is never deleted. A blanket "expire everything after 7 days"
+#     would delete the live image if you went a week without deploying.
+resource "aws_ecr_lifecycle_policy" "this" {
+  repository = aws_ecr_repository.this.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Expire untagged images after 7 days"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 7
+        }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "Keep only the 10 most recent images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = 10
+        }
+        action = { type = "expire" }
+      }
+    ]
+  })
+}
+
 resource "aws_cloudwatch_log_group" "this" {
   name_prefix       = "/ecs/${var.name}-"
   retention_in_days = 14

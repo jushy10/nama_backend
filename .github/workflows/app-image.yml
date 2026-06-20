@@ -43,6 +43,21 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # On the very first deploy this workflow can start before the infra apply
+      # has created the ECR repo, so wait for it rather than failing the race.
+      - name: Wait for the ECR repository
+        run: |
+          for i in $(seq 1 60); do
+            if aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1; then
+              echo "ECR repository '$ECR_REPOSITORY' is ready."
+              exit 0
+            fi
+            echo "Waiting for ECR repository '$ECR_REPOSITORY' ($i/60)…"
+            sleep 15
+          done
+          echo "Timed out. Make sure the infra workflow has run to create it."
+          exit 1
+
       - name: Log in to Amazon ECR
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
@@ -57,9 +72,15 @@ jobs:
           docker push "$REGISTRY/$ECR_REPOSITORY:latest"
           docker push "$REGISTRY/$ECR_REPOSITORY:${{ github.sha }}"
 
+      # Roll the service if it already exists. On a brand-new deploy it may not
+      # be up yet — that's fine, it will pull :latest when it starts.
       - name: Roll the ECS service onto the new image
         run: |
-          aws ecs update-service \
-            --cluster "$ECS_CLUSTER" \
-            --service "$ECS_SERVICE" \
-            --force-new-deployment
+          status=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" = "ACTIVE" ]; then
+            aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --force-new-deployment
+          else
+            echo "ECS service not ACTIVE yet (status: $status) — it will pull :latest on first launch."
+          fi

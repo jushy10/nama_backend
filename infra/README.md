@@ -118,9 +118,10 @@ until CI pushes one**. So:
 2. **Merge → the `infra` workflow applies.** The ECS service comes up but its
    tasks can't start yet (no image) — that's expected.
 3. **The [`app-image`](../.github/workflows/app-image.yml) workflow** builds the
-   Docker image, pushes it to ECR, and force-deploys the service. It runs on
-   pushes that touch `app/**` or the `Dockerfile`, or manually via
-   *Actions → app-image → Run workflow*.
+   Docker image, pushes it to ECR, and rolls the service. It runs automatically
+   on the same merge (it touches `app/**`/`Dockerfile`) and **waits for the ECR
+   repo to exist**, so it no longer needs a manual re-run after `infra`. The ECR
+   repo keeps only recent images (untagged expire after 7 days; last 10 kept).
 4. Once a task is healthy, hit `terraform output app_url` (an `http://…elb…`
    address). `GET /healthz` should return `{"status":"ok"}`.
 
