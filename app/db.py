@@ -19,14 +19,20 @@ import os
 from collections.abc import Iterator
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./nama.db")
-_IS_SQLITE = DATABASE_URL.startswith("sqlite")
+
+# The backend kind, derived once and reused everywhere (engine config, app
+# startup, Alembic) so "which database am I on?" lives in exactly one place.
+# get_backend_name() also strips driver suffixes, e.g. postgresql+psycopg.
+DIALECT = make_url(DATABASE_URL).get_backend_name()  # "sqlite", "postgresql", ...
+IS_SQLITE = DIALECT == "sqlite"
 
 # check_same_thread=False only applies to SQLite (it lets the connection be
 # shared across FastAPI's threadpool). Postgres must not receive it.
-_connect_args = {"check_same_thread": False} if _IS_SQLITE else {}
+_connect_args = {"check_same_thread": False} if IS_SQLITE else {}
 
 engine = create_engine(
     DATABASE_URL,
@@ -41,6 +47,15 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 class Base(DeclarativeBase):
     """Base class for ORM models."""
+
+
+def should_auto_create_tables() -> bool:
+    """Whether the app should create tables on startup.
+
+    True for SQLite (local dev + tests, no migration step). On Postgres/RDS the
+    schema is owned by Alembic migrations, so the app must not auto-create.
+    """
+    return IS_SQLITE
 
 
 def get_db() -> Iterator[Session]:

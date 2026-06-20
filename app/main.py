@@ -8,15 +8,15 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db import _IS_SQLITE, Base, engine, get_db
+from app.db import Base, engine, get_db, should_auto_create_tables
 from app.models import User
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Auto-create tables for SQLite only (local dev + tests). On Postgres/RDS the
-    # schema is owned by Alembic migrations — run `alembic upgrade head` instead.
-    if _IS_SQLITE:
+    # SQLite (local dev + tests) auto-creates tables. On Postgres/RDS the schema
+    # is owned by Alembic migrations — run `alembic upgrade head` instead.
+    if should_auto_create_tables():
         Base.metadata.create_all(bind=engine)
     yield
 
