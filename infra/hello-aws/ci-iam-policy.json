@@ -16,6 +16,12 @@
       "Resource": "arn:aws:ssm:*:*:parameter/nama/*"
     },
     {
+      "Sid": "DescribeParametersNeedsWildcard",
+      "Effect": "Allow",
+      "Action": "ssm:DescribeParameters",
+      "Resource": "*"
+    },
+    {
       "Sid": "WhoAmI",
       "Effect": "Allow",
       "Action": "sts:GetCallerIdentity",

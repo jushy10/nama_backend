@@ -53,9 +53,11 @@ One-time setup — add these under **Settings → Secrets and variables → Acti
 | Variable | `AWS_REGION` | e.g. `us-east-1` (optional; defaults to `us-east-1`) |
 
 The IAM user needs only a **least-privilege** policy — use
-[`ci-iam-policy.json`](ci-iam-policy.json) in this folder. It allows SSM actions
-on parameters under `/nama/*` and `sts:GetCallerIdentity`, nothing more, so a
-leaked key can't touch anything else in the account.
+[`ci-iam-policy.json`](ci-iam-policy.json) in this folder. It allows
+write/read/delete on SSM parameters under `/nama/*`, `sts:GetCallerIdentity`, and
+the account-wide `ssm:DescribeParameters` (AWS requires `"*"` for that one — it
+exposes parameter *metadata* only, never values). A leaked key still can't read
+secret values or change anything outside `/nama/*`.
 
 Attach it to the user with the CLI:
 
