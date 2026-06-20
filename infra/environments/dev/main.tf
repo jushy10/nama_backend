@@ -39,3 +39,15 @@ module "database" {
 
   database_url_ssm_name = "/nama/dev/database-url"
 }
+
+# The app on ECS Fargate, behind a public load balancer. It carries the
+# database's app security group and reads DATABASE_URL from the SSM SecureString.
+module "app" {
+  source = "../../modules/ecs-fargate-service"
+
+  name                  = "nama-dev"
+  vpc_id                = data.aws_vpc.default.id
+  subnet_ids            = data.aws_subnets.default.ids
+  app_security_group_id = module.database.app_security_group_id
+  database_url_ssm_arn  = module.database.database_url_ssm_arn
+}
