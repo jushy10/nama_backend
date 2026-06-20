@@ -1,51 +1,59 @@
 # nama_backend
 
-A basic Go HTTP backend.
+A very lightweight Python **FastAPI** backend backed by **SQLite**.
 
-## Requirements
+## Layout
 
-- Go 1.26+
+```
+app/
+├── db.py       # SQLite engine, session, Base, get_db dependency
+├── models.py   # SQLAlchemy User model
+└── main.py     # FastAPI app, schemas, and endpoints
+tests/
+└── test_users.py   # API tests against in-memory SQLite
+```
+
+## Setup
+
+```sh
+python -m venv .venv
+# Windows PowerShell:  .venv\Scripts\Activate.ps1
+# macOS/Linux:         source .venv/bin/activate
+pip install -e ".[dev]"
+```
 
 ## Run
 
 ```sh
-go run .
+uvicorn app.main:app --reload
 ```
 
-The server listens on `:8080` by default. Override the port with the `PORT`
-environment variable:
-
-```sh
-PORT=3000 go run .
-```
+Creates a local `nama.db` on first run. Interactive docs at
+<http://localhost:8080/docs>.
 
 ## Endpoints
 
-| Method | Path       | Description                       |
-| ------ | ---------- | --------------------------------- |
-| GET    | `/`        | Service greeting (JSON)           |
-| GET    | `/healthz` | Liveness check (JSON)             |
-
-Example:
+| Method | Path          | Description      |
+| ------ | ------------- | ---------------- |
+| GET    | `/healthz`    | Liveness check   |
+| POST   | `/users`      | Create a user    |
+| GET    | `/users`      | List users       |
+| GET    | `/users/{id}` | Get a user by ID |
 
 ```sh
-curl localhost:8080/healthz
-# {"status":"ok","time":"2026-06-20T00:00:00Z"}
+curl -X POST localhost:8080/users \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"alice@example.com","name":"Alice"}'
 ```
 
 ## Test
 
 ```sh
-go test ./...
+pytest
 ```
 
-## Build
-
-```sh
-go build -o nama_backend .
-```
+Tests run against an in-memory SQLite database — no setup, no files.
 
 ## Contributing
 
-`main` is protected — push to a feature branch and open a pull request. Direct
-pushes to `main` are rejected.
+`main` is protected — push to a feature branch and open a pull request.

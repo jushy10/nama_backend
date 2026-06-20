@@ -1,12 +1,23 @@
-# Binaries
-/nama_backend
-/nama_backend.exe
-*.exe
-*.test
-*.out
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
-# Go build/test cache and vendored deps
-/vendor/
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build artifacts
+build/
+dist/
+
+# Local SQLite databases
+*.db
+*.sqlite3
 
 # Environment overrides
 .env
