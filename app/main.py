@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import Base, engine, get_db
 from app.models import User
+from app.stocks.router import router as stocks_router
 
 
 @asynccontextmanager
@@ -20,6 +21,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="nama_backend", lifespan=lifespan)
+app.include_router(stocks_router)
 
 
 class UserIn(BaseModel):

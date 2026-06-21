@@ -8,9 +8,12 @@ A very lightweight Python **FastAPI** backend backed by **SQLite**.
 app/
 ├── db.py       # SQLite engine, session, Base, get_db dependency
 ├── models.py   # SQLAlchemy User model
-└── main.py     # FastAPI app, schemas, and endpoints
+├── main.py     # FastAPI app, schemas, and endpoints
+└── stocks/     # Alpaca stock-info feature (clean-architecture vertical slice)
 tests/
-└── test_users.py   # API tests against in-memory SQLite
+├── test_users.py            # API tests against in-memory SQLite
+├── test_stocks.py           # stock entity/use-case/API tests (offline)
+└── test_stocks_provider.py  # Alpaca adapter tests (offline, faked SDK)
 ```
 
 ## Setup
@@ -39,6 +42,7 @@ Creates a local `nama.db` on first run. Interactive docs at
 | POST   | `/users`      | Create a user    |
 | GET    | `/users`      | List users       |
 | GET    | `/users/{id}` | Get a user by ID |
+| GET    | `/stocks/{symbol}` | Stock info from Alpaca (e.g. `AAPL`) |
 
 ```sh
 curl -X POST localhost:8080/users \
@@ -66,6 +70,34 @@ export DATABASE_URL="postgresql+psycopg://USER:PASSWORD@HOST:5432/nama?sslmode=r
 ```
 
 Tests ignore `DATABASE_URL` and always use in-memory SQLite, so they stay fast.
+
+## Stocks (Alpaca)
+
+`GET /stocks/{symbol}` returns a snapshot for a ticker, fetched from Alpaca via
+the official [`alpaca-py`](https://alpaca.markets/sdks/python/) SDK. It's a
+self-contained **clean-architecture vertical slice** under
+[`app/stocks/`](app/stocks/): the use case depends on a `StockDataProvider`
+port, and only `alpaca_provider.py` knows Alpaca exists — so the tests run fully
+offline with a fake provider.
+
+Credentials come from the environment (like `DATABASE_URL`):
+
+```sh
+export APCA_API_KEY_ID=...
+export APCA_API_SECRET_KEY=...
+curl localhost:8080/stocks/AAPL
+```
+
+Uses Alpaca's free **IEX** feed. Without keys the endpoint returns `503`; the
+rest of the app still runs.
+
+### Secrets in AWS
+
+Store the keys the same way as `DATABASE_URL`: as **SSM SecureString**
+parameters (e.g. `/nama/dev/alpaca-api-key-id`, `/nama/dev/alpaca-api-secret-key`)
+via the [`ssm-parameter`](infra/modules/ssm-parameter) module, and inject them
+into the ECS task as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`. Never commit
+keys to the repo.
 
 ## Contributing
 
