@@ -27,3 +27,18 @@ output "app_security_group_id" {
   description = "Attach this SG to compute (ECS/EC2/Lambda) that needs the database."
   value       = module.database.app_security_group_id
 }
+
+output "app_url" {
+  description = "Public URL of the app (once an image is pushed and the service is healthy)."
+  value       = module.app.url
+}
+
+output "ecr_repository_url" {
+  description = "Push the app's Docker image here."
+  value       = module.app.ecr_repository_url
+}
+
+output "name_servers" {
+  description = "Set these at your registrar — only populated if Terraform created the hosted zone."
+  value       = module.dns.name_servers
+}

@@ -39,3 +39,29 @@ module "database" {
 
   database_url_ssm_name = "/nama/dev/database-url"
 }
+
+# DNS + TLS certificate for the public hostname.
+module "dns" {
+  source = "../../modules/dns-cert"
+
+  parent_domain = var.parent_domain
+  domain_name   = var.domain_name
+  create_zone   = var.create_hosted_zone
+}
+
+# The app on ECS Fargate, behind a public load balancer. It carries the
+# database's app security group, reads DATABASE_URL from the SSM SecureString,
+# and is served at domain_name over HTTPS.
+module "app" {
+  source = "../../modules/ecs-fargate-service"
+
+  name                  = "nama-dev"
+  vpc_id                = data.aws_vpc.default.id
+  subnet_ids            = data.aws_subnets.default.ids
+  app_security_group_id = module.database.app_security_group_id
+  database_url_ssm_arn  = module.database.database_url_ssm_arn
+
+  domain_name     = var.domain_name
+  route53_zone_id = module.dns.zone_id
+  certificate_arn = module.dns.certificate_arn
+}

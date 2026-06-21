@@ -27,3 +27,8 @@ output "database_url_ssm_name" {
   description = "SSM SecureString holding the SQLAlchemy connection URL."
   value       = aws_ssm_parameter.database_url.name
 }
+
+output "database_url_ssm_arn" {
+  description = "ARN of the SSM SecureString — for injecting DATABASE_URL into compute."
+  value       = aws_ssm_parameter.database_url.arn
+}

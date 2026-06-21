@@ -1,0 +1,111 @@
+name: Build & Deploy App
+run-name: Build & deploy app · ${{ github.ref_name }}
+
+# Pull requests touching app/Dockerfile  -> build the image only (validate).
+# Merge (push) to main, or manual run     -> build, push to ECR, roll ECS.
+#
+# The ECR repo + ECS service are created by the Infrastructure workflow. Deploy
+# auth uses the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var.
+# (The PR validate job needs no credentials.)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - ".github/workflows/app-image.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - ".github/workflows/app-image.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: app-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # These match module "app" { name = "nama-dev" } in environments/dev.
+  ECR_REPOSITORY: nama-dev
+  ECS_CLUSTER: nama-dev
+  ECS_SERVICE: nama-dev
+
+jobs:
+  # On pull requests: just prove the image builds. No AWS credentials, no push.
+  validate:
+    name: Validate build
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Build image (no push)
+        run: docker build -t "$ECR_REPOSITORY:ci" .
+
+  # On merge to main (or a manual run): build, push to ECR, and roll the service.
+  deploy:
+    name: Build & deploy
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # On the very first deploy this job can start before the infra apply has
+      # created the ECR repo, so wait for it rather than failing the race.
+      - name: Wait for the ECR repository
+        run: |
+          for i in $(seq 1 60); do
+            if aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1; then
+              echo "ECR repository '$ECR_REPOSITORY' is ready."
+              exit 0
+            fi
+            echo "Waiting for ECR repository '$ECR_REPOSITORY' ($i/60)…"
+            sleep 15
+          done
+          echo "Timed out. Make sure the Infrastructure workflow has run to create it."
+          exit 1
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          docker build \
+            -t "$REGISTRY/$ECR_REPOSITORY:latest" \
+            -t "$REGISTRY/$ECR_REPOSITORY:${{ github.sha }}" .
+          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
+          docker push "$REGISTRY/$ECR_REPOSITORY:${{ github.sha }}"
+
+      # Roll the service if it already exists. On a brand-new deploy it may not
+      # be up yet — that's fine, it will pull :latest when it starts.
+      - name: Roll the ECS service onto the new image
+        run: |
+          status=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" = "ACTIVE" ]; then
+            aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --force-new-deployment
+          else
+            echo "ECS service not ACTIVE yet (status: $status) — it will pull :latest on first launch."
+          fi

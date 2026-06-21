@@ -2,7 +2,7 @@
 
 Infrastructure as code, structured to grow. Reusable **modules** are composed by
 per-**environment** root configs, with remote state in S3 and CI that plans on
-pull requests and applies on merge.
+pull requests and applies on a merge to `main`.
 
 ## Layout
 
@@ -47,7 +47,8 @@ infra/
 2. **Or write a new module** under `modules/<name>/` with `main.tf`,
    `variables.tf`, `outputs.tf`, and a `versions.tf` declaring `required_providers`.
    Then call it as above.
-3. Open a PR → the `infra` workflow runs `terraform plan`. Merge → it applies.
+3. Open a PR → the **Infrastructure** workflow runs `terraform plan` (preview).
+   Merge to `main` → it applies.
 
 ## How to add a new environment (e.g. prod)
 
@@ -93,6 +94,59 @@ running. It bills whether or not you use it — `terraform destroy` (or remove t
 > Provisioning RDS takes several minutes, so the `apply` step runs longer than
 > the SSM-only deploys did.
 
+## App on ECS Fargate
+
+`environments/dev` runs the FastAPI app as a container via the
+[`ecs-fargate-service`](modules/ecs-fargate-service) module:
+
+- An **ECR** repo (image registry), an **ECS cluster + service + task
+  definition**, a public **Application Load Balancer**, security groups, two IAM
+  roles, and a CloudWatch log group.
+- The task carries the database's `app` security group (so it can reach Postgres)
+  and gets **`DATABASE_URL` injected from the SSM SecureString** — the secret
+  never appears in the task definition.
+- The app already auto-creates its tables on startup (`Base.metadata.create_all`),
+  so no migration step is needed for this simple schema.
+
+### Deploy order (important)
+
+Terraform creates the registry and service, but the service has **no image to run
+until CI pushes one**. So:
+
+1. **Update `nama-ci`'s policy** (it now needs ECS/ECR/ELB/logs + IAM for
+   `nama-*` roles) — re-paste [`ci-iam-policy.json`](ci-iam-policy.json), or use
+   the managed `PowerUserAccess` policy **plus** the `ManageNamaRoles` statement.
+2. **Merge → the [Infrastructure](../.github/workflows/infra.yml) workflow applies.**
+   The ECS service comes up but its tasks can't start yet (no image) — expected.
+3. **The [Build & Deploy App](../.github/workflows/app-image.yml) workflow** builds
+   the Docker image, pushes it to ECR, and rolls the service. It runs automatically
+   on the same merge (it touches `app/**`/`Dockerfile`) and **waits for the ECR
+   repo to exist**, so it no longer needs a manual re-run after the Infrastructure
+   run. The ECR repo keeps only recent images (untagged expire after 7 days; last
+   10 kept).
+4. Once a task is healthy, hit `terraform output app_url` (an `http://…elb…`
+   address). `GET /healthz` should return `{"status":"ok"}`.
+
+### Custom domain + HTTPS
+
+The [`dns-cert`](modules/dns-cert) module issues a free, auto-renewing ACM
+certificate (DNS-validated) and the app module adds an HTTPS listener + an
+`api.namainsights.com` record pointing at the ALB, with HTTP redirecting to HTTPS.
+
+- The hosted zone for `namainsights.com` already exists (registered via Route 53),
+  so `create_hosted_zone = false` and it all comes up in one apply.
+- If you ever move to a registrar outside AWS, set `create_hosted_zone = true`;
+  Terraform creates the zone and outputs `name_servers` to set at the registrar,
+  then a second apply validates the cert once DNS is live.
+- Change the hostname via the `domain_name` / `parent_domain` variables.
+
+### Cost & teardown
+
+This tier is **not** free: the ALB is ~$16/mo and the Fargate task ~$9/mo while
+running, on top of RDS. The ACM cert and Route 53 queries are negligible (the
+hosted zone is ~$0.50/mo). `terraform destroy` (or remove the `module "app"` block
+and apply) when you're done.
+
 ## Bootstrap (one-time per account)
 
 1. **State bucket** — an S3 bucket, **versioned**, **encrypted**, **public access
@@ -100,9 +154,10 @@ running. It bills whether or not you use it — `terraform destroy` (or remove t
    this one by hand (console or CLI).
 2. **CI user + policy** — attach [`ci-iam-policy.json`](ci-iam-policy.json) to the
    deploy IAM user, replacing `YOUR_STATE_BUCKET`. It grants SSM on `/nama/*`,
-   read/write on the state bucket, `sts:GetCallerIdentity`, and (for the database)
-   `rds:*` plus the EC2 security-group/VPC actions. Re-paste it whenever this file
-   changes.
+   the state bucket, `sts:GetCallerIdentity`, `rds:*` + EC2 SG/VPC actions (database),
+   and ECS/ECR/ELB/logs + IAM scoped to `nama-*` roles (the app). Broad on
+   services, careful on IAM. Re-paste it whenever this file changes — or attach
+   the managed `PowerUserAccess` policy plus the `ManageNamaRoles` statement.
 3. **GitHub** — under **Settings → Secrets and variables → Actions**:
    - Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
    - Variables: `TF_STATE_BUCKET` (required), `AWS_REGION` (optional)
@@ -123,4 +178,4 @@ terraform apply
 - **Promotion flow** — apply `dev` automatically, gate `prod` behind a manual
   approval using a GitHub Environment.
 - **Quality gates** — add `terraform fmt -check`, `validate`, and `tflint` steps
-  to the `infra` workflow.
+  to the Infrastructure workflow.
