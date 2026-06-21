@@ -1,9 +1,11 @@
 """A lightweight FastAPI backend backed by SQLite."""
 
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,6 +13,16 @@ from sqlalchemy.orm import Session
 from app.db import Base, engine, get_db
 from app.models import User
 from app.stocks.router import router as stocks_router
+
+# Browser origins allowed to call this API (cross-origin). Comma-separated env
+# var so prod and local dev differ without a code change; defaults to the
+# namainsights site. Without this, a browser on namainsights.com is blocked.
+_DEFAULT_ORIGINS = "https://namainsights.com,https://www.namainsights.com"
+CORS_ALLOW_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ALLOW_ORIGINS", _DEFAULT_ORIGINS).split(",")
+    if origin.strip()
+]
 
 
 @asynccontextmanager
@@ -21,6 +33,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="nama_backend", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_methods=["*"],  # lets the OPTIONS preflight succeed instead of 405
+    allow_headers=["*"],
+)
 app.include_router(stocks_router)
 
 

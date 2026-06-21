@@ -11,14 +11,14 @@ the error only surfaces when the endpoint is actually called.
 import os
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.entities import Stock
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import StockDataProvider
 from app.stocks.schemas import StockResponse
-from app.stocks.use_cases import GetStockInfo
+from app.stocks.use_cases import GetStockInfo, GetStockLogo
 
 router = APIRouter(tags=["stocks"])
 
@@ -36,6 +36,10 @@ def get_provider() -> StockDataProvider:
 
 def get_stock_info(provider: StockDataProvider = Depends(get_provider)) -> GetStockInfo:
     return GetStockInfo(provider)
+
+
+def get_stock_logo(provider: StockDataProvider = Depends(get_provider)) -> GetStockLogo:
+    return GetStockLogo(provider)
 
 
 def _present(stock: Stock) -> StockResponse:
@@ -72,3 +76,22 @@ def get_stock(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present(stock)
+
+
+@router.get(
+    "/stocks/{symbol}/logo",
+    responses={200: {"content": {"image/png": {}}}},
+    response_class=Response,
+)
+def get_stock_logo_image(
+    symbol: str, use_case: GetStockLogo = Depends(get_stock_logo)
+) -> Response:
+    try:
+        image = use_case.execute(symbol)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return Response(content=image, media_type="image/png")

@@ -1,12 +1,22 @@
-"""Application Business Rules: the GetStockInfo use case.
+"""Application Business Rules: the stock use cases.
 
-Orchestrates the flow: validate/normalize the symbol, then ask the injected
-provider for the data. Depends only on the entity and the port — never on a
+Orchestrate the flow: validate/normalize the symbol, then ask the injected
+provider for the data. Depend only on the entity and the port — never on a
 framework or a concrete provider.
 """
 
 from app.stocks.entities import Stock
 from app.stocks.ports import StockDataProvider
+
+
+def _normalize_symbol(symbol: str) -> str:
+    normalized = (symbol or "").strip().upper()
+    if not normalized:
+        raise ValueError("A stock symbol is required.")
+    if not normalized.isalpha() or len(normalized) > 5:
+        # Simple guard; real tickers are 1-5 letters (ignoring class suffixes).
+        raise ValueError(f"'{symbol}' is not a valid stock symbol.")
+    return normalized
 
 
 class GetStockInfo:
@@ -16,10 +26,14 @@ class GetStockInfo:
         self._provider = provider
 
     def execute(self, symbol: str) -> Stock:
-        normalized = (symbol or "").strip().upper()
-        if not normalized:
-            raise ValueError("A stock symbol is required.")
-        if not normalized.isalpha() or len(normalized) > 5:
-            # Simple guard; real tickers are 1-5 letters (ignoring class suffixes).
-            raise ValueError(f"'{symbol}' is not a valid stock symbol.")
-        return self._provider.get_stock(normalized)
+        return self._provider.get_stock(_normalize_symbol(symbol))
+
+
+class GetStockLogo:
+    """Use case: retrieve the company logo image for a stock symbol."""
+
+    def __init__(self, provider: StockDataProvider) -> None:
+        self._provider = provider
+
+    def execute(self, symbol: str) -> bytes:
+        return self._provider.get_logo(_normalize_symbol(symbol))
