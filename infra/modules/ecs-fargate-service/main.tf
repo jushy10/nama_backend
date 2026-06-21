@@ -214,11 +214,11 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
-    type             = var.certificate_arn == null ? "forward" : "redirect"
-    target_group_arn = var.certificate_arn == null ? aws_lb_target_group.this.arn : null
+    type             = var.enable_https ? "redirect" : "forward"
+    target_group_arn = var.enable_https ? null : aws_lb_target_group.this.arn
 
     dynamic "redirect" {
-      for_each = var.certificate_arn == null ? [] : [1]
+      for_each = var.enable_https ? [1] : []
       content {
         port        = "443"
         protocol    = "HTTPS"
@@ -228,9 +228,9 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# Port 443: only when a certificate is supplied.
+# Port 443: only when HTTPS is enabled.
 resource "aws_lb_listener" "https" {
-  count = var.certificate_arn == null ? 0 : 1
+  count = var.enable_https ? 1 : 0
 
   load_balancer_arn = aws_lb.this.arn
   port              = 443

@@ -61,6 +61,7 @@ module "app" {
   app_security_group_id = module.database.app_security_group_id
   database_url_ssm_arn  = module.database.database_url_ssm_arn
 
+  enable_https    = true
   domain_name     = var.domain_name
   route53_zone_id = module.dns.zone_id
   certificate_arn = module.dns.certificate_arn

@@ -59,8 +59,14 @@ variable "image_tag" {
   default     = "latest"
 }
 
+variable "enable_https" {
+  description = "Add the HTTPS (443) listener + HTTP->HTTPS redirect. Separate from certificate_arn because count/for_each can't depend on a not-yet-known ARN."
+  type        = bool
+  default     = false
+}
+
 variable "certificate_arn" {
-  description = "ACM cert ARN. When set, adds an HTTPS (443) listener and redirects HTTP to it."
+  description = "ACM cert ARN for the HTTPS listener (used when enable_https = true)."
   type        = string
   default     = null
 }
