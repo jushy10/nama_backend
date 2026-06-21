@@ -7,6 +7,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "sqlalchemy>=2.0",
+    "alpaca-py>=0.30",  # Alpaca market-data SDK (stocks feature)
 ]
 
 # PostgreSQL driver — install with `pip install -e ".[postgres]"` anywhere that
