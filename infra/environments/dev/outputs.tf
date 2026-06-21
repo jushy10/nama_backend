@@ -38,6 +38,16 @@ output "ecr_repository_url" {
   value       = module.app.ecr_repository_url
 }
 
+output "frontend_url" {
+  description = "Public URL of the frontend (once an image is pushed and the service is healthy)."
+  value       = module.frontend.url
+}
+
+output "frontend_ecr_repository_url" {
+  description = "Push the frontend's Docker image here."
+  value       = module.frontend.ecr_repository_url
+}
+
 output "name_servers" {
   description = "Set these at your registrar — only populated if Terraform created the hosted zone."
   value       = module.dns.name_servers

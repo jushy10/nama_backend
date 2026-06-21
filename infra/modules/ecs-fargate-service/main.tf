@@ -86,8 +86,11 @@ resource "aws_iam_role_policy_attachment" "execution_managed" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Allow the execution role to read the DATABASE_URL SecureString (and decrypt it).
+# Allow the execution role to read the DATABASE_URL SecureString (and decrypt
+# it). Only created when a secret is configured — a static frontend has none.
 data "aws_iam_policy_document" "execution_secrets" {
+  count = var.database_url_ssm_arn == null ? 0 : 1
+
   statement {
     actions   = ["ssm:GetParameters"]
     resources = [var.database_url_ssm_arn]
@@ -99,9 +102,19 @@ data "aws_iam_policy_document" "execution_secrets" {
 }
 
 resource "aws_iam_role_policy" "execution_secrets" {
+  count = var.database_url_ssm_arn == null ? 0 : 1
+
   name_prefix = "secrets-"
   role        = aws_iam_role.execution.id
-  policy      = data.aws_iam_policy_document.execution_secrets.json
+  policy      = data.aws_iam_policy_document.execution_secrets[0].json
+}
+
+# This policy gained a `count` (so it can be skipped for the DB-less frontend),
+# which moves its address from [no index] to [0]. Tell Terraform it's the same
+# resource so the existing backend policy migrates instead of being recreated.
+moved {
+  from = aws_iam_role_policy.execution_secrets
+  to   = aws_iam_role_policy.execution_secrets[0]
 }
 
 resource "aws_iam_role" "task" {
@@ -259,6 +272,21 @@ resource "aws_route53_record" "this" {
   }
 }
 
+# Extra hostnames (e.g. www) that alias to the same load balancer.
+resource "aws_route53_record" "additional" {
+  for_each = var.route53_zone_id == null ? toset([]) : toset(var.additional_domain_names)
+
+  zone_id = var.route53_zone_id
+  name    = each.value
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.this.dns_name
+    zone_id                = aws_lb.this.zone_id
+    evaluate_target_health = true
+  }
+}
+
 # ---------------------------------------------------------------------------
 # The task definition + service.
 # DATABASE_URL is injected from SSM via the container "secrets" block, so it
@@ -278,29 +306,34 @@ resource "aws_ecs_task_definition" "this" {
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
+  # The "secrets" block is added only when a DATABASE_URL secret is configured;
+  # a static frontend has none, so the key is omitted entirely there.
   container_definitions = jsonencode([
-    {
-      name      = "app"
-      image     = "${aws_ecr_repository.this.repository_url}:${var.image_tag}"
-      essential = true
+    merge(
+      {
+        name      = "app"
+        image     = "${aws_ecr_repository.this.repository_url}:${var.image_tag}"
+        essential = true
 
-      portMappings = [
-        { containerPort = var.container_port, protocol = "tcp" }
-      ]
+        portMappings = [
+          { containerPort = var.container_port, protocol = "tcp" }
+        ]
 
-      secrets = [
-        { name = "DATABASE_URL", valueFrom = var.database_url_ssm_arn }
-      ]
-
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.this.name
-          "awslogs-region"        = data.aws_region.current.name
-          "awslogs-stream-prefix" = "app"
+        logConfiguration = {
+          logDriver = "awslogs"
+          options = {
+            "awslogs-group"         = aws_cloudwatch_log_group.this.name
+            "awslogs-region"        = data.aws_region.current.name
+            "awslogs-stream-prefix" = "app"
+          }
         }
+      },
+      var.database_url_ssm_arn == null ? {} : {
+        secrets = [
+          { name = "DATABASE_URL", valueFrom = var.database_url_ssm_arn }
+        ]
       }
-    }
+    )
   ])
 
   tags = var.tags
@@ -315,8 +348,11 @@ resource "aws_ecs_service" "this" {
 
   network_configuration {
     subnets = var.subnet_ids
-    # service SG (ALB -> task) + app SG (task -> database).
-    security_groups  = [aws_security_group.service.id, var.app_security_group_id]
+    # service SG (ALB -> task), plus the app SG (task -> database) when set.
+    # A static frontend needs no database, so it carries only the service SG.
+    security_groups = var.app_security_group_id == null ? [aws_security_group.service.id] : [
+      aws_security_group.service.id, var.app_security_group_id
+    ]
     assign_public_ip = true # needed in public subnets to pull the image
   }
 
