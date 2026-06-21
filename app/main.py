@@ -2,16 +2,11 @@
 
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from app.db import Base, engine, get_db
-from app.models import User
+from app.db import Base, engine
 from app.stocks.router import router as stocks_router
 
 # Browser origins allowed to call this API (cross-origin). Comma-separated env
@@ -42,45 +37,6 @@ app.add_middleware(
 app.include_router(stocks_router)
 
 
-class UserIn(BaseModel):
-    email: str
-    name: str
-
-
-class UserOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    email: str
-    name: str
-    created_at: datetime
-
-
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
-
-
-@app.post("/users", response_model=UserOut, status_code=201)
-def create_user(payload: UserIn, db: Session = Depends(get_db)) -> User:
-    email = payload.email.strip().lower()
-    if db.scalar(select(User).where(User.email == email)) is not None:
-        raise HTTPException(400, "email already registered")
-    user = User(email=email, name=payload.name.strip())
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
-
-
-@app.get("/users", response_model=list[UserOut])
-def list_users(db: Session = Depends(get_db)) -> list[User]:
-    return list(db.scalars(select(User).order_by(User.id)))
-
-
-@app.get("/users/{user_id}", response_model=UserOut)
-def get_user(user_id: int, db: Session = Depends(get_db)) -> User:
-    user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(404, "user not found")
-    return user

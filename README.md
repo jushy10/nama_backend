@@ -7,11 +7,9 @@ A very lightweight Python **FastAPI** backend backed by **SQLite**.
 ```
 app/
 ├── db.py       # SQLite engine, session, Base, get_db dependency
-├── models.py   # SQLAlchemy User model
-├── main.py     # FastAPI app, schemas, and endpoints
+├── main.py     # FastAPI app and endpoints
 └── stocks/     # Alpaca stock-info feature (clean-architecture vertical slice)
 tests/
-├── test_users.py            # API tests against in-memory SQLite
 ├── test_stocks.py           # stock entity/use-case/API tests (offline)
 └── test_stocks_provider.py  # Alpaca adapter tests (offline, faked SDK)
 ```
@@ -39,16 +37,7 @@ Creates a local `nama.db` on first run. Interactive docs at
 | Method | Path          | Description      |
 | ------ | ------------- | ---------------- |
 | GET    | `/healthz`    | Liveness check   |
-| POST   | `/users`      | Create a user    |
-| GET    | `/users`      | List users       |
-| GET    | `/users/{id}` | Get a user by ID |
 | GET    | `/stocks/{symbol}` | Stock info from Alpaca (e.g. `AAPL`) |
-
-```sh
-curl -X POST localhost:8080/users \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"alice@example.com","name":"Alice"}'
-```
 
 ## Test
 
