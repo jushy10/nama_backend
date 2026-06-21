@@ -26,3 +26,25 @@ class StockResponse(BaseModel):
     ask: float | None = None
     spread: float | None = None
     as_of: datetime | None = None
+
+
+class CandleResponse(BaseModel):
+    """One candlestick. `time` is UNIX epoch seconds (UTC) — the format
+    charting libraries such as TradingView Lightweight Charts expect — and
+    `timestamp` is the same instant in ISO 8601 for human readers."""
+
+    time: int
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int | None = None
+    direction: str  # "up" (green) or "down" (red)
+
+
+class CandleSeriesResponse(BaseModel):
+    symbol: str
+    timeframe: str
+    count: int
+    candles: list[CandleResponse]
