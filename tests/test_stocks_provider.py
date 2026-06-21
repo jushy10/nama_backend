@@ -8,6 +8,7 @@ Alpaca models -> Stock entity, and Alpaca failures -> domain exceptions.
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from alpaca.common.exceptions import APIError
 
@@ -113,3 +114,48 @@ def test_asset_metadata_failure_is_non_fatal():
     assert stock.name is None
     assert stock.exchange is None
     assert stock.price == 297.86  # market data still returned
+
+
+# --------------------------- logo (HTTP) ---------------------------
+
+class FakeHttpClient:
+    def __init__(self, status_code=200, content=b"", error=None):
+        self._status_code, self._content, self._error = status_code, content, error
+        self.requested: list[str] = []
+
+    def get(self, url):
+        self.requested.append(url)
+        if self._error is not None:
+            raise self._error
+        return SimpleNamespace(status_code=self._status_code, content=self._content)
+
+
+def provider_with_http(http_client) -> AlpacaStockDataProvider:
+    p = AlpacaStockDataProvider("dummy-key", "dummy-secret")
+    p._http = http_client
+    return p
+
+
+def test_get_logo_returns_image_bytes():
+    http = FakeHttpClient(status_code=200, content=b"\x89PNG\r\n")
+    p = provider_with_http(http)
+    assert p.get_logo("AAPL") == b"\x89PNG\r\n"
+    assert http.requested == ["/logos/AAPL"]
+
+
+def test_get_logo_404_raises_not_found():
+    p = provider_with_http(FakeHttpClient(status_code=404))
+    with pytest.raises(StockNotFound):
+        p.get_logo("ZZZZ")
+
+
+def test_get_logo_other_status_raises_unavailable():
+    p = provider_with_http(FakeHttpClient(status_code=500))
+    with pytest.raises(StockDataUnavailable):
+        p.get_logo("AAPL")
+
+
+def test_get_logo_transport_error_raises_unavailable():
+    p = provider_with_http(FakeHttpClient(error=httpx.ConnectError("boom")))
+    with pytest.raises(StockDataUnavailable):
+        p.get_logo("AAPL")

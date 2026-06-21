@@ -22,3 +22,13 @@ class StockDataProvider(ABC):
             StockDataUnavailable: the upstream source failed.
         """
         raise NotImplementedError
+
+    @abstractmethod
+    def get_logo(self, symbol: str) -> bytes:
+        """Return the raw PNG logo image for the given symbol.
+
+        Raises:
+            StockNotFound: the symbol has no logo available.
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
