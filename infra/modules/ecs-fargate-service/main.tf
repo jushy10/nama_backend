@@ -1,5 +1,23 @@
 data "aws_region" "current" {}
 
+locals {
+  # Every SSM secret ARN the execution role must be able to read
+  # (DATABASE_URL, if set, plus any extra_secrets).
+  secret_arns = concat(
+    var.database_url_ssm_arn == null ? [] : [var.database_url_ssm_arn],
+    values(var.extra_secrets),
+  )
+
+  # Container "secrets" entries: env var name -> SSM ARN. Map iteration is
+  # key-sorted, so the order is stable across plans (no perpetual diff).
+  container_secrets = concat(
+    var.database_url_ssm_arn == null ? [] : [
+      { name = "DATABASE_URL", valueFrom = var.database_url_ssm_arn }
+    ],
+    [for env_name, arn in var.extra_secrets : { name = env_name, valueFrom = arn }],
+  )
+}
+
 # ---------------------------------------------------------------------------
 # Container image registry. CI builds the app image and pushes it here; the
 # task definition below pulls "<repo>:<image_tag>".
@@ -86,14 +104,15 @@ resource "aws_iam_role_policy_attachment" "execution_managed" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Allow the execution role to read the DATABASE_URL SecureString (and decrypt
-# it). Only created when a secret is configured — a static frontend has none.
+# Allow the execution role to read the injected SecureString secrets (and
+# decrypt them). Only created when at least one secret is configured — a static
+# frontend has none.
 data "aws_iam_policy_document" "execution_secrets" {
-  count = var.database_url_ssm_arn == null ? 0 : 1
+  count = length(local.secret_arns) == 0 ? 0 : 1
 
   statement {
     actions   = ["ssm:GetParameters"]
-    resources = [var.database_url_ssm_arn]
+    resources = local.secret_arns
   }
   statement {
     actions   = ["kms:Decrypt"]
@@ -102,7 +121,7 @@ data "aws_iam_policy_document" "execution_secrets" {
 }
 
 resource "aws_iam_role_policy" "execution_secrets" {
-  count = var.database_url_ssm_arn == null ? 0 : 1
+  count = length(local.secret_arns) == 0 ? 0 : 1
 
   name_prefix = "secrets-"
   role        = aws_iam_role.execution.id
@@ -306,8 +325,9 @@ resource "aws_ecs_task_definition" "this" {
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
-  # The "secrets" block is added only when a DATABASE_URL secret is configured;
-  # a static frontend has none, so the key is omitted entirely there.
+  # The "secrets" block injects SSM SecureStrings (DATABASE_URL plus any
+  # extra_secrets) as env vars. Omitted entirely when there are none (e.g. a
+  # static frontend), so nothing secret appears in the task definition.
   container_definitions = jsonencode([
     merge(
       {
@@ -328,10 +348,8 @@ resource "aws_ecs_task_definition" "this" {
           }
         }
       },
-      var.database_url_ssm_arn == null ? {} : {
-        secrets = [
-          { name = "DATABASE_URL", valueFrom = var.database_url_ssm_arn }
-        ]
+      length(local.container_secrets) == 0 ? {} : {
+        secrets = local.container_secrets
       }
     )
   ])

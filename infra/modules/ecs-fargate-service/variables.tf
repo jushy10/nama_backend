@@ -25,6 +25,12 @@ variable "database_url_ssm_arn" {
   default     = null
 }
 
+variable "extra_secrets" {
+  description = "Additional secrets injected as container env vars: a map of ENV_VAR_NAME => SSM parameter ARN. The execution role is granted read on each, and they're injected alongside DATABASE_URL."
+  type        = map(string)
+  default     = {}
+}
+
 variable "container_port" {
   description = "Port the app listens on inside the container."
   type        = number
