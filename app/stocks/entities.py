@@ -10,6 +10,14 @@ from datetime import datetime
 
 
 @dataclass(frozen=True)
+class Logo:
+    """A company's logo image plus its MIME type, ready to serve as-is."""
+
+    content: bytes
+    media_type: str
+
+
+@dataclass(frozen=True)
 class Stock:
     """A snapshot of a tradable stock at a point in time."""
 

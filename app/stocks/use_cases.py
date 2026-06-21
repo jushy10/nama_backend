@@ -5,8 +5,8 @@ provider for the data. Depend only on the entity and the port — never on a
 framework or a concrete provider.
 """
 
-from app.stocks.entities import Stock
-from app.stocks.ports import StockDataProvider
+from app.stocks.entities import Logo, Stock
+from app.stocks.ports import LogoProvider, StockDataProvider
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -32,8 +32,8 @@ class GetStockInfo:
 class GetStockLogo:
     """Use case: retrieve the company logo image for a stock symbol."""
 
-    def __init__(self, provider: StockDataProvider) -> None:
+    def __init__(self, provider: LogoProvider) -> None:
         self._provider = provider
 
-    def execute(self, symbol: str) -> bytes:
+    def execute(self, symbol: str) -> Logo:
         return self._provider.get_logo(_normalize_symbol(symbol))

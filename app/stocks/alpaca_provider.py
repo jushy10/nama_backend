@@ -7,7 +7,6 @@ Swap data vendors and only this file changes.
 SDK: https://alpaca.markets/sdks/python/
 """
 
-import httpx
 from alpaca.common.exceptions import APIError
 from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
@@ -22,9 +21,6 @@ from app.stocks.ports import StockDataProvider
 class AlpacaStockDataProvider(StockDataProvider):
     """Fetches stock data from Alpaca and maps it onto the Stock entity."""
 
-    # The logo endpoint isn't covered by alpaca-py, so we call it over HTTP.
-    _DATA_BASE_URL = "https://data.alpaca.markets/v1beta1"
-
     def __init__(
         self,
         api_key: str,
@@ -36,32 +32,11 @@ class AlpacaStockDataProvider(StockDataProvider):
         self._data = StockHistoricalDataClient(api_key, secret_key)
         self._trading = TradingClient(api_key, secret_key, paper=paper)
         self._feed = feed
-        self._http = httpx.Client(
-            base_url=self._DATA_BASE_URL,
-            headers={
-                "APCA-API-KEY-ID": api_key,
-                "APCA-API-SECRET-KEY": secret_key,
-            },
-            timeout=10.0,
-        )
 
     def get_stock(self, symbol: str) -> Stock:
         snapshot = self._fetch_snapshot(symbol)
         name, exchange = self._fetch_asset_metadata(symbol)
         return self._to_entity(symbol, snapshot, name, exchange)
-
-    def get_logo(self, symbol: str) -> bytes:
-        try:
-            resp = self._http.get(f"/logos/{symbol}")
-        except httpx.HTTPError as exc:
-            raise StockDataUnavailable(symbol, str(exc)) from exc
-        if resp.status_code == 404:
-            raise StockNotFound(symbol)
-        if resp.status_code != 200:
-            raise StockDataUnavailable(
-                symbol, f"logo request failed (HTTP {resp.status_code})"
-            )
-        return resp.content
 
     # --- Alpaca calls (thin and isolated) ---
 

@@ -16,7 +16,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.entities import Stock
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import StockDataProvider
+from app.stocks.fmp_logo_provider import FmpLogoProvider
+from app.stocks.ports import LogoProvider, StockDataProvider
 from app.stocks.schemas import StockResponse
 from app.stocks.use_cases import GetStockInfo, GetStockLogo
 
@@ -38,7 +39,15 @@ def get_stock_info(provider: StockDataProvider = Depends(get_provider)) -> GetSt
     return GetStockInfo(provider)
 
 
-def get_stock_logo(provider: StockDataProvider = Depends(get_provider)) -> GetStockLogo:
+@lru_cache(maxsize=1)
+def get_logo_provider() -> LogoProvider:
+    # No credentials needed; the source is free. LOGO_BASE_URL lets you point
+    # at a different ticker-keyed source without a code change.
+    base_url = os.environ.get("LOGO_BASE_URL")
+    return FmpLogoProvider(base_url) if base_url else FmpLogoProvider()
+
+
+def get_stock_logo(provider: LogoProvider = Depends(get_logo_provider)) -> GetStockLogo:
     return GetStockLogo(provider)
 
 
@@ -87,11 +96,11 @@ def get_stock_logo_image(
     symbol: str, use_case: GetStockLogo = Depends(get_stock_logo)
 ) -> Response:
     try:
-        image = use_case.execute(symbol)
+        logo = use_case.execute(symbol)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except StockNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
-    return Response(content=image, media_type="image/png")
+    return Response(content=logo.content, media_type=logo.media_type)
