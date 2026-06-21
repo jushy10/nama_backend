@@ -5,8 +5,10 @@ provider for the data. Depend only on the entity and the port — never on a
 framework or a concrete provider.
 """
 
-from app.stocks.entities import Logo, Stock
-from app.stocks.ports import LogoProvider, StockDataProvider
+from datetime import datetime
+
+from app.stocks.entities import CandleSeries, Logo, Stock, Timeframe
+from app.stocks.ports import CandleProvider, LogoProvider, StockDataProvider
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -37,3 +39,24 @@ class GetStockLogo:
 
     def execute(self, symbol: str) -> Logo:
         return self._provider.get_logo(_normalize_symbol(symbol))
+
+
+class GetStockCandles:
+    """Use case: retrieve historical OHLC candles for charting."""
+
+    def __init__(self, provider: CandleProvider) -> None:
+        self._provider = provider
+
+    def execute(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> CandleSeries:
+        if start is not None and end is not None and start >= end:
+            raise ValueError("'start' must be earlier than 'end'.")
+        return self._provider.get_candles(
+            _normalize_symbol(symbol), timeframe, start=start, end=end
+        )
