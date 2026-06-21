@@ -40,6 +40,26 @@ module "database" {
   database_url_ssm_name = "/nama/dev/database-url"
 }
 
+# Alpaca API credentials for the stocks feature (GET /stocks/{symbol}). Created
+# as SecureString placeholders; set the REAL values out of band so they never
+# live in code or Terraform state:
+#
+#   aws ssm put-parameter --overwrite --type SecureString \
+#     --name /nama/dev/alpaca-api-key-id     --value <YOUR_KEY_ID>
+#   aws ssm put-parameter --overwrite --type SecureString \
+#     --name /nama/dev/alpaca-api-secret-key --value <YOUR_SECRET>
+module "alpaca_api_key_id" {
+  source      = "../../modules/ssm-secret"
+  name        = "/nama/dev/alpaca-api-key-id"
+  description = "Alpaca API key ID (stocks feature). Value set out of band."
+}
+
+module "alpaca_api_secret_key" {
+  source      = "../../modules/ssm-secret"
+  name        = "/nama/dev/alpaca-api-secret-key"
+  description = "Alpaca API secret key (stocks feature). Value set out of band."
+}
+
 # DNS + TLS certificate for the public hostname.
 module "dns" {
   source = "../../modules/dns-cert"
@@ -60,6 +80,13 @@ module "app" {
   subnet_ids            = data.aws_subnets.default.ids
   app_security_group_id = module.database.app_security_group_id
   database_url_ssm_arn  = module.database.database_url_ssm_arn
+
+  # Injected as APCA_API_KEY_ID / APCA_API_SECRET_KEY — the env vars the app
+  # reads in app/stocks/router.py.
+  extra_secrets = {
+    APCA_API_KEY_ID     = module.alpaca_api_key_id.arn
+    APCA_API_SECRET_KEY = module.alpaca_api_secret_key.arn
+  }
 
   enable_https    = true
   domain_name     = var.domain_name
