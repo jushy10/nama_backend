@@ -1,8 +1,8 @@
 # infra/ — Terraform for the nama AWS account
 
 Infrastructure as code, structured to grow. Reusable **modules** are composed by
-per-**environment** root configs, with remote state in S3 and CI that runs
-Terraform on a merge to `main`.
+per-**environment** root configs, with remote state in S3 and CI that plans on
+pull requests and applies on a merge to `main`.
 
 ## Layout
 
@@ -47,7 +47,8 @@ infra/
 2. **Or write a new module** under `modules/<name>/` with `main.tf`,
    `variables.tf`, `outputs.tf`, and a `versions.tf` declaring `required_providers`.
    Then call it as above.
-3. Merge to `main` → the **Infrastructure** workflow runs `terraform plan` then apply.
+3. Open a PR → the **Infrastructure** workflow runs `terraform plan` (preview).
+   Merge to `main` → it applies.
 
 ## How to add a new environment (e.g. prod)
 

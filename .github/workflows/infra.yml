@@ -1,8 +1,9 @@
 name: Infrastructure
 run-name: Infrastructure · ${{ (github.event_name == 'pull_request') && 'plan' || 'apply' }} · ${{ github.ref_name }}
 
-# Terraform for every environment under infra/environments/. Runs ONLY on a
-# merge (push) to main: terraform plan, then apply.
+# Terraform for every environment under infra/environments/.
+#   - Pull requests touching infra/**  -> terraform plan  (preview, no changes)
+#   - Merge (push) to main             -> terraform plan + apply
 #
 # Add an environment by creating infra/environments/<name>/ and adding <name>
 # to the matrix below.
@@ -14,6 +15,10 @@ run-name: Infrastructure · ${{ (github.event_name == 'pull_request') && 'plan' 
 on:
   push:
     branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra.yml"
+  pull_request:
     paths:
       - "infra/**"
       - ".github/workflows/infra.yml"

@@ -1,12 +1,12 @@
 name: Build & Deploy App
 run-name: Build & deploy app · ${{ github.ref_name }}
 
-# Build the app's Docker image, push it to ECR, and roll the ECS service.
-# Runs on pushes to main that touch the app or Dockerfile, or on demand.
+# Pull requests touching app/Dockerfile  -> build the image only (validate).
+# Merge (push) to main, or manual run     -> build, push to ECR, roll ECS.
 #
-# Requires the infra to exist first (the ECR repo + ECS service are created by
-# the Infrastructure workflow). Auth uses the same AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
-# secrets and the AWS_REGION variable.
+# The ECR repo + ECS service are created by the Infrastructure workflow. Deploy
+# auth uses the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var.
+# (The PR validate job needs no credentials.)
 
 on:
   push:
@@ -16,10 +16,16 @@ on:
       - "pyproject.toml"
       - "Dockerfile"
       - ".github/workflows/app-image.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - ".github/workflows/app-image.yml"
   workflow_dispatch: {}
 
 concurrency:
-  group: app-image
+  group: app-image-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -30,8 +36,24 @@ env:
   ECS_SERVICE: nama-dev
 
 jobs:
-  build-and-deploy:
+  # On pull requests: just prove the image builds. No AWS credentials, no push.
+  validate:
+    name: Validate build
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Build image (no push)
+        run: docker build -t "$ECR_REPOSITORY:ci" .
+
+  # On merge to main (or a manual run): build, push to ECR, and roll the service.
+  deploy:
     name: Build & deploy
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -46,8 +68,8 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # On the very first deploy this workflow can start before the infra apply
-      # has created the ECR repo, so wait for it rather than failing the race.
+      # On the very first deploy this job can start before the infra apply has
+      # created the ECR repo, so wait for it rather than failing the race.
       - name: Wait for the ECR repository
         run: |
           for i in $(seq 1 60); do
