@@ -8,7 +8,7 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "sqlalchemy>=2.0",
     "alpaca-py>=0.30",  # Alpaca market-data SDK (stocks feature)
-    "httpx>=0.27",      # direct HTTP for Alpaca's logo endpoint (not in the SDK)
+    "httpx>=0.27",      # direct HTTP for the logo source (Financial Modeling Prep)
 ]
 
 # PostgreSQL driver — install with `pip install -e ".[postgres]"` anywhere that
