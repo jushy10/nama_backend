@@ -147,6 +147,39 @@ running, on top of RDS. The ACM cert and Route 53 queries are negligible (the
 hosted zone is ~$0.50/mo). `terraform destroy` (or remove the `module "app"` block
 and apply) when you're done.
 
+## Frontend on ECS Fargate
+
+`environments/dev` runs the frontend (a static SPA built by Vite, served by
+**nginx on port 80**) as a **second** instance of the same
+[`ecs-fargate-service`](modules/ecs-fargate-service) module — `module "frontend"`.
+It's identical to the backend wiring with two differences:
+
+- **No database.** `app_security_group_id` and `database_url_ssm_arn` are left
+  unset, so the task gets no DB security group and no `DATABASE_URL` secret. The
+  module makes both optional for exactly this case.
+- **Apex + www.** It's served at `namainsights.com` and `www.namainsights.com`.
+  A dedicated `module "dns_frontend"` issues one ACM cert covering both names
+  (apex via `domain_name`, www via `subject_alternative_names`), and the service
+  adds an A record for each (`additional_domain_names`). Both hostnames alias to
+  the same load balancer and serve the same app.
+
+It gets its **own** ECR repo, ECS cluster/service, ALB, and IAM roles, all named
+`nama-frontend-dev-*` — covered by the existing CI policy (scoped to `nama-*`),
+so **no IAM policy change is needed**.
+
+### Deploy order
+
+Same as the backend: Terraform creates the registry + service (tasks can't start
+until an image exists), then the frontend repo's own GitHub Action builds the
+nginx image, pushes it to the `nama-frontend-dev` ECR repo, and rolls the
+service. After a healthy task, `terraform output frontend_url` →
+`https://namainsights.com`.
+
+### Cost & teardown
+
+A second ALB (~$16/mo) and Fargate task (~$9/mo). `terraform destroy` (or remove
+`module "frontend"` + `module "dns_frontend"` and apply) when you're done.
+
 ## Bootstrap (one-time per account)
 
 1. **State bucket** — an S3 bucket, **versioned**, **encrypted**, **public access

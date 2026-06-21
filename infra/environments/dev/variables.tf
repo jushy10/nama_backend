@@ -33,3 +33,15 @@ variable "create_hosted_zone" {
   type        = bool
   default     = false
 }
+
+variable "frontend_domain_name" {
+  description = "Apex hostname the frontend SPA is served at."
+  type        = string
+  default     = "namainsights.com"
+}
+
+variable "frontend_additional_domains" {
+  description = "Extra hostnames that also serve the frontend (e.g. www)."
+  type        = list(string)
+  default     = ["www.namainsights.com"]
+}

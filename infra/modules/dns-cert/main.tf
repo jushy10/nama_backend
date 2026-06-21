@@ -17,11 +17,17 @@ locals {
   name_servers = var.create_zone ? aws_route53_zone.this[0].name_servers : []
 }
 
-# Free, auto-renewing TLS certificate, validated by DNS.
+# Free, auto-renewing TLS certificate, validated by DNS. One cert can cover
+# several names (apex + www, say) via subject_alternative_names.
+#
+# When there are no extra names we pass null (not []) so an existing single-name
+# cert isn't seen as changed — SANs are ForceNew, so a spurious diff would
+# replace the cert.
 resource "aws_acm_certificate" "this" {
-  domain_name       = var.domain_name
-  validation_method = "DNS"
-  tags              = var.tags
+  domain_name               = var.domain_name
+  subject_alternative_names = length(var.subject_alternative_names) > 0 ? var.subject_alternative_names : null
+  validation_method         = "DNS"
+  tags                      = var.tags
 
   lifecycle {
     create_before_destroy = true

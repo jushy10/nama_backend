@@ -14,13 +14,15 @@ variable "subnet_ids" {
 }
 
 variable "app_security_group_id" {
-  description = "Security group that the database accepts — attached to tasks so they can reach the DB."
+  description = "Security group that the database accepts — attached to tasks so they can reach the DB. Null for a service that needs no database (e.g. a static frontend)."
   type        = string
+  default     = null
 }
 
 variable "database_url_ssm_arn" {
-  description = "ARN of the SSM SecureString holding DATABASE_URL; injected into the container."
+  description = "ARN of the SSM SecureString holding DATABASE_URL; injected into the container. Null = no DATABASE_URL secret (e.g. a static frontend)."
   type        = string
+  default     = null
 }
 
 variable "container_port" {
@@ -75,6 +77,12 @@ variable "domain_name" {
   description = "Hostname to point at the load balancer (e.g. api.namainsights.com). Null = no DNS record."
   type        = string
   default     = null
+}
+
+variable "additional_domain_names" {
+  description = "Extra hostnames that also alias to this load balancer (e.g. [\"www.namainsights.com\"]). Must be covered by certificate_arn when enable_https is true."
+  type        = list(string)
+  default     = []
 }
 
 variable "route53_zone_id" {

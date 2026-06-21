@@ -66,3 +66,35 @@ module "app" {
   route53_zone_id = module.dns.zone_id
   certificate_arn = module.dns.certificate_arn
 }
+
+# DNS + TLS for the frontend (apex + www), in the same hosted zone. create_zone
+# is false because module.dns / Route 53 already owns the zone; one cert covers
+# both the apex and www via subject_alternative_names.
+module "dns_frontend" {
+  source = "../../modules/dns-cert"
+
+  parent_domain             = var.parent_domain
+  domain_name               = var.frontend_domain_name
+  subject_alternative_names = var.frontend_additional_domains
+  create_zone               = false
+}
+
+# The frontend SPA on ECS Fargate, behind its own public load balancer. It's a
+# static build served by nginx on port 80 — no database, so no app security
+# group and no DATABASE_URL secret. Served at the apex (and www) over HTTPS.
+module "frontend" {
+  source = "../../modules/ecs-fargate-service"
+
+  name       = "nama-frontend-dev"
+  vpc_id     = data.aws_vpc.default.id
+  subnet_ids = data.aws_subnets.default.ids
+
+  container_port    = 80
+  health_check_path = "/"
+
+  enable_https            = true
+  domain_name             = var.frontend_domain_name
+  additional_domain_names = var.frontend_additional_domains
+  route53_zone_id         = module.dns_frontend.zone_id
+  certificate_arn         = module.dns_frontend.certificate_arn
+}
