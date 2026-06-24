@@ -15,6 +15,7 @@ from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     Candle,
     CandleSeries,
+    KeyMetrics,
     Logo,
     Stock,
     StockFundamentals,
@@ -154,9 +155,19 @@ def a_performance(**overrides) -> StockPerformance:
     return StockPerformance(**base)
 
 
+def a_key_metrics(**overrides) -> KeyMetrics:
+    base = dict(
+        pe=28.5, pb=45.2, ps=7.1, eps=6.1, roe=150.0, beta=1.2,
+        week_52_high=320.0, week_52_low=210.0,
+    )
+    base.update(overrides)
+    return KeyMetrics(**base)
+
+
 def a_fundamentals(**overrides) -> StockFundamentals:
     base = dict(
-        market_cap=3_120_000_000_000.0, dividend_per_share=1.0, dividend_yield=0.42
+        market_cap=3_120_000_000_000.0, dividend_per_share=1.0, dividend_yield=0.42,
+        metrics=a_key_metrics(),
     )
     base.update(overrides)
     return StockFundamentals(**base)
@@ -248,6 +259,8 @@ def test_use_case_merges_enrichment():
     assert stock.dividend_per_share == 1.0
     assert stock.dividend_yield == 0.42
     assert stock.performance.one_year == 21.0
+    assert stock.metrics.pe == 28.5
+    assert stock.metrics.beta == 1.2
 
 
 def test_use_case_without_enrichment_leaves_fields_none():
@@ -255,6 +268,7 @@ def test_use_case_without_enrichment_leaves_fields_none():
     assert stock.market_cap is None
     assert stock.dividend_yield is None
     assert stock.performance is None
+    assert stock.metrics is None
 
 
 def test_use_case_enrichment_is_best_effort():
@@ -388,6 +402,11 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
     assert body["performance"] == {
         "1w": 1.2, "1m": -0.4, "3m": 5.1, "6m": 8.7, "ytd": 12.3, "1y": 21.0,
     }
+    # nested key metrics ride along on the same fundamentals payload
+    assert body["metrics"]["pe"] == 28.5
+    assert body["metrics"]["beta"] == 1.2
+    assert body["metrics"]["week_52_high"] == 320.0
+    assert body["metrics"]["ps"] == 7.1
 
 
 def test_get_stock_enrichment_best_effort_returns_200(make_client):
@@ -412,6 +431,7 @@ def test_get_stock_without_enrichment_providers_nulls_fields(make_client):
     assert body["market_cap"] is None
     assert body["dividend_per_share"] is None
     assert body["performance"] is None
+    assert body["metrics"] is None
 
 
 # --------------------------- logo endpoint ---------------------------

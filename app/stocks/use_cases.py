@@ -66,6 +66,7 @@ class GetStockInfo:
                 fundamentals.dividend_per_share if fundamentals else None
             ),
             dividend_yield=fundamentals.dividend_yield if fundamentals else None,
+            metrics=fundamentals.metrics if fundamentals else None,
         )
 
     def _performance(self, symbol: str) -> StockPerformance | None:

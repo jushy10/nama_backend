@@ -55,16 +55,56 @@ class StockPerformance:
 
 
 @dataclass(frozen=True)
+class KeyMetrics:
+    """Trailing valuation, profitability, health and growth indicators.
+
+    Point-in-time ratios that say where a stock trades and how the business is
+    doing. Every field is optional: vendors cover tickers unevenly and this is
+    best-effort enrichment, so any unknown value is left ``None``.
+
+    All figures are *trailing* (derived from reported history). Forward-looking
+    metrics (forward P/E, analyst price targets) need an estimates feed and are
+    deliberately out of scope. Margins, ROE and the growth fields are percent;
+    ratios are plain multiples; the 52-week prices are in the quote currency.
+    """
+
+    # Valuation
+    pe: float | None = None  # price / trailing EPS
+    pb: float | None = None  # price / book value
+    ps: float | None = None  # price / sales
+    eps: float | None = None  # trailing earnings per share
+    # Profitability (percent)
+    roe: float | None = None  # return on equity
+    gross_margin: float | None = None
+    operating_margin: float | None = None
+    net_margin: float | None = None
+    # Financial health
+    current_ratio: float | None = None  # current assets / current liabilities
+    debt_to_equity: float | None = None  # total debt / equity
+    # Growth (percent, year over year)
+    eps_growth_yoy: float | None = None
+    revenue_growth_yoy: float | None = None
+    # Market / price
+    beta: float | None = None  # volatility vs the market (1.0 = moves with it)
+    week_52_high: float | None = None
+    week_52_low: float | None = None
+    # Dividend sustainability
+    payout_ratio: float | None = None  # dividends / earnings (percent)
+
+
+@dataclass(frozen=True)
 class StockFundamentals:
     """Company fundamentals that live outside the live price snapshot.
 
     Sourced from a fundamentals vendor rather than the price feed, since market
-    data APIs (e.g. Alpaca) don't expose shares outstanding or dividends.
+    data APIs (e.g. Alpaca) don't expose shares outstanding or dividends. The
+    same vendor call also yields the richer ``metrics`` block.
     """
 
     market_cap: float | None
     dividend_per_share: float | None
     dividend_yield: float | None
+    metrics: KeyMetrics | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +129,7 @@ class Stock:
     dividend_per_share: float | None = None
     dividend_yield: float | None = None
     performance: StockPerformance | None = None
+    metrics: KeyMetrics | None = None
 
     @property
     def change(self) -> float | None:

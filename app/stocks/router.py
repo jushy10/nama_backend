@@ -16,7 +16,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.chart_window import ChartRange, resolve_window
-from app.stocks.entities import CandleSeries, Stock, StockPerformance, Timeframe
+from app.stocks.entities import (
+    CandleSeries,
+    KeyMetrics,
+    Stock,
+    StockPerformance,
+    Timeframe,
+)
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
 from app.stocks.fmp_logo_provider import FmpLogoProvider
@@ -29,6 +35,7 @@ from app.stocks.ports import (
 from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
+    KeyMetricsResponse,
     StockPerformanceResponse,
     StockResponse,
 )
@@ -107,6 +114,7 @@ def _present(stock: Stock) -> StockResponse:
         dividend_per_share=stock.dividend_per_share,
         dividend_yield=stock.dividend_yield,
         performance=_present_performance(stock.performance),
+        metrics=_present_metrics(stock.metrics),
     )
 
 
@@ -122,6 +130,29 @@ def _present_performance(
         six_month=perf.six_month,
         ytd=perf.ytd,
         one_year=perf.one_year,
+    )
+
+
+def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
+    if metrics is None:
+        return None
+    return KeyMetricsResponse(
+        pe=metrics.pe,
+        pb=metrics.pb,
+        ps=metrics.ps,
+        eps=metrics.eps,
+        roe=metrics.roe,
+        gross_margin=metrics.gross_margin,
+        operating_margin=metrics.operating_margin,
+        net_margin=metrics.net_margin,
+        current_ratio=metrics.current_ratio,
+        debt_to_equity=metrics.debt_to_equity,
+        eps_growth_yoy=metrics.eps_growth_yoy,
+        revenue_growth_yoy=metrics.revenue_growth_yoy,
+        beta=metrics.beta,
+        week_52_high=metrics.week_52_high,
+        week_52_low=metrics.week_52_low,
+        payout_ratio=metrics.payout_ratio,
     )
 
 

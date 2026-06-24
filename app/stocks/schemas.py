@@ -27,6 +27,32 @@ class StockPerformanceResponse(BaseModel):
     one_year: float | None = Field(default=None, alias="1y")
 
 
+class KeyMetricsResponse(BaseModel):
+    """Trailing valuation, profitability, health and growth indicators.
+
+    All trailing (no forward estimates). Margins, ROE and the growth fields are
+    percentages; the ratios are plain multiples. Any field a vendor doesn't
+    cover is ``null``.
+    """
+
+    pe: float | None = None  # price / trailing EPS
+    pb: float | None = None  # price / book value
+    ps: float | None = None  # price / sales
+    eps: float | None = None  # trailing earnings per share
+    roe: float | None = None  # return on equity (percent)
+    gross_margin: float | None = None  # percent
+    operating_margin: float | None = None  # percent
+    net_margin: float | None = None  # percent
+    current_ratio: float | None = None
+    debt_to_equity: float | None = None
+    eps_growth_yoy: float | None = None  # percent
+    revenue_growth_yoy: float | None = None  # percent
+    beta: float | None = None
+    week_52_high: float | None = None
+    week_52_low: float | None = None
+    payout_ratio: float | None = None  # dividends / earnings (percent)
+
+
 class StockResponse(BaseModel):
     symbol: str
     name: str | None = None
@@ -47,6 +73,7 @@ class StockResponse(BaseModel):
     dividend_per_share: float | None = None  # $ per share, annual
     dividend_yield: float | None = None  # percent
     performance: StockPerformanceResponse | None = None
+    metrics: KeyMetricsResponse | None = None
 
 
 class CandleResponse(BaseModel):
