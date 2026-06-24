@@ -12,8 +12,13 @@ import pytest
 from alpaca.common.exceptions import APIError
 
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
-from app.stocks.entities import Stock, StockPerformance
+from app.stocks.entities import Candle, Stock, StockPerformance, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.ports import (
+    CandleProvider,
+    StockDataProvider,
+    StockPerformanceProvider,
+)
 
 
 def make_snapshot():
@@ -193,3 +198,78 @@ def test_get_performance_unknown_symbol_returns_empty():
     assert p.get_performance("AAPL") == StockPerformance(
         None, None, None, None, None, None
     )
+
+
+# --------------------------- candles ---------------------------
+
+def make_bar(ts, open_, high, low, close, volume=1000.0):
+    return SimpleNamespace(
+        timestamp=ts, open=open_, high=high, low=low, close=close, volume=volume
+    )
+
+
+class FakeBarsClient:
+    """Stands in for StockHistoricalDataClient.get_stock_bars."""
+
+    def __init__(self, bars_by_symbol=None, error=None):
+        self._barset = SimpleNamespace(data=bars_by_symbol or {})
+        self._error = error
+        self.last_request = None
+
+    def get_stock_bars(self, request):
+        self.last_request = request
+        if self._error is not None:
+            raise self._error
+        return self._barset
+
+
+def bars_provider(client) -> AlpacaStockDataProvider:
+    p = AlpacaStockDataProvider("dummy-key", "dummy-secret")
+    p._data = client
+    return p
+
+
+def test_to_candle_maps_fields_and_casts_volume():
+    bar = make_bar(datetime(2026, 6, 18, tzinfo=timezone.utc), 100.0, 105.0, 99.0, 104.0)
+    candle = AlpacaStockDataProvider._to_candle(bar)
+    assert isinstance(candle, Candle)
+    assert (candle.open, candle.high, candle.low, candle.close) == (100.0, 105.0, 99.0, 104.0)
+    assert candle.volume == 1000  # float -> int
+    assert candle.is_bullish is True
+
+
+def test_get_candles_returns_chronological_order():
+    # Alpaca is asked for newest-first (sort=DESC); the adapter must reverse it.
+    newest = make_bar(datetime(2026, 6, 19, tzinfo=timezone.utc), 110, 111, 108, 109)
+    oldest = make_bar(datetime(2026, 6, 18, tzinfo=timezone.utc), 100, 106, 99, 105)
+    p = bars_provider(FakeBarsClient(bars_by_symbol={"AAPL": [newest, oldest]}))
+    series = p.get_candles("AAPL", Timeframe.DAY_1, start=None, end=None)
+    times = [c.timestamp for c in series.candles]
+    assert times == sorted(times)  # oldest first
+    assert series.timeframe is Timeframe.DAY_1
+
+
+def test_get_candles_empty_raises_not_found():
+    p = bars_provider(FakeBarsClient(bars_by_symbol={}))
+    with pytest.raises(StockNotFound):
+        p.get_candles("ZZZZ", Timeframe.DAY_1, start=None, end=None)
+
+
+def test_get_candles_api_error_translated_to_unavailable():
+    p = bars_provider(FakeBarsClient(error=APIError("boom")))
+    with pytest.raises(StockDataUnavailable):
+        p.get_candles("AAPL", Timeframe.HOUR_1, start=None, end=None)
+
+
+# --------------------------- port composition ---------------------------
+
+
+def test_provider_implements_all_three_ports():
+    # The merged adapter serves the snapshot, performance, and candle ports from
+    # one instance. The router relies on this: get_stock_info uses an isinstance
+    # check to reuse the provider as the StockPerformanceProvider, so a dropped
+    # base class would silently stop performance from populating in production.
+    p = AlpacaStockDataProvider("dummy-key", "dummy-secret")
+    assert isinstance(p, StockDataProvider)
+    assert isinstance(p, StockPerformanceProvider)
+    assert isinstance(p, CandleProvider)

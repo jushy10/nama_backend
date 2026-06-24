@@ -38,6 +38,8 @@ Creates a local `nama.db` on first run. Interactive docs at
 | ------ | ------------- | ---------------- |
 | GET    | `/healthz`    | Liveness check   |
 | GET    | `/stocks/{symbol}` | Stock info from Alpaca (e.g. `AAPL`) |
+| GET    | `/stocks/{symbol}/logo` | Company logo image |
+| GET    | `/stocks/{symbol}/candles` | OHLC candlestick chart data |
 
 ## Test
 
@@ -88,6 +90,38 @@ curl localhost:8080/stocks/AAPL
 Uses Alpaca's free **IEX** feed. Without the Alpaca keys the endpoint returns
 `503`; without `FINNHUB_API_KEY` it still serves price + performance, just with
 market cap and dividend omitted. The rest of the app runs regardless.
+
+### Candlestick chart data
+
+`GET /stocks/{symbol}/candles` returns OHLC candles for drawing a candlestick
+chart (the green/red bars on a stock page). Each candle carries a `direction`
+(`up`/`down`) for colouring and a `time` field in **UNIX epoch seconds**, the
+format charting libraries such as [TradingView Lightweight
+Charts](https://www.tradingview.com/lightweight-charts/) expect.
+
+Query parameters:
+
+| Param       | Values | Default | Notes |
+| ----------- | ------ | ------- | ----- |
+| `timeframe` | `1Min` `5Min` `15Min` `30Min` `1Hour` `4Hour` `1Day` `1Week` `1Month` | `1Day` | Granularity of each candle. |
+| `range`     | `1D` `5D` `1M` `3M` `6M` `1Y` `2Y` `5Y` `YTD` `MAX` | `6M` | How far back to fetch. |
+| `start`     | ISO 8601 datetime | – | Explicit window start (UTC); overrides `range`. |
+| `end`       | ISO 8601 datetime | now | Explicit window end (UTC). |
+
+Pick a `timeframe` for zoom level and a `range` (or an explicit `start`/`end`
+window) for how much history to load. Candles come back oldest-first, split-
+adjusted, and capped at the 10,000 most recent bars in the window.
+
+```sh
+# Last 6 months, daily candles (defaults)
+curl localhost:8080/stocks/AAPL/candles
+
+# Last 5 trading days, hourly candles
+curl "localhost:8080/stocks/AAPL/candles?timeframe=1Hour&range=5D"
+
+# An explicit window
+curl "localhost:8080/stocks/AAPL/candles?start=2026-01-01T00:00:00Z&end=2026-02-01T00:00:00Z"
+```
 
 ### Secrets in AWS
 

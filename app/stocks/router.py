@@ -9,12 +9,14 @@ the error only surfaces when the endpoint is actually called.
 """
 
 import os
+from datetime import datetime, timezone
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
-from app.stocks.entities import Stock, StockPerformance
+from app.stocks.chart_window import ChartRange, resolve_window
+from app.stocks.entities import CandleSeries, Stock, StockPerformance, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
 from app.stocks.fmp_logo_provider import FmpLogoProvider
@@ -24,14 +26,19 @@ from app.stocks.ports import (
     StockFundamentalsProvider,
     StockPerformanceProvider,
 )
-from app.stocks.schemas import StockPerformanceResponse, StockResponse
-from app.stocks.use_cases import GetStockInfo, GetStockLogo
+from app.stocks.schemas import (
+    CandleResponse,
+    CandleSeriesResponse,
+    StockPerformanceResponse,
+    StockResponse,
+)
+from app.stocks.use_cases import GetStockCandles, GetStockInfo, GetStockLogo
 
 router = APIRouter(tags=["stocks"])
 
 
 @lru_cache(maxsize=1)
-def get_provider() -> StockDataProvider:
+def get_provider() -> AlpacaStockDataProvider:
     key = os.environ.get("APCA_API_KEY_ID")
     secret = os.environ.get("APCA_API_SECRET_KEY")
     if not key or not secret:
@@ -56,6 +63,14 @@ def get_stock_info(
     # The Alpaca provider supplies both the snapshot and the performance windows.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
     return GetStockInfo(provider, performance, fundamentals)
+
+
+def get_stock_candles(
+    # The Alpaca provider implements CandleProvider too, so the same instance
+    # serves both the snapshot and candle endpoints.
+    provider: AlpacaStockDataProvider = Depends(get_provider),
+) -> GetStockCandles:
+    return GetStockCandles(provider)
 
 
 @lru_cache(maxsize=1)
@@ -110,6 +125,36 @@ def _present_performance(
     )
 
 
+def _present_candles(series: CandleSeries) -> CandleSeriesResponse:
+    """Presenter: candle series entity -> HTTP response DTO."""
+    return CandleSeriesResponse(
+        symbol=series.symbol,
+        timeframe=series.timeframe.value,
+        count=len(series.candles),
+        candles=[
+            CandleResponse(
+                time=int(c.timestamp.timestamp()),
+                timestamp=c.timestamp,
+                open=c.open,
+                high=c.high,
+                low=c.low,
+                close=c.close,
+                volume=c.volume,
+                direction="up" if c.is_bullish else "down",
+            )
+            for c in series.candles
+        ],
+    )
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """Coerce a (possibly naive) query datetime to UTC so window arithmetic and
+    comparisons never mix naive and aware values."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
 @router.get("/stocks/{symbol}", response_model=StockResponse)
 def get_stock(
     symbol: str, use_case: GetStockInfo = Depends(get_stock_info)
@@ -142,3 +187,40 @@ def get_stock_logo_image(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return Response(content=logo.content, media_type=logo.media_type)
+
+
+@router.get("/stocks/{symbol}/candles", response_model=CandleSeriesResponse)
+def get_stock_candles_endpoint(
+    symbol: str,
+    timeframe: Timeframe = Query(
+        Timeframe.DAY_1, description="Granularity of each candle."
+    ),
+    range_: ChartRange = Query(
+        ChartRange.MONTH_6,
+        alias="range",
+        description="How far back to fetch. Ignored when an explicit `start`/`end` is given.",
+    ),
+    start: datetime | None = Query(
+        None, description="Explicit window start (ISO 8601, UTC). Overrides `range`."
+    ),
+    end: datetime | None = Query(
+        None, description="Explicit window end (ISO 8601, UTC). Defaults to now."
+    ),
+    use_case: GetStockCandles = Depends(get_stock_candles),
+) -> CandleSeriesResponse:
+    start, end = _as_utc(start), _as_utc(end)
+    # Explicit start/end win; otherwise derive the window from the range preset.
+    if start is None and end is None:
+        start, end = resolve_window(range_, now=datetime.now(timezone.utc))
+    elif end is None:
+        end = datetime.now(timezone.utc)
+
+    try:
+        series = use_case.execute(symbol, timeframe, start=start, end=end)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return _present_candles(series)

@@ -6,8 +6,16 @@ implementation. The core never imports Alpaca; Alpaca imports the core.
 """
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 
-from app.stocks.entities import Logo, Stock, StockFundamentals, StockPerformance
+from app.stocks.entities import (
+    CandleSeries,
+    Logo,
+    Stock,
+    StockFundamentals,
+    StockPerformance,
+    Timeframe,
+)
 
 
 class StockDataProvider(ABC):
@@ -75,6 +83,32 @@ class LogoProvider(ABC):
 
         Raises:
             StockNotFound: no logo is available for the symbol.
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class CandleProvider(ABC):
+    """A gateway for retrieving historical OHLC candles (chart data)."""
+
+    @abstractmethod
+    def get_candles(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        start: datetime | None,
+        end: datetime | None,
+    ) -> CandleSeries:
+        """Return chronological candles for the (already-normalized) symbol.
+
+        Args:
+            timeframe: granularity of each candle.
+            start: window start (UTC); None means "as far back as available".
+            end: window end (UTC); None means "up to now".
+
+        Raises:
+            StockNotFound: the symbol has no candle data in the window.
             StockDataUnavailable: the upstream source failed.
         """
         raise NotImplementedError

@@ -10,22 +10,45 @@ SDK: https://alpaca.markets/sdks/python/
 import bisect
 from datetime import datetime, timedelta, timezone
 
+from alpaca.common.enums import Sort
 from alpaca.common.exceptions import APIError
-from alpaca.data.enums import DataFeed
+from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockSnapshotRequest
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 
-from app.stocks.entities import Stock, StockPerformance
+from app.stocks.entities import Candle, CandleSeries, Stock, StockPerformance, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import StockDataProvider, StockPerformanceProvider
+from app.stocks.ports import CandleProvider, StockDataProvider, StockPerformanceProvider
+
+# Our vendor-agnostic Timeframe -> Alpaca's (amount, unit).
+_TIMEFRAME_MAP: dict[Timeframe, tuple[int, TimeFrameUnit]] = {
+    Timeframe.MIN_1: (1, TimeFrameUnit.Minute),
+    Timeframe.MIN_5: (5, TimeFrameUnit.Minute),
+    Timeframe.MIN_15: (15, TimeFrameUnit.Minute),
+    Timeframe.MIN_30: (30, TimeFrameUnit.Minute),
+    Timeframe.HOUR_1: (1, TimeFrameUnit.Hour),
+    Timeframe.HOUR_4: (4, TimeFrameUnit.Hour),
+    Timeframe.DAY_1: (1, TimeFrameUnit.Day),
+    Timeframe.WEEK_1: (1, TimeFrameUnit.Week),
+    Timeframe.MONTH_1: (1, TimeFrameUnit.Month),
+}
+
+# Hard cap on candles per response. Also Alpaca's max page size. We ask Alpaca
+# to sort newest-first and cap at this many, so when a window holds more bars
+# than the cap it's the *most recent* ones that survive (a chart wants recent
+# data); we then reverse back to chronological order before returning.
+_MAX_CANDLES = 10_000
 
 
-class AlpacaStockDataProvider(StockDataProvider, StockPerformanceProvider):
+class AlpacaStockDataProvider(
+    StockDataProvider, StockPerformanceProvider, CandleProvider
+):
     """Fetches stock data from Alpaca and maps it onto the Stock entity.
 
-    Also derives trailing-window performance from daily price bars.
+    Also derives trailing-window performance from daily bars and historical
+    OHLC candles for charting.
     """
 
     # Lookback long enough to cover the 1-year window with margin for
@@ -62,6 +85,38 @@ class AlpacaStockDataProvider(StockDataProvider, StockPerformanceProvider):
 
     def get_performance(self, symbol: str) -> StockPerformance:
         return self._compute_performance(self._fetch_daily_bars(symbol))
+
+    def get_candles(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        start: datetime | None,
+        end: datetime | None,
+    ) -> CandleSeries:
+        amount, unit = _TIMEFRAME_MAP[timeframe]
+        try:
+            request = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame(amount, unit),
+                start=start,
+                end=end,
+                limit=_MAX_CANDLES,
+                adjustment=Adjustment.SPLIT,  # keep the line continuous over splits
+                sort=Sort.DESC,  # newest-first so the cap keeps recent bars
+                feed=self._feed,
+            )
+            barset = self._data.get_stock_bars(request)
+        except APIError as exc:
+            raise StockDataUnavailable(symbol, str(exc)) from exc
+
+        bars = barset.data.get(symbol, [])
+        if not bars:
+            raise StockNotFound(symbol)
+        # Reverse the newest-first response into chronological (oldest-first)
+        # order — the order a chart draws candles left to right.
+        candles = tuple(self._to_candle(bar) for bar in reversed(bars))
+        return CandleSeries(symbol=symbol, timeframe=timeframe, candles=candles)
 
     # --- Alpaca calls (thin and isolated) ---
 
@@ -104,6 +159,17 @@ class AlpacaStockDataProvider(StockDataProvider, StockPerformanceProvider):
         return barset.data.get(symbol, [])
 
     # --- Mapping: Alpaca SDK models -> domain entity ---
+
+    @staticmethod
+    def _to_candle(bar) -> Candle:
+        return Candle(
+            timestamp=bar.timestamp,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=int(bar.volume) if bar.volume is not None else None,
+        )
 
     @staticmethod
     def _to_entity(symbol, snapshot, name, exchange) -> Stock:

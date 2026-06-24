@@ -47,3 +47,25 @@ class StockResponse(BaseModel):
     dividend_per_share: float | None = None  # $ per share, annual
     dividend_yield: float | None = None  # percent
     performance: StockPerformanceResponse | None = None
+
+
+class CandleResponse(BaseModel):
+    """One candlestick. `time` is UNIX epoch seconds (UTC) — the format
+    charting libraries such as TradingView Lightweight Charts expect — and
+    `timestamp` is the same instant in ISO 8601 for human readers."""
+
+    time: int
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int | None = None
+    direction: str  # "up" (green) or "down" (red)
+
+
+class CandleSeriesResponse(BaseModel):
+    symbol: str
+    timeframe: str
+    count: int
+    candles: list[CandleResponse]
