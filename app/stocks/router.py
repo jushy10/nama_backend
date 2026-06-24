@@ -19,6 +19,7 @@ from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     CandleSeries,
     KeyMetrics,
+    SectorPerformance,
     Stock,
     StockPerformance,
     Timeframe,
@@ -39,10 +40,13 @@ from app.stocks.schemas import (
     KeyMetricsResponse,
     RsiPointResponse,
     RsiResponse,
+    SectorBoardResponse,
+    SectorPerformanceResponse,
     StockPerformanceResponse,
     StockResponse,
 )
 from app.stocks.use_cases import (
+    GetSectorPerformance,
     GetStockCandles,
     GetStockInfo,
     GetStockLogo,
@@ -94,6 +98,14 @@ def get_stock_rsi(
     provider: AlpacaStockDataProvider = Depends(get_provider),
 ) -> GetStockRsi:
     return GetStockRsi(provider)
+
+
+def get_sector_performance(
+    # The Alpaca provider implements SectorPerformanceProvider as well, reading
+    # each sector through its proxy ETF snapshot.
+    provider: AlpacaStockDataProvider = Depends(get_provider),
+) -> GetSectorPerformance:
+    return GetSectorPerformance(provider)
 
 
 @lru_cache(maxsize=1)
@@ -218,6 +230,26 @@ def _present_rsi(series: RsiSeries) -> RsiResponse:
     )
 
 
+def _present_sectors(sectors: list[SectorPerformance]) -> SectorBoardResponse:
+    """Presenter: ranked sector entities -> HTTP response DTO."""
+    return SectorBoardResponse(
+        count=len(sectors),
+        sectors=[
+            SectorPerformanceResponse(
+                sector=s.sector,
+                symbol=s.symbol,
+                price=s.price,
+                change=s.change,
+                change_percent=s.change_percent,
+                previous_close=s.previous_close,
+                as_of=s.as_of,
+                performance=_present_performance(s.performance),
+            )
+            for s in sectors
+        ],
+    )
+
+
 def _as_utc(dt: datetime | None) -> datetime | None:
     """Coerce a (possibly naive) query datetime to UTC so window arithmetic and
     comparisons never mix naive and aware values."""
@@ -335,3 +367,16 @@ def get_stock_rsi_endpoint(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present_rsi(series)
+
+
+@router.get("/sectors", response_model=SectorBoardResponse)
+def get_sectors_endpoint(
+    use_case: GetSectorPerformance = Depends(get_sector_performance),
+) -> SectorBoardResponse:
+    try:
+        sectors = use_case.execute()
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return _present_sectors(sectors)

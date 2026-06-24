@@ -11,6 +11,7 @@ from datetime import datetime
 from app.stocks.entities import (
     CandleSeries,
     Logo,
+    SectorPerformance,
     Stock,
     StockFundamentals,
     StockPerformance,
@@ -21,6 +22,7 @@ from app.stocks.indicators import RsiSeries, rsi_series
 from app.stocks.ports import (
     CandleProvider,
     LogoProvider,
+    SectorPerformanceProvider,
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
@@ -146,3 +148,22 @@ class GetStockRsi:
             _normalize_symbol(symbol), timeframe, start=start, end=end
         )
         return rsi_series(series, period)
+
+
+class GetSectorPerformance:
+    """Use case: rank the market's sectors by their move on the day.
+
+    Takes no input — it reports on the whole market. Sectors come back best
+    performer first; any sector missing a quote (so no percent move) sorts last.
+    """
+
+    def __init__(self, provider: SectorPerformanceProvider) -> None:
+        self._provider = provider
+
+    def execute(self) -> list[SectorPerformance]:
+        sectors = self._provider.get_sector_performance()
+        # Best performer first; a None percent (no quote) sorts to the end.
+        return sorted(
+            sectors,
+            key=lambda s: (s.change_percent is None, -(s.change_percent or 0.0)),
+        )

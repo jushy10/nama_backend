@@ -17,6 +17,7 @@ from app.stocks.entities import (
     CandleSeries,
     KeyMetrics,
     Logo,
+    SectorPerformance,
     Stock,
     StockFundamentals,
     StockPerformance,
@@ -27,17 +28,20 @@ from app.stocks.indicators import RsiSignal
 from app.stocks.ports import (
     CandleProvider,
     LogoProvider,
+    SectorPerformanceProvider,
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
 )
 from app.stocks.router import (
+    get_sector_performance,
     get_stock_candles,
     get_stock_info,
     get_stock_logo,
     get_stock_rsi,
 )
 from app.stocks.use_cases import (
+    GetSectorPerformance,
     GetStockCandles,
     GetStockInfo,
     GetStockLogo,
@@ -127,6 +131,22 @@ class FakeCandleProvider(CandleProvider):
         return self._series
 
 
+class FakeSectorProvider(SectorPerformanceProvider):
+    """Returns/raises whatever the test configured; counts calls."""
+
+    def __init__(self, sectors=None, raises: Exception | None = None):
+        self._sectors = sectors
+        self._raises = raises
+        self.calls = 0
+
+    def get_sector_performance(self) -> list[SectorPerformance]:
+        self.calls += 1
+        if self._raises is not None:
+            raise self._raises
+        assert self._sectors is not None
+        return self._sectors
+
+
 def a_logo(content: bytes = b"\x89PNG\r\n", media_type: str = "image/png") -> Logo:
     return Logo(content=content, media_type=media_type)
 
@@ -194,6 +214,15 @@ def a_fundamentals(**overrides) -> StockFundamentals:
     )
     base.update(overrides)
     return StockFundamentals(**base)
+
+
+def a_sector(**overrides) -> SectorPerformance:
+    base = dict(
+        sector="Technology", symbol="XLK", price=255.0, previous_close=250.0,
+        as_of=datetime(2026, 6, 18, 19, 59, 59, tzinfo=timezone.utc),
+    )
+    base.update(overrides)
+    return SectorPerformance(**base)
 
 
 # --------------------------- entity rules (pure) ---------------------------
@@ -395,6 +424,36 @@ def test_rsi_use_case_computes_from_fetched_candles():
     assert result.signal is RsiSignal.OVERBOUGHT
 
 
+# --------------------------- sector use case ---------------------------
+
+def test_sector_entity_change_and_percent():
+    s = a_sector(price=110.0, previous_close=100.0)
+    assert s.change == 10.0
+    assert s.change_percent == 10.0
+    assert a_sector(previous_close=None).change_percent is None
+
+
+def test_sector_use_case_ranks_best_performer_first():
+    tech = a_sector(sector="Technology", price=110.0, previous_close=100.0)    # +10%
+    energy = a_sector(sector="Energy", price=95.0, previous_close=100.0)       # -5%
+    health = a_sector(sector="Health Care", price=102.0, previous_close=100.0) # +2%
+    ranked = GetSectorPerformance(FakeSectorProvider([energy, health, tech])).execute()
+    assert [s.sector for s in ranked] == ["Technology", "Health Care", "Energy"]
+
+
+def test_sector_use_case_sorts_missing_percent_last():
+    up = a_sector(sector="Technology", price=110.0, previous_close=100.0)  # +10%
+    unknown = a_sector(sector="Energy", previous_close=None)              # no percent
+    ranked = GetSectorPerformance(FakeSectorProvider([unknown, up])).execute()
+    assert [s.sector for s in ranked] == ["Technology", "Energy"]
+
+
+def test_sector_use_case_propagates_not_found():
+    fake = FakeSectorProvider(raises=StockNotFound("sectors"))
+    with pytest.raises(StockNotFound):
+        GetSectorPerformance(fake).execute()
+
+
 # --------------------------- API ---------------------------
 
 @pytest.fixture
@@ -406,6 +465,7 @@ def make_client():
         fundamentals_provider: StockFundamentalsProvider | None = None,
         candle_provider: CandleProvider | None = None,
         rsi_provider: CandleProvider | None = None,
+        sector_provider: SectorPerformanceProvider | None = None,
     ) -> TestClient:
         if provider is not None:
             app.dependency_overrides[get_stock_info] = lambda: GetStockInfo(
@@ -419,6 +479,10 @@ def make_client():
             )
         if rsi_provider is not None:
             app.dependency_overrides[get_stock_rsi] = lambda: GetStockRsi(rsi_provider)
+        if sector_provider is not None:
+            app.dependency_overrides[get_sector_performance] = (
+                lambda: GetSectorPerformance(sector_provider)
+            )
         return TestClient(app)
 
     yield _make
@@ -697,6 +761,49 @@ def test_get_rsi_upstream_failure_502(make_client):
     fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
     client = make_client(rsi_provider=fake)
     assert client.get("/stocks/AAPL/rsi").status_code == 502
+
+
+# --------------------------- sectors endpoint ---------------------------
+
+def test_get_sectors_returns_200_ranked_with_computed_fields(make_client):
+    tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
+    energy = a_sector(sector="Energy", symbol="XLE", price=95.0, previous_close=100.0)
+    client = make_client(sector_provider=FakeSectorProvider([energy, tech]))
+    r = client.get("/sectors")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 2
+    first = body["sectors"][0]
+    assert first["sector"] == "Technology"          # best performer first
+    assert first["symbol"] == "XLK"
+    assert first["change"] == 10.0                  # entity rule via presenter
+    assert first["change_percent"] == 10.0
+    assert body["sectors"][1]["change_percent"] == -5.0
+
+
+def test_get_sectors_includes_trailing_performance_alias_keys(make_client):
+    client = make_client(sector_provider=FakeSectorProvider([a_sector(performance=a_performance())]))
+    body = client.get("/sectors").json()
+    # trailing windows serialize with the finance-style JSON keys
+    assert body["sectors"][0]["performance"] == {
+        "1w": 1.2, "1m": -0.4, "3m": 5.1, "6m": 8.7, "ytd": 12.3, "1y": 21.0,
+    }
+
+
+def test_get_sectors_without_performance_is_null(make_client):
+    client = make_client(sector_provider=FakeSectorProvider([a_sector()]))
+    assert client.get("/sectors").json()["sectors"][0]["performance"] is None
+
+
+def test_get_sectors_unknown_404(make_client):
+    client = make_client(sector_provider=FakeSectorProvider(raises=StockNotFound("sectors")))
+    assert client.get("/sectors").status_code == 404
+
+
+def test_get_sectors_upstream_failure_502(make_client):
+    fake = FakeSectorProvider(raises=StockDataUnavailable("sectors", "boom"))
+    client = make_client(sector_provider=fake)
+    assert client.get("/sectors").status_code == 502
 
 
 # --------------------------- CORS ---------------------------
