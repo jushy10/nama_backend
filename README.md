@@ -69,24 +69,34 @@ self-contained **clean-architecture vertical slice** under
 port, and only `alpaca_provider.py` knows Alpaca exists — so the tests run fully
 offline with a fake provider.
 
+The response also carries best-effort enrichment: a **performance** object of
+trailing price returns (`1w`, `1m`, `3m`, `6m`, `ytd`, `1y`) computed from
+Alpaca daily bars, plus **market cap** and **dividend** (`dividend_per_share`,
+`dividend_yield`) from [Finnhub](https://finnhub.io). These never fail the
+request — if a source is down, unkeyed, or doesn't cover the symbol, that field
+comes back `null` and the price still returns.
+
 Credentials come from the environment (like `DATABASE_URL`):
 
 ```sh
 export APCA_API_KEY_ID=...
 export APCA_API_SECRET_KEY=...
+export FINNHUB_API_KEY=...        # optional: enables market cap + dividend
 curl localhost:8080/stocks/AAPL
 ```
 
-Uses Alpaca's free **IEX** feed. Without keys the endpoint returns `503`; the
-rest of the app still runs.
+Uses Alpaca's free **IEX** feed. Without the Alpaca keys the endpoint returns
+`503`; without `FINNHUB_API_KEY` it still serves price + performance, just with
+market cap and dividend omitted. The rest of the app runs regardless.
 
 ### Secrets in AWS
 
 Store the keys the same way as `DATABASE_URL`: as **SSM SecureString**
 parameters (e.g. `/nama/dev/alpaca-api-key-id`, `/nama/dev/alpaca-api-secret-key`)
 via the [`ssm-parameter`](infra/modules/ssm-parameter) module, and inject them
-into the ECS task as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`. Never commit
-keys to the repo.
+into the ECS task as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`. The optional
+`FINNHUB_API_KEY` follows the same pattern (e.g. `/nama/dev/finnhub-api-key`).
+Never commit keys to the repo.
 
 ## Contributing
 

@@ -5,8 +5,16 @@ provider for the data. Depend only on the entity and the port — never on a
 framework or a concrete provider.
 """
 
-from app.stocks.entities import Logo, Stock
-from app.stocks.ports import LogoProvider, StockDataProvider
+from dataclasses import replace
+
+from app.stocks.entities import Logo, Stock, StockFundamentals, StockPerformance
+from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.ports import (
+    LogoProvider,
+    StockDataProvider,
+    StockFundamentalsProvider,
+    StockPerformanceProvider,
+)
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -20,13 +28,52 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 class GetStockInfo:
-    """Use case: retrieve information about a single stock by its symbol."""
+    """Use case: retrieve information about a single stock by its symbol.
 
-    def __init__(self, provider: StockDataProvider) -> None:
+    The price snapshot is required; performance and fundamentals are optional,
+    best-effort enrichment. If those sources fail or aren't configured, the
+    stock is still returned with the enrichment fields left unset.
+    """
+
+    def __init__(
+        self,
+        provider: StockDataProvider,
+        performance_provider: StockPerformanceProvider | None = None,
+        fundamentals_provider: StockFundamentalsProvider | None = None,
+    ) -> None:
         self._provider = provider
+        self._performance_provider = performance_provider
+        self._fundamentals_provider = fundamentals_provider
 
     def execute(self, symbol: str) -> Stock:
-        return self._provider.get_stock(_normalize_symbol(symbol))
+        normalized = _normalize_symbol(symbol)
+        stock = self._provider.get_stock(normalized)  # required; errors propagate
+        fundamentals = self._fundamentals(normalized)
+        return replace(
+            stock,
+            performance=self._performance(normalized),
+            market_cap=fundamentals.market_cap if fundamentals else None,
+            dividend_per_share=(
+                fundamentals.dividend_per_share if fundamentals else None
+            ),
+            dividend_yield=fundamentals.dividend_yield if fundamentals else None,
+        )
+
+    def _performance(self, symbol: str) -> StockPerformance | None:
+        if self._performance_provider is None:
+            return None
+        try:
+            return self._performance_provider.get_performance(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None  # best-effort: never sink the price response
+
+    def _fundamentals(self, symbol: str) -> StockFundamentals | None:
+        if self._fundamentals_provider is None:
+            return None
+        try:
+            return self._fundamentals_provider.get_fundamentals(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None  # best-effort
 
 
 class GetStockLogo:

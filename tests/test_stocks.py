@@ -11,9 +11,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.entities import Logo, Stock
+from app.stocks.entities import Logo, Stock, StockFundamentals, StockPerformance
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import LogoProvider, StockDataProvider
+from app.stocks.ports import (
+    LogoProvider,
+    StockDataProvider,
+    StockFundamentalsProvider,
+    StockPerformanceProvider,
+)
 from app.stocks.router import get_stock_info, get_stock_logo
 from app.stocks.use_cases import GetStockInfo, GetStockLogo
 
@@ -50,6 +55,38 @@ class FakeLogoProvider(LogoProvider):
         return self._logo
 
 
+class FakePerformanceProvider(StockPerformanceProvider):
+    """Returns/raises whatever the test configured; records calls."""
+
+    def __init__(self, performance=None, raises=None):
+        self._performance = performance
+        self._raises = raises
+        self.received: list[str] = []
+
+    def get_performance(self, symbol: str) -> StockPerformance:
+        self.received.append(symbol)
+        if self._raises is not None:
+            raise self._raises
+        assert self._performance is not None
+        return self._performance
+
+
+class FakeFundamentalsProvider(StockFundamentalsProvider):
+    """Returns/raises whatever the test configured; records calls."""
+
+    def __init__(self, fundamentals=None, raises=None):
+        self._fundamentals = fundamentals
+        self._raises = raises
+        self.received: list[str] = []
+
+    def get_fundamentals(self, symbol: str) -> StockFundamentals:
+        self.received.append(symbol)
+        if self._raises is not None:
+            raise self._raises
+        assert self._fundamentals is not None
+        return self._fundamentals
+
+
 def a_logo(content: bytes = b"\x89PNG\r\n", media_type: str = "image/png") -> Logo:
     return Logo(content=content, media_type=media_type)
 
@@ -63,6 +100,23 @@ def a_stock(**overrides) -> Stock:
     )
     base.update(overrides)
     return Stock(**base)
+
+
+def a_performance(**overrides) -> StockPerformance:
+    base = dict(
+        one_week=1.2, one_month=-0.4, three_month=5.1,
+        six_month=8.7, ytd=12.3, one_year=21.0,
+    )
+    base.update(overrides)
+    return StockPerformance(**base)
+
+
+def a_fundamentals(**overrides) -> StockFundamentals:
+    base = dict(
+        market_cap=3_120_000_000_000.0, dividend_per_share=1.0, dividend_yield=0.42
+    )
+    base.update(overrides)
+    return StockFundamentals(**base)
 
 
 # --------------------------- entity rules (pure) ---------------------------
@@ -110,6 +164,38 @@ def test_use_case_propagates_not_found():
         GetStockInfo(fake).execute("ZZZZ")
 
 
+def test_use_case_merges_enrichment():
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock()),
+        FakePerformanceProvider(a_performance()),
+        FakeFundamentalsProvider(a_fundamentals()),
+    )
+    stock = info.execute("AAPL")
+    assert stock.market_cap == 3_120_000_000_000.0
+    assert stock.dividend_per_share == 1.0
+    assert stock.dividend_yield == 0.42
+    assert stock.performance.one_year == 21.0
+
+
+def test_use_case_without_enrichment_leaves_fields_none():
+    stock = GetStockInfo(FakeProvider(stock=a_stock())).execute("AAPL")
+    assert stock.market_cap is None
+    assert stock.dividend_yield is None
+    assert stock.performance is None
+
+
+def test_use_case_enrichment_is_best_effort():
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock()),
+        FakePerformanceProvider(raises=StockDataUnavailable("AAPL", "boom")),
+        FakeFundamentalsProvider(raises=StockNotFound("AAPL")),
+    )
+    stock = info.execute("AAPL")  # enrichment failures must not raise
+    assert stock.price == 297.86
+    assert stock.performance is None
+    assert stock.market_cap is None
+
+
 def test_logo_use_case_normalizes_symbol():
     fake = FakeLogoProvider(logo=a_logo(content=b"PNG"))
     assert GetStockLogo(fake).execute("  aapl ").content == b"PNG"
@@ -131,9 +217,13 @@ def make_client():
     def _make(
         provider: StockDataProvider | None = None,
         logo_provider: LogoProvider | None = None,
+        performance_provider: StockPerformanceProvider | None = None,
+        fundamentals_provider: StockFundamentalsProvider | None = None,
     ) -> TestClient:
         if provider is not None:
-            app.dependency_overrides[get_stock_info] = lambda: GetStockInfo(provider)
+            app.dependency_overrides[get_stock_info] = lambda: GetStockInfo(
+                provider, performance_provider, fundamentals_provider
+            )
         if logo_provider is not None:
             app.dependency_overrides[get_stock_logo] = lambda: GetStockLogo(logo_provider)
         return TestClient(app)
@@ -173,6 +263,46 @@ def test_get_stock_unknown_symbol_404(make_client):
 def test_get_stock_upstream_failure_502(make_client):
     client = make_client(FakeProvider(raises=StockDataUnavailable("AAPL", "boom")))
     assert client.get("/stocks/AAPL").status_code == 502
+
+
+def test_get_stock_includes_enrichment_with_alias_keys(make_client):
+    client = make_client(
+        FakeProvider(stock=a_stock()),
+        performance_provider=FakePerformanceProvider(a_performance()),
+        fundamentals_provider=FakeFundamentalsProvider(a_fundamentals()),
+    )
+    body = client.get("/stocks/AAPL").json()
+    assert body["market_cap"] == 3_120_000_000_000.0
+    assert body["dividend_per_share"] == 1.0
+    assert body["dividend_yield"] == 0.42
+    # nested performance is serialized with finance-style JSON keys
+    assert body["performance"] == {
+        "1w": 1.2, "1m": -0.4, "3m": 5.1, "6m": 8.7, "ytd": 12.3, "1y": 21.0,
+    }
+
+
+def test_get_stock_enrichment_best_effort_returns_200(make_client):
+    client = make_client(
+        FakeProvider(stock=a_stock()),
+        performance_provider=FakePerformanceProvider(
+            raises=StockDataUnavailable("AAPL", "boom")
+        ),
+        fundamentals_provider=FakeFundamentalsProvider(raises=StockNotFound("AAPL")),
+    )
+    r = client.get("/stocks/AAPL")
+    assert r.status_code == 200, r.text  # price survives enrichment failures
+    body = r.json()
+    assert body["price"] == 297.86
+    assert body["market_cap"] is None
+    assert body["performance"] is None
+
+
+def test_get_stock_without_enrichment_providers_nulls_fields(make_client):
+    client = make_client(FakeProvider(stock=a_stock()))
+    body = client.get("/stocks/AAPL").json()
+    assert body["market_cap"] is None
+    assert body["dividend_per_share"] is None
+    assert body["performance"] is None
 
 
 # --------------------------- logo endpoint ---------------------------
