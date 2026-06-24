@@ -11,6 +11,7 @@ from datetime import datetime
 from app.stocks.entities import (
     CandleSeries,
     Logo,
+    SectorPerformance,
     Stock,
     StockFundamentals,
     StockPerformance,
@@ -109,6 +110,24 @@ class CandleProvider(ABC):
 
         Raises:
             StockNotFound: the symbol has no candle data in the window.
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class SectorPerformanceProvider(ABC):
+    """A gateway for each market sector's performance on the day.
+
+    Sectors are read through their proxy ETFs rather than a dedicated sector
+    feed, so this sits alongside the other price-derived ports.
+    """
+
+    @abstractmethod
+    def get_sector_performance(self) -> list[SectorPerformance]:
+        """Return the day's performance for every covered market sector.
+
+        Raises:
+            StockNotFound: no sector data is available at all.
             StockDataUnavailable: the upstream source failed.
         """
         raise NotImplementedError

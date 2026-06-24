@@ -16,6 +16,7 @@ from app.stocks.entities import Candle, Stock, StockPerformance, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     CandleProvider,
+    SectorPerformanceProvider,
     StockDataProvider,
     StockPerformanceProvider,
 )
@@ -200,6 +201,49 @@ def test_get_performance_unknown_symbol_returns_empty():
     )
 
 
+# --------------------------- sector performance ---------------------------
+
+
+def test_get_sector_performance_attaches_day_change_and_windows():
+    # One snapshot batch + one bars batch. XLK has bars; XLV has a snapshot but
+    # no bars, so it still appears with all-None trailing windows.
+    p = provider_with(
+        FakeDataClient(
+            result={"XLK": make_snapshot(), "XLV": make_snapshot()},
+            bars={"XLK": performance_bars()},
+        ),
+        FakeTradingClient(),
+    )
+    by_symbol = {s.symbol: s for s in p.get_sector_performance()}
+    assert by_symbol["XLK"].change == 1.79  # day change from the snapshot
+    assert by_symbol["XLK"].performance.one_year == 100.0  # windows from bars
+    assert by_symbol["XLK"].performance.six_month == 120.0
+    assert by_symbol["XLV"].performance.one_year is None  # no bars -> None
+
+
+def test_get_sector_performance_bars_failure_keeps_day_change():
+    # Performance is best-effort: a bars failure must not sink the board.
+    p = provider_with(
+        FakeDataClient(result={"XLK": make_snapshot()}, bars_error=APIError("boom")),
+        FakeTradingClient(),
+    )
+    sectors = p.get_sector_performance()
+    assert sectors[0].change == 1.79
+    assert sectors[0].performance.one_year is None
+
+
+def test_get_sector_performance_snapshot_error_unavailable():
+    p = provider_with(FakeDataClient(error=APIError("boom")), FakeTradingClient())
+    with pytest.raises(StockDataUnavailable):
+        p.get_sector_performance()
+
+
+def test_get_sector_performance_empty_board_not_found():
+    p = provider_with(FakeDataClient(result={}), FakeTradingClient())
+    with pytest.raises(StockNotFound):
+        p.get_sector_performance()
+
+
 # --------------------------- candles ---------------------------
 
 def make_bar(ts, open_, high, low, close, volume=1000.0):
@@ -264,12 +308,13 @@ def test_get_candles_api_error_translated_to_unavailable():
 # --------------------------- port composition ---------------------------
 
 
-def test_provider_implements_all_three_ports():
-    # The merged adapter serves the snapshot, performance, and candle ports from
-    # one instance. The router relies on this: get_stock_info uses an isinstance
-    # check to reuse the provider as the StockPerformanceProvider, so a dropped
-    # base class would silently stop performance from populating in production.
+def test_provider_implements_all_ports():
+    # The merged adapter serves the snapshot, performance, candle, and sector
+    # ports from one instance. The router relies on this: get_stock_info uses an
+    # isinstance check to reuse the provider as the StockPerformanceProvider, so
+    # a dropped base class would silently stop a feature from populating.
     p = AlpacaStockDataProvider("dummy-key", "dummy-secret")
     assert isinstance(p, StockDataProvider)
     assert isinstance(p, StockPerformanceProvider)
     assert isinstance(p, CandleProvider)
+    assert isinstance(p, SectorPerformanceProvider)
