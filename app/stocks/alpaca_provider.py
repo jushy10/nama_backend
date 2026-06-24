@@ -18,9 +18,21 @@ from alpaca.data.requests import StockBarsRequest, StockSnapshotRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 
-from app.stocks.entities import Candle, CandleSeries, Stock, StockPerformance, Timeframe
+from app.stocks.entities import (
+    Candle,
+    CandleSeries,
+    SectorPerformance,
+    Stock,
+    StockPerformance,
+    Timeframe,
+)
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import CandleProvider, StockDataProvider, StockPerformanceProvider
+from app.stocks.ports import (
+    CandleProvider,
+    SectorPerformanceProvider,
+    StockDataProvider,
+    StockPerformanceProvider,
+)
 
 # Our vendor-agnostic Timeframe -> Alpaca's (amount, unit).
 _TIMEFRAME_MAP: dict[Timeframe, tuple[int, TimeFrameUnit]] = {
@@ -41,9 +53,29 @@ _TIMEFRAME_MAP: dict[Timeframe, tuple[int, TimeFrameUnit]] = {
 # data); we then reverse back to chronological order before returning.
 _MAX_CANDLES = 10_000
 
+# Market sectors read through their SPDR Select Sector ETF. Sector indices
+# aren't directly tradable, so the ETF that tracks each sector stands in for it
+# — the standard proxy for reading a sector's move on the day.
+_SECTOR_ETFS: dict[str, str] = {
+    "XLK": "Technology",
+    "XLV": "Health Care",
+    "XLF": "Financials",
+    "XLY": "Consumer Discretionary",
+    "XLP": "Consumer Staples",
+    "XLE": "Energy",
+    "XLI": "Industrials",
+    "XLB": "Materials",
+    "XLU": "Utilities",
+    "XLRE": "Real Estate",
+    "XLC": "Communication Services",
+}
+
 
 class AlpacaStockDataProvider(
-    StockDataProvider, StockPerformanceProvider, CandleProvider
+    StockDataProvider,
+    StockPerformanceProvider,
+    CandleProvider,
+    SectorPerformanceProvider,
 ):
     """Fetches stock data from Alpaca and maps it onto the Stock entity.
 
@@ -118,6 +150,37 @@ class AlpacaStockDataProvider(
         candles = tuple(self._to_candle(bar) for bar in reversed(bars))
         return CandleSeries(symbol=symbol, timeframe=timeframe, candles=candles)
 
+    def get_sector_performance(self) -> list[SectorPerformance]:
+        # One batched snapshot call covers every sector ETF. A sector missing a
+        # quote (e.g. not carried on the IEX free feed) is skipped rather than
+        # failing the whole board; only an empty board is a hard error.
+        try:
+            request = StockSnapshotRequest(
+                symbol_or_symbols=list(_SECTOR_ETFS), feed=self._feed
+            )
+            snapshots = self._data.get_stock_snapshot(request)
+        except APIError as exc:
+            raise StockDataUnavailable("sectors", str(exc)) from exc
+
+        # Trailing-window performance for every ETF in one more batched call;
+        # best-effort, so a failure here leaves the day-change board intact.
+        bars_by_symbol = self._fetch_daily_bars_batch(list(_SECTOR_ETFS))
+
+        sectors = [
+            self._to_sector(
+                symbol,
+                sector,
+                snapshots[symbol],
+                self._compute_performance(bars_by_symbol.get(symbol, [])),
+            )
+            for symbol, sector in _SECTOR_ETFS.items()
+            if snapshots.get(symbol) is not None
+            and snapshots[symbol].latest_trade is not None
+        ]
+        if not sectors:
+            raise StockNotFound("sectors")
+        return sectors
+
     # --- Alpaca calls (thin and isolated) ---
 
     def _fetch_snapshot(self, symbol: str):
@@ -158,6 +221,27 @@ class AlpacaStockDataProvider(
             raise StockDataUnavailable(symbol, str(exc)) from exc
         return barset.data.get(symbol, [])
 
+    def _fetch_daily_bars_batch(self, symbols: list[str]) -> dict[str, list]:
+        """Daily bars over the lookback for several symbols in one request.
+
+        Best-effort: on failure returns an empty map so callers can still serve
+        a snapshot-only view without trailing-window performance.
+        """
+        start = datetime.now(timezone.utc) - timedelta(
+            days=self._PERFORMANCE_LOOKBACK_DAYS
+        )
+        try:
+            request = StockBarsRequest(
+                symbol_or_symbols=symbols,
+                timeframe=TimeFrame.Day,
+                start=start,
+                feed=self._feed,
+            )
+            barset = self._data.get_stock_bars(request)
+        except APIError:
+            return {}
+        return barset.data
+
     # --- Mapping: Alpaca SDK models -> domain entity ---
 
     @staticmethod
@@ -190,6 +274,22 @@ class AlpacaStockDataProvider(
             bid=quote.bid_price if quote else None,
             ask=quote.ask_price if quote else None,
             as_of=trade.timestamp,
+        )
+
+    @staticmethod
+    def _to_sector(symbol, sector, snapshot, performance) -> SectorPerformance:
+        # Day's move = latest trade vs the previous daily close, mirroring the
+        # Stock entity's own change rule; `performance` carries the trailing
+        # windows (1w/1m/3m/6m/ytd/1y).
+        trade = snapshot.latest_trade
+        prev = snapshot.previous_daily_bar
+        return SectorPerformance(
+            sector=sector,
+            symbol=symbol,
+            price=trade.price,
+            previous_close=prev.close if prev else None,
+            as_of=trade.timestamp,
+            performance=performance,
         )
 
     # --- Mapping: Alpaca bars -> performance windows ---

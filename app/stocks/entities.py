@@ -108,6 +108,40 @@ class StockFundamentals:
 
 
 @dataclass(frozen=True)
+class SectorPerformance:
+    """One market sector's move on the day, proxied by its sector ETF.
+
+    Sector indices aren't directly tradable, so each sector is represented by
+    the SPDR Select Sector ETF that tracks it (e.g. XLK -> Technology). The
+    day's move is the proxy's latest price versus its previous close — the same
+    rule the Stock entity uses for its own daily change.
+    """
+
+    sector: str
+    symbol: str  # the proxy ETF ticker
+    price: float  # latest trade price of the proxy ETF
+    previous_close: float | None
+    as_of: datetime | None
+    # Trailing-window returns (1w/1m/3m/6m/ytd/1y) of the proxy ETF; best-effort
+    # like the Stock entity's, so None when price history is unavailable.
+    performance: StockPerformance | None = None
+
+    @property
+    def change(self) -> float | None:
+        """Absolute price change since the previous close."""
+        if self.previous_close is None:
+            return None
+        return round(self.price - self.previous_close, 4)
+
+    @property
+    def change_percent(self) -> float | None:
+        """Percent price change since the previous close."""
+        if not self.previous_close:  # None or 0 -> undefined
+            return None
+        return round((self.price - self.previous_close) / self.previous_close * 100, 2)
+
+
+@dataclass(frozen=True)
 class Stock:
     """A snapshot of a tradable stock at a point in time."""
 
