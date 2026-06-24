@@ -98,6 +98,36 @@ class CandleSeriesResponse(BaseModel):
     candles: list[CandleResponse]
 
 
+class RsiPointResponse(BaseModel):
+    """One RSI reading. `time` is UNIX epoch seconds (UTC) for charting libs;
+    `timestamp` is the same instant in ISO 8601, and `value` is 0–100."""
+
+    time: int
+    timestamp: datetime
+    value: float
+
+
+class RsiResponse(BaseModel):
+    """RSI series plus a read of its latest point.
+
+    `signal` is the band the latest value sits in ("overbought" / "oversold" /
+    "neutral") — "overbought" being the classic take-profit zone. `overbought`
+    and `oversold` carry the threshold lines so a client can draw the bands.
+    A short window can leave `points` empty (and `latest`/`signal` null) when
+    there isn't enough history to warm the indicator up. Descriptive, not advice.
+    """
+
+    symbol: str
+    timeframe: str
+    period: int
+    count: int
+    latest: float | None = None
+    signal: str | None = None
+    overbought: float
+    oversold: float
+    points: list[RsiPointResponse]
+
+
 class SectorPerformanceResponse(BaseModel):
     """One market sector's move on the day.
 
