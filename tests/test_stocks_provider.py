@@ -12,8 +12,13 @@ import pytest
 from alpaca.common.exceptions import APIError
 
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
-from app.stocks.entities import Candle, Stock, Timeframe
+from app.stocks.entities import Candle, Stock, StockPerformance, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.ports import (
+    CandleProvider,
+    StockDataProvider,
+    StockPerformanceProvider,
+)
 
 
 def make_snapshot():
@@ -31,13 +36,19 @@ def make_snapshot():
 
 
 class FakeDataClient:
-    def __init__(self, result=None, error=None):
+    def __init__(self, result=None, error=None, bars=None, bars_error=None):
         self._result, self._error = result, error
+        self._bars, self._bars_error = bars, bars_error
 
     def get_stock_snapshot(self, request):
         if self._error is not None:
             raise self._error
         return self._result
+
+    def get_stock_bars(self, request):
+        if self._bars_error is not None:
+            raise self._bars_error
+        return SimpleNamespace(data=self._bars or {})
 
 
 class FakeTradingClient:
@@ -115,6 +126,80 @@ def test_asset_metadata_failure_is_non_fatal():
     assert stock.price == 297.86  # market data still returned
 
 
+# --------------------------- performance from bars ---------------------------
+
+
+def bar(year, month, day, close):
+    return SimpleNamespace(
+        timestamp=datetime(year, month, day, tzinfo=timezone.utc), close=close
+    )
+
+
+def performance_bars():
+    """Bars placed exactly on each window's start date; current close = 110."""
+    return [
+        bar(2025, 6, 18, 55.0),  # 1y  -> +100%
+        bar(2025, 12, 18, 50.0),  # 6m  -> +120%
+        bar(2025, 12, 31, 100.0),  # ytd baseline (last 2025 close) -> +10%
+        bar(2026, 3, 19, 80.0),  # 3m  -> +37.5%
+        bar(2026, 5, 19, 88.0),  # 1m  -> +25%
+        bar(2026, 6, 11, 100.0),  # 1w  -> +10%
+        bar(2026, 6, 18, 110.0),  # anchor / current price
+    ]
+
+
+def test_compute_performance_maps_each_window():
+    # Reversed input also exercises the defensive sort.
+    perf = AlpacaStockDataProvider._compute_performance(
+        list(reversed(performance_bars()))
+    )
+    assert perf.one_week == 10.0
+    assert perf.one_month == 25.0
+    assert perf.three_month == 37.5
+    assert perf.six_month == 120.0
+    assert perf.ytd == 10.0
+    assert perf.one_year == 100.0
+
+
+def test_compute_performance_empty_bars_all_none():
+    assert AlpacaStockDataProvider._compute_performance([]) == StockPerformance(
+        None, None, None, None, None, None
+    )
+
+
+def test_compute_performance_insufficient_history_yields_none():
+    # Only two recent bars: 1w computes; longer windows and YTD are None.
+    bars = [bar(2026, 6, 11, 100.0), bar(2026, 6, 18, 110.0)]
+    perf = AlpacaStockDataProvider._compute_performance(bars)
+    assert perf.one_week == 10.0
+    assert perf.one_month is None
+    assert perf.one_year is None
+    assert perf.ytd is None  # no bar from a previous year
+
+
+def test_get_performance_reads_bars_from_client():
+    p = provider_with(
+        FakeDataClient(bars={"AAPL": performance_bars()}), FakeTradingClient()
+    )
+    perf = p.get_performance("AAPL")
+    assert perf.one_year == 100.0
+    assert perf.six_month == 120.0
+
+
+def test_get_performance_api_error_translated_to_unavailable():
+    p = provider_with(FakeDataClient(bars_error=APIError("boom")), FakeTradingClient())
+    with pytest.raises(StockDataUnavailable):
+        p.get_performance("AAPL")
+
+
+def test_get_performance_unknown_symbol_returns_empty():
+    # No series for the symbol -> all-None performance (not an error).
+    p = provider_with(FakeDataClient(bars={}), FakeTradingClient())
+    assert p.get_performance("AAPL") == StockPerformance(
+        None, None, None, None, None, None
+    )
+
+
 # --------------------------- candles ---------------------------
 
 def make_bar(ts, open_, high, low, close, volume=1000.0):
@@ -174,3 +259,17 @@ def test_get_candles_api_error_translated_to_unavailable():
     p = bars_provider(FakeBarsClient(error=APIError("boom")))
     with pytest.raises(StockDataUnavailable):
         p.get_candles("AAPL", Timeframe.HOUR_1, start=None, end=None)
+
+
+# --------------------------- port composition ---------------------------
+
+
+def test_provider_implements_all_three_ports():
+    # The merged adapter serves the snapshot, performance, and candle ports from
+    # one instance. The router relies on this: get_stock_info uses an isinstance
+    # check to reuse the provider as the StockPerformanceProvider, so a dropped
+    # base class would silently stop performance from populating in production.
+    p = AlpacaStockDataProvider("dummy-key", "dummy-secret")
+    assert isinstance(p, StockDataProvider)
+    assert isinstance(p, StockPerformanceProvider)
+    assert isinstance(p, CandleProvider)

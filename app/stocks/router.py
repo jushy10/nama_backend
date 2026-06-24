@@ -16,11 +16,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.chart_window import ChartRange, resolve_window
-from app.stocks.entities import CandleSeries, Stock, Timeframe
+from app.stocks.entities import CandleSeries, Stock, StockPerformance, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
 from app.stocks.fmp_logo_provider import FmpLogoProvider
-from app.stocks.ports import LogoProvider, StockDataProvider
-from app.stocks.schemas import CandleResponse, CandleSeriesResponse, StockResponse
+from app.stocks.ports import (
+    LogoProvider,
+    StockDataProvider,
+    StockFundamentalsProvider,
+    StockPerformanceProvider,
+)
+from app.stocks.schemas import (
+    CandleResponse,
+    CandleSeriesResponse,
+    StockPerformanceResponse,
+    StockResponse,
+)
 from app.stocks.use_cases import GetStockCandles, GetStockInfo, GetStockLogo
 
 router = APIRouter(tags=["stocks"])
@@ -37,8 +48,21 @@ def get_provider() -> AlpacaStockDataProvider:
     return AlpacaStockDataProvider(key, secret)
 
 
-def get_stock_info(provider: StockDataProvider = Depends(get_provider)) -> GetStockInfo:
-    return GetStockInfo(provider)
+@lru_cache(maxsize=1)
+def get_fundamentals_provider() -> StockFundamentalsProvider | None:
+    # Best-effort enrichment: without a key we simply omit market cap + dividend
+    # (price + performance still serve). Free key from finnhub.io.
+    key = os.environ.get("FINNHUB_API_KEY")
+    return FinnhubFundamentalsProvider(key) if key else None
+
+
+def get_stock_info(
+    provider: StockDataProvider = Depends(get_provider),
+    fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
+) -> GetStockInfo:
+    # The Alpaca provider supplies both the snapshot and the performance windows.
+    performance = provider if isinstance(provider, StockPerformanceProvider) else None
+    return GetStockInfo(provider, performance, fundamentals)
 
 
 def get_stock_candles(
@@ -79,6 +103,25 @@ def _present(stock: Stock) -> StockResponse:
         ask=stock.ask,
         spread=stock.spread,
         as_of=stock.as_of,
+        market_cap=stock.market_cap,
+        dividend_per_share=stock.dividend_per_share,
+        dividend_yield=stock.dividend_yield,
+        performance=_present_performance(stock.performance),
+    )
+
+
+def _present_performance(
+    perf: StockPerformance | None,
+) -> StockPerformanceResponse | None:
+    if perf is None:
+        return None
+    return StockPerformanceResponse(
+        one_week=perf.one_week,
+        one_month=perf.one_month,
+        three_month=perf.three_month,
+        six_month=perf.six_month,
+        ytd=perf.ytd,
+        one_year=perf.one_year,
     )
 
 

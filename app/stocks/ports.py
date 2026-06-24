@@ -8,7 +8,14 @@ implementation. The core never imports Alpaca; Alpaca imports the core.
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from app.stocks.entities import CandleSeries, Logo, Stock, Timeframe
+from app.stocks.entities import (
+    CandleSeries,
+    Logo,
+    Stock,
+    StockFundamentals,
+    StockPerformance,
+    Timeframe,
+)
 
 
 class StockDataProvider(ABC):
@@ -20,6 +27,43 @@ class StockDataProvider(ABC):
 
         Raises:
             StockNotFound: the symbol does not exist / has no data.
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class StockPerformanceProvider(ABC):
+    """A gateway for a stock's trailing price-return over standard windows.
+
+    Separate from StockDataProvider: performance is derived from price history
+    rather than the live snapshot, and the endpoint treats it as best-effort
+    enrichment, so a failure here must not sink the price response.
+    """
+
+    @abstractmethod
+    def get_performance(self, symbol: str) -> StockPerformance:
+        """Return trailing-window performance for the (normalized) symbol.
+
+        Raises:
+            StockNotFound: the symbol has no price history.
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class StockFundamentalsProvider(ABC):
+    """A gateway for company fundamentals (market cap, dividend).
+
+    These come from a fundamentals vendor, not the price feed — market data
+    APIs don't expose shares outstanding or dividends. Best-effort enrichment.
+    """
+
+    @abstractmethod
+    def get_fundamentals(self, symbol: str) -> StockFundamentals:
+        """Return fundamentals for the (already-normalized) symbol.
+
+        Raises:
+            StockNotFound: the symbol is not covered by the source.
             StockDataUnavailable: the upstream source failed.
         """
         raise NotImplementedError

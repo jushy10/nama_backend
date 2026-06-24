@@ -38,6 +38,36 @@ class Logo:
 
 
 @dataclass(frozen=True)
+class StockPerformance:
+    """Trailing price return over standard windows, expressed as percentages.
+
+    Each field is the percent change of the latest price versus the close at
+    the start of that window (``ytd`` is measured from the previous year's
+    final close). ``None`` means there isn't enough price history to cover it.
+    """
+
+    one_week: float | None
+    one_month: float | None
+    three_month: float | None
+    six_month: float | None
+    ytd: float | None
+    one_year: float | None
+
+
+@dataclass(frozen=True)
+class StockFundamentals:
+    """Company fundamentals that live outside the live price snapshot.
+
+    Sourced from a fundamentals vendor rather than the price feed, since market
+    data APIs (e.g. Alpaca) don't expose shares outstanding or dividends.
+    """
+
+    market_cap: float | None
+    dividend_per_share: float | None
+    dividend_yield: float | None
+
+
+@dataclass(frozen=True)
 class Stock:
     """A snapshot of a tradable stock at a point in time."""
 
@@ -53,6 +83,12 @@ class Stock:
     bid: float | None
     ask: float | None
     as_of: datetime | None
+    # Enrichment beyond the raw snapshot; optional so the price-only view of a
+    # Stock stays valid when these sources are unavailable (best-effort).
+    market_cap: float | None = None
+    dividend_per_share: float | None = None
+    dividend_yield: float | None = None
+    performance: StockPerformance | None = None
 
     @property
     def change(self) -> float | None:
