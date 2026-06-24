@@ -108,13 +108,14 @@ running. It bills whether or not you use it — `terraform destroy` (or remove t
 - The app already auto-creates its tables on startup (`Base.metadata.create_all`),
   so no migration step is needed for this simple schema.
 
-### Stocks API credentials (Alpaca)
+### Stocks API credentials (Alpaca + Finnhub)
 
-The stocks feature (`GET /stocks/{symbol}`) needs Alpaca API keys at runtime.
-They're created as **SSM SecureString** placeholders by the
-[`ssm-secret`](modules/ssm-secret) module and injected into the task as
-`APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` (via the app module's `extra_secrets`)
-— the same mechanism as `DATABASE_URL`.
+The stocks feature (`GET /stocks/{symbol}`) reads three keys at runtime: the
+**Alpaca** key/secret (price snapshot + performance) and an optional **Finnhub**
+key (market cap + dividend). All three are created as **SSM SecureString**
+placeholders by the [`ssm-secret`](modules/ssm-secret) module and injected into
+the task as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` / `FINNHUB_API_KEY` (via
+the app module's `extra_secrets`) — the same mechanism as `DATABASE_URL`.
 
 Terraform never holds the real values: it creates the parameters with a
 placeholder and **ignores value changes**. Set the real keys **once**, out of
@@ -125,11 +126,15 @@ aws ssm put-parameter --overwrite --type SecureString \
   --name /nama/dev/alpaca-api-key-id     --value <YOUR_KEY_ID>
 aws ssm put-parameter --overwrite --type SecureString \
   --name /nama/dev/alpaca-api-secret-key --value <YOUR_SECRET>
+aws ssm put-parameter --overwrite --type SecureString \
+  --name /nama/dev/finnhub-api-key       --value <YOUR_FINNHUB_KEY>
 ```
 
 Rotate the same way (`put-parameter --overwrite`), then force a new deployment
-to pick up the value. Without the keys set, `/stocks/{symbol}` returns `503`
-while the rest of the app runs normally.
+to pick up the value. Without the **Alpaca** keys set, `/stocks/{symbol}`
+returns `503`. The **Finnhub** key is optional: until it's set (the placeholder
+isn't a real key), market cap and dividend come back `null` and the rest of the
+response is unaffected.
 
 ### Deploy order (important)
 

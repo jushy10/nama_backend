@@ -40,7 +40,7 @@ module "database" {
   database_url_ssm_name = "/nama/dev/database-url"
 }
 
-# Alpaca API credentials for the stocks feature (GET /stocks/{symbol}). Created
+# Stock-data credentials for the stocks feature (GET /stocks/{symbol}). Created
 # as SecureString placeholders; set the REAL values out of band so they never
 # live in code or Terraform state:
 #
@@ -48,6 +48,8 @@ module "database" {
 #     --name /nama/dev/alpaca-api-key-id     --value <YOUR_KEY_ID>
 #   aws ssm put-parameter --overwrite --type SecureString \
 #     --name /nama/dev/alpaca-api-secret-key --value <YOUR_SECRET>
+#   aws ssm put-parameter --overwrite --type SecureString \
+#     --name /nama/dev/finnhub-api-key       --value <YOUR_FINNHUB_KEY>
 module "alpaca_api_key_id" {
   source      = "../../modules/ssm-secret"
   name        = "/nama/dev/alpaca-api-key-id"
@@ -58,6 +60,15 @@ module "alpaca_api_secret_key" {
   source      = "../../modules/ssm-secret"
   name        = "/nama/dev/alpaca-api-secret-key"
   description = "Alpaca API secret key (stocks feature). Value set out of band."
+}
+
+# Finnhub powers market cap + dividend enrichment. Optional: until the real key
+# is set out of band the app simply returns those fields as null (best-effort),
+# so the placeholder is harmless.
+module "finnhub_api_key" {
+  source      = "../../modules/ssm-secret"
+  name        = "/nama/dev/finnhub-api-key"
+  description = "Finnhub API key (stocks market cap + dividend). Value set out of band."
 }
 
 # DNS + TLS certificate for the public hostname.
@@ -81,11 +92,12 @@ module "app" {
   app_security_group_id = module.database.app_security_group_id
   database_url_ssm_arn  = module.database.database_url_ssm_arn
 
-  # Injected as APCA_API_KEY_ID / APCA_API_SECRET_KEY — the env vars the app
-  # reads in app/stocks/router.py.
+  # Injected as the env vars the app reads in app/stocks/router.py: the Alpaca
+  # keys (required) and the optional Finnhub key (market cap + dividend).
   extra_secrets = {
     APCA_API_KEY_ID     = module.alpaca_api_key_id.arn
     APCA_API_SECRET_KEY = module.alpaca_api_secret_key.arn
+    FINNHUB_API_KEY     = module.finnhub_api_key.arn
   }
 
   enable_https    = true
