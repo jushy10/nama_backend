@@ -2,15 +2,17 @@
 
 Market data feeds (Alpaca) don't expose market cap or dividends, so those come
 from a fundamentals vendor. Finnhub's free ``/stock/metric`` endpoint returns a
-broad metrics object keyed by ticker; we pick out market cap and dividend. This
-is the only module that knows Finnhub exists; swap it and nothing else changes.
+broad metrics object keyed by ticker; we pick out market cap, dividend, and the
+trailing valuation/health/growth indicators (P/E, P/B, margins, ROE, beta, …).
+This is the only module that knows Finnhub exists; swap it and nothing else
+changes.
 
 Docs: https://finnhub.io/docs/api/company-basic-financials
 """
 
 import httpx
 
-from app.stocks.entities import StockFundamentals
+from app.stocks.entities import KeyMetrics, StockFundamentals
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.ports import StockFundamentalsProvider
 
@@ -55,6 +57,7 @@ class FinnhubFundamentalsProvider(StockFundamentalsProvider):
             dividend_yield=_first(
                 metric, "dividendYieldIndicatedAnnual", "currentDividendYieldTTM"
             ),
+            metrics=_key_metrics(metric),
         )
 
     @staticmethod
@@ -71,3 +74,47 @@ def _first(metric: dict, *keys: str) -> float | None:
         if value is not None:
             return value
     return None
+
+
+def _key_metrics(metric: dict) -> KeyMetrics | None:
+    """Pull the trailing valuation/health/growth indicators out of Finnhub's
+    ``metric`` object — the same payload market cap + dividend come from.
+
+    Each indicator tries the TTM key first, then annual/quarterly fallbacks, so
+    a ticker missing one cadence still gets a value. Returns ``None`` when none
+    are present, so an uncovered symbol yields no metrics block rather than an
+    all-null one.
+    """
+    values = {
+        "pe": _first(metric, "peTTM", "peBasicExclExtraTTM", "peAnnual"),
+        "pb": _first(metric, "pbQuarterly", "pbAnnual"),
+        "ps": _first(metric, "psTTM", "psAnnual"),
+        "eps": _first(metric, "epsTTM", "epsAnnual"),
+        "roe": _first(metric, "roeTTM", "roeRfy"),
+        "gross_margin": _first(metric, "grossMarginTTM", "grossMarginAnnual"),
+        "operating_margin": _first(
+            metric, "operatingMarginTTM", "operatingMarginAnnual"
+        ),
+        "net_margin": _first(metric, "netProfitMarginTTM", "netProfitMarginAnnual"),
+        "current_ratio": _first(
+            metric, "currentRatioQuarterly", "currentRatioAnnual"
+        ),
+        "debt_to_equity": _first(
+            metric,
+            "totalDebt/totalEquityQuarterly",
+            "totalDebt/totalEquityAnnual",
+            "longTermDebt/equityQuarterly",
+            "longTermDebt/equityAnnual",
+        ),
+        "eps_growth_yoy": _first(metric, "epsGrowthTTMYoy", "epsGrowthQuarterlyYoy"),
+        "revenue_growth_yoy": _first(
+            metric, "revenueGrowthTTMYoy", "revenueGrowthQuarterlyYoy"
+        ),
+        "beta": _first(metric, "beta"),
+        "week_52_high": _first(metric, "52WeekHigh"),
+        "week_52_low": _first(metric, "52WeekLow"),
+        "payout_ratio": _first(metric, "payoutRatioTTM", "payoutRatioAnnual"),
+    }
+    if all(value is None for value in values.values()):
+        return None
+    return KeyMetrics(**values)
