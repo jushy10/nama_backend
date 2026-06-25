@@ -188,10 +188,15 @@ universe.
 The universe — which symbols belong to each index, and each one's GICS sector —
 is **static reference data** baked into the package at
 [`app/stocks/data/constituents.json`](app/stocks/data/constituents.json), since
-no market-data feed here exposes index membership. Regenerate it from public
-sources (S&P 500 + Nasdaq-100) when the indices reconstitute (~quarterly):
+the live market-data feed (Alpaca) doesn't expose index membership. It's
+generated from **Financial Modeling Prep**'s index-constituent endpoints — one
+call per index, each returning symbol + name + sector — by
+[`scripts/build_constituents.py`](scripts/build_constituents.py), with sectors
+normalized to GICS. It's a build-time tool, so the key is **not** needed at
+runtime. Regenerate when the indices reconstitute (~quarterly):
 
 ```sh
+export FMP_API_KEY=...   # free key from financialmodelingprep.com
 python scripts/build_constituents.py
 ```
 
@@ -219,6 +224,18 @@ into the ECS task as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`. The optional
 `FINNHUB_API_KEY` and the `LOGODEV_TOKEN` follow the same pattern (e.g.
 `/nama/dev/finnhub-api-key`, `/nama/dev/logodev-token`). Never commit keys to the
 repo.
+
+The screener's `FMP_API_KEY` is stored the same way (`/nama/dev/fmp-api-key`,
+via the [`ssm-secret`](infra/modules/ssm-secret) module) but is **build-time
+only** — [`scripts/build_constituents.py`](scripts/build_constituents.py) reads
+it to regenerate the committed universe, so it is *not* injected into the running
+ECS task. Fetch it from SSM when regenerating:
+
+```sh
+export FMP_API_KEY=$(aws ssm get-parameter --name /nama/dev/fmp-api-key \
+  --with-decryption --query Parameter.Value --output text)
+python scripts/build_constituents.py
+```
 
 ## Contributing
 

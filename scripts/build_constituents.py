@@ -2,24 +2,23 @@
 
 The screener ranks the day's move across a *universe* of stocks and lets the
 caller narrow it by index (S&P 500 / Nasdaq-100) and GICS sector. That needs a
-symbol -> (name, sector, index memberships) table, which no market-data feed in
-this app provides. Rather than depend on a paid constituents API at request
-time, we bake the membership into a static JSON checked into the repo (the same
+symbol -> (name, sector, index memberships) table, which the app's live data
+feed (Alpaca) doesn't expose. Rather than call a constituents API on every
+request — rarely-changing data that would burn a rate limit and add a failure
+mode — we bake the membership into a static JSON checked into the repo (the same
 spirit as the hard-coded sector-ETF map in the Alpaca adapter).
 
-This script regenerates that JSON from two public sources:
+This script regenerates that JSON from **Financial Modeling Prep (FMP)** — one
+provider with purpose-built index-constituent endpoints that each return the
+symbol, company name, and sector for every member in a single call:
 
-  * S&P 500   - the `datasets/s-and-p-500-companies` CSV (Symbol, Security,
-                GICS Sector). Authoritative GICS sector per name.
-  * Nasdaq-100 - the Wikipedia "Nasdaq-100" constituents table (Ticker,
-                Company, ICB Industry).
+  * S&P 500    - /sp500-constituent
+  * Nasdaq-100 - /nasdaq-constituent
 
-Sector taxonomy is kept consistent on GICS: a Nasdaq-100 name that is also in
-the S&P 500 (the large majority) takes its GICS sector from the CSV; the few
-Nasdaq-only names fall back to an ICB->GICS mapping.
+Set an FMP API key (free tier) and run it whenever the indices reconstitute
+(roughly quarterly):
 
-Run it whenever the indices reconstitute (roughly quarterly):
-
+    export FMP_API_KEY=...
     python scripts/build_constituents.py
 
 stdlib only, so it runs without the app's dependencies installed.
@@ -27,26 +26,34 @@ stdlib only, so it runs without the app's dependencies installed.
 
 from __future__ import annotations
 
-import csv
-import io
 import json
-import re
+import os
+import urllib.error
 import urllib.request
 from pathlib import Path
 
-SP500_CSV_URL = (
-    "https://raw.githubusercontent.com/datasets/"
-    "s-and-p-500-companies/main/data/constituents.csv"
-)
-NASDAQ100_WIKI_URL = "https://en.wikipedia.org/wiki/Nasdaq-100?action=raw"
+# FMP's current "stable" endpoints, with the older /api/v3 slugs as a fallback
+# (some keys are scoped to the legacy API). Both return the same JSON shape.
+_BASE_STABLE = "https://financialmodelingprep.com/stable"
+_BASE_LEGACY = "https://financialmodelingprep.com/api/v3"
+_ENDPOINTS = {
+    # index -> (stable slug, legacy slug)
+    "sp500": ("sp500-constituent", "sp500_constituent"),
+    "nasdaq100": ("nasdaq-constituent", "nasdaq_constituent"),
+}
 
-# Wikipedia's table is keyed on ICB industries; map the ones that differ in
-# name onto their GICS-sector equivalent so the whole file speaks one taxonomy.
-# (Identically-named industries pass through unchanged.)
-_ICB_TO_GICS = {
+# FMP's sector vocabulary varies by endpoint; fold the non-GICS labels back onto
+# the 11 GICS sectors so the screener's sector filter speaks one vocabulary.
+# GICS-native names pass through unchanged.
+_TO_GICS = {
     "Technology": "Information Technology",
-    "Telecommunications": "Communication Services",
+    "Financial Services": "Financials",
+    "Consumer Cyclical": "Consumer Discretionary",
+    "Consumer Defensive": "Consumer Staples",
     "Basic Materials": "Materials",
+    "Healthcare": "Health Care",
+    "Telecommunication Services": "Communication Services",
+    "Communication": "Communication Services",
 }
 
 OUTPUT = Path(__file__).resolve().parents[1] / "app" / "stocks" / "data" / "constituents.json"
@@ -54,76 +61,68 @@ OUTPUT = Path(__file__).resolve().parents[1] / "app" / "stocks" / "data" / "cons
 _USER_AGENT = "nama-backend-constituents/1.0 (https://namainsights.com)"
 
 
-def _fetch(url: str) -> str:
+def _api_key() -> str:
+    key = os.environ.get("FMP_API_KEY")
+    if not key:
+        raise SystemExit(
+            "FMP_API_KEY is not set. Get a free key at financialmodelingprep.com, "
+            "then `export FMP_API_KEY=...` before running."
+        )
+    return key
+
+
+def _fetch_json(url: str):
     request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 (trusted URLs)
-        return response.read().decode("utf-8")
+    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 (trusted host)
+        return json.loads(response.read().decode("utf-8"))
 
 
-def _strip_wiki_markup(cell: str) -> str:
-    """Turn a wikitext cell into plain text.
-
-    `[[Adobe Inc.]]` -> "Adobe Inc."; `[[AMD|Advanced Micro Devices]]` ->
-    "Advanced Micro Devices" (the display text after the pipe); trailing text
-    such as "(Class A)" is preserved.
+def _fetch_constituents(slug_stable: str, slug_legacy: str, key: str) -> list[dict]:
+    """Fetch one index's constituents, preferring the stable endpoint and
+    falling back to the legacy one. A non-list payload is FMP signalling an
+    error (bad key, plan limit) — surface it rather than writing a broken file.
     """
-    text = cell.strip().strip("|").strip()
-    text = re.sub(r"\[\[([^\]]+)\]\]", lambda m: m.group(1).split("|")[-1], text)
-    return re.sub(r"<[^>]+>", "", text).strip()  # drop any stray <ref> tags
-
-
-def _load_sp500() -> dict[str, dict]:
-    """Symbol -> {name, sector, indices} for every S&P 500 constituent."""
-    rows = csv.DictReader(io.StringIO(_fetch(SP500_CSV_URL)))
-    out: dict[str, dict] = {}
-    for row in rows:
-        symbol = (row.get("Symbol") or "").strip()
-        if not symbol:
+    last_error: object = "no attempt made"
+    for url in (
+        f"{_BASE_STABLE}/{slug_stable}?apikey={key}",
+        f"{_BASE_LEGACY}/{slug_legacy}?apikey={key}",
+    ):
+        try:
+            data = _fetch_json(url)
+        except (urllib.error.URLError, ValueError) as exc:
+            last_error = exc
             continue
-        out[symbol] = {
-            "symbol": symbol,
-            "name": (row.get("Security") or "").strip() or None,
-            "sector": (row.get("GICS Sector") or "").strip() or None,
-            "indices": {"sp500"},
-        }
-    return out
+        if isinstance(data, list) and data:
+            return data
+        # Dict/empty here is usually {"Error Message": "..."} or a plan notice.
+        last_error = f"unexpected response from {url.split('?')[0]}: {str(data)[:200]}"
+    raise SystemExit(f"FMP constituents fetch failed: {last_error}")
 
 
-def _parse_nasdaq100(wikitext: str) -> list[tuple[str, str, str]]:
-    """Extract (ticker, company, icb_industry) rows from the constituents table."""
-    start = wikitext.index('id="constituents"')
-    table = wikitext[start : wikitext.index("\n|}", start)]
-    rows: list[tuple[str, str, str]] = []
-    for line in table.splitlines():
-        line = line.rstrip()
-        if not line.startswith("|") or line.startswith(("|-", "|}")):
-            continue  # separator / closer, not a data row
-        cells = line.split("||")
-        if len(cells) < 2:
-            continue
-        ticker = _strip_wiki_markup(cells[0]).upper()
-        company = _strip_wiki_markup(cells[1])
-        icb = _strip_wiki_markup(cells[2]) if len(cells) > 2 else ""
-        if ticker:
-            rows.append((ticker, company, icb))
-    return rows
+def _clean(value) -> str | None:
+    text = (value or "").strip()
+    return text or None
 
 
 def build() -> dict:
-    universe = _load_sp500()
+    key = _api_key()
+    universe: dict[str, dict] = {}
 
-    nasdaq = _parse_nasdaq100(_fetch(NASDAQ100_WIKI_URL))
-    for ticker, company, icb in nasdaq:
-        entry = universe.get(ticker)
-        if entry is not None:
-            entry["indices"].add("nasdaq100")  # already an S&P 500 name
-            continue
-        universe[ticker] = {
-            "symbol": ticker,
-            "name": company or None,
-            "sector": _ICB_TO_GICS.get(icb, icb) or None,
-            "indices": {"nasdaq100"},
-        }
+    for index, (slug_stable, slug_legacy) in _ENDPOINTS.items():
+        for row in _fetch_constituents(slug_stable, slug_legacy, key):
+            symbol = _clean(row.get("symbol"))
+            if symbol is None:
+                continue
+            entry = universe.setdefault(
+                symbol, {"symbol": symbol, "name": None, "sector": None, "indices": set()}
+            )
+            entry["indices"].add(index)
+            # First non-empty wins (a symbol can arrive from both indices).
+            sector = _clean(row.get("sector"))
+            entry["name"] = entry["name"] or _clean(row.get("name"))
+            entry["sector"] = entry["sector"] or (
+                _TO_GICS.get(sector, sector) if sector else None
+            )
 
     constituents = [
         {
@@ -139,15 +138,11 @@ def build() -> dict:
     return {
         "_note": (
             "Point-in-time index membership + GICS sector for the stock screener. "
-            "Regenerate with scripts/build_constituents.py when the indices "
-            "reconstitute (~quarterly)."
+            "Regenerate with scripts/build_constituents.py (needs FMP_API_KEY) when "
+            "the indices reconstitute (~quarterly)."
         ),
-        "_sources": [SP500_CSV_URL, NASDAQ100_WIKI_URL],
-        "counts": {
-            "total": len(constituents),
-            "sp500": sp500,
-            "nasdaq100": nasdaq100,
-        },
+        "_source": "Financial Modeling Prep (/sp500-constituent, /nasdaq-constituent)",
+        "counts": {"total": len(constituents), "sp500": sp500, "nasdaq100": nasdaq100},
         "constituents": constituents,
     }
 

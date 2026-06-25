@@ -83,6 +83,27 @@ module "logodev_token" {
   description = "Logo.dev publishable token (company logos). Value set out of band."
 }
 
+# FMP (Financial Modeling Prep) powers the stock screener's universe — the
+# S&P 500 / Nasdaq-100 membership + sector baked into
+# app/stocks/data/constituents.json by scripts/build_constituents.py. That's a
+# BUILD-TIME step (the generated file is committed to the repo and read at
+# runtime), so this key is deliberately NOT in module.app.extra_secrets below —
+# the running container never calls FMP. It lives in SSM so the build script /
+# CI can read it from one place:
+#
+#   export FMP_API_KEY=$(aws ssm get-parameter --name /nama/dev/fmp-api-key \
+#     --with-decryption --query Parameter.Value --output text)
+#   python scripts/build_constituents.py
+#
+# Set the real value out of band, like the keys above:
+#   aws ssm put-parameter --overwrite --type SecureString \
+#     --name /nama/dev/fmp-api-key --value <YOUR_FMP_API_KEY>
+module "fmp_api_key" {
+  source      = "../../modules/ssm-secret"
+  name        = "/nama/dev/fmp-api-key"
+  description = "FMP API key (stock screener constituents). Build-time only; not injected into ECS."
+}
+
 # DNS + TLS certificate for the public hostname.
 module "dns" {
   source = "../../modules/dns-cert"
