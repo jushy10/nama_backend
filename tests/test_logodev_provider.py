@@ -1,7 +1,9 @@
-"""Unit tests for the FMP logo adapter.
+"""Unit tests for the Logo.dev logo adapter.
 
 No network: the httpx client is swapped for a fake. Verifies the adapter's two
-jobs — return a Logo on success, and translate HTTP failures into domain errors.
+jobs — return a Logo on success, and translate HTTP failures into domain errors
+— plus that it calls the ticker endpoint with the token and the params that pin
+PNG output and 404-on-missing.
 """
 
 from types import SimpleNamespace
@@ -11,7 +13,7 @@ import pytest
 
 from app.stocks.entities import Logo
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.fmp_logo_provider import FmpLogoProvider
+from app.stocks.logodev_provider import LogoDevProvider
 
 
 class FakeHttpClient:
@@ -21,10 +23,10 @@ class FakeHttpClient:
         self._text = text
         self._headers = headers or {}
         self._error = error
-        self.requested: list[str] = []
+        self.requested: list[tuple[str, dict]] = []
 
-    def get(self, url):
-        self.requested.append(url)
+    def get(self, url, params=None):
+        self.requested.append((url, params or {}))
         if self._error is not None:
             raise self._error
         return SimpleNamespace(
@@ -35,10 +37,10 @@ class FakeHttpClient:
         )
 
 
-def provider_with(http_client) -> FmpLogoProvider:
+def provider_with(http_client) -> LogoDevProvider:
     # Construction is offline (the httpx client makes no call until used); then
     # swap in the fake so get_logo() makes no network calls.
-    p = FmpLogoProvider()
+    p = LogoDevProvider(token="pk_test")
     p._http = http_client
     return p
 
@@ -52,7 +54,11 @@ def test_returns_logo_with_upstream_media_type():
     assert isinstance(logo, Logo)
     assert logo.content == b"\x89PNG\r\n"
     assert logo.media_type == "image/png"
-    assert http.requested == ["/AAPL.png"]
+    url, params = http.requested[0]
+    assert url == "/ticker/AAPL"
+    assert params["token"] == "pk_test"
+    assert params["format"] == "png"
+    assert params["fallback"] == "404"  # missing logo must 404, not placeholder
 
 
 def test_media_type_defaults_to_png_when_absent():
@@ -81,5 +87,5 @@ def test_transport_error_raises_unavailable():
 
 
 def test_client_follows_redirects():
-    # The source may 3xx to a CDN; httpx won't follow unless told to.
-    assert FmpLogoProvider()._http.follow_redirects is True
+    # The source 3xx-es to a CDN; httpx won't follow unless told to.
+    assert LogoDevProvider(token="pk_test")._http.follow_redirects is True

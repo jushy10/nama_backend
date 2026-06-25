@@ -18,8 +18,8 @@ Layers (dependencies point inward only):
                                       alpaca-py)
     finnhub_fundamentals_provider.py 🟢 Interface Adapter (market cap + dividend
                                       via Finnhub)
-    fmp_logo_provider.py           🟢 Interface Adapter (logos via Financial
-                                      Modeling Prep)
+    logodev_provider.py            🟢 Interface Adapter (logos via Logo.dev —
+                                      ticker-keyed, tracks rebrands)
     chart_window.py                🔵 transport helper (chart range -> window)
     schemas.py                     🔵 HTTP DTOs (Pydantic)
     router.py                      🟢/🔵 controller + presenter + DI wiring

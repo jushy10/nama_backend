@@ -84,6 +84,7 @@ Credentials come from the environment (like `DATABASE_URL`):
 export APCA_API_KEY_ID=...
 export APCA_API_SECRET_KEY=...
 export FINNHUB_API_KEY=...        # optional: enables market cap + dividend
+export LOGODEV_TOKEN=...          # required for /logo: publishable key from logo.dev
 curl localhost:8080/stocks/AAPL
 ```
 
@@ -123,14 +124,35 @@ curl "localhost:8080/stocks/AAPL/candles?timeframe=1Hour&range=5D"
 curl "localhost:8080/stocks/AAPL/candles?start=2026-01-01T00:00:00Z&end=2026-02-01T00:00:00Z"
 ```
 
+### Company logo
+
+`GET /stocks/{symbol}/logo` returns the company logo as an image, sourced from
+[Logo.dev](https://logo.dev) keyed by ticker. Logo.dev resolves to the *current*
+logo through mergers, rebrands, and symbol changes, so the image stays up to date
+rather than going stale. Only [`logodev_provider.py`](app/stocks/logodev_provider.py)
+knows the source exists — swap that one adapter and nothing else changes.
+
+It needs a free **publishable** token (logo.dev, 500k requests/month, no card).
+The token is publishable by design — it rides in the request URL — so it isn't a
+secret like the Alpaca keys, but it's still injected via `LOGODEV_TOKEN`. Without
+it the `/logo` endpoint returns `503`; the rest of the app runs regardless. An
+unknown ticker returns `404` (we request `fallback=404` so logo.dev 404s instead
+of serving a monogram placeholder).
+
+```sh
+export LOGODEV_TOKEN=pk_...
+curl localhost:8080/stocks/AAPL/logo --output aapl.png
+```
+
 ### Secrets in AWS
 
 Store the keys the same way as `DATABASE_URL`: as **SSM SecureString**
 parameters (e.g. `/nama/dev/alpaca-api-key-id`, `/nama/dev/alpaca-api-secret-key`)
 via the [`ssm-parameter`](infra/modules/ssm-parameter) module, and inject them
 into the ECS task as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`. The optional
-`FINNHUB_API_KEY` follows the same pattern (e.g. `/nama/dev/finnhub-api-key`).
-Never commit keys to the repo.
+`FINNHUB_API_KEY` and the `LOGODEV_TOKEN` follow the same pattern (e.g.
+`/nama/dev/finnhub-api-key`, `/nama/dev/logodev-token`). Never commit keys to the
+repo.
 
 ## Contributing
 
