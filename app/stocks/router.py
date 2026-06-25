@@ -20,6 +20,7 @@ from app.stocks.entities import (
     CandleSeries,
     EarningsHistory,
     KeyMetrics,
+    Quote,
     SectorPerformance,
     Stock,
     StockPerformance,
@@ -43,6 +44,7 @@ from app.stocks.schemas import (
     EarningsHistoryResponse,
     EarningsSurpriseResponse,
     KeyMetricsResponse,
+    QuoteResponse,
     RsiPointResponse,
     RsiResponse,
     SectorBoardResponse,
@@ -56,6 +58,7 @@ from app.stocks.use_cases import (
     GetStockEarnings,
     GetStockInfo,
     GetStockLogo,
+    GetStockQuote,
     GetStockRsi,
 )
 
@@ -88,6 +91,14 @@ def get_stock_info(
     # The Alpaca provider supplies both the snapshot and the performance windows.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
     return GetStockInfo(provider, performance, fundamentals)
+
+
+def get_stock_quote(
+    # Same Alpaca instance — get_quote is just the snapshot half of get_stock,
+    # so the live-price poll endpoint reuses the provider with no extra wiring.
+    provider: AlpacaStockDataProvider = Depends(get_provider),
+) -> GetStockQuote:
+    return GetStockQuote(provider)
 
 
 def get_stock_candles(
@@ -171,6 +182,21 @@ def _present(stock: Stock) -> StockResponse:
         dividend_yield=stock.dividend_yield,
         performance=_present_performance(stock.performance),
         metrics=_present_metrics(stock.metrics),
+    )
+
+
+def _present_quote(quote: Quote) -> QuoteResponse:
+    """Presenter: quote entity -> HTTP response DTO."""
+    return QuoteResponse(
+        symbol=quote.symbol,
+        price=quote.price,
+        change=quote.change,
+        change_percent=quote.change_percent,
+        previous_close=quote.previous_close,
+        bid=quote.bid,
+        ask=quote.ask,
+        spread=quote.spread,
+        as_of=quote.as_of,
     )
 
 
@@ -325,6 +351,26 @@ def get_stock(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present(stock)
+
+
+@router.get("/stocks/{symbol}/quote", response_model=QuoteResponse)
+def get_stock_quote_endpoint(
+    symbol: str,
+    response: Response,
+    use_case: GetStockQuote = Depends(get_stock_quote),
+) -> QuoteResponse:
+    try:
+        quote = use_case.execute(symbol)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    # Short cache so a burst of pollers (and any CDN in front) collapses onto one
+    # upstream snapshot; 2s keeps it live-ish without hitting Alpaca every refresh.
+    response.headers["Cache-Control"] = "public, max-age=2"
+    return _present_quote(quote)
 
 
 @router.get(

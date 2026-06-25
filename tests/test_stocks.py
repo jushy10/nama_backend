@@ -19,6 +19,7 @@ from app.stocks.entities import (
     EarningsSurprise,
     KeyMetrics,
     Logo,
+    Quote,
     SectorPerformance,
     Stock,
     StockFundamentals,
@@ -35,6 +36,7 @@ from app.stocks.ports import (
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
+    StockQuoteProvider,
 )
 from app.stocks.router import (
     get_sector_performance,
@@ -42,6 +44,7 @@ from app.stocks.router import (
     get_stock_earnings,
     get_stock_info,
     get_stock_logo,
+    get_stock_quote,
     get_stock_rsi,
 )
 from app.stocks.use_cases import (
@@ -50,6 +53,7 @@ from app.stocks.use_cases import (
     GetStockEarnings,
     GetStockInfo,
     GetStockLogo,
+    GetStockQuote,
     GetStockRsi,
 )
 
@@ -68,6 +72,22 @@ class FakeProvider(StockDataProvider):
             raise self._raises
         assert self._stock is not None
         return self._stock
+
+
+class FakeQuoteProvider(StockQuoteProvider):
+    """Returns/raises whatever the test configured; records calls."""
+
+    def __init__(self, quote: Quote | None = None, raises: Exception | None = None):
+        self._quote = quote
+        self._raises = raises
+        self.received: list[str] = []
+
+    def get_quote(self, symbol: str) -> Quote:
+        self.received.append(symbol)
+        if self._raises is not None:
+            raise self._raises
+        assert self._quote is not None
+        return self._quote
 
 
 class FakeLogoProvider(LogoProvider):
@@ -210,6 +230,16 @@ def a_stock(**overrides) -> Stock:
     return Stock(**base)
 
 
+def a_quote(**overrides) -> Quote:
+    base = dict(
+        symbol="AAPL", price=297.86, previous_close=296.07,
+        bid=283.52, ask=313.43,
+        as_of=datetime(2026, 6, 18, 19, 59, 59, tzinfo=timezone.utc),
+    )
+    base.update(overrides)
+    return Quote(**base)
+
+
 def a_performance(**overrides) -> StockPerformance:
     base = dict(
         one_week=1.2, one_month=-0.4, three_month=5.1,
@@ -282,6 +312,17 @@ def test_entity_change_percent_guards_zero_division():
 def test_entity_spread():
     assert a_stock(bid=283.52, ask=313.43).spread == 29.91
     assert a_stock(bid=None).spread is None
+
+
+def test_quote_entity_mirrors_stock_change_rules():
+    # Quote duplicates Stock's change/spread rules on purpose — they must agree.
+    q = a_quote(price=110.0, previous_close=100.0)
+    assert q.change == 10.0
+    assert q.change_percent == 10.0
+    assert q.spread == 29.91
+    assert a_quote(previous_close=None).change is None
+    assert a_quote(previous_close=0).change_percent is None
+    assert a_quote(bid=None).spread is None
 
 
 def test_key_metrics_peg_divides_pe_by_growth():
@@ -415,6 +456,26 @@ def test_use_case_enrichment_is_best_effort():
     assert stock.price == 297.86
     assert stock.performance is None
     assert stock.market_cap is None
+
+
+def test_quote_use_case_normalizes_symbol():
+    fake = FakeQuoteProvider(quote=a_quote())
+    GetStockQuote(fake).execute("  aapl ")
+    assert fake.received == ["AAPL"]
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "123", "AA1", "AA.B", "TOOLONG"])
+def test_quote_use_case_rejects_invalid_symbols(bad):
+    fake = FakeQuoteProvider(quote=a_quote())
+    with pytest.raises(ValueError):
+        GetStockQuote(fake).execute(bad)
+    assert fake.received == []  # provider untouched on invalid input
+
+
+def test_quote_use_case_propagates_not_found():
+    fake = FakeQuoteProvider(raises=StockNotFound("ZZZZ"))
+    with pytest.raises(StockNotFound):
+        GetStockQuote(fake).execute("ZZZZ")
 
 
 def test_logo_use_case_normalizes_symbol():
@@ -582,10 +643,15 @@ def make_client():
         rsi_provider: CandleProvider | None = None,
         sector_provider: SectorPerformanceProvider | None = None,
         earnings_provider: EarningsHistoryProvider | None = None,
+        quote_provider: StockQuoteProvider | None = None,
     ) -> TestClient:
         if provider is not None:
             app.dependency_overrides[get_stock_info] = lambda: GetStockInfo(
                 provider, performance_provider, fundamentals_provider
+            )
+        if quote_provider is not None:
+            app.dependency_overrides[get_stock_quote] = (
+                lambda: GetStockQuote(quote_provider)
             )
         if logo_provider is not None:
             app.dependency_overrides[get_stock_logo] = lambda: GetStockLogo(logo_provider)
@@ -686,6 +752,52 @@ def test_get_stock_without_enrichment_providers_nulls_fields(make_client):
     assert body["dividend_per_share"] is None
     assert body["performance"] is None
     assert body["metrics"] is None
+
+
+# --------------------------- quote endpoint ---------------------------
+
+def test_get_quote_returns_200_with_computed_fields(make_client):
+    client = make_client(quote_provider=FakeQuoteProvider(a_quote()))
+    r = client.get("/stocks/AAPL/quote")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["symbol"] == "AAPL"
+    assert body["price"] == 297.86
+    assert body["change"] == 1.79              # entity rule via presenter
+    assert body["change_percent"] == 0.6
+    assert body["spread"] == 29.91
+    # slim payload: none of the full stock's enrichment fields
+    assert "market_cap" not in body
+    assert "name" not in body
+
+
+def test_get_quote_sets_short_cache_header(make_client):
+    client = make_client(quote_provider=FakeQuoteProvider(a_quote()))
+    r = client.get("/stocks/AAPL/quote")
+    assert r.headers["cache-control"] == "public, max-age=2"
+
+
+def test_get_quote_normalizes_lowercase(make_client):
+    fake = FakeQuoteProvider(a_quote())
+    client = make_client(quote_provider=fake)
+    assert client.get("/stocks/aapl/quote").json()["symbol"] == "AAPL"
+    assert fake.received == ["AAPL"]
+
+
+def test_get_quote_invalid_symbol_400(make_client):
+    client = make_client(quote_provider=FakeQuoteProvider(a_quote()))
+    assert client.get("/stocks/123/quote").status_code == 400
+
+
+def test_get_quote_unknown_symbol_404(make_client):
+    client = make_client(quote_provider=FakeQuoteProvider(raises=StockNotFound("ZZZZ")))
+    assert client.get("/stocks/ZZZZ/quote").status_code == 404
+
+
+def test_get_quote_upstream_failure_502(make_client):
+    fake = FakeQuoteProvider(raises=StockDataUnavailable("AAPL", "boom"))
+    client = make_client(quote_provider=fake)
+    assert client.get("/stocks/AAPL/quote").status_code == 502
 
 
 # --------------------------- logo endpoint ---------------------------

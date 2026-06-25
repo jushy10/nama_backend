@@ -267,6 +267,47 @@ class Stock:
 
 
 @dataclass(frozen=True)
+class Quote:
+    """A minimal live quote: just enough to redraw a ticking price.
+
+    A deliberately slim cousin of ``Stock`` for high-frequency polling — it
+    carries only what a price widget refreshes (last price, the day's change,
+    and the bid/ask spread), so serving it costs a single snapshot call with
+    none of Stock's company-metadata lookup or best-effort enrichment. The
+    change rules are identical to Stock's on purpose: the slim and full views
+    must never disagree on the day's move for the same symbol.
+    """
+
+    symbol: str
+    price: float  # latest trade price
+    previous_close: float | None
+    bid: float | None
+    ask: float | None
+    as_of: datetime | None
+
+    @property
+    def change(self) -> float | None:
+        """Absolute price change since the previous close."""
+        if self.previous_close is None:
+            return None
+        return round(self.price - self.previous_close, 4)
+
+    @property
+    def change_percent(self) -> float | None:
+        """Percent price change since the previous close."""
+        if not self.previous_close:  # None or 0 -> undefined
+            return None
+        return round((self.price - self.previous_close) / self.previous_close * 100, 2)
+
+    @property
+    def spread(self) -> float | None:
+        """Current bid/ask spread, if a quote is available."""
+        if self.bid is None or self.ask is None:
+            return None
+        return round(self.ask - self.bid, 4)
+
+
+@dataclass(frozen=True)
 class Candle:
     """One OHLC bar: a stock's price action over a single timeframe slice.
 
