@@ -12,6 +12,7 @@ from app.stocks.entities import (
     CandleSeries,
     EarningsHistory,
     Logo,
+    Quote,
     SectorPerformance,
     Stock,
     StockFundamentals,
@@ -26,6 +27,25 @@ class StockDataProvider(ABC):
     @abstractmethod
     def get_stock(self, symbol: str) -> Stock:
         """Return a Stock for the given (already-normalized) symbol.
+
+        Raises:
+            StockNotFound: the symbol does not exist / has no data.
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class StockQuoteProvider(ABC):
+    """A gateway for a stock's minimal live quote (price + day change).
+
+    Separate from StockDataProvider because this backs a high-frequency polling
+    endpoint: it returns only the snapshot-derived quote and skips the company
+    metadata lookup, so a client refreshing every few seconds stays cheap.
+    """
+
+    @abstractmethod
+    def get_quote(self, symbol: str) -> Quote:
+        """Return the latest quote for the (already-normalized) symbol.
 
         Raises:
             StockNotFound: the symbol does not exist / has no data.

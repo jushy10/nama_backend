@@ -13,13 +13,14 @@ from alpaca.common.exceptions import APIError
 from alpaca.data.enums import Adjustment, DataFeed
 
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
-from app.stocks.entities import Candle, Stock, StockPerformance, Timeframe
+from app.stocks.entities import Candle, Quote, Stock, StockPerformance, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     CandleProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockPerformanceProvider,
+    StockQuoteProvider,
 )
 
 
@@ -63,6 +64,13 @@ class FakeTradingClient:
         if self._error is not None:
             raise self._error
         return self._asset
+
+
+class ExplodingTradingClient:
+    """Fails if touched — proves get_quote never makes the asset-metadata call."""
+
+    def get_asset(self, symbol):
+        raise AssertionError("get_quote must not call the trading client")
 
 
 def provider_with(data_client, trading_client) -> AlpacaStockDataProvider:
@@ -128,6 +136,49 @@ def test_asset_metadata_failure_is_non_fatal():
     assert stock.name is None
     assert stock.exchange is None
     assert stock.price == 297.86  # market data still returned
+
+
+# --------------------------- quote (snapshot only) ---------------------------
+
+
+def test_to_quote_maps_snapshot_fields():
+    quote = AlpacaStockDataProvider._to_quote("AAPL", make_snapshot())
+    assert isinstance(quote, Quote)
+    assert quote.symbol == "AAPL"
+    assert quote.price == 297.86
+    assert quote.previous_close == 296.07
+    assert quote.bid == 283.52 and quote.ask == 313.43
+    assert quote.change == 1.79  # entity rule, same as Stock's
+    assert quote.as_of == datetime(2026, 6, 18, tzinfo=timezone.utc)
+
+
+def test_get_quote_happy_path():
+    p = provider_with(
+        FakeDataClient(result={"AAPL": make_snapshot()}), FakeTradingClient()
+    )
+    quote = p.get_quote("AAPL")
+    assert quote.price == 297.86
+    assert quote.change_percent == 0.6
+
+
+def test_get_quote_skips_trading_client():
+    # The whole point of the slim endpoint: one snapshot call, no asset lookup.
+    p = provider_with(
+        FakeDataClient(result={"AAPL": make_snapshot()}), ExplodingTradingClient()
+    )
+    assert p.get_quote("AAPL").price == 297.86  # would raise if trading touched
+
+
+def test_get_quote_missing_snapshot_raises_not_found():
+    p = provider_with(FakeDataClient(result={"AAPL": None}), FakeTradingClient())
+    with pytest.raises(StockNotFound):
+        p.get_quote("AAPL")
+
+
+def test_get_quote_api_error_translated_to_unavailable():
+    p = provider_with(FakeDataClient(error=APIError("boom")), FakeTradingClient())
+    with pytest.raises(StockDataUnavailable):
+        p.get_quote("AAPL")
 
 
 # --------------------------- performance from bars ---------------------------
@@ -332,6 +383,7 @@ def test_provider_implements_all_ports():
     # a dropped base class would silently stop a feature from populating.
     p = AlpacaStockDataProvider("dummy-key", "dummy-secret")
     assert isinstance(p, StockDataProvider)
+    assert isinstance(p, StockQuoteProvider)
     assert isinstance(p, StockPerformanceProvider)
     assert isinstance(p, CandleProvider)
     assert isinstance(p, SectorPerformanceProvider)

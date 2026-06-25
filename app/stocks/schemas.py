@@ -78,6 +78,24 @@ class StockResponse(BaseModel):
     metrics: KeyMetricsResponse | None = None
 
 
+class QuoteResponse(BaseModel):
+    """A minimal live quote for high-frequency polling.
+
+    The slim counterpart to ``StockResponse``: only the fields a ticking price
+    widget redraws. ``change``/``change_percent`` follow the same rules as the
+    full stock endpoint, so the two never disagree on the day's move."""
+
+    symbol: str
+    price: float
+    change: float | None = None
+    change_percent: float | None = None
+    previous_close: float | None = None
+    bid: float | None = None
+    ask: float | None = None
+    spread: float | None = None
+    as_of: datetime | None = None
+
+
 class CandleResponse(BaseModel):
     """One candlestick. `time` is UNIX epoch seconds (UTC) — the format
     charting libraries such as TradingView Lightweight Charts expect — and

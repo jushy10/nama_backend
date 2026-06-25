@@ -21,6 +21,7 @@ from alpaca.trading.client import TradingClient
 from app.stocks.entities import (
     Candle,
     CandleSeries,
+    Quote,
     SectorPerformance,
     Stock,
     StockPerformance,
@@ -32,6 +33,7 @@ from app.stocks.ports import (
     SectorPerformanceProvider,
     StockDataProvider,
     StockPerformanceProvider,
+    StockQuoteProvider,
 )
 
 # Our vendor-agnostic Timeframe -> Alpaca's (amount, unit).
@@ -73,6 +75,7 @@ _SECTOR_ETFS: dict[str, str] = {
 
 class AlpacaStockDataProvider(
     StockDataProvider,
+    StockQuoteProvider,
     StockPerformanceProvider,
     CandleProvider,
     SectorPerformanceProvider,
@@ -125,6 +128,11 @@ class AlpacaStockDataProvider(
         snapshot = self._fetch_snapshot(symbol)
         name, exchange = self._fetch_asset_metadata(symbol)
         return self._to_entity(symbol, snapshot, name, exchange)
+
+    def get_quote(self, symbol: str) -> Quote:
+        # Snapshot only: one data call, no asset-metadata lookup. Cheap enough to
+        # back a poll-every-few-seconds endpoint.
+        return self._to_quote(symbol, self._fetch_snapshot(symbol))
 
     def get_performance(self, symbol: str) -> StockPerformance:
         return self._compute_performance(self._fetch_daily_bars(symbol))
@@ -266,6 +274,22 @@ class AlpacaStockDataProvider(
             low=bar.low,
             close=bar.close,
             volume=int(bar.volume) if bar.volume is not None else None,
+        )
+
+    @staticmethod
+    def _to_quote(symbol, snapshot) -> Quote:
+        # Same fields the Stock mapping reads, minus everything that needs a
+        # second call (name/exchange) or the daily bar (open/high/low/volume).
+        trade = snapshot.latest_trade
+        quote = snapshot.latest_quote
+        prev = snapshot.previous_daily_bar
+        return Quote(
+            symbol=symbol,
+            price=trade.price,
+            previous_close=prev.close if prev else None,
+            bid=quote.bid_price if quote else None,
+            ask=quote.ask_price if quote else None,
+            as_of=trade.timestamp,
         )
 
     @staticmethod
