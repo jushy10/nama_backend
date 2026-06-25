@@ -40,6 +40,7 @@ Creates a local `nama.db` on first run. Interactive docs at
 | GET    | `/stocks/{symbol}` | Stock info from Alpaca (e.g. `AAPL`) |
 | GET    | `/stocks/{symbol}/logo` | Company logo image |
 | GET    | `/stocks/{symbol}/candles` | OHLC candlestick chart data |
+| GET    | `/stocks/{symbol}/earnings` | Quarterly earnings surprises (beat history) |
 
 ## Test
 
@@ -142,6 +143,28 @@ of serving a monogram placeholder).
 ```sh
 export LOGODEV_TOKEN=pk_...
 curl localhost:8080/stocks/AAPL/logo --output aapl.png
+```
+
+### Earnings beat history
+
+`GET /stocks/{symbol}/earnings` returns recent **quarterly earnings surprises** —
+the reported EPS against the consensus estimate going into each quarter, newest
+first — answering "does the company beat estimates consistently?". Each quarter
+carries a `beat` flag (`actual >= estimate`, met counts as beat) and a
+`surprise_percent`; the top level summarises with `beats`, `scored` (quarters
+with both an actual and an estimate) and `beat_rate` (percent of scored quarters
+that beat). Sourced from [Finnhub](https://finnhub.io)'s free `/stock/earnings`.
+
+Unlike market cap and dividend (best-effort enrichment on `/stocks/{symbol}`),
+this is the endpoint's primary data, so it needs `FINNHUB_API_KEY`: without it
+the endpoint returns `503`, an unknown symbol returns `404`.
+
+```sh
+# Last 4 quarters (default)
+curl localhost:8080/stocks/AAPL/earnings
+
+# Last 12 quarters
+curl "localhost:8080/stocks/AAPL/earnings?limit=12"
 ```
 
 ### Secrets in AWS

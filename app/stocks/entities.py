@@ -6,7 +6,7 @@ calculations intrinsic to it.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
 
@@ -64,8 +64,9 @@ class KeyMetrics:
 
     All figures are *trailing* (derived from reported history). Forward-looking
     metrics (forward P/E, analyst price targets) need an estimates feed and are
-    deliberately out of scope. Margins, ROE and the growth fields are percent;
-    ratios are plain multiples; the 52-week prices are in the quote currency.
+    deliberately out of scope. Margins, ROE/ROIC and the growth fields are
+    percent; ratios are plain multiples; the 52-week prices are in the quote
+    currency. The derived ``peg`` property combines two of these.
     """
 
     # Valuation
@@ -75,6 +76,7 @@ class KeyMetrics:
     eps: float | None = None  # trailing earnings per share
     # Profitability (percent)
     roe: float | None = None  # return on equity
+    roic: float | None = None  # return on invested capital
     gross_margin: float | None = None
     operating_margin: float | None = None
     net_margin: float | None = None
@@ -91,6 +93,23 @@ class KeyMetrics:
     # Dividend sustainability
     payout_ratio: float | None = None  # dividends / earnings (percent)
 
+    @property
+    def peg(self) -> float | None:
+        """Trailing PEG: P/E divided by trailing EPS growth (percent).
+
+        A rough "is the P/E justified by growth" read — near 1.0 means the
+        price roughly matches growth, well above ~2 means it doesn't. Built
+        from trailing figures (not forward analyst estimates), so it answers
+        "what growth has the company shown", not "what growth is expected".
+        ``None`` unless both inputs are present and positive: a non-positive
+        P/E (losses) or non-positive growth makes the ratio meaningless.
+        """
+        if self.pe is None or self.eps_growth_yoy is None:
+            return None
+        if self.pe <= 0 or self.eps_growth_yoy <= 0:
+            return None
+        return round(self.pe / self.eps_growth_yoy, 2)
+
 
 @dataclass(frozen=True)
 class StockFundamentals:
@@ -105,6 +124,66 @@ class StockFundamentals:
     dividend_per_share: float | None
     dividend_yield: float | None
     metrics: KeyMetrics | None = None
+
+
+@dataclass(frozen=True)
+class EarningsSurprise:
+    """One quarter's reported EPS against the consensus estimate going in.
+
+    The gap between ``actual`` and ``estimate`` is the "earnings surprise" —
+    whether the company beat, met, or missed expectations that quarter.
+    ``surprise_percent`` expresses that gap as a percent of the estimate. Any
+    field can be ``None`` when the vendor didn't cover the quarter fully.
+    """
+
+    period: date | None  # fiscal period end date
+    fiscal_year: int | None
+    fiscal_quarter: int | None
+    actual: float | None  # reported EPS
+    estimate: float | None  # consensus EPS estimate going in
+    surprise: float | None  # actual - estimate (EPS)
+    surprise_percent: float | None  # surprise as a percent of the estimate
+
+    @property
+    def beat(self) -> bool | None:
+        """Whether the quarter met or beat its estimate (``actual >= estimate``).
+
+        Meeting counts as a beat. ``None`` when either side is missing, so an
+        unknowable quarter stays distinct from a genuine miss.
+        """
+        if self.actual is None or self.estimate is None:
+            return None
+        return self.actual >= self.estimate
+
+
+@dataclass(frozen=True)
+class EarningsHistory:
+    """A run of recent quarterly earnings surprises for one symbol.
+
+    Ordered newest quarter first — the order a "last N quarters" view reads in.
+    The summary properties answer the checklist's "beats consistently?" question:
+    of the quarters with both an actual and an estimate, how many met or beat.
+    """
+
+    symbol: str
+    quarters: tuple[EarningsSurprise, ...]
+
+    @property
+    def scored(self) -> int:
+        """Quarters with enough data to judge a beat (actual and estimate)."""
+        return sum(1 for q in self.quarters if q.beat is not None)
+
+    @property
+    def beats(self) -> int:
+        """Count of quarters that met or beat their estimate."""
+        return sum(1 for q in self.quarters if q.beat)
+
+    @property
+    def beat_rate(self) -> float | None:
+        """Percent of scoreable quarters that met or beat; ``None`` if none are."""
+        if self.scored == 0:
+            return None
+        return round(self.beats / self.scored * 100, 1)
 
 
 @dataclass(frozen=True)
