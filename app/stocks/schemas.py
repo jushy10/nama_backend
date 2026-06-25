@@ -5,7 +5,7 @@ deliberately separate from the Stock entity so the core stays
 framework-agnostic.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -128,6 +128,38 @@ class RsiResponse(BaseModel):
     overbought: float
     oversold: float
     points: list[RsiPointResponse]
+
+
+class EarningsSurpriseResponse(BaseModel):
+    """One quarter's reported EPS versus the consensus estimate going in.
+
+    ``beat`` is the met-or-beat flag (``actual >= estimate``); ``null`` when
+    either side is missing. ``surprise`` is the EPS gap and ``surprise_percent``
+    that gap as a percent of the estimate."""
+
+    period: date | None = None  # fiscal period end date
+    fiscal_year: int | None = None
+    fiscal_quarter: int | None = None
+    actual: float | None = None  # reported EPS
+    estimate: float | None = None  # consensus EPS estimate
+    surprise: float | None = None  # actual - estimate (EPS)
+    surprise_percent: float | None = None  # percent of estimate
+    beat: bool | None = None  # met or beat the estimate
+
+
+class EarningsHistoryResponse(BaseModel):
+    """Recent quarterly earnings surprises (newest first) plus a beat summary.
+
+    ``beat_rate`` is the percent of *scored* quarters (those with both an actual
+    and an estimate) that met or beat — the "beats consistently?" read.
+    ``count`` is how many quarters are returned."""
+
+    symbol: str
+    count: int
+    beats: int  # quarters that met or beat
+    scored: int  # quarters with enough data to judge a beat
+    beat_rate: float | None = None  # percent of scored quarters that beat
+    quarters: list[EarningsSurpriseResponse]
 
 
 class SectorPerformanceResponse(BaseModel):

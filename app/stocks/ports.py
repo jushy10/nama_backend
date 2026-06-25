@@ -10,6 +10,7 @@ from datetime import datetime
 
 from app.stocks.entities import (
     CandleSeries,
+    EarningsHistory,
     Logo,
     SectorPerformance,
     Stock,
@@ -65,6 +66,26 @@ class StockFundamentalsProvider(ABC):
 
         Raises:
             StockNotFound: the symbol is not covered by the source.
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class EarningsHistoryProvider(ABC):
+    """A gateway for a stock's recent quarterly earnings surprises.
+
+    Actual-vs-estimate EPS comes from a fundamentals/estimates vendor, not the
+    price feed. This backs a dedicated endpoint (not best-effort enrichment),
+    so failures surface as errors rather than being swallowed.
+    """
+
+    @abstractmethod
+    def get_earnings_history(self, symbol: str, *, limit: int) -> EarningsHistory:
+        """Return up to ``limit`` recent quarters for the (normalized) symbol,
+        newest first.
+
+        Raises:
+            StockNotFound: the symbol has no earnings data.
             StockDataUnavailable: the upstream source failed.
         """
         raise NotImplementedError

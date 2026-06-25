@@ -6,7 +6,7 @@ calculations intrinsic to it.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
 
@@ -124,6 +124,66 @@ class StockFundamentals:
     dividend_per_share: float | None
     dividend_yield: float | None
     metrics: KeyMetrics | None = None
+
+
+@dataclass(frozen=True)
+class EarningsSurprise:
+    """One quarter's reported EPS against the consensus estimate going in.
+
+    The gap between ``actual`` and ``estimate`` is the "earnings surprise" —
+    whether the company beat, met, or missed expectations that quarter.
+    ``surprise_percent`` expresses that gap as a percent of the estimate. Any
+    field can be ``None`` when the vendor didn't cover the quarter fully.
+    """
+
+    period: date | None  # fiscal period end date
+    fiscal_year: int | None
+    fiscal_quarter: int | None
+    actual: float | None  # reported EPS
+    estimate: float | None  # consensus EPS estimate going in
+    surprise: float | None  # actual - estimate (EPS)
+    surprise_percent: float | None  # surprise as a percent of the estimate
+
+    @property
+    def beat(self) -> bool | None:
+        """Whether the quarter met or beat its estimate (``actual >= estimate``).
+
+        Meeting counts as a beat. ``None`` when either side is missing, so an
+        unknowable quarter stays distinct from a genuine miss.
+        """
+        if self.actual is None or self.estimate is None:
+            return None
+        return self.actual >= self.estimate
+
+
+@dataclass(frozen=True)
+class EarningsHistory:
+    """A run of recent quarterly earnings surprises for one symbol.
+
+    Ordered newest quarter first — the order a "last N quarters" view reads in.
+    The summary properties answer the checklist's "beats consistently?" question:
+    of the quarters with both an actual and an estimate, how many met or beat.
+    """
+
+    symbol: str
+    quarters: tuple[EarningsSurprise, ...]
+
+    @property
+    def scored(self) -> int:
+        """Quarters with enough data to judge a beat (actual and estimate)."""
+        return sum(1 for q in self.quarters if q.beat is not None)
+
+    @property
+    def beats(self) -> int:
+        """Count of quarters that met or beat their estimate."""
+        return sum(1 for q in self.quarters if q.beat)
+
+    @property
+    def beat_rate(self) -> float | None:
+        """Percent of scoreable quarters that met or beat; ``None`` if none are."""
+        if self.scored == 0:
+            return None
+        return round(self.beats / self.scored * 100, 1)
 
 
 @dataclass(frozen=True)

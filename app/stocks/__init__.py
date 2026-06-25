@@ -3,21 +3,26 @@
 Layers (dependencies point inward only):
     entities.py                    🟡 Enterprise Business Rules (Stock, Logo,
                                       StockPerformance, StockFundamentals,
+                                      EarningsSurprise, EarningsHistory,
                                       Candle, CandleSeries, Timeframe)
     indicators.py                  🟡 Enterprise Business Rules (RSI: pure
                                       technical indicator over close prices)
     exceptions.py                  🟡 domain errors
     ports.py                       🔴 Application ports (StockDataProvider,
                                       StockPerformanceProvider,
-                                      StockFundamentalsProvider, LogoProvider,
+                                      StockFundamentalsProvider,
+                                      EarningsHistoryProvider, LogoProvider,
                                       CandleProvider)
     use_cases.py                   🔴 Application Business Rules (GetStockInfo,
-                                      GetStockLogo, GetStockCandles, GetStockRsi)
+                                      GetStockLogo, GetStockCandles, GetStockRsi,
+                                      GetStockEarnings)
     alpaca_provider.py             🟢 Interface Adapter (price snapshot,
                                       performance windows + OHLC candles via
                                       alpaca-py)
     finnhub_fundamentals_provider.py 🟢 Interface Adapter (market cap + dividend
                                       via Finnhub)
+    finnhub_earnings_provider.py   🟢 Interface Adapter (quarterly earnings
+                                      surprises via Finnhub)
     fmp_logo_provider.py           🟢 Interface Adapter (logos via Financial
                                       Modeling Prep)
     chart_window.py                🔵 transport helper (chart range -> window)

@@ -5,7 +5,7 @@ port, so we inject a hand-written FakeProvider instead of mocking Alpaca or
 the network — that's the payoff of the clean-architecture layering.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +15,8 @@ from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     Candle,
     CandleSeries,
+    EarningsHistory,
+    EarningsSurprise,
     KeyMetrics,
     Logo,
     SectorPerformance,
@@ -27,6 +29,7 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSignal
 from app.stocks.ports import (
     CandleProvider,
+    EarningsHistoryProvider,
     LogoProvider,
     SectorPerformanceProvider,
     StockDataProvider,
@@ -36,6 +39,7 @@ from app.stocks.ports import (
 from app.stocks.router import (
     get_sector_performance,
     get_stock_candles,
+    get_stock_earnings,
     get_stock_info,
     get_stock_logo,
     get_stock_rsi,
@@ -43,6 +47,7 @@ from app.stocks.router import (
 from app.stocks.use_cases import (
     GetSectorPerformance,
     GetStockCandles,
+    GetStockEarnings,
     GetStockInfo,
     GetStockLogo,
     GetStockRsi,
@@ -147,6 +152,22 @@ class FakeSectorProvider(SectorPerformanceProvider):
         return self._sectors
 
 
+class FakeEarningsProvider(EarningsHistoryProvider):
+    """Returns/raises whatever the test configured; records the call args."""
+
+    def __init__(self, history=None, raises: Exception | None = None):
+        self._history = history
+        self._raises = raises
+        self.received: list[tuple] = []
+
+    def get_earnings_history(self, symbol: str, *, limit: int) -> EarningsHistory:
+        self.received.append((symbol, limit))
+        if self._raises is not None:
+            raise self._raises
+        assert self._history is not None
+        return self._history
+
+
 def a_logo(content: bytes = b"\x89PNG\r\n", media_type: str = "image/png") -> Logo:
     return Logo(content=content, media_type=media_type)
 
@@ -225,6 +246,21 @@ def a_sector(**overrides) -> SectorPerformance:
     return SectorPerformance(**base)
 
 
+def a_surprise(**overrides) -> EarningsSurprise:
+    base = dict(
+        period=date(2026, 3, 31), fiscal_year=2026, fiscal_quarter=1,
+        actual=2.18, estimate=2.10, surprise=0.08, surprise_percent=3.81,
+    )
+    base.update(overrides)
+    return EarningsSurprise(**base)
+
+
+def a_history(quarters=None, symbol: str = "AAPL") -> EarningsHistory:
+    if quarters is None:
+        quarters = (a_surprise(),)
+    return EarningsHistory(symbol=symbol, quarters=tuple(quarters))
+
+
 # --------------------------- entity rules (pure) ---------------------------
 
 def test_entity_change_and_percent():
@@ -265,6 +301,33 @@ def test_key_metrics_peg_divides_pe_by_growth():
 )
 def test_key_metrics_peg_none_when_inputs_missing_or_nonpositive(pe, growth):
     assert KeyMetrics(pe=pe, eps_growth_yoy=growth).peg is None
+
+
+def test_earnings_surprise_beat_flag():
+    assert a_surprise(actual=2.0, estimate=1.5).beat is True   # beat
+    assert a_surprise(actual=1.5, estimate=1.5).beat is True   # met counts as beat
+    assert a_surprise(actual=1.0, estimate=1.5).beat is False  # miss
+    assert a_surprise(actual=None, estimate=1.5).beat is None  # unknowable
+    assert a_surprise(actual=2.0, estimate=None).beat is None
+
+
+def test_earnings_history_beat_rate_ignores_unscored_quarters():
+    history = a_history((
+        a_surprise(actual=2.0, estimate=1.5),   # beat
+        a_surprise(actual=1.0, estimate=1.5),   # miss
+        a_surprise(actual=2.0, estimate=1.5),   # beat
+        a_surprise(actual=None, estimate=None), # unscored -> excluded
+    ))
+    assert history.scored == 3
+    assert history.beats == 2
+    assert history.beat_rate == 66.7  # 2/3, one decimal
+
+
+def test_earnings_history_beat_rate_none_when_nothing_scoreable():
+    history = a_history((a_surprise(actual=None, estimate=None),))
+    assert history.scored == 0
+    assert history.beats == 0
+    assert history.beat_rate is None
 
 
 def test_candle_is_bullish():
@@ -473,6 +536,39 @@ def test_sector_use_case_propagates_not_found():
         GetSectorPerformance(fake).execute()
 
 
+def test_earnings_use_case_normalizes_symbol_and_forwards_limit():
+    fake = FakeEarningsProvider(a_history())
+    GetStockEarnings(fake).execute("  aapl ", limit=8)
+    assert fake.received == [("AAPL", 8)]
+
+
+def test_earnings_use_case_defaults_to_four_quarters():
+    fake = FakeEarningsProvider(a_history())
+    GetStockEarnings(fake).execute("AAPL")
+    assert fake.received == [("AAPL", 4)]
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "123", "AA1", "TOOLONG"])
+def test_earnings_use_case_rejects_invalid_symbols(bad):
+    fake = FakeEarningsProvider(a_history())
+    with pytest.raises(ValueError):
+        GetStockEarnings(fake).execute(bad)
+    assert fake.received == []  # provider untouched on invalid input
+
+
+def test_earnings_use_case_rejects_non_positive_limit():
+    fake = FakeEarningsProvider(a_history())
+    with pytest.raises(ValueError):
+        GetStockEarnings(fake).execute("AAPL", limit=0)
+    assert fake.received == []
+
+
+def test_earnings_use_case_propagates_not_found():
+    fake = FakeEarningsProvider(raises=StockNotFound("ZZZZ"))
+    with pytest.raises(StockNotFound):
+        GetStockEarnings(fake).execute("ZZZZ")
+
+
 # --------------------------- API ---------------------------
 
 @pytest.fixture
@@ -485,6 +581,7 @@ def make_client():
         candle_provider: CandleProvider | None = None,
         rsi_provider: CandleProvider | None = None,
         sector_provider: SectorPerformanceProvider | None = None,
+        earnings_provider: EarningsHistoryProvider | None = None,
     ) -> TestClient:
         if provider is not None:
             app.dependency_overrides[get_stock_info] = lambda: GetStockInfo(
@@ -501,6 +598,10 @@ def make_client():
         if sector_provider is not None:
             app.dependency_overrides[get_sector_performance] = (
                 lambda: GetSectorPerformance(sector_provider)
+            )
+        if earnings_provider is not None:
+            app.dependency_overrides[get_stock_earnings] = (
+                lambda: GetStockEarnings(earnings_provider)
             )
         return TestClient(app)
 
@@ -780,6 +881,64 @@ def test_get_rsi_upstream_failure_502(make_client):
     fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
     client = make_client(rsi_provider=fake)
     assert client.get("/stocks/AAPL/rsi").status_code == 502
+
+
+# --------------------------- earnings endpoint ---------------------------
+
+def test_get_earnings_returns_200_with_beat_summary(make_client):
+    history = a_history((
+        a_surprise(actual=2.18, estimate=2.10, period=date(2026, 3, 31)),   # beat
+        a_surprise(actual=1.40, estimate=1.50, period=date(2025, 12, 31)),  # miss
+    ))
+    client = make_client(earnings_provider=FakeEarningsProvider(history))
+    r = client.get("/stocks/AAPL/earnings")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["symbol"] == "AAPL"
+    assert body["count"] == 2
+    assert body["scored"] == 2
+    assert body["beats"] == 1
+    assert body["beat_rate"] == 50.0
+    first = body["quarters"][0]
+    assert first["period"] == "2026-03-31"   # date serialized ISO
+    assert first["actual"] == 2.18
+    assert first["beat"] is True
+    assert body["quarters"][1]["beat"] is False
+
+
+def test_get_earnings_honors_limit(make_client):
+    fake = FakeEarningsProvider(a_history())
+    client = make_client(earnings_provider=fake)
+    assert client.get("/stocks/AAPL/earnings", params={"limit": 12}).status_code == 200
+    assert fake.received == [("AAPL", 12)]
+
+
+def test_get_earnings_defaults_to_four_quarters(make_client):
+    fake = FakeEarningsProvider(a_history())
+    client = make_client(earnings_provider=fake)
+    client.get("/stocks/AAPL/earnings")
+    assert fake.received == [("AAPL", 4)]
+
+
+def test_get_earnings_invalid_symbol_400(make_client):
+    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
+    assert client.get("/stocks/123/earnings").status_code == 400
+
+
+def test_get_earnings_invalid_limit_422(make_client):
+    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
+    assert client.get("/stocks/AAPL/earnings", params={"limit": 0}).status_code == 422
+
+
+def test_get_earnings_unknown_symbol_404(make_client):
+    client = make_client(earnings_provider=FakeEarningsProvider(raises=StockNotFound("ZZZZ")))
+    assert client.get("/stocks/ZZZZ/earnings").status_code == 404
+
+
+def test_get_earnings_upstream_failure_502(make_client):
+    fake = FakeEarningsProvider(raises=StockDataUnavailable("AAPL", "boom"))
+    client = make_client(earnings_provider=fake)
+    assert client.get("/stocks/AAPL/earnings").status_code == 502
 
 
 # --------------------------- sectors endpoint ---------------------------

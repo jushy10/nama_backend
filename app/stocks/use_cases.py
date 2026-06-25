@@ -10,6 +10,7 @@ from datetime import datetime
 
 from app.stocks.entities import (
     CandleSeries,
+    EarningsHistory,
     Logo,
     SectorPerformance,
     Stock,
@@ -21,6 +22,7 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSeries, rsi_series
 from app.stocks.ports import (
     CandleProvider,
+    EarningsHistoryProvider,
     LogoProvider,
     SectorPerformanceProvider,
     StockDataProvider,
@@ -148,6 +150,25 @@ class GetStockRsi:
             _normalize_symbol(symbol), timeframe, start=start, end=end
         )
         return rsi_series(series, period)
+
+
+class GetStockEarnings:
+    """Use case: retrieve a stock's recent quarterly earnings surprises.
+
+    A dedicated dataset (actual vs estimate per quarter), not snapshot
+    enrichment — so errors propagate to the caller rather than being swallowed,
+    mirroring the candles and RSI endpoints.
+    """
+
+    def __init__(self, provider: EarningsHistoryProvider) -> None:
+        self._provider = provider
+
+    def execute(self, symbol: str, *, limit: int = 4) -> EarningsHistory:
+        if limit < 1:
+            raise ValueError("'limit' must be at least 1.")
+        return self._provider.get_earnings_history(
+            _normalize_symbol(symbol), limit=limit
+        )
 
 
 class GetSectorPerformance:
