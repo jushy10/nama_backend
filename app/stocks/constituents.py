@@ -1,48 +1,70 @@
-"""Interface Adapter: the file-backed ConstituentRepository.
+"""Interface Adapter: the database-backed ConstituentRepository.
 
 The screener's universe — which symbols belong to which index, and each one's
-GICS sector — is static reference data, so it ships as a JSON file baked into
-the package rather than coming from a live feed. Regenerate that file with
-``scripts/build_constituents.py`` when the indices reconstitute.
+GICS sector — lives in the ``index_constituents`` table rather than a bundled
+file, so it can be refreshed without redeploying the app. The table is populated
+by ``scripts/sync_constituents.py`` (FMP -> DB) and read at request time.
 
-This is the only module that knows the on-disk shape; it maps the JSON onto the
-Constituent entity. Swap the storage and only this file changes.
+This module owns both the ORM model (the storage shape) and the repository that
+maps rows onto the Constituent *entity*. The domain entity stays free of
+SQLAlchemy; only this adapter knows the table exists.
 """
 
-import json
-from pathlib import Path
+from sqlalchemy import Boolean, String, select
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from app.stocks.entities import Constituent
+from app.db import Base
+from app.stocks.entities import Constituent, StockIndex
 from app.stocks.ports import ConstituentRepository
 
-_DATA_FILE = Path(__file__).resolve().parent / "data" / "constituents.json"
 
+class ConstituentRecord(Base):
+    """One index constituent as stored in the database.
 
-class JsonConstituentRepository(ConstituentRepository):
-    """Reads the index-constituents universe from the bundled JSON file.
-
-    The file is parsed once and cached on the instance: it's static for the
-    process's lifetime and the router holds a single shared instance, so there
-    is no per-request file read.
+    Index membership is a boolean per index — the index set is small and fixed
+    (the same StockIndex values the API exposes), so a column each keeps the
+    table legible and trivially queryable. ``name``/``sector`` are nullable so a
+    thinly-covered symbol still gets a row.
     """
 
-    def __init__(self, data_file: Path = _DATA_FILE) -> None:
-        self._data_file = data_file
-        self._constituents: tuple[Constituent, ...] | None = None
+    __tablename__ = "index_constituents"
+
+    symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
+    name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    sector: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    in_sp500: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    in_nasdaq100: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+# Each StockIndex paired with the boolean column that records its membership, so
+# the enum and the schema stay in lockstep — one place to extend for a new index.
+INDEX_COLUMNS: dict[StockIndex, str] = {
+    StockIndex.SP500: "in_sp500",
+    StockIndex.NASDAQ100: "in_nasdaq100",
+}
+
+
+def _to_entity(row: ConstituentRecord) -> Constituent:
+    indices = frozenset(
+        index.value for index, column in INDEX_COLUMNS.items() if getattr(row, column)
+    )
+    return Constituent(
+        symbol=row.symbol, name=row.name, sector=row.sector, indices=indices
+    )
+
+
+class SqlConstituentRepository(ConstituentRepository):
+    """Reads the index-constituents universe from the database.
+
+    Holds a request-scoped session (injected by the router via ``get_db``). The
+    screener loads the whole table once per call and filters in memory: the
+    universe is small (a few hundred rows) and the screener response is cached,
+    so a single SELECT beats per-filter round-trips.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
 
     def all(self) -> tuple[Constituent, ...]:
-        if self._constituents is None:
-            self._constituents = self._load()
-        return self._constituents
-
-    def _load(self) -> tuple[Constituent, ...]:
-        raw = json.loads(self._data_file.read_text(encoding="utf-8"))
-        return tuple(
-            Constituent(
-                symbol=record["symbol"],
-                name=record.get("name"),
-                sector=record.get("sector"),
-                indices=frozenset(record.get("indices", ())),
-            )
-            for record in raw["constituents"]
-        )
+        rows = self._session.execute(select(ConstituentRecord)).scalars().all()
+        return tuple(_to_entity(row) for row in rows)

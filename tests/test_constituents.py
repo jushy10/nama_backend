@@ -1,38 +1,45 @@
-"""Tests for the file-backed ConstituentRepository.
+"""Tests for the database-backed ConstituentRepository.
 
-Two jobs: map the JSON onto the Constituent entity (offline, against a tiny
-fixture file), and a sanity check that the bundled universe the screener
-actually ships is well-formed.
+Offline: an in-memory SQLite database stands in for the real table. Verifies the
+ORM row -> Constituent entity mapping (membership flags -> the indices set), plus
+the pure merge the sync script uses to fold FMP's two index feeds together.
 """
 
-import json
-from pathlib import Path
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
-from app.stocks.constituents import JsonConstituentRepository
+from app.db import Base
+from app.stocks.constituents import ConstituentRecord, SqlConstituentRepository
 from app.stocks.entities import Constituent, StockIndex
+from scripts.sync_constituents import build_universe
 
 
-def _write(tmp_path, records) -> Path:
-    path = tmp_path / "constituents.json"
-    path.write_text(json.dumps({"constituents": records}), encoding="utf-8")
-    return path
+@pytest.fixture
+def session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        yield db
 
 
-def test_maps_records_onto_entities(tmp_path):
-    repo = JsonConstituentRepository(
-        _write(
-            tmp_path,
-            [
-                {
-                    "symbol": "AAPL",
-                    "name": "Apple Inc.",
-                    "sector": "Information Technology",
-                    "indices": ["sp500", "nasdaq100"],
-                }
-            ],
-        )
+def _add(session, **fields):
+    session.add(ConstituentRecord(**fields))
+    session.commit()
+
+
+# --------------------------- repository (row -> entity) ---------------------------
+
+def test_maps_row_to_entity(session):
+    _add(
+        session,
+        symbol="AAPL",
+        name="Apple Inc.",
+        sector="Information Technology",
+        in_sp500=True,
+        in_nasdaq100=True,
     )
-    (apple,) = repo.all()
+    (apple,) = SqlConstituentRepository(session).all()
     assert isinstance(apple, Constituent)
     assert apple.symbol == "AAPL"
     assert apple.name == "Apple Inc."
@@ -41,39 +48,49 @@ def test_maps_records_onto_entities(tmp_path):
     assert apple.in_index(StockIndex.NASDAQ100)
 
 
-def test_missing_fields_become_none(tmp_path):
-    repo = JsonConstituentRepository(_write(tmp_path, [{"symbol": "ZZZZ"}]))
-    (z,) = repo.all()
+def test_membership_flags_become_indices(session):
+    _add(session, symbol="XOM", sector="Energy", in_sp500=True, in_nasdaq100=False)
+    _add(session, symbol="ARM", sector="Information Technology", in_sp500=False, in_nasdaq100=True)
+    by_symbol = {c.symbol: c for c in SqlConstituentRepository(session).all()}
+    assert by_symbol["XOM"].indices == frozenset({"sp500"})
+    assert by_symbol["ARM"].indices == frozenset({"nasdaq100"})
+    assert not by_symbol["XOM"].in_index(StockIndex.NASDAQ100)
+
+
+def test_nullable_name_and_sector(session):
+    _add(session, symbol="ZZZZ", in_sp500=True)
+    (z,) = SqlConstituentRepository(session).all()
     assert z.name is None and z.sector is None
-    assert z.indices == frozenset()
-    assert not z.in_index(StockIndex.SP500)
+    assert z.indices == frozenset({"sp500"})
 
 
-def test_file_is_parsed_once_and_cached(tmp_path):
-    path = _write(tmp_path, [{"symbol": "AAPL", "indices": ["sp500"]}])
-    repo = JsonConstituentRepository(path)
-    first = repo.all()
-    path.write_text(json.dumps({"constituents": []}), encoding="utf-8")  # change on disk
-    assert repo.all() is first  # cached: the file isn't re-read
+def test_empty_table_returns_empty_tuple(session):
+    assert SqlConstituentRepository(session).all() == ()
 
 
-# --------------------------- bundled universe sanity ---------------------------
+# --------------------------- sync merge (FMP rows -> records) ---------------------------
+
+def test_build_universe_merges_membership_and_normalizes_sector():
+    universe = build_universe(
+        {
+            "sp500": [
+                {"symbol": "AAPL", "name": "Apple Inc.", "sector": "Technology"},
+                {"symbol": "XOM", "name": "Exxon", "sector": "Energy"},
+            ],
+            "nasdaq100": [
+                {"symbol": "AAPL", "name": "Apple Inc.", "sector": "Technology"},
+                {"symbol": "ARM", "name": "Arm Holdings", "sector": "Technology"},
+            ],
+        }
+    )
+    # AAPL is in both indices; FMP "Technology" -> GICS "Information Technology".
+    assert universe["AAPL"]["in_sp500"] and universe["AAPL"]["in_nasdaq100"]
+    assert universe["AAPL"]["sector"] == "Information Technology"
+    assert universe["XOM"]["in_sp500"] and not universe["XOM"]["in_nasdaq100"]
+    assert universe["ARM"]["in_nasdaq100"] and not universe["ARM"]["in_sp500"]
+    assert universe["XOM"]["sector"] == "Energy"  # already GICS, unchanged
 
 
-def test_bundled_universe_is_wellformed():
-    universe = JsonConstituentRepository().all()
-    by_symbol = {c.symbol: c for c in universe}
-    assert len(by_symbol) == len(universe)  # symbols are unique
-
-    sp500 = [c for c in universe if c.in_index(StockIndex.SP500)]
-    nasdaq = [c for c in universe if c.in_index(StockIndex.NASDAQ100)]
-    assert 490 <= len(sp500) <= 510  # roughly 500 names
-    assert 95 <= len(nasdaq) <= 110  # roughly 100 names
-
-    # Every name belongs to at least one index and carries a GICS sector.
-    assert all(c.indices for c in universe)
-    assert all(c.sector for c in universe)
-
-    # A couple of well-known members land in the right indices.
-    assert by_symbol["AAPL"].in_index(StockIndex.SP500)
-    assert by_symbol["AAPL"].in_index(StockIndex.NASDAQ100)
+def test_build_universe_skips_rows_without_a_symbol():
+    universe = build_universe({"sp500": [{"name": "No Symbol"}, {"symbol": "  "}]})
+    assert universe == {}

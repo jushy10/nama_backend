@@ -13,10 +13,12 @@ from datetime import datetime, timezone
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy.orm import Session
 
+from app.db import get_db
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.chart_window import ChartRange, resolve_window
-from app.stocks.constituents import JsonConstituentRepository
+from app.stocks.constituents import SqlConstituentRepository
 from app.stocks.entities import (
     CandleSeries,
     EarningsHistory,
@@ -36,7 +38,6 @@ from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
 from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
 from app.stocks.ports import (
-    ConstituentRepository,
     EarningsHistoryProvider,
     LogoProvider,
     StockDataProvider,
@@ -346,21 +347,14 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
-@lru_cache(maxsize=1)
-def get_constituent_repository() -> ConstituentRepository:
-    # The screener's universe is static reference data baked into the package
-    # (regenerate with scripts/build_constituents.py). Parsed once and shared,
-    # so there's no per-request file read.
-    return JsonConstituentRepository()
-
-
 def get_screener(
     provider: AlpacaStockDataProvider = Depends(get_provider),
-    repository: ConstituentRepository = Depends(get_constituent_repository),
+    db: Session = Depends(get_db),
 ) -> ScreenStocks:
-    # The Alpaca provider implements QuoteBatchProvider (batched snapshots), so
-    # the same instance backs the screener's day-move fetch.
-    return ScreenStocks(repository, provider)
+    # Universe comes from the index_constituents table (populated by
+    # scripts/sync_constituents.py); the Alpaca provider supplies the day move
+    # via batched snapshots. The repository is request-scoped, like the session.
+    return ScreenStocks(SqlConstituentRepository(db), provider)
 
 
 def _present_screened(stock: ScreenedStock) -> ScreenedStockResponse:

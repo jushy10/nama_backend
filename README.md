@@ -12,9 +12,9 @@ app/
 tests/
 ├── test_stocks.py           # stock entity/use-case/API tests (offline)
 ├── test_stocks_provider.py  # Alpaca adapter tests (offline, faked SDK)
-└── test_constituents.py     # screener universe: repo mapping + data sanity
+└── test_constituents.py     # screener universe: DB repo + sync merge (offline)
 scripts/
-└── build_constituents.py    # regenerate the screener's index-membership file
+└── sync_constituents.py     # sync the screener's index universe (FMP -> DB)
 ```
 
 ## Setup
@@ -186,18 +186,19 @@ universe.
 | `limit`  | `1`–`50` | `10` | How many names per side (gainers and losers). |
 
 The universe — which symbols belong to each index, and each one's GICS sector —
-is **static reference data** baked into the package at
-[`app/stocks/data/constituents.json`](app/stocks/data/constituents.json), since
-the live market-data feed (Alpaca) doesn't expose index membership. It's
-generated from **Financial Modeling Prep**'s index-constituent endpoints — one
-call per index, each returning symbol + name + sector — by
-[`scripts/build_constituents.py`](scripts/build_constituents.py), with sectors
-normalized to GICS. It's a build-time tool, so the key is **not** needed at
-runtime. Regenerate when the indices reconstitute (~quarterly):
+lives in the `index_constituents` **database table** (auto-created at startup by
+the app's `create_all`), since the live market-data feed (Alpaca) doesn't expose
+index membership. The table is populated by
+[`scripts/sync_constituents.py`](scripts/sync_constituents.py) from **Financial
+Modeling Prep**'s index-constituent endpoints — one call per index, each
+returning symbol + name + sector, normalized to GICS. It's an ops-time sync (the
+app never calls FMP while serving), so run it whenever the indices reconstitute
+(~quarterly); the screener returns an empty board until the first sync:
 
 ```sh
-export FMP_API_KEY=...   # free key from financialmodelingprep.com
-python scripts/build_constituents.py
+export FMP_API_KEY=...                          # free key from financialmodelingprep.com
+export DATABASE_URL=postgresql+psycopg://...     # omit for local sqlite:///./nama.db
+python scripts/sync_constituents.py
 ```
 
 The day's move for each name comes from a best-effort batch of Alpaca snapshots
@@ -226,15 +227,18 @@ into the ECS task as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`. The optional
 repo.
 
 The screener's `FMP_API_KEY` is stored the same way (`/nama/dev/fmp-api-key`,
-via the [`ssm-secret`](infra/modules/ssm-secret) module) but is **build-time
-only** — [`scripts/build_constituents.py`](scripts/build_constituents.py) reads
-it to regenerate the committed universe, so it is *not* injected into the running
-ECS task. Fetch it from SSM when regenerating:
+via the [`ssm-secret`](infra/modules/ssm-secret) module) but is **ops-time
+only** — [`scripts/sync_constituents.py`](scripts/sync_constituents.py) reads it
+to populate the `index_constituents` table, so it is *not* injected into the
+running ECS task. Run the sync against the same database the app uses, fetching
+both from SSM:
 
 ```sh
 export FMP_API_KEY=$(aws ssm get-parameter --name /nama/dev/fmp-api-key \
   --with-decryption --query Parameter.Value --output text)
-python scripts/build_constituents.py
+export DATABASE_URL=$(aws ssm get-parameter --name /nama/dev/database-url \
+  --with-decryption --query Parameter.Value --output text)
+python scripts/sync_constituents.py
 ```
 
 ## Contributing

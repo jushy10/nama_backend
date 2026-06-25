@@ -28,12 +28,6 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["app*"]
 
-[tool.setuptools.package-data]
-# The screener's static universe ships inside the package and is read at runtime
-# via a path relative to the module, so the wheel must bundle the JSON — the
-# Docker image installs with a plain `pip install .` (not editable).
-"app.stocks" = ["data/*.json"]
-
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
