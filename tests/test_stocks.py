@@ -248,6 +248,25 @@ def test_entity_spread():
     assert a_stock(bid=None).spread is None
 
 
+def test_key_metrics_peg_divides_pe_by_growth():
+    assert KeyMetrics(pe=30.0, eps_growth_yoy=15.0).peg == 2.0
+    assert KeyMetrics(pe=28.5, eps_growth_yoy=10.0).peg == 2.85  # rounded to 2dp
+
+
+@pytest.mark.parametrize(
+    "pe, growth",
+    [
+        (30.0, None),   # growth unknown
+        (None, 15.0),   # P/E unknown
+        (30.0, 0.0),    # zero growth -> undefined
+        (30.0, -5.0),   # shrinking earnings -> meaningless
+        (-12.0, 15.0),  # negative P/E (losses) -> meaningless
+    ],
+)
+def test_key_metrics_peg_none_when_inputs_missing_or_nonpositive(pe, growth):
+    assert KeyMetrics(pe=pe, eps_growth_yoy=growth).peg is None
+
+
 def test_candle_is_bullish():
     assert a_candle(open=100.0, close=110.0).is_bullish is True   # up -> green
     assert a_candle(open=110.0, close=100.0).is_bullish is False  # down -> red

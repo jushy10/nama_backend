@@ -81,6 +81,7 @@ def test_maps_key_metrics_from_same_payload():
                 "psTTM": 7.1,
                 "epsTTM": 6.1,
                 "roeTTM": 150.0,
+                "roicTTM": 55.0,
                 "grossMarginTTM": 44.0,
                 "operatingMarginTTM": 30.0,
                 "netProfitMarginTTM": 25.0,
@@ -102,6 +103,7 @@ def test_maps_key_metrics_from_same_payload():
     assert m.ps == 7.1
     assert m.eps == 6.1
     assert m.roe == 150.0
+    assert m.roic == 55.0
     assert m.net_margin == 25.0
     assert m.current_ratio == 0.9
     assert m.debt_to_equity == 1.5
@@ -120,6 +122,7 @@ def test_key_metrics_fall_back_to_annual_keys():
                 "pbAnnual": 3.0,
                 "psAnnual": 2.0,
                 "epsAnnual": 4.0,
+                "roicAnnual": 12.0,
                 "currentRatioAnnual": 1.4,
                 "totalDebt/totalEquityAnnual": 0.8,
             }
@@ -130,6 +133,7 @@ def test_key_metrics_fall_back_to_annual_keys():
     assert m.pb == 3.0
     assert m.ps == 2.0
     assert m.eps == 4.0
+    assert m.roic == 12.0
     assert m.current_ratio == 1.4
     assert m.debt_to_equity == 0.8
 

@@ -166,10 +166,12 @@ def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
         return None
     return KeyMetricsResponse(
         pe=metrics.pe,
+        peg=metrics.peg,
         pb=metrics.pb,
         ps=metrics.ps,
         eps=metrics.eps,
         roe=metrics.roe,
+        roic=metrics.roic,
         gross_margin=metrics.gross_margin,
         operating_margin=metrics.operating_margin,
         net_margin=metrics.net_margin,

@@ -64,8 +64,9 @@ class KeyMetrics:
 
     All figures are *trailing* (derived from reported history). Forward-looking
     metrics (forward P/E, analyst price targets) need an estimates feed and are
-    deliberately out of scope. Margins, ROE and the growth fields are percent;
-    ratios are plain multiples; the 52-week prices are in the quote currency.
+    deliberately out of scope. Margins, ROE/ROIC and the growth fields are
+    percent; ratios are plain multiples; the 52-week prices are in the quote
+    currency. The derived ``peg`` property combines two of these.
     """
 
     # Valuation
@@ -75,6 +76,7 @@ class KeyMetrics:
     eps: float | None = None  # trailing earnings per share
     # Profitability (percent)
     roe: float | None = None  # return on equity
+    roic: float | None = None  # return on invested capital
     gross_margin: float | None = None
     operating_margin: float | None = None
     net_margin: float | None = None
@@ -90,6 +92,23 @@ class KeyMetrics:
     week_52_low: float | None = None
     # Dividend sustainability
     payout_ratio: float | None = None  # dividends / earnings (percent)
+
+    @property
+    def peg(self) -> float | None:
+        """Trailing PEG: P/E divided by trailing EPS growth (percent).
+
+        A rough "is the P/E justified by growth" read — near 1.0 means the
+        price roughly matches growth, well above ~2 means it doesn't. Built
+        from trailing figures (not forward analyst estimates), so it answers
+        "what growth has the company shown", not "what growth is expected".
+        ``None`` unless both inputs are present and positive: a non-positive
+        P/E (losses) or non-positive growth makes the ratio meaningless.
+        """
+        if self.pe is None or self.eps_growth_yoy is None:
+            return None
+        if self.pe <= 0 or self.eps_growth_yoy <= 0:
+            return None
+        return round(self.pe / self.eps_growth_yoy, 2)
 
 
 @dataclass(frozen=True)

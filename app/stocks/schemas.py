@@ -36,10 +36,12 @@ class KeyMetricsResponse(BaseModel):
     """
 
     pe: float | None = None  # price / trailing EPS
+    peg: float | None = None  # trailing P/E / trailing EPS growth (not forward)
     pb: float | None = None  # price / book value
     ps: float | None = None  # price / sales
     eps: float | None = None  # trailing earnings per share
     roe: float | None = None  # return on equity (percent)
+    roic: float | None = None  # return on invested capital (percent)
     gross_margin: float | None = None  # percent
     operating_margin: float | None = None  # percent
     net_margin: float | None = None  # percent
