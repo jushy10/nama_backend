@@ -18,6 +18,7 @@ from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     CandleSeries,
+    EarningsHistory,
     KeyMetrics,
     SectorPerformance,
     Stock,
@@ -25,10 +26,12 @@ from app.stocks.entities import (
     Timeframe,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.finnhub_earnings_provider import FinnhubEarningsProvider
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
 from app.stocks.fmp_logo_provider import FmpLogoProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
 from app.stocks.ports import (
+    EarningsHistoryProvider,
     LogoProvider,
     StockDataProvider,
     StockFundamentalsProvider,
@@ -37,6 +40,8 @@ from app.stocks.ports import (
 from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
+    EarningsHistoryResponse,
+    EarningsSurpriseResponse,
     KeyMetricsResponse,
     RsiPointResponse,
     RsiResponse,
@@ -48,6 +53,7 @@ from app.stocks.schemas import (
 from app.stocks.use_cases import (
     GetSectorPerformance,
     GetStockCandles,
+    GetStockEarnings,
     GetStockInfo,
     GetStockLogo,
     GetStockRsi,
@@ -109,6 +115,23 @@ def get_sector_performance(
 
 
 @lru_cache(maxsize=1)
+def get_earnings_provider() -> EarningsHistoryProvider:
+    # Earnings beat history is this endpoint's primary data (not best-effort
+    # enrichment like market cap), so a missing key is a hard 503 — same shape
+    # as the price provider — rather than a silently empty response.
+    key = os.environ.get("FINNHUB_API_KEY")
+    if not key:
+        raise HTTPException(503, "Earnings data is not configured (FINNHUB_API_KEY).")
+    return FinnhubEarningsProvider(key)
+
+
+def get_stock_earnings(
+    provider: EarningsHistoryProvider = Depends(get_earnings_provider),
+) -> GetStockEarnings:
+    return GetStockEarnings(provider)
+
+
+@lru_cache(maxsize=1)
 def get_logo_provider() -> LogoProvider:
     # No credentials needed; the source is free. LOGO_BASE_URL lets you point
     # at a different ticker-keyed source without a code change.
@@ -166,10 +189,12 @@ def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
         return None
     return KeyMetricsResponse(
         pe=metrics.pe,
+        peg=metrics.peg,
         pb=metrics.pb,
         ps=metrics.ps,
         eps=metrics.eps,
         roe=metrics.roe,
+        roic=metrics.roic,
         gross_margin=metrics.gross_margin,
         operating_margin=metrics.operating_margin,
         net_margin=metrics.net_margin,
@@ -181,6 +206,30 @@ def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
         week_52_high=metrics.week_52_high,
         week_52_low=metrics.week_52_low,
         payout_ratio=metrics.payout_ratio,
+    )
+
+
+def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
+    """Presenter: earnings-history entity -> HTTP response DTO."""
+    return EarningsHistoryResponse(
+        symbol=history.symbol,
+        count=len(history.quarters),
+        beats=history.beats,
+        scored=history.scored,
+        beat_rate=history.beat_rate,
+        quarters=[
+            EarningsSurpriseResponse(
+                period=q.period,
+                fiscal_year=q.fiscal_year,
+                fiscal_quarter=q.fiscal_quarter,
+                actual=q.actual,
+                estimate=q.estimate,
+                surprise=q.surprise,
+                surprise_percent=q.surprise_percent,
+                beat=q.beat,
+            )
+            for q in history.quarters
+        ],
     )
 
 
@@ -367,6 +416,25 @@ def get_stock_rsi_endpoint(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present_rsi(series)
+
+
+@router.get("/stocks/{symbol}/earnings", response_model=EarningsHistoryResponse)
+def get_stock_earnings_endpoint(
+    symbol: str,
+    limit: int = Query(
+        4, ge=1, le=40, description="How many recent quarters to return (newest first)."
+    ),
+    use_case: GetStockEarnings = Depends(get_stock_earnings),
+) -> EarningsHistoryResponse:
+    try:
+        history = use_case.execute(symbol, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return _present_earnings(history)
 
 
 @router.get("/sectors", response_model=SectorBoardResponse)

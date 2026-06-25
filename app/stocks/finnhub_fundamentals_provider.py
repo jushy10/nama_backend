@@ -91,6 +91,7 @@ def _key_metrics(metric: dict) -> KeyMetrics | None:
         "ps": _first(metric, "psTTM", "psAnnual"),
         "eps": _first(metric, "epsTTM", "epsAnnual"),
         "roe": _first(metric, "roeTTM", "roeRfy"),
+        "roic": _first(metric, "roicTTM", "roicAnnual"),
         "gross_margin": _first(metric, "grossMarginTTM", "grossMarginAnnual"),
         "operating_margin": _first(
             metric, "operatingMarginTTM", "operatingMarginAnnual"
