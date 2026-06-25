@@ -87,6 +87,17 @@ class AlpacaStockDataProvider(
     # weekends/holidays, so a bar exists at or before each target date.
     _PERFORMANCE_LOOKBACK_DAYS = 400
 
+    # Trailing-window returns must read the *consolidated* close, not one venue's.
+    # IEX is a single exchange (~2.5% of volume): its daily close isn't the
+    # official closing print and its history is gappy, which skews the base price
+    # a window anchors on (the 1-year base most of all). So historical bars come
+    # from SIP (full market coverage + true close). The free plan allows SIP for
+    # history as long as the query ends >15 min in the past, so `end` is held
+    # back by a small margin. Split-adjusted (not dividend) keeps these as
+    # price-return figures, matching public charts and the candle endpoint.
+    _HISTORICAL_FEED = DataFeed.SIP
+    _SIP_FREE_DELAY = timedelta(minutes=16)
+
     # Trailing windows as day-count offsets from the latest bar. Months are
     # approximated in days (fine for a performance indicator); YTD is handled
     # separately against the previous year's final close.
@@ -206,15 +217,16 @@ class AlpacaStockDataProvider(
 
     def _fetch_daily_bars(self, symbol: str):
         """Daily bars over the lookback window (oldest first)."""
-        start = datetime.now(timezone.utc) - timedelta(
-            days=self._PERFORMANCE_LOOKBACK_DAYS
-        )
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=self._PERFORMANCE_LOOKBACK_DAYS)
         try:
             request = StockBarsRequest(
                 symbol_or_symbols=symbol,
                 timeframe=TimeFrame.Day,
                 start=start,
-                feed=self._feed,
+                end=now - self._SIP_FREE_DELAY,
+                adjustment=Adjustment.SPLIT,
+                feed=self._HISTORICAL_FEED,
             )
             barset = self._data.get_stock_bars(request)
         except APIError as exc:
@@ -227,15 +239,16 @@ class AlpacaStockDataProvider(
         Best-effort: on failure returns an empty map so callers can still serve
         a snapshot-only view without trailing-window performance.
         """
-        start = datetime.now(timezone.utc) - timedelta(
-            days=self._PERFORMANCE_LOOKBACK_DAYS
-        )
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=self._PERFORMANCE_LOOKBACK_DAYS)
         try:
             request = StockBarsRequest(
                 symbol_or_symbols=symbols,
                 timeframe=TimeFrame.Day,
                 start=start,
-                feed=self._feed,
+                end=now - self._SIP_FREE_DELAY,
+                adjustment=Adjustment.SPLIT,
+                feed=self._HISTORICAL_FEED,
             )
             barset = self._data.get_stock_bars(request)
         except APIError:

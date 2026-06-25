@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from alpaca.common.exceptions import APIError
+from alpaca.data.enums import Adjustment, DataFeed
 
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.entities import Candle, Stock, StockPerformance, Timeframe
@@ -40,6 +41,7 @@ class FakeDataClient:
     def __init__(self, result=None, error=None, bars=None, bars_error=None):
         self._result, self._error = result, error
         self._bars, self._bars_error = bars, bars_error
+        self.last_bars_request = None  # captured for request-shape assertions
 
     def get_stock_snapshot(self, request):
         if self._error is not None:
@@ -47,6 +49,7 @@ class FakeDataClient:
         return self._result
 
     def get_stock_bars(self, request):
+        self.last_bars_request = request
         if self._bars_error is not None:
             raise self._bars_error
         return SimpleNamespace(data=self._bars or {})
@@ -185,6 +188,20 @@ def test_get_performance_reads_bars_from_client():
     perf = p.get_performance("AAPL")
     assert perf.one_year == 100.0
     assert perf.six_month == 120.0
+
+
+def test_performance_bars_read_consolidated_split_adjusted_feed():
+    # Trailing returns must anchor on the real consolidated close, not IEX's
+    # single-venue print, and survive splits. The free plan permits SIP for
+    # history only when the query ends >15 min in the past, so `end` is held back.
+    client = FakeDataClient(bars={"AAPL": performance_bars()})
+    p = provider_with(client, FakeTradingClient())
+    p.get_performance("AAPL")
+    req = client.last_bars_request
+    assert req.feed == DataFeed.SIP
+    assert req.adjustment == Adjustment.SPLIT
+    # `end` held back from "now" (SIP-on-free needs >15 min old) and after start.
+    assert req.end is not None and req.start < req.end
 
 
 def test_get_performance_api_error_translated_to_unavailable():
