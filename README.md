@@ -11,7 +11,10 @@ app/
 └── stocks/     # Alpaca stock-info feature (clean-architecture vertical slice)
 tests/
 ├── test_stocks.py           # stock entity/use-case/API tests (offline)
-└── test_stocks_provider.py  # Alpaca adapter tests (offline, faked SDK)
+├── test_stocks_provider.py  # Alpaca adapter tests (offline, faked SDK)
+└── test_constituents.py     # screener universe: repo mapping + data sanity
+scripts/
+└── build_constituents.py    # regenerate the screener's index-membership file
 ```
 
 ## Setup
@@ -41,6 +44,7 @@ Creates a local `nama.db` on first run. Interactive docs at
 | GET    | `/stocks/{symbol}/logo` | Company logo image |
 | GET    | `/stocks/{symbol}/candles` | OHLC candlestick chart data |
 | GET    | `/stocks/{symbol}/earnings` | Quarterly earnings surprises (beat history) |
+| GET    | `/stocks/screener` | Day's biggest gainers & losers, filter by index + sector |
 
 ## Test
 
@@ -165,6 +169,45 @@ curl localhost:8080/stocks/AAPL/earnings
 
 # Last 12 quarters
 curl "localhost:8080/stocks/AAPL/earnings?limit=12"
+```
+
+### Stock screener
+
+`GET /stocks/screener` ranks a whole index's move on the day and returns the
+biggest **gainers** and **losers** together, so a "top/bottom movers" board is a
+single request. Narrow the field with `index` (`sp500` / `nasdaq100`) and/or
+`sector` (a GICS sector, case-insensitive); omit both to screen the entire known
+universe.
+
+| Param    | Values | Default | Notes |
+| -------- | ------ | ------- | ----- |
+| `index`  | `sp500` `nasdaq100` | – (all) | Limit the universe to an index. |
+| `sector` | a GICS sector, e.g. `Information Technology`, `Health Care`, `Energy` | – (all) | Case-insensitive. |
+| `limit`  | `1`–`50` | `10` | How many names per side (gainers and losers). |
+
+The universe — which symbols belong to each index, and each one's GICS sector —
+is **static reference data** baked into the package at
+[`app/stocks/data/constituents.json`](app/stocks/data/constituents.json), since
+no market-data feed here exposes index membership. Regenerate it from public
+sources (S&P 500 + Nasdaq-100) when the indices reconstitute (~quarterly):
+
+```sh
+python scripts/build_constituents.py
+```
+
+The day's move for each name comes from a best-effort batch of Alpaca snapshots
+(the same IEX feed as `/stocks/{symbol}`), so it needs the Alpaca keys (`503`
+without them). Names the feed can't price are left out of the ranking;
+`universe_count` (how many matched the filter) and `quoted_count` (how many could
+be ranked) report the coverage. A symbol never appears as both a gainer and a
+loser, and the board is briefly cached (`Cache-Control: max-age=15`).
+
+```sh
+# Top/bottom 10 across every known name
+curl localhost:8080/stocks/screener
+
+# Nasdaq-100 information-technology names, 5 per side
+curl "localhost:8080/stocks/screener?index=nasdaq100&sector=Information%20Technology&limit=5"
 ```
 
 ### Secrets in AWS

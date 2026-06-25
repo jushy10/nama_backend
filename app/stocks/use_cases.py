@@ -10,12 +10,16 @@ from datetime import datetime
 
 from app.stocks.entities import (
     CandleSeries,
+    Constituent,
     EarningsHistory,
     Logo,
+    MoversBoard,
     Quote,
+    ScreenedStock,
     SectorPerformance,
     Stock,
     StockFundamentals,
+    StockIndex,
     StockPerformance,
     Timeframe,
 )
@@ -23,8 +27,10 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSeries, rsi_series
 from app.stocks.ports import (
     CandleProvider,
+    ConstituentRepository,
     EarningsHistoryProvider,
     LogoProvider,
+    QuoteBatchProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockFundamentalsProvider,
@@ -206,3 +212,94 @@ class GetSectorPerformance:
             sectors,
             key=lambda s: (s.change_percent is None, -(s.change_percent or 0.0)),
         )
+
+
+class ScreenStocks:
+    """Use case: rank a universe of stocks by their move on the day.
+
+    Builds a "movers" board — the biggest gainers and the biggest losers — over
+    the constituents of an index (or the whole known universe), optionally
+    narrowed to one GICS sector. The day's move comes from a best-effort batch
+    of live quotes; constituents without a usable quote are simply left out of
+    the ranking, and a symbol is never both a gainer and a loser.
+    """
+
+    def __init__(
+        self, repository: ConstituentRepository, quotes: QuoteBatchProvider
+    ) -> None:
+        self._repository = repository
+        self._quotes = quotes
+
+    def execute(
+        self,
+        *,
+        index: StockIndex | None = None,
+        sector: str | None = None,
+        limit: int = 10,
+    ) -> MoversBoard:
+        if limit < 1:
+            raise ValueError("'limit' must be at least 1.")
+
+        universe = self._filter(self._repository.all(), index, sector)
+        symbols = [c.symbol for c in universe]
+        quotes = self._quotes.get_quotes(symbols) if symbols else {}
+        # A non-empty universe that returns no quotes at all means the upstream
+        # feed is down — surface that rather than serving an empty board that
+        # would read as a flat market. (An empty *universe* is a valid "nothing
+        # matched the filter" and returns an empty board below.)
+        if symbols and not quotes:
+            raise StockDataUnavailable(
+                "screener", "no quotes for the screened universe"
+            )
+
+        screened = [
+            ScreenedStock(name=c.name, sector=c.sector, quote=quotes[c.symbol])
+            for c in universe
+            if c.symbol in quotes and quotes[c.symbol].change_percent is not None
+        ]
+        # None percents are already filtered out, so the key is always a float.
+        ranked = sorted(screened, key=lambda s: s.change_percent, reverse=True)
+        # Best-first gainers and worst-first losers, each capped at `limit` and
+        # never overlapping. When the universe is too small to fill both sides
+        # it's split down the middle, so a name shows once — as a gainer or a
+        # loser, not both. For a real index (hundreds of names) this is just the
+        # top `limit` and bottom `limit`.
+        count = len(ranked)
+        gain_count = min(limit, (count + 1) // 2)
+        lose_count = min(limit, count - gain_count)
+        gainers = tuple(ranked[:gain_count])
+        losers = tuple(reversed(ranked[-lose_count:])) if lose_count else ()
+
+        as_of = max(
+            (s.quote.as_of for s in screened if s.quote.as_of is not None),
+            default=None,
+        )
+        return MoversBoard(
+            index=index,
+            sector=sector,
+            limit=limit,
+            universe_count=len(universe),
+            quoted_count=len(screened),
+            as_of=as_of,
+            gainers=gainers,
+            losers=losers,
+        )
+
+    @staticmethod
+    def _filter(
+        constituents: tuple[Constituent, ...],
+        index: StockIndex | None,
+        sector: str | None,
+    ) -> list[Constituent]:
+        """Narrow the universe by index membership and/or GICS sector.
+
+        Sector matching is case-insensitive; ``None`` for either filter means
+        "don't narrow on it".
+        """
+        sector_key = sector.strip().casefold() if sector else None
+        return [
+            c
+            for c in constituents
+            if (index is None or c.in_index(index))
+            and (sector_key is None or (c.sector or "").casefold() == sector_key)
+        ]
