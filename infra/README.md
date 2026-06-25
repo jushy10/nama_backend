@@ -108,14 +108,19 @@ running. It bills whether or not you use it — `terraform destroy` (or remove t
 - The app already auto-creates its tables on startup (`Base.metadata.create_all`),
   so no migration step is needed for this simple schema.
 
-### Stocks API credentials (Alpaca + Finnhub)
+### Stocks API credentials (Alpaca + Finnhub + Logo.dev)
 
-The stocks feature (`GET /stocks/{symbol}`) reads three keys at runtime: the
-**Alpaca** key/secret (price snapshot + performance) and an optional **Finnhub**
-key (market cap + dividend). All three are created as **SSM SecureString**
-placeholders by the [`ssm-secret`](modules/ssm-secret) module and injected into
-the task as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` / `FINNHUB_API_KEY` (via
-the app module's `extra_secrets`) — the same mechanism as `DATABASE_URL`.
+The stocks feature reads four keys at runtime: the **Alpaca** key/secret (price
+snapshot + performance), an optional **Finnhub** key (market cap + dividend), and
+the **Logo.dev** publishable token (company logos for `GET /stocks/{symbol}/logo`).
+All are created as **SSM SecureString** placeholders by the
+[`ssm-secret`](modules/ssm-secret) module and injected into the task as
+`APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` / `FINNHUB_API_KEY` / `LOGODEV_TOKEN`
+(via the app module's `extra_secrets`) — the same mechanism as `DATABASE_URL`.
+
+The Logo.dev value is the **publishable** key (`pk_...`) only; it rides in the
+image request URL. The separate Logo.dev *secret* key is not used by the app —
+don't store it here unless we add the brand-search adapter.
 
 Terraform never holds the real values: it creates the parameters with a
 placeholder and **ignores value changes**. Set the real keys **once**, out of
@@ -128,13 +133,16 @@ aws ssm put-parameter --overwrite --type SecureString \
   --name /nama/dev/alpaca-api-secret-key --value <YOUR_SECRET>
 aws ssm put-parameter --overwrite --type SecureString \
   --name /nama/dev/finnhub-api-key       --value <YOUR_FINNHUB_KEY>
+aws ssm put-parameter --overwrite --type SecureString \
+  --name /nama/dev/logodev-token         --value <YOUR_LOGODEV_PUBLISHABLE_KEY>
 ```
 
 Rotate the same way (`put-parameter --overwrite`), then force a new deployment
 to pick up the value. Without the **Alpaca** keys set, `/stocks/{symbol}`
 returns `503`. The **Finnhub** key is optional: until it's set (the placeholder
 isn't a real key), market cap and dividend come back `null` and the rest of the
-response is unaffected.
+response is unaffected. Without the **Logo.dev** token, `/stocks/{symbol}/logo`
+returns `503`; the rest of the app is unaffected.
 
 ### Deploy order (important)
 

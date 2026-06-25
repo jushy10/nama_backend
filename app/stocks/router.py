@@ -28,7 +28,7 @@ from app.stocks.entities import (
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.finnhub_earnings_provider import FinnhubEarningsProvider
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
-from app.stocks.fmp_logo_provider import FmpLogoProvider
+from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
 from app.stocks.ports import (
     EarningsHistoryProvider,
@@ -133,10 +133,15 @@ def get_stock_earnings(
 
 @lru_cache(maxsize=1)
 def get_logo_provider() -> LogoProvider:
-    # No credentials needed; the source is free. LOGO_BASE_URL lets you point
-    # at a different ticker-keyed source without a code change.
-    base_url = os.environ.get("LOGO_BASE_URL")
-    return FmpLogoProvider(base_url) if base_url else FmpLogoProvider()
+    # Logo.dev keeps logos current through rebrands/symbol changes. It needs a
+    # free *publishable* token (logo.dev, 500k/mo); without it the logo endpoint
+    # returns 503, mirroring how the Alpaca keys gate price data. LOGODEV_BASE_URL
+    # lets tests point elsewhere without a code change.
+    token = os.environ.get("LOGODEV_TOKEN")
+    if not token:
+        raise HTTPException(503, "Logos are not configured (LOGODEV_TOKEN).")
+    base_url = os.environ.get("LOGODEV_BASE_URL")
+    return LogoDevProvider(token, base_url) if base_url else LogoDevProvider(token)
 
 
 def get_stock_logo(provider: LogoProvider = Depends(get_logo_provider)) -> GetStockLogo:

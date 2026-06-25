@@ -50,6 +50,8 @@ module "database" {
 #     --name /nama/dev/alpaca-api-secret-key --value <YOUR_SECRET>
 #   aws ssm put-parameter --overwrite --type SecureString \
 #     --name /nama/dev/finnhub-api-key       --value <YOUR_FINNHUB_KEY>
+#   aws ssm put-parameter --overwrite --type SecureString \
+#     --name /nama/dev/logodev-token         --value <YOUR_LOGODEV_PUBLISHABLE_KEY>
 module "alpaca_api_key_id" {
   source      = "../../modules/ssm-secret"
   name        = "/nama/dev/alpaca-api-key-id"
@@ -69,6 +71,16 @@ module "finnhub_api_key" {
   source      = "../../modules/ssm-secret"
   name        = "/nama/dev/finnhub-api-key"
   description = "Finnhub API key (stocks market cap + dividend). Value set out of band."
+}
+
+# Logo.dev serves company logos for GET /stocks/{symbol}/logo. Required: without
+# it the logo endpoint returns 503 (the rest of the app is unaffected). This is
+# the publishable key (pk_...) only — it rides in the image request URL. The
+# separate secret key is NOT used here; don't store it unless we add brand search.
+module "logodev_token" {
+  source      = "../../modules/ssm-secret"
+  name        = "/nama/dev/logodev-token"
+  description = "Logo.dev publishable token (company logos). Value set out of band."
 }
 
 # DNS + TLS certificate for the public hostname.
@@ -93,11 +105,13 @@ module "app" {
   database_url_ssm_arn  = module.database.database_url_ssm_arn
 
   # Injected as the env vars the app reads in app/stocks/router.py: the Alpaca
-  # keys (required) and the optional Finnhub key (market cap + dividend).
+  # keys (required), the optional Finnhub key (market cap + dividend), and the
+  # Logo.dev token (required for the logo endpoint).
   extra_secrets = {
     APCA_API_KEY_ID     = module.alpaca_api_key_id.arn
     APCA_API_SECRET_KEY = module.alpaca_api_secret_key.arn
     FINNHUB_API_KEY     = module.finnhub_api_key.arn
+    LOGODEV_TOKEN       = module.logodev_token.arn
   }
 
   enable_https    = true

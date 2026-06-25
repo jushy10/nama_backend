@@ -23,8 +23,8 @@ Layers (dependencies point inward only):
                                       via Finnhub)
     finnhub_earnings_provider.py   🟢 Interface Adapter (quarterly earnings
                                       surprises via Finnhub)
-    fmp_logo_provider.py           🟢 Interface Adapter (logos via Financial
-                                      Modeling Prep)
+    logodev_provider.py            🟢 Interface Adapter (logos via Logo.dev —
+                                      ticker-keyed, tracks rebrands)
     chart_window.py                🔵 transport helper (chart range -> window)
     schemas.py                     🔵 HTTP DTOs (Pydantic)
     router.py                      🟢/🔵 controller + presenter + DI wiring
