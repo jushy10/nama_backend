@@ -1,10 +1,11 @@
 name: Sync screener constituents
 run-name: Sync constituents
 
-# Manual, on-demand. The S&P 500 / Nasdaq-100 universe changes only on
-# reconstitution (~quarterly), so this isn't part of every deploy. It runs
-# scripts/sync_constituents.py as a one-off ECS task — inside the VPC, where it
-# can reach the private RDS — on the latest deployed image.
+# Weekly (and on-demand). The S&P 500 / Nasdaq-100 universe changes only on
+# reconstitution (~quarterly), so this isn't part of every deploy — a weekly
+# refresh keeps the table from drifting without anyone remembering to run it. It
+# runs scripts/sync_constituents.py as a one-off ECS task — inside the VPC, where
+# it can reach the private RDS — on the latest deployed image.
 #
 # The app task injects DATABASE_URL but NOT the FMP key (that's build/ops-time
 # only, deliberately kept out of the runtime task). So this workflow reads the
@@ -12,6 +13,12 @@ run-name: Sync constituents
 
 on:
   workflow_dispatch: {}
+  # Mondays 08:00 UTC. Weekly is plenty for a ~quarterly universe; exact timing
+  # doesn't matter, so GitHub delaying scheduled runs under load is fine. Caveats:
+  # scheduled workflows run only from the default branch, and GitHub auto-disables
+  # the schedule after 60 days with no repo activity.
+  schedule:
+    - cron: "0 8 * * 1"
 
 concurrency:
   group: sync-constituents
