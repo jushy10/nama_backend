@@ -94,12 +94,15 @@ module "logodev_token" {
   description = "Logo.dev publishable token (company logos). Value set out of band."
 }
 
-# FMP (Financial Modeling Prep) powers the stock screener's universe — the
-# S&P 500 / Nasdaq-100 membership + sector loaded into the index_constituents
-# database table by scripts/sync_constituents.py. That's an OPS-TIME sync (the
-# app reads the table; it never calls FMP while serving), so this key is
-# deliberately NOT in module.app.extra_secrets below. It lives in SSM so the
-# sync job can read it, alongside the database URL it writes to:
+# FMP (Financial Modeling Prep) is used two ways, both off the same key:
+#   1. OPS-TIME: scripts/sync_constituents.py loads the S&P 500 / Nasdaq-100
+#      membership + sector into the index_constituents table (the app reads that
+#      table; it never calls FMP for the screener while serving).
+#   2. RUNTIME: GET /stocks/{symbol} fetches the company description from FMP's
+#      profile endpoint (best-effort enrichment) — so the key is injected into
+#      the ECS task via module.app.extra_secrets below. Without it the
+#      description field is simply null, like a missing Finnhub key.
+# The sync job reads it from SSM directly, alongside the database URL it writes:
 #
 #   export FMP_API_KEY=$(aws ssm get-parameter --name /nama/dev/fmp-api-key \
 #     --with-decryption --query Parameter.Value --output text)
@@ -113,7 +116,7 @@ module "logodev_token" {
 module "fmp_api_key" {
   source      = "../../modules/ssm-secret"
   name        = "/nama/dev/fmp-api-key"
-  description = "FMP API key (stock screener constituents sync). Ops-time only; not injected into ECS."
+  description = "FMP API key (screener constituents sync + company description enrichment)."
 }
 
 # DNS + TLS certificate for the public hostname.
@@ -138,13 +141,15 @@ module "app" {
   database_url_ssm_arn  = module.database.database_url_ssm_arn
 
   # Injected as the env vars the app reads in app/stocks/router.py: the Alpaca
-  # keys (required), the optional Finnhub key (market cap + dividend), and the
-  # Logo.dev token (required for the logo endpoint).
+  # keys (required), the optional Finnhub key (market cap + dividend), the
+  # Logo.dev token (required for the logo endpoint), and the FMP key (optional;
+  # company description on GET /stocks/{symbol}).
   extra_secrets = {
     APCA_API_KEY_ID     = module.alpaca_api_key_id.arn
     APCA_API_SECRET_KEY = module.alpaca_api_secret_key.arn
     FINNHUB_API_KEY     = module.finnhub_api_key.arn
     LOGODEV_TOKEN       = module.logodev_token.arn
+    FMP_API_KEY         = module.fmp_api_key.arn
   }
 
   enable_https    = true

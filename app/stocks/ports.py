@@ -10,6 +10,7 @@ from datetime import datetime
 
 from app.stocks.entities import (
     CandleSeries,
+    CompanyProfile,
     Constituent,
     EarningsHistory,
     Logo,
@@ -84,6 +85,25 @@ class StockFundamentalsProvider(ABC):
     @abstractmethod
     def get_fundamentals(self, symbol: str) -> StockFundamentals:
         """Return fundamentals for the (already-normalized) symbol.
+
+        Raises:
+            StockNotFound: the symbol is not covered by the source.
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class CompanyProfileProvider(ABC):
+    """A gateway for a company's business description (what the company does).
+
+    Comes from a company-profile vendor, not the price feed — market data APIs
+    expose a ticker's name and exchange but not a business summary. Best-effort
+    enrichment, like fundamentals: a failure here must not sink the price view.
+    """
+
+    @abstractmethod
+    def get_profile(self, symbol: str) -> CompanyProfile:
+        """Return the company profile for the (already-normalized) symbol.
 
         Raises:
             StockNotFound: the symbol is not covered by the source.

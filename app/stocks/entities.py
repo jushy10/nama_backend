@@ -112,6 +112,19 @@ class KeyMetrics:
 
 
 @dataclass(frozen=True)
+class CompanyProfile:
+    """A short, human-readable description of what a company does.
+
+    Sourced from a company-profile vendor, not the price feed: market data APIs
+    (e.g. Alpaca) return a ticker's name and exchange but no business summary.
+    The vendor's profile call yields more (sector, website, …); this entity
+    keeps just the ``description`` the stock view surfaces, leaving room to grow.
+    """
+
+    description: str | None
+
+
+@dataclass(frozen=True)
 class StockFundamentals:
     """Company fundamentals that live outside the live price snapshot.
 
@@ -238,6 +251,7 @@ class Stock:
     as_of: datetime | None
     # Enrichment beyond the raw snapshot; optional so the price-only view of a
     # Stock stays valid when these sources are unavailable (best-effort).
+    description: str | None = None  # what the company does, from a profile vendor
     market_cap: float | None = None
     dividend_per_share: float | None = None
     dividend_yield: float | None = None

@@ -15,6 +15,7 @@ from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     Candle,
     CandleSeries,
+    CompanyProfile,
     Constituent,
     EarningsHistory,
     EarningsSurprise,
@@ -32,6 +33,7 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSignal
 from app.stocks.ports import (
     CandleProvider,
+    CompanyProfileProvider,
     ConstituentRepository,
     EarningsHistoryProvider,
     LogoProvider,
@@ -142,6 +144,22 @@ class FakeFundamentalsProvider(StockFundamentalsProvider):
             raise self._raises
         assert self._fundamentals is not None
         return self._fundamentals
+
+
+class FakeProfileProvider(CompanyProfileProvider):
+    """Returns/raises whatever the test configured; records calls."""
+
+    def __init__(self, profile=None, raises=None):
+        self._profile = profile
+        self._raises = raises
+        self.received: list[str] = []
+
+    def get_profile(self, symbol: str) -> CompanyProfile:
+        self.received.append(symbol)
+        if self._raises is not None:
+            raise self._raises
+        assert self._profile is not None
+        return self._profile
 
 
 class FakeCandleProvider(CandleProvider):
@@ -271,6 +289,10 @@ def a_fundamentals(**overrides) -> StockFundamentals:
     )
     base.update(overrides)
     return StockFundamentals(**base)
+
+
+def a_profile(description: str = "Apple Inc. designs and sells consumer electronics.") -> CompanyProfile:
+    return CompanyProfile(description=description)
 
 
 def a_sector(**overrides) -> SectorPerformance:
@@ -434,6 +456,7 @@ def test_use_case_merges_enrichment():
         FakeProvider(stock=a_stock()),
         FakePerformanceProvider(a_performance()),
         FakeFundamentalsProvider(a_fundamentals()),
+        FakeProfileProvider(a_profile()),
     )
     stock = info.execute("AAPL")
     assert stock.market_cap == 3_120_000_000_000.0
@@ -442,6 +465,7 @@ def test_use_case_merges_enrichment():
     assert stock.performance.one_year == 21.0
     assert stock.metrics.pe == 28.5
     assert stock.metrics.beta == 1.2
+    assert stock.description == "Apple Inc. designs and sells consumer electronics."
 
 
 def test_use_case_without_enrichment_leaves_fields_none():
@@ -450,6 +474,7 @@ def test_use_case_without_enrichment_leaves_fields_none():
     assert stock.dividend_yield is None
     assert stock.performance is None
     assert stock.metrics is None
+    assert stock.description is None
 
 
 def test_use_case_enrichment_is_best_effort():
@@ -457,11 +482,13 @@ def test_use_case_enrichment_is_best_effort():
         FakeProvider(stock=a_stock()),
         FakePerformanceProvider(raises=StockDataUnavailable("AAPL", "boom")),
         FakeFundamentalsProvider(raises=StockNotFound("AAPL")),
+        FakeProfileProvider(raises=StockDataUnavailable("AAPL", "boom")),
     )
     stock = info.execute("AAPL")  # enrichment failures must not raise
     assert stock.price == 297.86
     assert stock.performance is None
     assert stock.market_cap is None
+    assert stock.description is None
 
 
 def test_quote_use_case_normalizes_symbol():
@@ -645,6 +672,7 @@ def make_client():
         logo_provider: LogoProvider | None = None,
         performance_provider: StockPerformanceProvider | None = None,
         fundamentals_provider: StockFundamentalsProvider | None = None,
+        profile_provider: CompanyProfileProvider | None = None,
         candle_provider: CandleProvider | None = None,
         rsi_provider: CandleProvider | None = None,
         sector_provider: SectorPerformanceProvider | None = None,
@@ -653,7 +681,7 @@ def make_client():
     ) -> TestClient:
         if provider is not None:
             app.dependency_overrides[get_stock_info] = lambda: GetStockInfo(
-                provider, performance_provider, fundamentals_provider
+                provider, performance_provider, fundamentals_provider, profile_provider
             )
         if quote_provider is not None:
             app.dependency_overrides[get_stock_quote] = (
@@ -719,11 +747,13 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
         FakeProvider(stock=a_stock()),
         performance_provider=FakePerformanceProvider(a_performance()),
         fundamentals_provider=FakeFundamentalsProvider(a_fundamentals()),
+        profile_provider=FakeProfileProvider(a_profile()),
     )
     body = client.get("/stocks/AAPL").json()
     assert body["market_cap"] == 3_120_000_000_000.0
     assert body["dividend_per_share"] == 1.0
     assert body["dividend_yield"] == 0.42
+    assert body["description"] == "Apple Inc. designs and sells consumer electronics."
     # nested performance is serialized with finance-style JSON keys
     assert body["performance"] == {
         "1w": 1.2, "1m": -0.4, "3m": 5.1, "6m": 8.7, "ytd": 12.3, "1y": 21.0,
@@ -742,6 +772,7 @@ def test_get_stock_enrichment_best_effort_returns_200(make_client):
             raises=StockDataUnavailable("AAPL", "boom")
         ),
         fundamentals_provider=FakeFundamentalsProvider(raises=StockNotFound("AAPL")),
+        profile_provider=FakeProfileProvider(raises=StockDataUnavailable("AAPL", "x")),
     )
     r = client.get("/stocks/AAPL")
     assert r.status_code == 200, r.text  # price survives enrichment failures
@@ -749,6 +780,7 @@ def test_get_stock_enrichment_best_effort_returns_200(make_client):
     assert body["price"] == 297.86
     assert body["market_cap"] is None
     assert body["performance"] is None
+    assert body["description"] is None
 
 
 def test_get_stock_without_enrichment_providers_nulls_fields(make_client):
@@ -758,6 +790,7 @@ def test_get_stock_without_enrichment_providers_nulls_fields(make_client):
     assert body["dividend_per_share"] is None
     assert body["performance"] is None
     assert body["metrics"] is None
+    assert body["description"] is None
 
 
 # --------------------------- quote endpoint ---------------------------

@@ -32,12 +32,15 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
+from app.stocks.caching_company_profile_provider import CachingCompanyProfileProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.finnhub_earnings_provider import FinnhubEarningsProvider
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
+from app.stocks.fmp_profile_provider import FmpProfileProvider
 from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
 from app.stocks.ports import (
+    CompanyProfileProvider,
     EarningsHistoryProvider,
     LogoProvider,
     StockDataProvider,
@@ -93,13 +96,26 @@ def get_fundamentals_provider() -> StockFundamentalsProvider | None:
     return FinnhubFundamentalsProvider(key) if key else None
 
 
+@lru_cache(maxsize=1)
+def get_profile_provider() -> CompanyProfileProvider | None:
+    # Best-effort enrichment: without a key we simply omit the company
+    # description (price + the rest still serve). Reuses the same FMP key the
+    # constituents sync uses (financialmodelingprep.com). The provider is a
+    # singleton (lru_cache), so the TTL cache wrapped around it persists across
+    # requests — descriptions are near-static and FMP's free tier is only
+    # ~250 calls/day, so one upstream call per symbol per day keeps us in quota.
+    key = os.environ.get("FMP_API_KEY")
+    return CachingCompanyProfileProvider(FmpProfileProvider(key)) if key else None
+
+
 def get_stock_info(
     provider: StockDataProvider = Depends(get_provider),
     fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
+    profile: CompanyProfileProvider | None = Depends(get_profile_provider),
 ) -> GetStockInfo:
     # The Alpaca provider supplies both the snapshot and the performance windows.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
-    return GetStockInfo(provider, performance, fundamentals)
+    return GetStockInfo(provider, performance, fundamentals, profile)
 
 
 def get_stock_quote(
@@ -174,6 +190,7 @@ def _present(stock: Stock) -> StockResponse:
         symbol=stock.symbol,
         name=stock.name,
         exchange=stock.exchange,
+        description=stock.description,
         price=stock.price,
         change=stock.change,
         change_percent=stock.change_percent,
