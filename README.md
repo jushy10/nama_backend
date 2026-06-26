@@ -81,10 +81,12 @@ alembic upgrade head     # apply all migrations to the configured database
 alembic current          # show the applied revision
 ```
 
-Run it against the configured database — local SQLite by default, or the RDS
-Postgres in prod (RDS is private, so run from inside the VPC, e.g. a one-off ECS
-task — the same place [`scripts/sync_constituents.py`](scripts/sync_constituents.py)
-runs). To change the schema, edit the model in
+In **prod, migrations run automatically**: the
+[Build & Deploy](.github/workflows/app-image.yml) workflow applies `alembic
+upgrade head` as a one-off ECS task on each deploy — inside the VPC, against the
+private RDS — before rolling the service. The commands above are for local dev
+(or an exceptional manual run); [`scripts/sync_constituents.py`](scripts/sync_constituents.py)
+still runs separately to fill the table. To change the schema, edit the model in
 [`app/stocks/constituents.py`](app/stocks/constituents.py), autogenerate a
 revision, review it, then upgrade:
 

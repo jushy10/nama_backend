@@ -13,12 +13,16 @@ on:
     branches: [main]
     paths:
       - "app/**"
+      - "alembic/**"
+      - "scripts/**"
       - "pyproject.toml"
       - "Dockerfile"
       - ".github/workflows/app-image.yml"
   pull_request:
     paths:
       - "app/**"
+      - "alembic/**"
+      - "scripts/**"
       - "pyproject.toml"
       - "Dockerfile"
       - ".github/workflows/app-image.yml"
@@ -96,6 +100,47 @@ jobs:
             -t "$REGISTRY/$ECR_REPOSITORY:${{ github.sha }}" .
           docker push "$REGISTRY/$ECR_REPOSITORY:latest"
           docker push "$REGISTRY/$ECR_REPOSITORY:${{ github.sha }}"
+
+      # Apply database migrations before rolling the service, so the new code
+      # never serves against an out-of-date schema. Runs `alembic upgrade head`
+      # as a one-off ECS task on the image just pushed — inside the VPC, where it
+      # can reach the private RDS — reusing the service's own network config.
+      - name: Run database migrations
+        run: |
+          set -euo pipefail
+          status=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" != "ACTIVE" ]; then
+            echo "ECS service not ACTIVE yet (status: $status) — skipping migration; it runs on the next deploy."
+            exit 0
+          fi
+
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' --output json)
+
+          echo "Starting one-off migration task (alembic upgrade head)…"
+          task_arn=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$ECS_SERVICE" \
+            --launch-type FARGATE \
+            --network-configuration "$netcfg" \
+            --started-by "gha-migrate-${GITHUB_SHA::7}" \
+            --overrides '{"containerOverrides":[{"name":"app","command":["alembic","upgrade","head"]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+          echo "Task: $task_arn"
+
+          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$task_arn"
+
+          exit_code=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task_arn" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          reason=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task_arn" \
+            --query 'tasks[0].stoppedReason' --output text)
+          echo "Migration task stopped (exitCode=$exit_code, reason=$reason)"
+          if [ "$exit_code" != "0" ]; then
+            echo "::error::Database migration failed — not rolling the service. Check the task's CloudWatch logs."
+            exit 1
+          fi
+          echo "Migrations applied."
 
       # Roll the service if it already exists. On a brand-new deploy it may not
       # be up yet — that's fine, it will pull :latest when it starts.
