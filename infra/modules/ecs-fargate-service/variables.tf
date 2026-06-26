@@ -43,12 +43,6 @@ variable "desired_count" {
   default     = 1
 }
 
-variable "use_fargate_spot" {
-  description = "Run tasks on Fargate Spot (~70% cheaper) instead of on-demand. Spot tasks can be reclaimed with a 2-minute warning, so it's for dev/non-critical workloads, not prod."
-  type        = bool
-  default     = false
-}
-
 variable "cpu" {
   description = "Task CPU units (256 = 0.25 vCPU)."
   type        = number
