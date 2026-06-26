@@ -82,6 +82,21 @@
       "Resource": "*"
     },
     {
+      "Sid": "ManageFrontendStaticSiteBucket",
+      "Effect": "Allow",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::nama-frontend-*",
+        "arn:aws:s3:::nama-frontend-*/*"
+      ]
+    },
+    {
+      "Sid": "ManageCloudFront",
+      "Effect": "Allow",
+      "Action": "cloudfront:*",
+      "Resource": "*"
+    },
+    {
       "Sid": "ManageDnsAndCerts",
       "Effect": "Allow",
       "Action": [

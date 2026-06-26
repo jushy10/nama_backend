@@ -154,22 +154,19 @@ module "dns_frontend" {
   create_zone               = false
 }
 
-# The frontend SPA on ECS Fargate, behind its own public load balancer. It's a
-# static build served by nginx on port 80 — no database, so no app security
-# group and no DATABASE_URL secret. Served at the apex (and www) over HTTPS.
+# The frontend SPA as static files in S3, served by CloudFront over HTTPS at the
+# apex (and www). No Fargate task and no load balancer — far cheaper than running
+# nginx on ECS for static assets. CI uploads the build to the bucket and
+# invalidates the distribution (see the frontend_bucket_name /
+# frontend_distribution_id outputs). The cert comes from module.dns_frontend,
+# which issues it in us-east-1 — required, because CloudFront only reads certs
+# from there (this stack already deploys to us-east-1).
 module "frontend" {
-  source = "../../modules/ecs-fargate-service"
+  source = "../../modules/static-site-cloudfront"
 
-  name       = "nama-frontend-dev"
-  vpc_id     = data.aws_vpc.default.id
-  subnet_ids = data.aws_subnets.default.ids
-
-  container_port    = 80
-  health_check_path = "/"
-
-  enable_https            = true
+  name                    = "nama-frontend-dev"
   domain_name             = var.frontend_domain_name
   additional_domain_names = var.frontend_additional_domains
-  route53_zone_id         = module.dns_frontend.zone_id
   certificate_arn         = module.dns_frontend.certificate_arn
+  route53_zone_id         = module.dns_frontend.zone_id
 }
