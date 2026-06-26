@@ -113,15 +113,19 @@ class KeyMetrics:
 
 @dataclass(frozen=True)
 class CompanyProfile:
-    """A short, human-readable description of what a company does.
+    """A company's clean display name and a short summary of what it does.
 
-    Sourced from a company-profile vendor, not the price feed: market data APIs
-    (e.g. Alpaca) return a ticker's name and exchange but no business summary.
-    The vendor's profile call yields more (sector, website, …); this entity
-    keeps just the ``description`` the stock view surfaces, leaving room to grow.
+    Sourced from a company-profile vendor, not the price feed. Market data APIs
+    (e.g. Alpaca) return a ticker's name and exchange, but Alpaca's name is the
+    full legal instrument title ("Apple Inc. Common Stock") rather than the tidy
+    display name. The profile vendor carries both a clean ``name`` ("Apple Inc.")
+    and the business ``description`` the stock view surfaces; either is ``None``
+    when the vendor doesn't cover the symbol (best-effort enrichment). The call
+    yields more (sector, website, …), left out until something needs it.
     """
 
     description: str | None
+    name: str | None = None
 
 
 @dataclass(frozen=True)

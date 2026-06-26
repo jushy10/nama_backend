@@ -10,6 +10,7 @@ from datetime import datetime
 
 from app.stocks.entities import (
     CandleSeries,
+    CompanyProfile,
     Constituent,
     EarningsHistory,
     Logo,
@@ -74,10 +75,15 @@ class GetStockInfo:
         normalized = _normalize_symbol(symbol)
         stock = self._provider.get_stock(normalized)  # required; errors propagate
         fundamentals = self._fundamentals(normalized)
+        profile = self._profile(normalized)
         return replace(
             stock,
+            # Prefer the profile vendor's clean display name ("Apple Inc.") over
+            # the price feed's full legal title ("Apple Inc. Common Stock"); fall
+            # back to the feed's name when the profile is missing or unconfigured.
+            name=profile.name if profile and profile.name else stock.name,
             performance=self._performance(normalized),
-            description=self._description(normalized),
+            description=profile.description if profile else None,
             market_cap=fundamentals.market_cap if fundamentals else None,
             dividend_per_share=(
                 fundamentals.dividend_per_share if fundamentals else None
@@ -102,11 +108,12 @@ class GetStockInfo:
         except (StockNotFound, StockDataUnavailable):
             return None  # best-effort
 
-    def _description(self, symbol: str) -> str | None:
+    def _profile(self, symbol: str) -> CompanyProfile | None:
+        # One call feeds two fields — the clean name and the description.
         if self._profile_provider is None:
             return None
         try:
-            return self._profile_provider.get_profile(symbol).description
+            return self._profile_provider.get_profile(symbol)
         except (StockNotFound, StockDataUnavailable):
             return None  # best-effort: never sink the price response
 
