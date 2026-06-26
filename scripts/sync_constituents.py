@@ -7,9 +7,11 @@ while serving), so run this whenever the indices reconstitute (~quarterly):
 
     export FMP_API_KEY=...                          # free key from financialmodelingprep.com
     export DATABASE_URL=postgresql+psycopg://...    # omit for local sqlite:///./nama.db
+    alembic upgrade head                            # create the table (once per DB)
     python scripts/sync_constituents.py
 
-Needs the app installed (it writes through the app's SQLAlchemy models).
+Needs the app installed (it writes through the app's SQLAlchemy models), and the
+`index_constituents` table to exist (created by `alembic upgrade head`).
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import os
 import urllib.error
 import urllib.request
 
-from app.db import Base, SessionLocal, engine
+from app.db import SessionLocal
 from app.stocks.constituents import ConstituentRecord
 
 # FMP's current "stable" endpoints, with the older /api/v3 slugs as a fallback
@@ -129,7 +131,6 @@ def main() -> None:
     }
     universe = build_universe(rows_by_index)
 
-    Base.metadata.create_all(bind=engine)  # ensure the table exists
     with SessionLocal() as session:
         # Full replace in one transaction: a delete + reinsert also drops names
         # that have left an index since the last sync.

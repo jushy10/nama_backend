@@ -12,9 +12,12 @@ app/
 tests/
 ├── test_stocks.py           # stock entity/use-case/API tests (offline)
 ├── test_stocks_provider.py  # Alpaca adapter tests (offline, faked SDK)
-└── test_constituents.py     # screener universe: DB repo + sync merge (offline)
+├── test_constituents.py     # screener universe: DB repo + sync merge (offline)
+└── test_migrations.py       # alembic migration applies cleanly (offline sqlite)
 scripts/
 └── sync_constituents.py     # sync the screener's index universe (FMP -> DB)
+alembic/                     # database migrations (alembic upgrade head)
+└── versions/
 ```
 
 ## Setup
@@ -32,8 +35,8 @@ pip install -e ".[dev]"
 uvicorn app.main:app --reload
 ```
 
-Creates a local `nama.db` on first run. Interactive docs at
-<http://localhost:8080/docs>.
+Tables are created by migrations, not on boot — run `alembic upgrade head` first
+(see [Migrations](#migrations)). Interactive docs at <http://localhost:8080/docs>.
 
 ## Endpoints
 
@@ -66,6 +69,29 @@ export DATABASE_URL="postgresql+psycopg://USER:PASSWORD@HOST:5432/nama?sslmode=r
 ```
 
 Tests ignore `DATABASE_URL` and always use in-memory SQLite, so they stay fast.
+
+### Migrations
+
+Schema is managed by **Alembic** (`alembic/`), not `create_all` — so the database
+is updated explicitly, the same way in dev and prod. Migrations resolve their
+target from `DATABASE_URL` at run time (the same variable the app uses).
+
+```sh
+alembic upgrade head     # apply all migrations to the configured database
+alembic current          # show the applied revision
+```
+
+Run it against the configured database — local SQLite by default, or the RDS
+Postgres in prod (RDS is private, so run from inside the VPC, e.g. a one-off ECS
+task — the same place [`scripts/sync_constituents.py`](scripts/sync_constituents.py)
+runs). To change the schema, edit the model in
+[`app/stocks/constituents.py`](app/stocks/constituents.py), autogenerate a
+revision, review it, then upgrade:
+
+```sh
+alembic revision --autogenerate -m "describe the change"
+alembic upgrade head
+```
 
 ## Stocks (Alpaca)
 
@@ -186,8 +212,8 @@ universe.
 | `limit`  | `1`–`50` | `10` | How many names per side (gainers and losers). |
 
 The universe — which symbols belong to each index, and each one's GICS sector —
-lives in the `index_constituents` **database table** (auto-created at startup by
-the app's `create_all`), since the live market-data feed (Alpaca) doesn't expose
+lives in the `index_constituents` **database table** (created by an Alembic
+migration — `alembic upgrade head`), since the live market-data feed (Alpaca) doesn't expose
 index membership. The table is populated by
 [`scripts/sync_constituents.py`](scripts/sync_constituents.py) from **Financial
 Modeling Prep**'s index-constituent endpoints — one call per index, each

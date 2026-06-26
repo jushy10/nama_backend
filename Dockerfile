@@ -9,6 +9,13 @@ COPY pyproject.toml ./
 COPY app ./app
 RUN pip install --no-cache-dir ".[postgres]"
 
+# Migration config + ops scripts, so `alembic upgrade head` and the constituents
+# sync can run from this image (e.g. one-off ECS tasks in the VPC against RDS).
+# Copied after the install so editing them doesn't bust the dependency layer.
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY scripts ./scripts
+
 EXPOSE 8000
 
 # DATABASE_URL is injected by ECS from SSM; the app reads it at startup.
