@@ -126,6 +126,9 @@ module "app" {
   app_security_group_id = module.database.app_security_group_id
   database_url_ssm_arn  = module.database.database_url_ssm_arn
 
+  # Dev: run on Fargate Spot (~70% cheaper, reclaimable with 2-min warning).
+  use_fargate_spot = true
+
   # Injected as the env vars the app reads in app/stocks/router.py: the Alpaca
   # keys (required), the optional Finnhub key (market cap + dividend), and the
   # Logo.dev token (required for the logo endpoint).
