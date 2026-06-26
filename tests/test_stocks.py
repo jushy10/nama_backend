@@ -291,8 +291,11 @@ def a_fundamentals(**overrides) -> StockFundamentals:
     return StockFundamentals(**base)
 
 
-def a_profile(description: str = "Apple Inc. designs and sells consumer electronics.") -> CompanyProfile:
-    return CompanyProfile(description=description)
+def a_profile(
+    description: str = "Apple Inc. designs and sells consumer electronics.",
+    name: str | None = None,
+) -> CompanyProfile:
+    return CompanyProfile(description=description, name=name)
 
 
 def a_sector(**overrides) -> SectorPerformance:
@@ -466,6 +469,33 @@ def test_use_case_merges_enrichment():
     assert stock.metrics.pe == 28.5
     assert stock.metrics.beta == 1.2
     assert stock.description == "Apple Inc. designs and sells consumer electronics."
+
+
+def test_use_case_prefers_profile_name_over_feed_name():
+    # The price feed gives the full legal title; the profile vendor's clean name
+    # wins when present.
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock(name="Apple Inc. Common Stock")),
+        profile_provider=FakeProfileProvider(a_profile(name="Apple Inc.")),
+    )
+    assert info.execute("AAPL").name == "Apple Inc."
+
+
+def test_use_case_keeps_feed_name_when_profile_name_absent():
+    # No clean name from the vendor -> fall back to the feed's name, unchanged.
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock(name="Apple Inc. Common Stock")),
+        profile_provider=FakeProfileProvider(a_profile(name=None)),
+    )
+    assert info.execute("AAPL").name == "Apple Inc. Common Stock"
+
+
+def test_use_case_keeps_feed_name_when_profile_unconfigured():
+    # No profile provider at all -> the feed's name stands.
+    stock = GetStockInfo(
+        FakeProvider(stock=a_stock(name="Apple Inc. Common Stock"))
+    ).execute("AAPL")
+    assert stock.name == "Apple Inc. Common Stock"
 
 
 def test_use_case_without_enrichment_leaves_fields_none():

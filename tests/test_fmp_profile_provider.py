@@ -57,6 +57,31 @@ def test_maps_description_from_stable():
     assert profile.description == "Apple designs phones."
 
 
+def test_maps_clean_company_name_from_stable():
+    # FMP's companyName is the tidy display name; it backs the stock view's name.
+    p = provider_with(
+        FakeResponse(json_data=[{"companyName": "Apple Inc.", "description": "x"}])
+    )
+    profile = p.get_profile("AAPL")
+    assert profile.name == "Apple Inc."
+    assert profile.description == "x"
+
+
+def test_blank_company_name_normalized_to_none():
+    p = provider_with(FakeResponse(json_data=[{"companyName": "   ", "description": "x"}]))
+    assert p.get_profile("AAPL").name is None
+
+
+def test_missing_company_name_yields_none():
+    p = provider_with(FakeResponse(json_data=[{"description": "x"}]))
+    assert p.get_profile("AAPL").name is None
+
+
+def test_empty_list_yields_none_name():
+    p = provider_with(FakeResponse(json_data=[]))
+    assert p.get_profile("ZZZZ").name is None
+
+
 def test_sends_symbol_and_apikey_to_stable_first():
     p = provider_with(FakeResponse(json_data=[{"description": "x"}]))
     p.get_profile("AAPL")

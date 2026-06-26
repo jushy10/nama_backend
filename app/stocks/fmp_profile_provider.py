@@ -1,14 +1,15 @@
-"""Interface Adapter: a company's business description from FMP.
+"""Interface Adapter: a company's clean name and business description from FMP.
 
-Market-data feeds (Alpaca) return a ticker's name and exchange but not a summary
-of what the company does. Financial Modeling Prep's profile endpoint does, so the
-description shown on the stock view comes from here. FMP's text runs several
-hundred words, so we condense it to the first couple of sentences (see
-``_summarize``) — the stock view only wants a quick "what is this company" blurb.
-We read FMP's "stable" endpoint first and fall back to the older ``/api/v3`` one
-(some keys are scoped to the legacy API) — the same dual-endpoint handling the
-constituents sync uses. This is the only module that knows FMP profiles exist;
-swap it and nothing else changes.
+Market-data feeds (Alpaca) carry the full legal instrument title ("Apple Inc.
+Common Stock") and no summary of what the company does. Financial Modeling Prep's
+profile endpoint carries both a clean display name ("Apple Inc.") and a business
+description, so the stock view's name and description come from here. FMP's
+description runs several hundred words, so we condense it to the first couple of
+sentences (see ``_summarize``) — the stock view only wants a quick "what is this
+company" blurb. We read FMP's "stable" endpoint first and fall back to the older
+``/api/v3`` one (some keys are scoped to the legacy API) — the same dual-endpoint
+handling the constituents sync uses. This is the only module that knows FMP
+profiles exist; swap it and nothing else changes.
 
 Docs: https://site.financialmodelingprep.com/developer/docs (Company Profile)
 """
@@ -34,11 +35,18 @@ class FmpProfileProvider(CompanyProfileProvider):
     def get_profile(self, symbol: str) -> CompanyProfile:
         payload = self._fetch_profile(symbol)
         # FMP returns a list of profiles; an unknown symbol yields an empty list,
-        # which maps cleanly to "no description" (best-effort enrichment).
+        # which maps cleanly to "no profile" (best-effort enrichment).
         first = payload[0] if isinstance(payload, list) and payload else {}
-        description = first.get("description") if isinstance(first, dict) else None
-        cleaned = _clean(description)
-        return CompanyProfile(description=_summarize(cleaned) if cleaned else None)
+        if not isinstance(first, dict):
+            first = {}
+        # ``companyName`` is the clean display name ("Apple Inc.") — the stock
+        # view prefers it over the price feed's full legal title. The description
+        # runs long, so condense it to a short blurb (see ``_summarize``).
+        description = _clean(first.get("description"))
+        return CompanyProfile(
+            name=_clean(first.get("companyName")),
+            description=_summarize(description) if description else None,
+        )
 
     def _fetch_profile(self, symbol: str):
         """Fetch the raw profile list, preferring the stable endpoint and falling
