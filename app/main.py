@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.db import Base, engine
 from app.stocks.router import router as stocks_router
 
 # Browser origins allowed to call this API (cross-origin). Comma-separated env
@@ -22,8 +21,9 @@ CORS_ALLOW_ORIGINS = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables on startup (fine for SQLite; swap for migrations later).
-    Base.metadata.create_all(bind=engine)
+    # Database schema is owned by Alembic migrations (`alembic upgrade head`),
+    # not created here — deploys manage the database explicitly, so there's
+    # nothing to do on startup for now.
     yield
 
 

@@ -83,6 +83,28 @@ module "logodev_token" {
   description = "Logo.dev publishable token (company logos). Value set out of band."
 }
 
+# FMP (Financial Modeling Prep) powers the stock screener's universe — the
+# S&P 500 / Nasdaq-100 membership + sector loaded into the index_constituents
+# database table by scripts/sync_constituents.py. That's an OPS-TIME sync (the
+# app reads the table; it never calls FMP while serving), so this key is
+# deliberately NOT in module.app.extra_secrets below. It lives in SSM so the
+# sync job can read it, alongside the database URL it writes to:
+#
+#   export FMP_API_KEY=$(aws ssm get-parameter --name /nama/dev/fmp-api-key \
+#     --with-decryption --query Parameter.Value --output text)
+#   export DATABASE_URL=$(aws ssm get-parameter --name /nama/dev/database-url \
+#     --with-decryption --query Parameter.Value --output text)
+#   python scripts/sync_constituents.py
+#
+# Set the real value out of band, like the keys above:
+#   aws ssm put-parameter --overwrite --type SecureString \
+#     --name /nama/dev/fmp-api-key --value <YOUR_FMP_API_KEY>
+module "fmp_api_key" {
+  source      = "../../modules/ssm-secret"
+  name        = "/nama/dev/fmp-api-key"
+  description = "FMP API key (stock screener constituents sync). Ops-time only; not injected into ECS."
+}
+
 # DNS + TLS certificate for the public hostname.
 module "dns" {
   source = "../../modules/dns-cert"

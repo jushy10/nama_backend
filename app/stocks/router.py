@@ -13,16 +13,22 @@ from datetime import datetime, timezone
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy.orm import Session
 
+from app.db import get_db
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.chart_window import ChartRange, resolve_window
+from app.stocks.constituents import SqlConstituentRepository
 from app.stocks.entities import (
     CandleSeries,
     EarningsHistory,
     KeyMetrics,
+    MoversBoard,
     Quote,
+    ScreenedStock,
     SectorPerformance,
     Stock,
+    StockIndex,
     StockPerformance,
     Timeframe,
 )
@@ -44,9 +50,11 @@ from app.stocks.schemas import (
     EarningsHistoryResponse,
     EarningsSurpriseResponse,
     KeyMetricsResponse,
+    MoversResponse,
     QuoteResponse,
     RsiPointResponse,
     RsiResponse,
+    ScreenedStockResponse,
     SectorBoardResponse,
     SectorPerformanceResponse,
     StockPerformanceResponse,
@@ -60,6 +68,7 @@ from app.stocks.use_cases import (
     GetStockLogo,
     GetStockQuote,
     GetStockRsi,
+    ScreenStocks,
 )
 
 router = APIRouter(tags=["stocks"])
@@ -336,6 +345,77 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def get_screener(
+    provider: AlpacaStockDataProvider = Depends(get_provider),
+    db: Session = Depends(get_db),
+) -> ScreenStocks:
+    # Universe comes from the index_constituents table (populated by
+    # scripts/sync_constituents.py); the Alpaca provider supplies the day move
+    # via batched snapshots. The repository is request-scoped, like the session.
+    return ScreenStocks(SqlConstituentRepository(db), provider)
+
+
+def _present_screened(stock: ScreenedStock) -> ScreenedStockResponse:
+    """Presenter: one screened-stock entity -> HTTP response DTO."""
+    return ScreenedStockResponse(
+        symbol=stock.symbol,
+        name=stock.name,
+        sector=stock.sector,
+        price=stock.quote.price,
+        change=stock.quote.change,
+        change_percent=stock.quote.change_percent,
+        previous_close=stock.quote.previous_close,
+        as_of=stock.quote.as_of,
+    )
+
+
+def _present_movers(board: MoversBoard) -> MoversResponse:
+    """Presenter: movers board entity -> HTTP response DTO."""
+    return MoversResponse(
+        index=board.index.value if board.index else None,
+        sector=board.sector,
+        limit=board.limit,
+        universe_count=board.universe_count,
+        quoted_count=board.quoted_count,
+        as_of=board.as_of,
+        gainers=[_present_screened(s) for s in board.gainers],
+        losers=[_present_screened(s) for s in board.losers],
+    )
+
+
+# Declared before "/stocks/{symbol}" so this literal path wins the match —
+# otherwise the dynamic route would capture "screener" as a symbol.
+@router.get("/stocks/screener", response_model=MoversResponse)
+def get_screener_endpoint(
+    response: Response,
+    index: StockIndex | None = Query(
+        None, description="Limit the universe to an index. Omit for all known names."
+    ),
+    sector: str | None = Query(
+        None,
+        description=(
+            "Limit to one GICS sector, e.g. 'Information Technology', "
+            "'Health Care', 'Financials' (case-insensitive). Omit for all sectors."
+        ),
+    ),
+    limit: int = Query(
+        10, ge=1, le=50, description="How many names per side (gainers and losers)."
+    ),
+    use_case: ScreenStocks = Depends(get_screener),
+) -> MoversResponse:
+    try:
+        board = use_case.execute(index=index, sector=sector, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    # Heavier than a single quote (a whole index of snapshots) and the board
+    # only shifts as the market moves — cache briefly so a burst of viewers
+    # collapses onto one upstream sweep.
+    response.headers["Cache-Control"] = "public, max-age=15"
+    return _present_movers(board)
 
 
 @router.get("/stocks/{symbol}", response_model=StockResponse)

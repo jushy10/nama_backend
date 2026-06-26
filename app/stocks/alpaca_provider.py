@@ -30,6 +30,7 @@ from app.stocks.entities import (
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     CandleProvider,
+    QuoteBatchProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockPerformanceProvider,
@@ -76,6 +77,7 @@ _SECTOR_ETFS: dict[str, str] = {
 class AlpacaStockDataProvider(
     StockDataProvider,
     StockQuoteProvider,
+    QuoteBatchProvider,
     StockPerformanceProvider,
     CandleProvider,
     SectorPerformanceProvider,
@@ -112,6 +114,11 @@ class AlpacaStockDataProvider(
         "one_year": 365,
     }
 
+    # Symbols per batched snapshot request for the screener. Alpaca takes many
+    # symbols at once; chunking keeps any single request's URL/size bounded and
+    # lets one bad chunk fail without sinking the whole board.
+    _SNAPSHOT_CHUNK = 200
+
     def __init__(
         self,
         api_key: str,
@@ -133,6 +140,25 @@ class AlpacaStockDataProvider(
         # Snapshot only: one data call, no asset-metadata lookup. Cheap enough to
         # back a poll-every-few-seconds endpoint.
         return self._to_quote(symbol, self._fetch_snapshot(symbol))
+
+    def get_quotes(self, symbols: list[str]) -> dict[str, Quote]:
+        # Backs the screener: latest quotes for a whole index in batched
+        # snapshot calls. Best-effort end to end — a chunk that errors is
+        # skipped (its symbols go unquoted) and a symbol the IEX free feed
+        # doesn't carry is dropped — so a thin name never sinks the board.
+        quotes: dict[str, Quote] = {}
+        for start in range(0, len(symbols), self._SNAPSHOT_CHUNK):
+            chunk = symbols[start : start + self._SNAPSHOT_CHUNK]
+            try:
+                request = StockSnapshotRequest(symbol_or_symbols=chunk, feed=self._feed)
+                snapshots = self._data.get_stock_snapshot(request)
+            except APIError:
+                continue  # skip this chunk; keep whatever the others return
+            for symbol in chunk:
+                snapshot = snapshots.get(symbol)
+                if snapshot is not None and snapshot.latest_trade is not None:
+                    quotes[symbol] = self._to_quote(symbol, snapshot)
+        return quotes
 
     def get_performance(self, symbol: str) -> StockPerformance:
         return self._compute_performance(self._fetch_daily_bars(symbol))

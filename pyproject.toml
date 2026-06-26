@@ -9,6 +9,7 @@ dependencies = [
     "sqlalchemy>=2.0",
     "alpaca-py>=0.30",  # Alpaca market-data SDK (stocks feature)
     "httpx>=0.27",      # direct HTTP for the logo source (Financial Modeling Prep)
+    "alembic>=1.13",    # database schema migrations (alembic upgrade head)
 ]
 
 # PostgreSQL driver — install with `pip install -e ".[postgres]"` anywhere that

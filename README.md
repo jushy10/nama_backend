@@ -11,7 +11,13 @@ app/
 └── stocks/     # Alpaca stock-info feature (clean-architecture vertical slice)
 tests/
 ├── test_stocks.py           # stock entity/use-case/API tests (offline)
-└── test_stocks_provider.py  # Alpaca adapter tests (offline, faked SDK)
+├── test_stocks_provider.py  # Alpaca adapter tests (offline, faked SDK)
+├── test_constituents.py     # screener universe: DB repo + sync merge (offline)
+└── test_migrations.py       # alembic migration applies cleanly (offline sqlite)
+scripts/
+└── sync_constituents.py     # sync the screener's index universe (FMP -> DB)
+alembic/                     # database migrations (alembic upgrade head)
+└── versions/
 ```
 
 ## Setup
@@ -29,8 +35,8 @@ pip install -e ".[dev]"
 uvicorn app.main:app --reload
 ```
 
-Creates a local `nama.db` on first run. Interactive docs at
-<http://localhost:8080/docs>.
+Tables are created by migrations, not on boot — run `alembic upgrade head` first
+(see [Migrations](#migrations)). Interactive docs at <http://localhost:8080/docs>.
 
 ## Endpoints
 
@@ -41,6 +47,7 @@ Creates a local `nama.db` on first run. Interactive docs at
 | GET    | `/stocks/{symbol}/logo` | Company logo image |
 | GET    | `/stocks/{symbol}/candles` | OHLC candlestick chart data |
 | GET    | `/stocks/{symbol}/earnings` | Quarterly earnings surprises (beat history) |
+| GET    | `/stocks/screener` | Day's biggest gainers & losers, filter by index + sector |
 
 ## Test
 
@@ -62,6 +69,29 @@ export DATABASE_URL="postgresql+psycopg://USER:PASSWORD@HOST:5432/nama?sslmode=r
 ```
 
 Tests ignore `DATABASE_URL` and always use in-memory SQLite, so they stay fast.
+
+### Migrations
+
+Schema is managed by **Alembic** (`alembic/`), not `create_all` — so the database
+is updated explicitly, the same way in dev and prod. Migrations resolve their
+target from `DATABASE_URL` at run time (the same variable the app uses).
+
+```sh
+alembic upgrade head     # apply all migrations to the configured database
+alembic current          # show the applied revision
+```
+
+Run it against the configured database — local SQLite by default, or the RDS
+Postgres in prod (RDS is private, so run from inside the VPC, e.g. a one-off ECS
+task — the same place [`scripts/sync_constituents.py`](scripts/sync_constituents.py)
+runs). To change the schema, edit the model in
+[`app/stocks/constituents.py`](app/stocks/constituents.py), autogenerate a
+revision, review it, then upgrade:
+
+```sh
+alembic revision --autogenerate -m "describe the change"
+alembic upgrade head
+```
 
 ## Stocks (Alpaca)
 
@@ -167,6 +197,51 @@ curl localhost:8080/stocks/AAPL/earnings
 curl "localhost:8080/stocks/AAPL/earnings?limit=12"
 ```
 
+### Stock screener
+
+`GET /stocks/screener` ranks a whole index's move on the day and returns the
+biggest **gainers** and **losers** together, so a "top/bottom movers" board is a
+single request. Narrow the field with `index` (`sp500` / `nasdaq100`) and/or
+`sector` (a GICS sector, case-insensitive); omit both to screen the entire known
+universe.
+
+| Param    | Values | Default | Notes |
+| -------- | ------ | ------- | ----- |
+| `index`  | `sp500` `nasdaq100` | – (all) | Limit the universe to an index. |
+| `sector` | a GICS sector, e.g. `Information Technology`, `Health Care`, `Energy` | – (all) | Case-insensitive. |
+| `limit`  | `1`–`50` | `10` | How many names per side (gainers and losers). |
+
+The universe — which symbols belong to each index, and each one's GICS sector —
+lives in the `index_constituents` **database table** (created by an Alembic
+migration — `alembic upgrade head`), since the live market-data feed (Alpaca) doesn't expose
+index membership. The table is populated by
+[`scripts/sync_constituents.py`](scripts/sync_constituents.py) from **Financial
+Modeling Prep**'s index-constituent endpoints — one call per index, each
+returning symbol + name + sector, normalized to GICS. It's an ops-time sync (the
+app never calls FMP while serving), so run it whenever the indices reconstitute
+(~quarterly); the screener returns an empty board until the first sync:
+
+```sh
+export FMP_API_KEY=...                          # free key from financialmodelingprep.com
+export DATABASE_URL=postgresql+psycopg://...     # omit for local sqlite:///./nama.db
+python scripts/sync_constituents.py
+```
+
+The day's move for each name comes from a best-effort batch of Alpaca snapshots
+(the same IEX feed as `/stocks/{symbol}`), so it needs the Alpaca keys (`503`
+without them). Names the feed can't price are left out of the ranking;
+`universe_count` (how many matched the filter) and `quoted_count` (how many could
+be ranked) report the coverage. A symbol never appears as both a gainer and a
+loser, and the board is briefly cached (`Cache-Control: max-age=15`).
+
+```sh
+# Top/bottom 10 across every known name
+curl localhost:8080/stocks/screener
+
+# Nasdaq-100 information-technology names, 5 per side
+curl "localhost:8080/stocks/screener?index=nasdaq100&sector=Information%20Technology&limit=5"
+```
+
 ### Secrets in AWS
 
 Store the keys the same way as `DATABASE_URL`: as **SSM SecureString**
@@ -176,6 +251,21 @@ into the ECS task as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`. The optional
 `FINNHUB_API_KEY` and the `LOGODEV_TOKEN` follow the same pattern (e.g.
 `/nama/dev/finnhub-api-key`, `/nama/dev/logodev-token`). Never commit keys to the
 repo.
+
+The screener's `FMP_API_KEY` is stored the same way (`/nama/dev/fmp-api-key`,
+via the [`ssm-secret`](infra/modules/ssm-secret) module) but is **ops-time
+only** — [`scripts/sync_constituents.py`](scripts/sync_constituents.py) reads it
+to populate the `index_constituents` table, so it is *not* injected into the
+running ECS task. Run the sync against the same database the app uses, fetching
+both from SSM:
+
+```sh
+export FMP_API_KEY=$(aws ssm get-parameter --name /nama/dev/fmp-api-key \
+  --with-decryption --query Parameter.Value --output text)
+export DATABASE_URL=$(aws ssm get-parameter --name /nama/dev/database-url \
+  --with-decryption --query Parameter.Value --output text)
+python scripts/sync_constituents.py
+```
 
 ## Contributing
 

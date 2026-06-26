@@ -340,3 +340,78 @@ class CandleSeries:
     symbol: str
     timeframe: Timeframe
     candles: tuple[Candle, ...]
+
+
+class StockIndex(str, Enum):
+    """A stock-market index the screener can scope its universe to.
+
+    The string values double as the API's accepted query values, the same
+    convention as Timeframe.
+    """
+
+    SP500 = "sp500"
+    NASDAQ100 = "nasdaq100"
+
+
+@dataclass(frozen=True)
+class Constituent:
+    """One member of the screener's universe: a symbol and its memberships.
+
+    Static reference data — which indices a stock belongs to and its GICS
+    sector — rather than market data. It tells the screener *what* to rank and
+    *how* a caller may narrow the field. ``name``/``sector`` are optional so a
+    thinly-covered symbol still screens on price alone.
+    """
+
+    symbol: str
+    name: str | None
+    sector: str | None
+    indices: frozenset[str]  # the StockIndex values this symbol belongs to
+
+    def in_index(self, index: StockIndex) -> bool:
+        """Whether this constituent is a member of the given index."""
+        return index.value in self.indices
+
+
+@dataclass(frozen=True)
+class ScreenedStock:
+    """A universe member paired with its live quote — one row of the screener.
+
+    Wraps a ``Quote`` so the day's move follows the exact same rule as every
+    other price view, and adds the universe metadata the screener filters and
+    labels on. ``symbol`` and ``change_percent`` delegate to the quote so
+    ranking and de-duping read naturally.
+    """
+
+    name: str | None
+    sector: str | None
+    quote: Quote
+
+    @property
+    def symbol(self) -> str:
+        return self.quote.symbol
+
+    @property
+    def change_percent(self) -> float | None:
+        return self.quote.change_percent
+
+
+@dataclass(frozen=True)
+class MoversBoard:
+    """The day's biggest gainers and losers across a (filtered) universe.
+
+    ``gainers`` lead with the largest positive move, ``losers`` with the
+    largest negative; a symbol never appears in both. ``index``/``sector`` echo
+    the filter that produced the board, and the counts report how wide the
+    field was (``universe_count``) versus how many had a usable quote and could
+    actually be ranked (``quoted_count``).
+    """
+
+    index: StockIndex | None
+    sector: str | None
+    limit: int
+    universe_count: int
+    quoted_count: int
+    as_of: datetime | None
+    gainers: tuple[ScreenedStock, ...]
+    losers: tuple[ScreenedStock, ...]

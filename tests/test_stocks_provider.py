@@ -17,6 +17,7 @@ from app.stocks.entities import Candle, Quote, Stock, StockPerformance, Timefram
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     CandleProvider,
+    QuoteBatchProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockPerformanceProvider,
@@ -384,6 +385,63 @@ def test_provider_implements_all_ports():
     p = AlpacaStockDataProvider("dummy-key", "dummy-secret")
     assert isinstance(p, StockDataProvider)
     assert isinstance(p, StockQuoteProvider)
+    assert isinstance(p, QuoteBatchProvider)
     assert isinstance(p, StockPerformanceProvider)
     assert isinstance(p, CandleProvider)
     assert isinstance(p, SectorPerformanceProvider)
+
+
+# --------------------------- batch quotes (screener) ---------------------------
+
+
+class RecordingSnapshotClient:
+    """Returns a snapshot for every requested symbol and records each request's
+    symbol list, so chunking can be asserted."""
+
+    def __init__(self):
+        self.requests: list[list[str]] = []
+
+    def get_stock_snapshot(self, request):
+        symbols = list(request.symbol_or_symbols)
+        self.requests.append(symbols)
+        return {symbol: make_snapshot() for symbol in symbols}
+
+
+def test_get_quotes_maps_each_requested_symbol():
+    p = provider_with(
+        FakeDataClient(result={"AAPL": make_snapshot(), "MSFT": make_snapshot()}),
+        FakeTradingClient(),
+    )
+    quotes = p.get_quotes(["AAPL", "MSFT"])
+    assert set(quotes) == {"AAPL", "MSFT"}
+    assert all(isinstance(q, Quote) for q in quotes.values())
+    assert quotes["AAPL"].change_percent == 0.6  # same rule as get_quote
+
+
+def test_get_quotes_omits_symbols_without_a_trade():
+    no_trade = make_snapshot()
+    no_trade.latest_trade = None
+    p = provider_with(
+        FakeDataClient(result={"AAPL": make_snapshot(), "MSFT": no_trade, "ZZZZ": None}),
+        FakeTradingClient(),
+    )
+    # The tradeless and the missing names drop out; only the priced one survives.
+    assert set(p.get_quotes(["AAPL", "MSFT", "ZZZZ"])) == {"AAPL"}
+
+
+def test_get_quotes_chunk_failure_is_best_effort():
+    # An API error yields an empty map rather than raising — the screener
+    # decides what an empty result means.
+    p = provider_with(FakeDataClient(error=APIError("boom")), FakeTradingClient())
+    assert p.get_quotes(["AAPL", "MSFT"]) == {}
+
+
+def test_get_quotes_batches_in_chunks_of_200():
+    client = RecordingSnapshotClient()
+    p = AlpacaStockDataProvider("dummy-key", "dummy-secret")
+    p._data = client
+    symbols = [f"S{i}" for i in range(250)]
+    quotes = p.get_quotes(symbols)
+    assert len(quotes) == 250
+    # 250 symbols at 200/chunk -> two requests (200 + 50).
+    assert [len(req) for req in client.requests] == [200, 50]

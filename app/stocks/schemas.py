@@ -202,3 +202,38 @@ class SectorBoardResponse(BaseModel):
 
     count: int
     sectors: list[SectorPerformanceResponse]
+
+
+class ScreenedStockResponse(BaseModel):
+    """One screener row: a stock's day move plus its universe metadata.
+
+    ``change``/``change_percent`` follow the same rule as every other price
+    view, so a name's move here matches its ``/stocks/{symbol}`` move."""
+
+    symbol: str
+    name: str | None = None
+    sector: str | None = None
+    price: float
+    change: float | None = None
+    change_percent: float | None = None
+    previous_close: float | None = None
+    as_of: datetime | None = None
+
+
+class MoversResponse(BaseModel):
+    """The day's biggest gainers and losers across a filtered universe.
+
+    ``index``/``sector`` echo the applied filter (``null`` = not filtered).
+    ``universe_count`` is how many constituents matched the filter;
+    ``quoted_count`` how many of those had a usable live quote and so could be
+    ranked. ``gainers`` lead with the largest gain and ``losers`` with the
+    largest loss, each capped at ``limit``; a symbol never appears in both."""
+
+    index: str | None = None
+    sector: str | None = None
+    limit: int
+    universe_count: int
+    quoted_count: int
+    as_of: datetime | None = None
+    gainers: list[ScreenedStockResponse]
+    losers: list[ScreenedStockResponse]
