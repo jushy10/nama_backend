@@ -27,6 +27,17 @@ data "aws_subnets" "default" {
   }
 }
 
+locals {
+  # An internet-facing ALB runs one node — and bills one public IPv4 (~$3.60/mo)
+  # — per subnet/AZ it spans. Spreading it across every default subnet (six AZs
+  # in us-east-1) means paying for six IPs to front a single task. Two AZs is the
+  # ALB minimum and plenty here, so pin the app to two subnets. The default VPC
+  # has one subnet per AZ, so two distinct subnets are two AZs; sort() keeps the
+  # selection stable across plans. The database keeps all subnets — it's private
+  # (no public IP) and its subnet group just wants coverage across AZs.
+  app_subnet_ids = slice(sort(data.aws_subnets.default.ids), 0, 2)
+}
+
 # Private PostgreSQL database (no public endpoint). The app reads its connection
 # URL from the SSM parameter below; attach module.database.app_security_group_id
 # to whatever compute needs to reach it.
@@ -122,7 +133,7 @@ module "app" {
 
   name                  = "nama-dev"
   vpc_id                = data.aws_vpc.default.id
-  subnet_ids            = data.aws_subnets.default.ids
+  subnet_ids            = local.app_subnet_ids
   app_security_group_id = module.database.app_security_group_id
   database_url_ssm_arn  = module.database.database_url_ssm_arn
 
