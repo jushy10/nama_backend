@@ -12,7 +12,7 @@ import pytest
 
 from app.stocks.entities import CompanyProfile
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.fmp_profile_provider import FmpProfileProvider
+from app.stocks.fmp_profile_provider import FmpProfileProvider, _summarize
 
 
 class FakeResponse:
@@ -131,3 +131,49 @@ def test_invalid_json_on_both_raises_unavailable():
     )
     with pytest.raises(StockDataUnavailable):
         p.get_profile("AAPL")
+
+
+# --------------------------- _summarize (condensing) ---------------------------
+
+def test_summarize_keeps_first_two_sentences():
+    text = "First sentence here. Second one follows. Third should be dropped."
+    assert _summarize(text) == "First sentence here. Second one follows."
+
+
+def test_summarize_does_not_split_on_company_suffix():
+    # "Inc." must not be read as a sentence end (it's followed by lowercase, and
+    # is also guarded) — otherwise the blurb would be just "Apple Inc.".
+    text = "Apple Inc. is a tech company. It makes phones and computers. More text."
+    assert _summarize(text) == "Apple Inc. is a tech company. It makes phones and computers."
+
+
+def test_summarize_guards_abbreviation_before_capital():
+    # "Co. The" looks like a boundary (capital follows) but "Co." is an
+    # abbreviation, so the two visual sentences stay merged as one.
+    text = "Bought by Globex Co. The deal closed. Apple makes phones. Extra one."
+    assert _summarize(text) == "Bought by Globex Co. The deal closed. Apple makes phones."
+
+
+def test_summarize_passes_through_short_text():
+    assert _summarize("Just one sentence.") == "Just one sentence."
+
+
+def test_summarize_collapses_whitespace():
+    assert _summarize("A  line.\n\nNext  line.") == "A line. Next line."
+
+
+def test_summarize_caps_runaway_sentence_with_ellipsis():
+    text = "word " * 200  # no sentence break, far past the char cap
+    out = _summarize(text)
+    assert out.endswith("…")
+    assert len(out) <= 301  # _MAX_CHARS + the ellipsis
+
+
+def test_get_profile_condenses_long_description():
+    long = "Apple Inc. is a global tech company. It designs devices. " + (
+        "Filler sentence. " * 20
+    )
+    p = provider_with(FakeResponse(json_data=[{"description": long}]))
+    assert p.get_profile("AAPL").description == (
+        "Apple Inc. is a global tech company. It designs devices."
+    )

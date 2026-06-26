@@ -2,14 +2,18 @@
 
 Market-data feeds (Alpaca) return a ticker's name and exchange but not a summary
 of what the company does. Financial Modeling Prep's profile endpoint does, so the
-description shown on the stock view comes from here. We read FMP's "stable"
-endpoint first and fall back to the older ``/api/v3`` one (some keys are scoped to
-the legacy API) — the same dual-endpoint handling the constituents sync uses.
-This is the only module that knows FMP profiles exist; swap it and nothing else
-changes.
+description shown on the stock view comes from here. FMP's text runs several
+hundred words, so we condense it to the first couple of sentences (see
+``_summarize``) — the stock view only wants a quick "what is this company" blurb.
+We read FMP's "stable" endpoint first and fall back to the older ``/api/v3`` one
+(some keys are scoped to the legacy API) — the same dual-endpoint handling the
+constituents sync uses. This is the only module that knows FMP profiles exist;
+swap it and nothing else changes.
 
 Docs: https://site.financialmodelingprep.com/developer/docs (Company Profile)
 """
+
+import re
 
 import httpx
 
@@ -33,7 +37,8 @@ class FmpProfileProvider(CompanyProfileProvider):
         # which maps cleanly to "no description" (best-effort enrichment).
         first = payload[0] if isinstance(payload, list) and payload else {}
         description = first.get("description") if isinstance(first, dict) else None
-        return CompanyProfile(description=_clean(description))
+        cleaned = _clean(description)
+        return CompanyProfile(description=_summarize(cleaned) if cleaned else None)
 
     def _fetch_profile(self, symbol: str):
         """Fetch the raw profile list, preferring the stable endpoint and falling
@@ -67,3 +72,51 @@ def _clean(value: object) -> str | None:
         return None
     text = value.strip()
     return text or None
+
+
+_MAX_SENTENCES = 2
+_MAX_CHARS = 300
+
+# Tokens that end in a period mid-sentence — without this guard a description
+# beginning "Apple Inc. is..." would be cut down to just "Apple Inc.".
+_ABBREVIATIONS = frozenset(
+    {
+        "inc", "corp", "co", "ltd", "llc", "plc", "lp", "sa", "ag", "nv",
+        "us", "uk", "jr", "sr", "st", "mr", "ms", "dr", "no", "vs",
+    }
+)
+
+# A sentence boundary: . ! or ? then whitespace then the start of the next
+# sentence (a capital or digit). Abbreviations that slip through (e.g. "Co. The")
+# are filtered out in _summarize.
+_SENTENCE_END = re.compile(r"[.!?]\s+(?=[A-Z0-9])")
+
+
+def _summarize(text: str) -> str:
+    """Condense a verbose company description to its first couple of sentences.
+
+    Keeps the first ``_MAX_SENTENCES`` sentences, guarding against company
+    suffixes ("Inc.", "Co.", …) being read as sentence ends, and hard-caps the
+    length so a single run-on sentence can't blow past ``_MAX_CHARS`` (cut at a
+    word boundary with an ellipsis).
+    """
+    text = " ".join(text.split())  # collapse newlines / runs of whitespace
+    sentences: list[str] = []
+    start = 0
+    for match in _SENTENCE_END.finditer(text):
+        candidate = text[start : match.start() + 1]
+        last_word = candidate.rsplit(" ", 1)[-1].rstrip(".!?").lower()
+        if last_word in _ABBREVIATIONS:
+            continue  # false boundary (e.g. "Inc."): keep reading
+        sentences.append(candidate.strip())
+        start = match.end()
+        if len(sentences) >= _MAX_SENTENCES:
+            break
+    else:
+        tail = text[start:].strip()
+        if tail:
+            sentences.append(tail)
+    summary = " ".join(sentences).strip()
+    if len(summary) > _MAX_CHARS:
+        summary = summary[:_MAX_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return summary
