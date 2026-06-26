@@ -27,6 +27,7 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSeries, rsi_series
 from app.stocks.ports import (
     CandleProvider,
+    CompanyProfileProvider,
     ConstituentRepository,
     EarningsHistoryProvider,
     LogoProvider,
@@ -52,9 +53,9 @@ def _normalize_symbol(symbol: str) -> str:
 class GetStockInfo:
     """Use case: retrieve information about a single stock by its symbol.
 
-    The price snapshot is required; performance and fundamentals are optional,
-    best-effort enrichment. If those sources fail or aren't configured, the
-    stock is still returned with the enrichment fields left unset.
+    The price snapshot is required; performance, fundamentals and the company
+    description are optional, best-effort enrichment. If those sources fail or
+    aren't configured, the stock is still returned with those fields left unset.
     """
 
     def __init__(
@@ -62,10 +63,12 @@ class GetStockInfo:
         provider: StockDataProvider,
         performance_provider: StockPerformanceProvider | None = None,
         fundamentals_provider: StockFundamentalsProvider | None = None,
+        profile_provider: CompanyProfileProvider | None = None,
     ) -> None:
         self._provider = provider
         self._performance_provider = performance_provider
         self._fundamentals_provider = fundamentals_provider
+        self._profile_provider = profile_provider
 
     def execute(self, symbol: str) -> Stock:
         normalized = _normalize_symbol(symbol)
@@ -74,6 +77,7 @@ class GetStockInfo:
         return replace(
             stock,
             performance=self._performance(normalized),
+            description=self._description(normalized),
             market_cap=fundamentals.market_cap if fundamentals else None,
             dividend_per_share=(
                 fundamentals.dividend_per_share if fundamentals else None
@@ -97,6 +101,14 @@ class GetStockInfo:
             return self._fundamentals_provider.get_fundamentals(symbol)
         except (StockNotFound, StockDataUnavailable):
             return None  # best-effort
+
+    def _description(self, symbol: str) -> str | None:
+        if self._profile_provider is None:
+            return None
+        try:
+            return self._profile_provider.get_profile(symbol).description
+        except (StockNotFound, StockDataUnavailable):
+            return None  # best-effort: never sink the price response
 
 
 class GetStockQuote:
