@@ -183,38 +183,63 @@ running, on top of RDS. The ACM cert and Route 53 queries are negligible (the
 hosted zone is ~$0.50/mo). `terraform destroy` (or remove the `module "app"` block
 and apply) when you're done.
 
-## Frontend on ECS Fargate
+## Frontend on S3 + CloudFront
 
-`environments/dev` runs the frontend (a static SPA built by Vite, served by
-**nginx on port 80**) as a **second** instance of the same
-[`ecs-fargate-service`](modules/ecs-fargate-service) module — `module "frontend"`.
-It's identical to the backend wiring with two differences:
+`environments/dev` serves the frontend (a static SPA built by Vite) from a
+**private S3 bucket behind CloudFront** via the
+[`static-site-cloudfront`](modules/static-site-cloudfront) module —
+`module "frontend"`. Serving static files this way costs cents at this scale; it
+replaced an earlier setup that ran nginx on a Fargate task behind its own ALB
+(~$25/mo for an always-on task + load balancer).
 
-- **No database.** `app_security_group_id` and `database_url_ssm_arn` are left
-  unset, so the task gets no DB security group and no `DATABASE_URL` secret. The
-  module makes both optional for exactly this case.
-- **Apex + www.** It's served at `namainsights.com` and `www.namainsights.com`.
-  A dedicated `module "dns_frontend"` issues one ACM cert covering both names
-  (apex via `domain_name`, www via `subject_alternative_names`), and the service
-  adds an A record for each (`additional_domain_names`). Both hostnames alias to
-  the same load balancer and serve the same app.
-
-It gets its **own** ECR repo, ECS cluster/service, ALB, and IAM roles, all named
-`nama-frontend-dev-*` — covered by the existing CI policy (scoped to `nama-*`),
-so **no IAM policy change is needed**.
+- **Private bucket, CloudFront-only.** All public access is blocked; an Origin
+  Access Control (OAC) lets only this distribution read the bucket.
+- **Apex + www.** Served at `namainsights.com` and `www.namainsights.com`. A
+  dedicated `module "dns_frontend"` issues one ACM cert covering both names, and
+  the module adds A + AAAA alias records for each, pointing at the distribution.
+- **us-east-1 cert.** CloudFront only reads ACM certs from `us-east-1`. This
+  stack already deploys there, so `module.dns_frontend`'s cert works as-is — but
+  if you ever move the stack to another region, the cert must still be issued in
+  `us-east-1`.
+- **SPA routing.** 403/404 from S3 are rewritten to `index.html` (200) so
+  client-side deep links resolve.
 
 ### Deploy order
 
-Same as the backend: Terraform creates the registry + service (tasks can't start
-until an image exists), then the frontend repo's own GitHub Action builds the
-nginx image, pushes it to the `nama-frontend-dev` ECR repo, and rolls the
-service. After a healthy task, `terraform output frontend_url` →
-`https://namainsights.com`.
+Terraform creates the bucket + distribution (empty at first — CloudFront serves
+403/`index.html` until a build is uploaded). Then the frontend repo's own GitHub
+Action **uploads the build and invalidates the distribution** instead of building
+a Docker image:
+
+```sh
+aws s3 sync ./dist "s3://$(terraform output -raw frontend_bucket_name)" --delete
+aws cloudfront create-invalidation \
+  --distribution-id "$(terraform output -raw frontend_distribution_id)" \
+  --paths "/*"
+```
+
+That CI needs `s3:*` on `arn:aws:s3:::nama-frontend-*` (+ `/*`) and
+`cloudfront:CreateInvalidation` — both already covered if it reuses the `nama-ci`
+keys (see the policy change below). After the first upload,
+`terraform output frontend_url` → `https://namainsights.com`.
+
+> **Migrating from the old ECS frontend:** this is a cross-repo cutover. The
+> frontend repo's deploy must switch from *docker build → push to
+> `nama-frontend-dev` ECR → roll ECS* to the `s3 sync` + invalidation above, at
+> the same time this applies. The old `nama-frontend-dev` ECR repo, ECS
+> cluster/service, ALB, and IAM roles are destroyed by this change.
+
+### IAM
+
+`nama-ci` now also needs to manage the bucket and distribution. `ci-iam-policy.json`
+adds `s3:*` scoped to `arn:aws:s3:::nama-frontend-*` and `cloudfront:*` — **re-apply
+the updated policy to the `nama-ci` user** before the first apply (see Bootstrap).
 
 ### Cost & teardown
 
-A second ALB (~$16/mo) and Fargate task (~$9/mo). `terraform destroy` (or remove
-`module "frontend"` + `module "dns_frontend"` and apply) when you're done.
+Effectively free at low traffic (CloudFront has a perpetual free tier; S3 storage
+for a built SPA is pennies). `terraform destroy` (or remove `module "frontend"` +
+`module "dns_frontend"` and apply) when you're done.
 
 ## Bootstrap (one-time per account)
 
@@ -224,7 +249,8 @@ A second ALB (~$16/mo) and Fargate task (~$9/mo). `terraform destroy` (or remove
 2. **CI user + policy** — attach [`ci-iam-policy.json`](ci-iam-policy.json) to the
    deploy IAM user, replacing `YOUR_STATE_BUCKET`. It grants SSM on `/nama/*`,
    the state bucket, `sts:GetCallerIdentity`, `rds:*` + EC2 SG/VPC actions (database),
-   and ECS/ECR/ELB/logs + IAM scoped to `nama-*` roles (the app). Broad on
+   ECS/ECR/ELB/logs + IAM scoped to `nama-*` roles (the app), and `s3:*` on
+   `nama-frontend-*` + `cloudfront:*` (the static frontend). Broad on
    services, careful on IAM. Re-paste it whenever this file changes — or attach
    the managed `PowerUserAccess` policy plus the `ManageNamaRoles` statement.
 3. **GitHub** — under **Settings → Secrets and variables → Actions**:

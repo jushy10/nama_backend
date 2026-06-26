@@ -39,13 +39,18 @@ output "ecr_repository_url" {
 }
 
 output "frontend_url" {
-  description = "Public URL of the frontend (once an image is pushed and the service is healthy)."
+  description = "Public URL of the frontend (live once the build is uploaded to the bucket)."
   value       = module.frontend.url
 }
 
-output "frontend_ecr_repository_url" {
-  description = "Push the frontend's Docker image here."
-  value       = module.frontend.ecr_repository_url
+output "frontend_bucket_name" {
+  description = "S3 bucket the frontend build is uploaded to (aws s3 sync target)."
+  value       = module.frontend.bucket_name
+}
+
+output "frontend_distribution_id" {
+  description = "CloudFront distribution id to invalidate after uploading a new build."
+  value       = module.frontend.distribution_id
 }
 
 output "name_servers" {
