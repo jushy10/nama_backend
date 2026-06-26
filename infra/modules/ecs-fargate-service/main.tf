@@ -316,6 +316,14 @@ resource "aws_ecs_cluster" "this" {
   tags = var.tags
 }
 
+# Make both capacity providers usable on the cluster so a service can pick
+# FARGATE_SPOT (~70% cheaper, interruptible) via capacity_provider_strategy.
+# Registering both is harmless even when a service runs on-demand FARGATE.
+resource "aws_ecs_cluster_capacity_providers" "this" {
+  cluster_name       = aws_ecs_cluster.this.name
+  capacity_providers = ["FARGATE", "FARGATE_SPOT"]
+}
+
 resource "aws_ecs_task_definition" "this" {
   family                   = var.name
   requires_compatibilities = ["FARGATE"]
@@ -362,7 +370,19 @@ resource "aws_ecs_service" "this" {
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.this.arn
   desired_count   = var.desired_count
-  launch_type     = "FARGATE"
+
+  # On-demand FARGATE by default; FARGATE_SPOT when use_fargate_spot is set.
+  # launch_type and capacity_provider_strategy are mutually exclusive, so we set
+  # exactly one: null out launch_type and add the strategy block only for Spot.
+  launch_type = var.use_fargate_spot ? null : "FARGATE"
+
+  dynamic "capacity_provider_strategy" {
+    for_each = var.use_fargate_spot ? [1] : []
+    content {
+      capacity_provider = "FARGATE_SPOT"
+      weight            = 1
+    }
+  }
 
   network_configuration {
     subnets = var.subnet_ids
@@ -380,7 +400,7 @@ resource "aws_ecs_service" "this" {
     container_port   = var.container_port
   }
 
-  depends_on = [aws_lb_listener.http]
+  depends_on = [aws_lb_listener.http, aws_ecs_cluster_capacity_providers.this]
 
   tags = var.tags
 }
