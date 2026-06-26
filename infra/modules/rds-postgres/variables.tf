@@ -61,6 +61,12 @@ variable "deletion_protection" {
   default     = false
 }
 
+variable "performance_insights_enabled" {
+  description = "Enable RDS Performance Insights (query-level monitoring). Free at the default 7-day retention."
+  type        = bool
+  default     = true
+}
+
 variable "database_url_ssm_name" {
   description = "SSM SecureString parameter name to store the SQLAlchemy URL in."
   type        = string

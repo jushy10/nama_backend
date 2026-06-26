@@ -106,6 +106,10 @@ resource "aws_db_instance" "this" {
   auto_minor_version_upgrade = true
   apply_immediately          = true
 
+  # Query-level monitoring. On by default — free at the 7-day retention the
+  # provider defaults to. Managed here so it isn't silently disabled by drift.
+  performance_insights_enabled = var.performance_insights_enabled
+
   # Dev convenience: destroy without being forced to take a final snapshot.
   skip_final_snapshot = true
 
