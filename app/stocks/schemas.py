@@ -28,31 +28,24 @@ class StockPerformanceResponse(BaseModel):
 
 
 class KeyMetricsResponse(BaseModel):
-    """Trailing valuation, profitability, health and growth indicators.
+    """Trailing valuation, financial-health and market indicators.
 
-    All trailing (no forward estimates). Margins, ROE and the growth fields are
-    percentages; the ratios are plain multiples. Any field a vendor doesn't
-    cover is ``null``.
+    The valuation ratios and risk/range figures for the price snapshot. The
+    earnings-flavored metrics (EPS, growth, margins, ROE/ROIC, payout) live on
+    the earnings endpoint instead — see ``EarningsMetricsResponse``. All
+    trailing (no forward estimates); the ratios are plain multiples. Any field a
+    vendor doesn't cover is ``null``.
     """
 
     pe: float | None = None  # price / trailing EPS
     peg: float | None = None  # trailing P/E / trailing EPS growth (not forward)
     pb: float | None = None  # price / book value
     ps: float | None = None  # price / sales
-    eps: float | None = None  # trailing earnings per share
-    roe: float | None = None  # return on equity (percent)
-    roic: float | None = None  # return on invested capital (percent)
-    gross_margin: float | None = None  # percent
-    operating_margin: float | None = None  # percent
-    net_margin: float | None = None  # percent
     current_ratio: float | None = None
     debt_to_equity: float | None = None
-    eps_growth_yoy: float | None = None  # percent
-    revenue_growth_yoy: float | None = None  # percent
     beta: float | None = None
     week_52_high: float | None = None
     week_52_low: float | None = None
-    payout_ratio: float | None = None  # dividends / earnings (percent)
 
 
 class StockResponse(BaseModel):
@@ -166,12 +159,33 @@ class EarningsSurpriseResponse(BaseModel):
     beat: bool | None = None  # met or beat the estimate
 
 
+class EarningsMetricsResponse(BaseModel):
+    """Trailing earnings / profitability snapshot served with the beat history.
+
+    The income-statement-flavored metrics — trailing EPS, EPS/revenue growth,
+    the margin stack, ROE/ROIC and the dividend payout ratio. All percentages
+    except ``eps``; any field a vendor doesn't cover is ``null``. (Valuation and
+    market metrics live on the stock endpoint — see ``KeyMetricsResponse``.)
+    """
+
+    eps: float | None = None  # trailing earnings per share
+    eps_growth_yoy: float | None = None  # percent
+    revenue_growth_yoy: float | None = None  # percent
+    gross_margin: float | None = None  # percent
+    operating_margin: float | None = None  # percent
+    net_margin: float | None = None  # percent
+    roe: float | None = None  # return on equity (percent)
+    roic: float | None = None  # return on invested capital (percent)
+    payout_ratio: float | None = None  # dividends / earnings (percent)
+
+
 class EarningsHistoryResponse(BaseModel):
     """Recent quarterly earnings surprises (newest first) plus a beat summary.
 
     ``beat_rate`` is the percent of *scored* quarters (those with both an actual
     and an estimate) that met or beat — the "beats consistently?" read.
-    ``count`` is how many quarters are returned."""
+    ``count`` is how many quarters are returned. ``metrics`` is an optional
+    trailing earnings snapshot (best-effort; ``null`` when unavailable)."""
 
     symbol: str
     count: int
@@ -179,6 +193,7 @@ class EarningsHistoryResponse(BaseModel):
     scored: int  # quarters with enough data to judge a beat
     beat_rate: float | None = None  # percent of scored quarters that beat
     quarters: list[EarningsSurpriseResponse]
+    metrics: EarningsMetricsResponse | None = None
 
 
 class SectorPerformanceResponse(BaseModel):

@@ -13,6 +13,7 @@ from app.stocks.entities import (
     CompanyProfile,
     Constituent,
     EarningsHistory,
+    EarningsMetrics,
     Logo,
     MoversBoard,
     Quote,
@@ -200,18 +201,38 @@ class GetStockEarnings:
 
     A dedicated dataset (actual vs estimate per quarter), not snapshot
     enrichment — so errors propagate to the caller rather than being swallowed,
-    mirroring the candles and RSI endpoints.
+    mirroring the candles and RSI endpoints. The trailing earnings ``metrics``
+    block *is* best-effort enrichment layered on top: drawn from the optional
+    fundamentals provider, it never sinks the (primary) beat history.
     """
 
-    def __init__(self, provider: EarningsHistoryProvider) -> None:
+    def __init__(
+        self,
+        provider: EarningsHistoryProvider,
+        fundamentals_provider: StockFundamentalsProvider | None = None,
+    ) -> None:
         self._provider = provider
+        self._fundamentals_provider = fundamentals_provider
 
     def execute(self, symbol: str, *, limit: int = 4) -> EarningsHistory:
         if limit < 1:
             raise ValueError("'limit' must be at least 1.")
-        return self._provider.get_earnings_history(
-            _normalize_symbol(symbol), limit=limit
-        )
+        normalized = _normalize_symbol(symbol)
+        history = self._provider.get_earnings_history(normalized, limit=limit)
+        metrics = self._metrics(normalized)
+        return replace(history, metrics=metrics) if metrics else history
+
+    def _metrics(self, symbol: str) -> EarningsMetrics | None:
+        # Trailing earnings metrics ride on the same Finnhub fundamentals the
+        # stock snapshot uses; best-effort, so a miss leaves the beat history
+        # intact rather than failing the request.
+        if self._fundamentals_provider is None:
+            return None
+        try:
+            fundamentals = self._fundamentals_provider.get_fundamentals(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None
+        return EarningsMetrics.from_key_metrics(fundamentals.metrics)
 
 
 class GetSectorPerformance:
