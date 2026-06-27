@@ -87,7 +87,7 @@ def test_sends_symbol_limit_and_key():
     assert url == "/stable/earnings"
     assert params["symbol"] == "AAPL"
     assert params["apikey"] == "dummy-key"
-    assert "limit" in params
+    assert params["limit"] == 5  # FMP free-tier cap; higher returns HTTP 402
 
 
 def test_error_object_degrades_to_empty():
