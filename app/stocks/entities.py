@@ -5,7 +5,7 @@ framework, or Alpaca. It only knows the concept of a "stock" and the
 calculations intrinsic to it.
 """
 
-from dataclasses import astuple, dataclass
+from dataclasses import astuple, dataclass, field
 from datetime import date, datetime
 from enum import Enum
 
@@ -250,21 +250,41 @@ class NextEarnings:
 
 
 @dataclass(frozen=True)
+class EarningsEstimates:
+    """Analyst estimates for one symbol, from an estimates vendor.
+
+    Two slices used to enrich the beat history: ``upcoming`` is the consensus
+    for the next several *future* quarters (multiple, not just the next report),
+    and ``revenue_by_period`` carries reported-quarter revenue — the consensus
+    estimate vs the actual — keyed by fiscal period-end date so it can be merged
+    onto the EPS quarters. All best-effort; empty when the vendor has nothing.
+    """
+
+    upcoming: tuple[NextEarnings, ...] = ()
+    # period-end date -> (revenue_estimate, revenue_actual)
+    revenue_by_period: dict[date, tuple[float | None, float | None]] = field(
+        default_factory=dict
+    )
+
+
+@dataclass(frozen=True)
 class EarningsHistory:
     """A run of recent quarterly earnings surprises for one symbol.
 
     Ordered newest quarter first — the order a "last N quarters" view reads in.
     The summary properties answer the checklist's "beats consistently?" question:
     of the quarters with both an actual and an estimate, how many met or beat.
-    ``metrics`` is an optional trailing earnings snapshot and ``next_report`` the
-    next scheduled report's consensus — both best-effort enrichment riding along
-    with the per-quarter history.
+    ``metrics`` is an optional trailing earnings snapshot, ``next_report`` the
+    next scheduled report's consensus, and ``upcoming`` the analyst consensus
+    for the next several quarters — all best-effort enrichment riding along with
+    the per-quarter history.
     """
 
     symbol: str
     quarters: tuple[EarningsSurprise, ...]
     metrics: EarningsMetrics | None = None
     next_report: NextEarnings | None = None
+    upcoming: tuple[NextEarnings, ...] = ()
 
     @property
     def scored(self) -> int:
