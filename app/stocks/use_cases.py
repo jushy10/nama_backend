@@ -14,6 +14,7 @@ from app.stocks.entities import (
     Constituent,
     EarningsHistory,
     EarningsMetrics,
+    EarningsSurprise,
     Logo,
     MoversBoard,
     NextEarnings,
@@ -224,11 +225,41 @@ class GetStockEarnings:
             raise ValueError("'limit' must be at least 1.")
         normalized = _normalize_symbol(symbol)
         history = self._provider.get_earnings_history(normalized, limit=limit)
+        quarters = self._with_revenue(normalized, history.quarters)
         metrics = self._metrics(normalized)
         next_report = self._next_report(normalized)
-        if metrics is None and next_report is None:
+        if quarters is history.quarters and metrics is None and next_report is None:
             return history
-        return replace(history, metrics=metrics, next_report=next_report)
+        return replace(
+            history, quarters=quarters, metrics=metrics, next_report=next_report
+        )
+
+    def _with_revenue(
+        self, symbol: str, quarters: tuple[EarningsSurprise, ...]
+    ) -> tuple[EarningsSurprise, ...]:
+        # Merge reported revenue (estimate vs actual) onto the EPS quarters from
+        # the calendar, keyed by fiscal year/quarter; best-effort. Returning the
+        # same tuple identity signals "nothing merged" so execute can short-circuit.
+        if self._calendar_provider is None:
+            return quarters
+        try:
+            revenue = self._calendar_provider.get_recent_revenue(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return quarters
+        if not revenue:
+            return quarters
+        merged: list[EarningsSurprise] = []
+        changed = False
+        for q in quarters:
+            point = revenue.get((q.fiscal_year, q.fiscal_quarter))
+            if point is not None and (point[0] is not None or point[1] is not None):
+                merged.append(
+                    replace(q, revenue_estimate=point[0], revenue_actual=point[1])
+                )
+                changed = True
+            else:
+                merged.append(q)
+        return tuple(merged) if changed else quarters
 
     def _metrics(self, symbol: str) -> EarningsMetrics | None:
         # Trailing earnings metrics ride on the same Finnhub fundamentals the

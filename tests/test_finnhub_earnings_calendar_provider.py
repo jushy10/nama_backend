@@ -127,3 +127,46 @@ def test_invalid_json_raises_unavailable():
     http = FakeHttpClient(json_error=ValueError("not json"))
     with pytest.raises(StockDataUnavailable):
         provider_with(http).get_next_earnings("AAPL")
+
+
+def test_recent_revenue_maps_reported_quarters():
+    http = FakeHttpClient(
+        json_data=_cal(
+            {"year": 2026, "quarter": 1, "revenueEstimate": 95e9,
+             "revenueActual": 97e9, "date": "2026-04-30"},
+            {"year": 2025, "quarter": 4, "revenueEstimate": 88e9,
+             "revenueActual": None, "date": "2026-01-28"},
+        )
+    )
+    rev = provider_with(http).get_recent_revenue("AAPL")
+    assert rev[(2026, 1)] == (95e9, 97e9)
+    assert rev[(2025, 4)] == (88e9, None)
+
+
+def test_recent_revenue_skips_rows_without_year_or_quarter():
+    http = FakeHttpClient(json_data=_cal({"revenueActual": 50e9, "date": "2026-01-28"}))
+    assert provider_with(http).get_recent_revenue("AAPL") == {}
+
+
+def test_recent_revenue_skips_rows_with_no_revenue_figures():
+    http = FakeHttpClient(
+        json_data=_cal(
+            {"year": 2026, "quarter": 1, "revenueEstimate": None, "revenueActual": None}
+        )
+    )
+    assert provider_with(http).get_recent_revenue("AAPL") == {}
+
+
+def test_recent_revenue_sends_a_past_window():
+    http = FakeHttpClient(json_data=_cal())
+    provider_with(http).get_recent_revenue("AAPL")
+    url, params = http.requests[0]
+    assert url == "/calendar/earnings"
+    assert params["symbol"] == "AAPL"
+    assert "from" in params and "to" in params
+
+
+def test_recent_revenue_non_200_raises_unavailable():
+    http = FakeHttpClient(status_code=429, text="rate limit")
+    with pytest.raises(StockDataUnavailable):
+        provider_with(http).get_recent_revenue("AAPL")

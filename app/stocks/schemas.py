@@ -157,6 +157,8 @@ class EarningsSurpriseResponse(BaseModel):
     surprise: float | None = None  # actual - estimate (EPS)
     surprise_percent: float | None = None  # percent of estimate
     beat: bool | None = None  # met or beat the estimate
+    revenue_estimate: float | None = None  # consensus revenue going in (raw)
+    revenue_actual: float | None = None  # reported revenue (raw)
 
 
 class EarningsMetricsResponse(BaseModel):
