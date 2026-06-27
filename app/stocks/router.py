@@ -332,6 +332,8 @@ def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
                 surprise=q.surprise,
                 surprise_percent=q.surprise_percent,
                 beat=q.beat,
+                revenue_estimate=q.revenue_estimate,
+                revenue_actual=q.revenue_actual,
             )
             for q in history.quarters
         ],

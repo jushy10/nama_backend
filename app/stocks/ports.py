@@ -152,6 +152,22 @@ class EarningsCalendarProvider(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def get_recent_revenue(
+        self, symbol: str
+    ) -> dict[tuple[int, int], tuple[float | None, float | None]]:
+        """Return recently-reported revenue keyed by ``(fiscal_year, quarter)``.
+
+        Each value is ``(estimate, actual)`` — the consensus revenue going in
+        and what was reported — for merging onto the EPS beat history. Quarters
+        the vendor doesn't cover are simply absent; an empty map means no
+        revenue was available (best-effort, never an error for "no data").
+
+        Raises:
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
 
 class LogoProvider(ABC):
     """A gateway for retrieving a company's logo image.

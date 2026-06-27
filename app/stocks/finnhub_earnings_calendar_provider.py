@@ -1,11 +1,12 @@
-"""Interface Adapter: the next scheduled earnings report from Finnhub.
+"""Interface Adapter: the earnings calendar from Finnhub.
 
 Finnhub's free ``/calendar/earnings`` endpoint lists scheduled earnings events
-with the consensus EPS/revenue estimate going into each one. We read the *next*
-upcoming event for a symbol — the "when do they report next, and where do
-analysts expect it" forward view that complements the reported beat history
-(which is past-only). Kept separate from the earnings-surprise adapter so each
-module owns a single Finnhub endpoint; swap this and nothing else changes.
+with the consensus EPS/revenue estimate going into each one — and, for events
+already reported, the actuals. We read two slices: the *next* upcoming event
+(the "when do they report next, and where do analysts expect it" forward view)
+and recent revenue (estimate vs actual per quarter, to merge onto the EPS beat
+history, which is revenue-blind). Kept separate from the earnings-surprise
+adapter so each module owns a single Finnhub endpoint.
 
 Docs: https://finnhub.io/docs/api/earnings-calendar
 """
@@ -20,7 +21,7 @@ from app.stocks.ports import EarningsCalendarProvider
 
 
 class FinnhubEarningsCalendarProvider(EarningsCalendarProvider):
-    """Fetches the next scheduled earnings report from Finnhub (free key)."""
+    """Fetches the earnings calendar from Finnhub (free key)."""
 
     _DEFAULT_BASE_URL = "https://finnhub.io/api/v1"
 
@@ -30,22 +31,26 @@ class FinnhubEarningsCalendarProvider(EarningsCalendarProvider):
         base_url: str = _DEFAULT_BASE_URL,
         *,
         horizon_days: int = 120,
+        lookback_days: int = 540,
     ) -> None:
         self._api_key = api_key
         self._http = httpx.Client(base_url=base_url, timeout=10.0)
         # How far ahead to look for the next report; a quarter-plus covers the
         # gap between cycles without dragging in the one after next.
         self._horizon_days = horizon_days
+        # How far back to pull reported revenue — enough to cover the last
+        # several quarters the beat history returns.
+        self._lookback_days = lookback_days
 
-    def get_next_earnings(self, symbol: str) -> NextEarnings | None:
-        today = date.today()
+    def _fetch_events(self, symbol: str, frm: date, to: date) -> list[dict]:
+        """Fetch the calendar rows for a date window, or raise on failure."""
         try:
             resp = self._http.get(
                 "/calendar/earnings",
                 params={
                     "symbol": symbol,
-                    "from": today.isoformat(),
-                    "to": (today + timedelta(days=self._horizon_days)).isoformat(),
+                    "from": frm.isoformat(),
+                    "to": to.isoformat(),
                     "token": self._api_key,
                 },
             )
@@ -61,14 +66,20 @@ class FinnhubEarningsCalendarProvider(EarningsCalendarProvider):
             payload = resp.json()
         except ValueError as exc:
             raise StockDataUnavailable(symbol, f"invalid JSON payload: {exc}") from exc
-
         # Finnhub returns {"earningsCalendar": [...]} — an unknown symbol or a
-        # name with nothing scheduled in the window yields an empty list.
+        # window with nothing scheduled yields an empty list.
         rows = payload.get("earningsCalendar") if isinstance(payload, dict) else None
+        return [row for row in (rows or []) if isinstance(row, dict)]
+
+    def get_next_earnings(self, symbol: str) -> NextEarnings | None:
+        today = date.today()
+        rows = self._fetch_events(
+            symbol, today, today + timedelta(days=self._horizon_days)
+        )
         dated = [
             (d, row)
-            for row in (rows or [])
-            if isinstance(row, dict) and (d := _parse_date(row.get("date"))) is not None
+            for row in rows
+            if (d := _parse_date(row.get("date"))) is not None
         ]
         if not dated:
             return None
@@ -82,6 +93,24 @@ class FinnhubEarningsCalendarProvider(EarningsCalendarProvider):
             revenue_estimate=row.get("revenueEstimate"),
             session=_session(row.get("hour")),
         )
+
+    def get_recent_revenue(
+        self, symbol: str
+    ) -> dict[tuple[int, int], tuple[float | None, float | None]]:
+        today = date.today()
+        rows = self._fetch_events(
+            symbol, today - timedelta(days=self._lookback_days), today
+        )
+        out: dict[tuple[int, int], tuple[float | None, float | None]] = {}
+        for row in rows:
+            year, quarter = row.get("year"), row.get("quarter")
+            if year is None or quarter is None:
+                continue
+            estimate, actual = row.get("revenueEstimate"), row.get("revenueActual")
+            if estimate is None and actual is None:
+                continue  # nothing to carry for this quarter
+            out[(year, quarter)] = (estimate, actual)
+        return out
 
 
 def _parse_date(value) -> date | None:

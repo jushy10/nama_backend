@@ -160,6 +160,11 @@ class EarningsSurprise:
     estimate: float | None  # consensus EPS estimate going in
     surprise: float | None  # actual - estimate (EPS)
     surprise_percent: float | None  # surprise as a percent of the estimate
+    # Revenue for the quarter (raw, e.g. USD), best-effort from the earnings
+    # calendar: ``revenue_estimate`` is the consensus going in, ``revenue_actual``
+    # what was reported. ``None`` when the vendor doesn't cover the quarter.
+    revenue_estimate: float | None = None
+    revenue_actual: float | None = None
 
     @property
     def beat(self) -> bool | None:
