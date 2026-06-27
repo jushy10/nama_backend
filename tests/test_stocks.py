@@ -18,6 +18,7 @@ from app.stocks.entities import (
     CompanyProfile,
     Constituent,
     EarningsHistory,
+    EarningsMetrics,
     EarningsSurprise,
     KeyMetrics,
     Logo,
@@ -275,8 +276,14 @@ def a_performance(**overrides) -> StockPerformance:
 
 def a_key_metrics(**overrides) -> KeyMetrics:
     base = dict(
-        pe=28.5, pb=45.2, ps=7.1, eps=6.1, roe=150.0, beta=1.2,
+        # Valuation / health / market (stay on the stock snapshot)
+        pe=28.5, pb=45.2, ps=7.1, beta=1.2,
+        current_ratio=0.9, debt_to_equity=1.5,
         week_52_high=320.0, week_52_low=210.0,
+        # Earnings-flavored (relocated to the earnings endpoint)
+        eps=6.1, eps_growth_yoy=12.0, revenue_growth_yoy=8.0,
+        gross_margin=44.0, operating_margin=30.0, net_margin=25.0,
+        roe=150.0, roic=40.0, payout_ratio=15.0,
     )
     base.update(overrides)
     return KeyMetrics(**base)
@@ -400,6 +407,25 @@ def test_earnings_history_beat_rate_none_when_nothing_scoreable():
     assert history.scored == 0
     assert history.beats == 0
     assert history.beat_rate is None
+
+
+def test_earnings_metrics_projects_earnings_fields_from_key_metrics():
+    em = EarningsMetrics.from_key_metrics(a_key_metrics())
+    # carries the earnings-flavored slice...
+    assert em.eps == 6.1
+    assert em.net_margin == 25.0
+    assert em.eps_growth_yoy == 12.0
+    assert em.roic == 40.0
+    assert em.payout_ratio == 15.0
+    # ...and nothing valuation-flavored leaks across (it has no such fields)
+    assert not hasattr(em, "pe")
+    assert not hasattr(em, "beta")
+
+
+def test_earnings_metrics_none_without_earnings_fields():
+    # KeyMetrics present but only valuation fields set -> nothing to carry
+    assert EarningsMetrics.from_key_metrics(KeyMetrics(pe=20.0, beta=1.1)) is None
+    assert EarningsMetrics.from_key_metrics(None) is None
 
 
 def test_candle_is_bullish():
@@ -693,6 +719,31 @@ def test_earnings_use_case_propagates_not_found():
         GetStockEarnings(fake).execute("ZZZZ")
 
 
+def test_earnings_use_case_attaches_metrics_from_fundamentals():
+    history = GetStockEarnings(
+        FakeEarningsProvider(a_history()),
+        FakeFundamentalsProvider(a_fundamentals()),
+    ).execute("AAPL")
+    assert history.metrics is not None
+    assert history.metrics.eps == 6.1
+    assert history.metrics.net_margin == 25.0
+
+
+def test_earnings_use_case_metrics_none_without_fundamentals_provider():
+    history = GetStockEarnings(FakeEarningsProvider(a_history())).execute("AAPL")
+    assert history.metrics is None
+
+
+def test_earnings_use_case_metrics_best_effort_when_fundamentals_fail():
+    # Fundamentals are enrichment: a failure leaves the beat history intact.
+    fake = FakeEarningsProvider(a_history())
+    history = GetStockEarnings(
+        fake, FakeFundamentalsProvider(raises=StockDataUnavailable("AAPL", "boom"))
+    ).execute("AAPL")
+    assert history.metrics is None
+    assert history.quarters  # primary data survived
+
+
 # --------------------------- API ---------------------------
 
 @pytest.fixture
@@ -731,7 +782,7 @@ def make_client():
             )
         if earnings_provider is not None:
             app.dependency_overrides[get_stock_earnings] = (
-                lambda: GetStockEarnings(earnings_provider)
+                lambda: GetStockEarnings(earnings_provider, fundamentals_provider)
             )
         return TestClient(app)
 
@@ -788,11 +839,15 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
     assert body["performance"] == {
         "1w": 1.2, "1m": -0.4, "3m": 5.1, "6m": 8.7, "ytd": 12.3, "1y": 21.0,
     }
-    # nested key metrics ride along on the same fundamentals payload
+    # nested key metrics ride along on the same fundamentals payload — only the
+    # valuation/health/market slice; earnings-flavored metrics moved to /earnings
     assert body["metrics"]["pe"] == 28.5
     assert body["metrics"]["beta"] == 1.2
     assert body["metrics"]["week_52_high"] == 320.0
     assert body["metrics"]["ps"] == 7.1
+    assert body["metrics"]["debt_to_equity"] == 1.5
+    for moved in ("eps", "roe", "roic", "net_margin", "eps_growth_yoy", "payout_ratio"):
+        assert moved not in body["metrics"], moved
 
 
 def test_get_stock_enrichment_best_effort_returns_200(make_client):
@@ -1085,6 +1140,27 @@ def test_get_earnings_returns_200_with_beat_summary(make_client):
     assert first["actual"] == 2.18
     assert first["beat"] is True
     assert body["quarters"][1]["beat"] is False
+
+
+def test_get_earnings_includes_metrics_block_from_fundamentals(make_client):
+    client = make_client(
+        earnings_provider=FakeEarningsProvider(a_history()),
+        fundamentals_provider=FakeFundamentalsProvider(a_fundamentals()),
+    )
+    body = client.get("/stocks/AAPL/earnings").json()
+    metrics = body["metrics"]
+    assert metrics["eps"] == 6.1
+    assert metrics["net_margin"] == 25.0
+    assert metrics["revenue_growth_yoy"] == 8.0
+    assert metrics["payout_ratio"] == 15.0
+    # valuation/market metrics belong to the stock endpoint, not here
+    for stock_only in ("pe", "pb", "beta", "week_52_high"):
+        assert stock_only not in metrics, stock_only
+
+
+def test_get_earnings_metrics_null_without_fundamentals(make_client):
+    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
+    assert client.get("/stocks/AAPL/earnings").json()["metrics"] is None
 
 
 def test_get_earnings_honors_limit(make_client):

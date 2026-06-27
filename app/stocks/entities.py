@@ -5,7 +5,7 @@ framework, or Alpaca. It only knows the concept of a "stock" and the
 calculations intrinsic to it.
 """
 
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from datetime import date, datetime
 from enum import Enum
 
@@ -174,16 +174,70 @@ class EarningsSurprise:
 
 
 @dataclass(frozen=True)
+class EarningsMetrics:
+    """Trailing earnings / profitability metrics for one stock.
+
+    The income-statement-flavored slice of the broader fundamentals: trailing
+    EPS, the year-over-year growth in EPS and revenue, the margin stack, the
+    returns (ROE/ROIC) and the dividend payout ratio. A projection of
+    ``KeyMetrics`` that rides alongside the quarterly beat history, so the
+    earnings view answers "how profitable, and growing how fast?" without a
+    second call. The valuation/market indicators (P/E, P/B, beta, …) stay with
+    the price snapshot. Every field is optional and all are percentages except
+    ``eps``.
+    """
+
+    eps: float | None = None  # trailing earnings per share
+    eps_growth_yoy: float | None = None  # percent, year over year
+    revenue_growth_yoy: float | None = None  # percent, year over year
+    gross_margin: float | None = None  # percent
+    operating_margin: float | None = None  # percent
+    net_margin: float | None = None  # percent
+    roe: float | None = None  # return on equity (percent)
+    roic: float | None = None  # return on invested capital (percent)
+    payout_ratio: float | None = None  # dividends / earnings (percent)
+
+    @classmethod
+    def from_key_metrics(cls, metrics: "KeyMetrics | None") -> "EarningsMetrics | None":
+        """Project the earnings-flavored fields out of a ``KeyMetrics``.
+
+        ``None`` when there's nothing to carry — no metrics at all, or none of
+        the earnings fields are populated — so an uncovered symbol yields no
+        metrics block rather than an all-null one (mirroring how the provider
+        builds ``KeyMetrics`` itself).
+        """
+        if metrics is None:
+            return None
+        projected = cls(
+            eps=metrics.eps,
+            eps_growth_yoy=metrics.eps_growth_yoy,
+            revenue_growth_yoy=metrics.revenue_growth_yoy,
+            gross_margin=metrics.gross_margin,
+            operating_margin=metrics.operating_margin,
+            net_margin=metrics.net_margin,
+            roe=metrics.roe,
+            roic=metrics.roic,
+            payout_ratio=metrics.payout_ratio,
+        )
+        if all(value is None for value in astuple(projected)):
+            return None
+        return projected
+
+
+@dataclass(frozen=True)
 class EarningsHistory:
     """A run of recent quarterly earnings surprises for one symbol.
 
     Ordered newest quarter first — the order a "last N quarters" view reads in.
     The summary properties answer the checklist's "beats consistently?" question:
     of the quarters with both an actual and an estimate, how many met or beat.
+    ``metrics`` is an optional trailing earnings snapshot (best-effort) that
+    rides along with the per-quarter history.
     """
 
     symbol: str
     quarters: tuple[EarningsSurprise, ...]
+    metrics: EarningsMetrics | None = None
 
     @property
     def scored(self) -> int:

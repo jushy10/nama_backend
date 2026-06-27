@@ -22,6 +22,7 @@ from app.stocks.constituents import SqlConstituentRepository
 from app.stocks.entities import (
     CandleSeries,
     EarningsHistory,
+    EarningsMetrics,
     KeyMetrics,
     MoversBoard,
     Quote,
@@ -51,6 +52,7 @@ from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
     EarningsHistoryResponse,
+    EarningsMetricsResponse,
     EarningsSurpriseResponse,
     KeyMetricsResponse,
     MoversResponse,
@@ -163,8 +165,12 @@ def get_earnings_provider() -> EarningsHistoryProvider:
 
 def get_stock_earnings(
     provider: EarningsHistoryProvider = Depends(get_earnings_provider),
+    # Trailing earnings metrics are best-effort enrichment on top of the beat
+    # history — same Finnhub fundamentals the stock snapshot uses, omitted when
+    # unconfigured rather than failing the (primary) earnings response.
+    fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
 ) -> GetStockEarnings:
-    return GetStockEarnings(provider)
+    return GetStockEarnings(provider, fundamentals)
 
 
 @lru_cache(maxsize=1)
@@ -242,6 +248,8 @@ def _present_performance(
 
 
 def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
+    # Valuation + health + market only; the earnings-flavored metrics (EPS,
+    # growth, margins, ROE/ROIC, payout) are surfaced on the earnings endpoint.
     if metrics is None:
         return None
     return KeyMetricsResponse(
@@ -249,19 +257,28 @@ def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
         peg=metrics.peg,
         pb=metrics.pb,
         ps=metrics.ps,
-        eps=metrics.eps,
-        roe=metrics.roe,
-        roic=metrics.roic,
-        gross_margin=metrics.gross_margin,
-        operating_margin=metrics.operating_margin,
-        net_margin=metrics.net_margin,
         current_ratio=metrics.current_ratio,
         debt_to_equity=metrics.debt_to_equity,
-        eps_growth_yoy=metrics.eps_growth_yoy,
-        revenue_growth_yoy=metrics.revenue_growth_yoy,
         beta=metrics.beta,
         week_52_high=metrics.week_52_high,
         week_52_low=metrics.week_52_low,
+    )
+
+
+def _present_earnings_metrics(
+    metrics: EarningsMetrics | None,
+) -> EarningsMetricsResponse | None:
+    if metrics is None:
+        return None
+    return EarningsMetricsResponse(
+        eps=metrics.eps,
+        eps_growth_yoy=metrics.eps_growth_yoy,
+        revenue_growth_yoy=metrics.revenue_growth_yoy,
+        gross_margin=metrics.gross_margin,
+        operating_margin=metrics.operating_margin,
+        net_margin=metrics.net_margin,
+        roe=metrics.roe,
+        roic=metrics.roic,
         payout_ratio=metrics.payout_ratio,
     )
 
@@ -287,6 +304,7 @@ def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
             )
             for q in history.quarters
         ],
+        metrics=_present_earnings_metrics(history.metrics),
     )
 
 
