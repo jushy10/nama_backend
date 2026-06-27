@@ -245,6 +245,11 @@ def _match_revenue(period, reported_revenue):
     return best
 
 
+# Finnhub's free `/stock/earnings` returns only the last four quarters and
+# ignores a larger `limit`, so the count is fixed here rather than a caller knob.
+_EARNINGS_QUARTERS = 4
+
+
 class GetStockEarnings:
     """Use case: retrieve a stock's recent quarterly earnings surprises.
 
@@ -268,11 +273,11 @@ class GetStockEarnings:
         self._calendar_provider = calendar_provider
         self._estimates_provider = estimates_provider
 
-    def execute(self, symbol: str, *, limit: int = 4) -> EarningsHistory:
-        if limit < 1:
-            raise ValueError("'limit' must be at least 1.")
+    def execute(self, symbol: str) -> EarningsHistory:
         normalized = _normalize_symbol(symbol)
-        history = self._provider.get_earnings_history(normalized, limit=limit)
+        history = self._provider.get_earnings_history(
+            normalized, limit=_EARNINGS_QUARTERS
+        )
         estimates = self._estimates(normalized)
         # Reported revenue: the calendar's (Finnhub) merge first, then the richer
         # estimates vendor (FMP) overlaid on top — FMP wins where both have it.

@@ -640,13 +640,10 @@ def get_stock_rsi_endpoint(
 @router.get("/stocks/{symbol}/earnings", response_model=EarningsHistoryResponse)
 def get_stock_earnings_endpoint(
     symbol: str,
-    limit: int = Query(
-        4, ge=1, le=40, description="How many recent quarters to return (newest first)."
-    ),
     use_case: GetStockEarnings = Depends(get_stock_earnings),
 ) -> EarningsHistoryResponse:
     try:
-        history = use_case.execute(symbol, limit=limit)
+        history = use_case.execute(symbol)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except StockNotFound as exc:

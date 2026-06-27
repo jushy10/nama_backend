@@ -181,9 +181,9 @@ curl localhost:8080/stocks/AAPL/logo --output aapl.png
 
 ### Earnings beat history
 
-`GET /stocks/{symbol}/earnings` returns recent **quarterly earnings surprises** —
-the reported EPS against the consensus estimate going into each quarter, newest
-first — answering "does the company beat estimates consistently?". Each quarter
+`GET /stocks/{symbol}/earnings` returns the four most recent **quarterly earnings
+surprises** — the reported EPS against the consensus estimate going into each
+quarter, newest first — answering "does the company beat estimates consistently?". Each quarter
 carries a `beat` flag (`actual >= estimate`, met counts as beat) and a
 `surprise_percent`; the top level summarises with `beats`, `scored` (quarters
 with both an actual and an estimate) and `beat_rate` (percent of scored quarters
@@ -194,11 +194,8 @@ this is the endpoint's primary data, so it needs `FINNHUB_API_KEY`: without it
 the endpoint returns `503`, an unknown symbol returns `404`.
 
 ```sh
-# Last 4 quarters (default)
+# The four most recent reported quarters
 curl localhost:8080/stocks/AAPL/earnings
-
-# Last 12 quarters
-curl "localhost:8080/stocks/AAPL/earnings?limit=12"
 ```
 
 ### Stock screener
