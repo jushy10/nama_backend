@@ -31,11 +31,14 @@ class FmpEstimatesProvider(EarningsEstimatesProvider):
     _DEFAULT_BASE_URL = "https://financialmodelingprep.com"
 
     def __init__(
-        self, api_key: str, base_url: str = _DEFAULT_BASE_URL, *, limit: int = 24
+        self, api_key: str, base_url: str = _DEFAULT_BASE_URL, *, limit: int = 5
     ) -> None:
         self._api_key = api_key
         self._http = httpx.Client(base_url=base_url, timeout=10.0)
-        self._limit = limit  # rows back; covers several past quarters + upcoming
+        # FMP's free tier caps `limit` at 5 (higher → HTTP 402). Five recent
+        # events covers the four displayed quarters' revenue plus the next
+        # report; deeper history / more forward quarters need a paid plan.
+        self._limit = limit
 
     def get_estimates(self, symbol: str) -> EarningsEstimates:
         today = date.today()
