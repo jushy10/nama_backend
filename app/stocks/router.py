@@ -667,3 +667,34 @@ def get_sectors_endpoint(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present_sectors(sectors)
+
+
+@router.get("/_debug/fmp/{symbol}")
+def _debug_fmp(symbol: str):
+    """TEMPORARY diagnostic: probe the FMP estimates endpoints directly and
+    surface the raw status/body so we can see what's actually available on this
+    key's plan. Returns no secret (key is never echoed). Remove after use."""
+    import httpx
+
+    key = os.environ.get("FMP_API_KEY")
+    if not key:
+        return {"error": "FMP_API_KEY not configured"}
+    sym = symbol.strip().upper()
+    routes = [
+        ("analyst-estimates/stable", "https://financialmodelingprep.com/stable/analyst-estimates", {"symbol": sym, "period": "quarter", "limit": 4}),
+        ("analyst-estimates/v3", f"https://financialmodelingprep.com/api/v3/analyst-estimates/{sym}", {"period": "quarter", "limit": 4}),
+        ("income-statement/stable", "https://financialmodelingprep.com/stable/income-statement", {"symbol": sym, "period": "quarter", "limit": 2}),
+        ("income-statement/v3", f"https://financialmodelingprep.com/api/v3/income-statement/{sym}", {"period": "quarter", "limit": 2}),
+        ("earnings/stable", "https://financialmodelingprep.com/stable/earnings", {"symbol": sym, "limit": 4}),
+    ]
+    out = []
+    with httpx.Client(timeout=10.0) as client:
+        for name, url, params in routes:
+            try:
+                resp = client.get(url, params={**params, "apikey": key})
+                out.append(
+                    {"route": name, "status": resp.status_code, "body": resp.text[:600]}
+                )
+            except Exception as exc:  # noqa: BLE001 - diagnostic, report anything
+                out.append({"route": name, "error": str(exc)})
+    return out
