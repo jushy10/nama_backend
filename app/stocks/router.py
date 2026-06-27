@@ -667,3 +667,43 @@ def get_sectors_endpoint(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present_sectors(sectors)
+
+
+@router.get("/_debug/est/{symbol}")
+def _debug_est(symbol: str):
+    """TEMPORARY: show what the FMP estimates provider actually does on prod —
+    raw /stable/earnings at two limits, plus the parsed provider result or
+    exception. No secret echoed. Removed after use."""
+    import httpx
+
+    from app.stocks.fmp_estimates_provider import FmpEstimatesProvider
+
+    key = os.environ.get("FMP_API_KEY")
+    if not key:
+        return {"error": "no FMP_API_KEY"}
+    sym = symbol.strip().upper()
+    out: dict = {}
+    with httpx.Client(
+        base_url="https://financialmodelingprep.com", timeout=10.0
+    ) as client:
+        for lim in (24, 8, 4):
+            try:
+                r = client.get(
+                    "/stable/earnings",
+                    params={"symbol": sym, "limit": lim, "apikey": key},
+                )
+                body = r.text[:300]
+                out[f"raw_limit_{lim}"] = {"status": r.status_code, "body": body}
+            except Exception as exc:  # noqa: BLE001
+                out[f"raw_limit_{lim}"] = {"error": str(exc)}
+    try:
+        est = FmpEstimatesProvider(key).get_estimates(sym)
+        out["provider"] = {
+            "upcoming": len(est.upcoming),
+            "reported": len(est.reported_revenue),
+            "sample_upcoming": [str(u.report_date) for u in est.upcoming[:3]],
+            "sample_reported": [str(r[0]) for r in est.reported_revenue[:3]],
+        }
+    except Exception as exc:  # noqa: BLE001
+        out["provider"] = {"exc": type(exc).__name__, "msg": str(exc)[:300]}
+    return out
