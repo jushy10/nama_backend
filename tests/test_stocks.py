@@ -731,10 +731,10 @@ def test_sector_use_case_propagates_not_found():
         GetSectorPerformance(fake).execute()
 
 
-def test_earnings_use_case_normalizes_symbol_and_forwards_limit():
+def test_earnings_use_case_normalizes_symbol():
     fake = FakeEarningsProvider(a_history())
-    GetStockEarnings(fake).execute("  aapl ", limit=8)
-    assert fake.received == [("AAPL", 8)]
+    GetStockEarnings(fake).execute("  aapl ")
+    assert fake.received == [("AAPL", 4)]
 
 
 def test_earnings_use_case_defaults_to_four_quarters():
@@ -749,13 +749,6 @@ def test_earnings_use_case_rejects_invalid_symbols(bad):
     with pytest.raises(ValueError):
         GetStockEarnings(fake).execute(bad)
     assert fake.received == []  # provider untouched on invalid input
-
-
-def test_earnings_use_case_rejects_non_positive_limit():
-    fake = FakeEarningsProvider(a_history())
-    with pytest.raises(ValueError):
-        GetStockEarnings(fake).execute("AAPL", limit=0)
-    assert fake.received == []
 
 
 def test_earnings_use_case_propagates_not_found():
@@ -1377,11 +1370,13 @@ def test_get_earnings_upcoming_empty_without_estimates(make_client):
     assert client.get("/stocks/AAPL/earnings").json()["upcoming"] == []
 
 
-def test_get_earnings_honors_limit(make_client):
+def test_get_earnings_ignores_limit_query_param(make_client):
+    # `limit` was removed (Finnhub's free tier ignored it); a stray value is
+    # harmless and the endpoint still returns the fixed four quarters.
     fake = FakeEarningsProvider(a_history())
     client = make_client(earnings_provider=fake)
     assert client.get("/stocks/AAPL/earnings", params={"limit": 12}).status_code == 200
-    assert fake.received == [("AAPL", 12)]
+    assert fake.received == [("AAPL", 4)]
 
 
 def test_get_earnings_defaults_to_four_quarters(make_client):
@@ -1394,11 +1389,6 @@ def test_get_earnings_defaults_to_four_quarters(make_client):
 def test_get_earnings_invalid_symbol_400(make_client):
     client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
     assert client.get("/stocks/123/earnings").status_code == 400
-
-
-def test_get_earnings_invalid_limit_422(make_client):
-    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
-    assert client.get("/stocks/AAPL/earnings", params={"limit": 0}).status_code == 422
 
 
 def test_get_earnings_unknown_symbol_404(make_client):
