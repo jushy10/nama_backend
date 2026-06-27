@@ -41,12 +41,14 @@ from app.stocks.finnhub_earnings_calendar_provider import (
 )
 from app.stocks.finnhub_earnings_provider import FinnhubEarningsProvider
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
+from app.stocks.fmp_estimates_provider import FmpEstimatesProvider
 from app.stocks.fmp_profile_provider import FmpProfileProvider
 from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
 from app.stocks.ports import (
     CompanyProfileProvider,
     EarningsCalendarProvider,
+    EarningsEstimatesProvider,
     EarningsHistoryProvider,
     LogoProvider,
     StockDataProvider,
@@ -178,15 +180,27 @@ def get_earnings_calendar_provider() -> EarningsCalendarProvider | None:
     return FinnhubEarningsCalendarProvider(key) if key else None
 
 
+@lru_cache(maxsize=1)
+def get_earnings_estimates_provider() -> EarningsEstimatesProvider | None:
+    # Analyst estimates (multiple upcoming quarters + reported revenue) from FMP
+    # — the same key the profile/constituents use. Best-effort: omitted when
+    # unconfigured rather than failing the (primary) beat history.
+    key = os.environ.get("FMP_API_KEY")
+    return FmpEstimatesProvider(key) if key else None
+
+
 def get_stock_earnings(
     provider: EarningsHistoryProvider = Depends(get_earnings_provider),
-    # Trailing earnings metrics + the next-report forecast are best-effort
-    # enrichment on top of the beat history — same Finnhub key the snapshot
-    # uses, omitted when unconfigured rather than failing the (primary) response.
+    # Trailing metrics, the next-report forecast, and the analyst estimates are
+    # best-effort enrichment on top of the beat history — omitted when their key
+    # is unconfigured rather than failing the (primary) response.
     fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
     calendar: EarningsCalendarProvider | None = Depends(get_earnings_calendar_provider),
+    estimates: EarningsEstimatesProvider | None = Depends(
+        get_earnings_estimates_provider
+    ),
 ) -> GetStockEarnings:
-    return GetStockEarnings(provider, fundamentals, calendar)
+    return GetStockEarnings(provider, fundamentals, calendar, estimates)
 
 
 @lru_cache(maxsize=1)
@@ -339,6 +353,11 @@ def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
         ],
         metrics=_present_earnings_metrics(history.metrics),
         next_report=_present_next_earnings(history.next_report),
+        upcoming=[
+            r
+            for u in history.upcoming
+            if (r := _present_next_earnings(u)) is not None
+        ],
     )
 
 

@@ -215,6 +215,8 @@ class EarningsHistoryResponse(BaseModel):
     quarters: list[EarningsSurpriseResponse]
     metrics: EarningsMetricsResponse | None = None
     next_report: NextEarningsResponse | None = None
+    # Consensus for the next several quarters (analyst estimates), nearest first.
+    upcoming: list[NextEarningsResponse] = []
 
 
 class SectorPerformanceResponse(BaseModel):

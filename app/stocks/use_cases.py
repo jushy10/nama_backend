@@ -12,6 +12,7 @@ from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     Constituent,
+    EarningsEstimates,
     EarningsHistory,
     EarningsMetrics,
     EarningsSurprise,
@@ -34,6 +35,7 @@ from app.stocks.ports import (
     CompanyProfileProvider,
     ConstituentRepository,
     EarningsCalendarProvider,
+    EarningsEstimatesProvider,
     EarningsHistoryProvider,
     LogoProvider,
     QuoteBatchProvider,
@@ -199,6 +201,29 @@ class GetStockRsi:
         return rsi_series(series, period)
 
 
+def _overlay_revenue(
+    quarters: tuple[EarningsSurprise, ...],
+    revenue_by_period: dict,
+) -> tuple[EarningsSurprise, ...]:
+    """Overlay reported revenue (estimate, actual) onto quarters by period-end
+    date. Returns the same tuple identity when nothing matched, so the caller
+    can tell whether anything changed."""
+    if not revenue_by_period:
+        return quarters
+    merged: list[EarningsSurprise] = []
+    changed = False
+    for q in quarters:
+        point = revenue_by_period.get(q.period)
+        if point is not None and (point[0] is not None or point[1] is not None):
+            merged.append(
+                replace(q, revenue_estimate=point[0], revenue_actual=point[1])
+            )
+            changed = True
+        else:
+            merged.append(q)
+    return tuple(merged) if changed else quarters
+
+
 class GetStockEarnings:
     """Use case: retrieve a stock's recent quarterly earnings surprises.
 
@@ -215,24 +240,51 @@ class GetStockEarnings:
         provider: EarningsHistoryProvider,
         fundamentals_provider: StockFundamentalsProvider | None = None,
         calendar_provider: EarningsCalendarProvider | None = None,
+        estimates_provider: EarningsEstimatesProvider | None = None,
     ) -> None:
         self._provider = provider
         self._fundamentals_provider = fundamentals_provider
         self._calendar_provider = calendar_provider
+        self._estimates_provider = estimates_provider
 
     def execute(self, symbol: str, *, limit: int = 4) -> EarningsHistory:
         if limit < 1:
             raise ValueError("'limit' must be at least 1.")
         normalized = _normalize_symbol(symbol)
         history = self._provider.get_earnings_history(normalized, limit=limit)
+        estimates = self._estimates(normalized)
+        # Reported revenue: the calendar's (Finnhub) merge first, then the richer
+        # estimates vendor (FMP) overlaid on top — FMP wins where both have it.
         quarters = self._with_revenue(normalized, history.quarters)
+        if estimates is not None:
+            quarters = _overlay_revenue(quarters, estimates.revenue_by_period)
         metrics = self._metrics(normalized)
         next_report = self._next_report(normalized)
-        if quarters is history.quarters and metrics is None and next_report is None:
+        upcoming = estimates.upcoming if estimates is not None else ()
+        if (
+            quarters is history.quarters
+            and metrics is None
+            and next_report is None
+            and not upcoming
+        ):
             return history
         return replace(
-            history, quarters=quarters, metrics=metrics, next_report=next_report
+            history,
+            quarters=quarters,
+            metrics=metrics,
+            next_report=next_report,
+            upcoming=upcoming,
         )
+
+    def _estimates(self, symbol: str) -> EarningsEstimates | None:
+        # Forward multi-quarter consensus + reported revenue, from the estimates
+        # vendor; best-effort, like the other enrichment.
+        if self._estimates_provider is None:
+            return None
+        try:
+            return self._estimates_provider.get_estimates(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None
 
     def _with_revenue(
         self, symbol: str, quarters: tuple[EarningsSurprise, ...]

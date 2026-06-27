@@ -17,6 +17,7 @@ from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     Constituent,
+    EarningsEstimates,
     EarningsHistory,
     EarningsMetrics,
     EarningsSurprise,
@@ -38,6 +39,7 @@ from app.stocks.ports import (
     CompanyProfileProvider,
     ConstituentRepository,
     EarningsCalendarProvider,
+    EarningsEstimatesProvider,
     EarningsHistoryProvider,
     LogoProvider,
     QuoteBatchProvider,
@@ -232,6 +234,19 @@ class FakeCalendarProvider(EarningsCalendarProvider):
         if self._raises is not None:
             raise self._raises
         return self._revenue
+
+
+class FakeEstimatesProvider(EarningsEstimatesProvider):
+    """Returns/raises whatever the test configured for analyst estimates."""
+
+    def __init__(self, estimates=None, raises: Exception | None = None):
+        self._estimates = estimates if estimates is not None else EarningsEstimates()
+        self._raises = raises
+
+    def get_estimates(self, symbol: str) -> EarningsEstimates:
+        if self._raises is not None:
+            raise self._raises
+        return self._estimates
 
 
 def a_logo(content: bytes = b"\x89PNG\r\n", media_type: str = "image/png") -> Logo:
@@ -820,6 +835,56 @@ def test_earnings_use_case_revenue_best_effort_when_calendar_fails():
     assert result.quarters[0].revenue_actual is None  # untouched, history intact
 
 
+def test_earnings_use_case_overlays_estimates_revenue_by_period():
+    history = a_history((
+        a_surprise(period=date(2026, 3, 31), fiscal_year=2026, fiscal_quarter=1),
+        a_surprise(period=date(2025, 12, 31), fiscal_year=2025, fiscal_quarter=4),
+    ))
+    estimates = EarningsEstimates(
+        revenue_by_period={
+            date(2026, 3, 31): (95.0e9, 97.0e9),
+            date(2025, 12, 31): (88.0e9, None),
+        }
+    )
+    result = GetStockEarnings(
+        FakeEarningsProvider(history),
+        estimates_provider=FakeEstimatesProvider(estimates),
+    ).execute("AAPL")
+    q0, q1 = result.quarters
+    assert (q0.revenue_estimate, q0.revenue_actual) == (95.0e9, 97.0e9)
+    assert (q1.revenue_estimate, q1.revenue_actual) == (88.0e9, None)
+
+
+def test_earnings_use_case_attaches_upcoming_quarters():
+    upcoming = (
+        a_next_earnings(
+            report_date=date(2026, 9, 30), eps_estimate=2.1,
+            fiscal_year=None, fiscal_quarter=None, session=None,
+        ),
+        a_next_earnings(
+            report_date=date(2026, 12, 31), eps_estimate=2.4,
+            fiscal_year=None, fiscal_quarter=None, session=None,
+        ),
+    )
+    result = GetStockEarnings(
+        FakeEarningsProvider(a_history()),
+        estimates_provider=FakeEstimatesProvider(EarningsEstimates(upcoming=upcoming)),
+    ).execute("AAPL")
+    assert len(result.upcoming) == 2
+    assert result.upcoming[0].eps_estimate == 2.1
+
+
+def test_earnings_use_case_estimates_best_effort_when_provider_fails():
+    result = GetStockEarnings(
+        FakeEarningsProvider(a_history()),
+        estimates_provider=FakeEstimatesProvider(
+            raises=StockDataUnavailable("AAPL", "boom")
+        ),
+    ).execute("AAPL")
+    assert result.upcoming == ()
+    assert result.quarters  # primary data survived
+
+
 # --------------------------- API ---------------------------
 
 @pytest.fixture
@@ -835,6 +900,7 @@ def make_client():
         sector_provider: SectorPerformanceProvider | None = None,
         earnings_provider: EarningsHistoryProvider | None = None,
         calendar_provider: EarningsCalendarProvider | None = None,
+        estimates_provider: EarningsEstimatesProvider | None = None,
         quote_provider: StockQuoteProvider | None = None,
     ) -> TestClient:
         if provider is not None:
@@ -859,7 +925,10 @@ def make_client():
             )
         if earnings_provider is not None:
             app.dependency_overrides[get_stock_earnings] = lambda: GetStockEarnings(
-                earnings_provider, fundamentals_provider, calendar_provider
+                earnings_provider,
+                fundamentals_provider,
+                calendar_provider,
+                estimates_provider,
             )
         return TestClient(app)
 
@@ -1275,6 +1344,36 @@ def test_get_earnings_quarters_revenue_null_without_calendar(make_client):
     q = client.get("/stocks/AAPL/earnings").json()["quarters"][0]
     assert q["revenue_estimate"] is None
     assert q["revenue_actual"] is None
+
+
+def test_get_earnings_includes_upcoming_and_estimates_revenue(make_client):
+    history = a_history(
+        (a_surprise(fiscal_year=2026, fiscal_quarter=1, period=date(2026, 3, 31)),)
+    )
+    estimates = EarningsEstimates(
+        upcoming=(
+            a_next_earnings(
+                report_date=date(2026, 9, 30), eps_estimate=2.1,
+                revenue_estimate=120e9, fiscal_year=None,
+                fiscal_quarter=None, session=None,
+            ),
+        ),
+        revenue_by_period={date(2026, 3, 31): (95.0e9, 97.0e9)},
+    )
+    client = make_client(
+        earnings_provider=FakeEarningsProvider(history),
+        estimates_provider=FakeEstimatesProvider(estimates),
+    )
+    body = client.get("/stocks/AAPL/earnings").json()
+    assert body["quarters"][0]["revenue_actual"] == 97.0e9  # FMP revenue overlaid
+    assert len(body["upcoming"]) == 1
+    assert body["upcoming"][0]["eps_estimate"] == 2.1
+    assert body["upcoming"][0]["report_date"] == "2026-09-30"
+
+
+def test_get_earnings_upcoming_empty_without_estimates(make_client):
+    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
+    assert client.get("/stocks/AAPL/earnings").json()["upcoming"] == []
 
 
 def test_get_earnings_honors_limit(make_client):

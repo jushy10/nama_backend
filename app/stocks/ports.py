@@ -12,6 +12,7 @@ from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     Constituent,
+    EarningsEstimates,
     EarningsHistory,
     Logo,
     NextEarnings,
@@ -162,6 +163,25 @@ class EarningsCalendarProvider(ABC):
         and what was reported — for merging onto the EPS beat history. Quarters
         the vendor doesn't cover are simply absent; an empty map means no
         revenue was available (best-effort, never an error for "no data").
+
+        Raises:
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class EarningsEstimatesProvider(ABC):
+    """A gateway for analyst estimates: forward quarters + reported revenue.
+
+    Richer than the earnings calendar — an estimates vendor that covers several
+    *future* quarters (not just the next report) and carries reported-quarter
+    revenue (consensus vs actual). Best-effort enrichment on the earnings
+    endpoint: an empty result (not an error) when the vendor has no coverage.
+    """
+
+    @abstractmethod
+    def get_estimates(self, symbol: str) -> EarningsEstimates:
+        """Return analyst estimates for the (already-normalized) symbol.
 
         Raises:
             StockDataUnavailable: the upstream source failed.
