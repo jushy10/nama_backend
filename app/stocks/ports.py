@@ -14,6 +14,7 @@ from app.stocks.entities import (
     Constituent,
     EarningsHistory,
     Logo,
+    NextEarnings,
     Quote,
     SectorPerformance,
     Stock,
@@ -127,6 +128,26 @@ class EarningsHistoryProvider(ABC):
 
         Raises:
             StockNotFound: the symbol has no earnings data.
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class EarningsCalendarProvider(ABC):
+    """A gateway for a stock's next scheduled earnings report.
+
+    The forward view — expected report date plus the consensus EPS/revenue
+    going in — from an earnings-calendar vendor. Best-effort enrichment on the
+    earnings endpoint: ``None`` (not an error) when nothing is scheduled, so a
+    name between reporting cycles simply has no forward bar.
+    """
+
+    @abstractmethod
+    def get_next_earnings(self, symbol: str) -> NextEarnings | None:
+        """Return the next scheduled report for the (normalized) symbol, or
+        ``None`` when none is scheduled.
+
+        Raises:
             StockDataUnavailable: the upstream source failed.
         """
         raise NotImplementedError
