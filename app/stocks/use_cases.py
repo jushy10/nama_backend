@@ -201,19 +201,24 @@ class GetStockRsi:
         return rsi_series(series, period)
 
 
+# A quarter is announced a few weeks after its period end; the next quarter's
+# announcement is ~90 days out, so this window matches exactly one event.
+_ANNOUNCE_WINDOW_DAYS = 75
+
+
 def _overlay_revenue(
     quarters: tuple[EarningsSurprise, ...],
-    revenue_by_period: dict,
+    reported_revenue: tuple[tuple, ...],
 ) -> tuple[EarningsSurprise, ...]:
-    """Overlay reported revenue (estimate, actual) onto quarters by period-end
-    date. Returns the same tuple identity when nothing matched, so the caller
-    can tell whether anything changed."""
-    if not revenue_by_period:
+    """Overlay reported revenue (estimate, actual) onto quarters, matching each
+    quarter's period end to the earnings announcement that follows it. Returns
+    the same tuple identity when nothing matched, so the caller can tell."""
+    if not reported_revenue:
         return quarters
     merged: list[EarningsSurprise] = []
     changed = False
     for q in quarters:
-        point = revenue_by_period.get(q.period)
+        point = _match_revenue(q.period, reported_revenue)
         if point is not None and (point[0] is not None or point[1] is not None):
             merged.append(
                 replace(q, revenue_estimate=point[0], revenue_actual=point[1])
@@ -222,6 +227,22 @@ def _overlay_revenue(
         else:
             merged.append(q)
     return tuple(merged) if changed else quarters
+
+
+def _match_revenue(period, reported_revenue):
+    """The (estimate, actual) whose announcement is the soonest within the window
+    after ``period`` (the quarter's end), or None when nothing fits."""
+    if period is None:
+        return None
+    best_date = None
+    best = None
+    for announce_date, estimate, actual in reported_revenue:
+        delta = (announce_date - period).days
+        if 0 < delta <= _ANNOUNCE_WINDOW_DAYS and (
+            best_date is None or announce_date < best_date
+        ):
+            best_date, best = announce_date, (estimate, actual)
+    return best
 
 
 class GetStockEarnings:
@@ -257,7 +278,7 @@ class GetStockEarnings:
         # estimates vendor (FMP) overlaid on top — FMP wins where both have it.
         quarters = self._with_revenue(normalized, history.quarters)
         if estimates is not None:
-            quarters = _overlay_revenue(quarters, estimates.revenue_by_period)
+            quarters = _overlay_revenue(quarters, estimates.reported_revenue)
         metrics = self._metrics(normalized)
         next_report = self._next_report(normalized)
         upcoming = estimates.upcoming if estimates is not None else ()
