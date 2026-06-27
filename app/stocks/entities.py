@@ -5,7 +5,7 @@ framework, or Alpaca. It only knows the concept of a "stock" and the
 calculations intrinsic to it.
 """
 
-from dataclasses import astuple, dataclass, field
+from dataclasses import astuple, dataclass
 from datetime import date, datetime
 from enum import Enum
 
@@ -255,16 +255,15 @@ class EarningsEstimates:
 
     Two slices used to enrich the beat history: ``upcoming`` is the consensus
     for the next several *future* quarters (multiple, not just the next report),
-    and ``revenue_by_period`` carries reported-quarter revenue — the consensus
-    estimate vs the actual — keyed by fiscal period-end date so it can be merged
-    onto the EPS quarters. All best-effort; empty when the vendor has nothing.
+    and ``reported_revenue`` carries each recently-reported quarter's revenue —
+    the consensus estimate vs the actual — tagged by its announcement date, so it
+    can be matched onto the EPS quarters by period. Best-effort; empty when the
+    vendor has nothing.
     """
 
     upcoming: tuple[NextEarnings, ...] = ()
-    # period-end date -> (revenue_estimate, revenue_actual)
-    revenue_by_period: dict[date, tuple[float | None, float | None]] = field(
-        default_factory=dict
-    )
+    # (announcement_date, revenue_estimate, revenue_actual) per reported quarter
+    reported_revenue: tuple[tuple[date, float | None, float | None], ...] = ()
 
 
 @dataclass(frozen=True)

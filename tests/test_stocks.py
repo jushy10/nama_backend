@@ -840,11 +840,12 @@ def test_earnings_use_case_overlays_estimates_revenue_by_period():
         a_surprise(period=date(2026, 3, 31), fiscal_year=2026, fiscal_quarter=1),
         a_surprise(period=date(2025, 12, 31), fiscal_year=2025, fiscal_quarter=4),
     ))
+    # Announcement dates fall ~a month after each period end, in the match window.
     estimates = EarningsEstimates(
-        revenue_by_period={
-            date(2026, 3, 31): (95.0e9, 97.0e9),
-            date(2025, 12, 31): (88.0e9, None),
-        }
+        reported_revenue=(
+            (date(2026, 4, 30), 95.0e9, 97.0e9),
+            (date(2026, 1, 30), 88.0e9, None),
+        )
     )
     result = GetStockEarnings(
         FakeEarningsProvider(history),
@@ -1358,7 +1359,7 @@ def test_get_earnings_includes_upcoming_and_estimates_revenue(make_client):
                 fiscal_quarter=None, session=None,
             ),
         ),
-        revenue_by_period={date(2026, 3, 31): (95.0e9, 97.0e9)},
+        reported_revenue=((date(2026, 4, 30), 95.0e9, 97.0e9),),
     )
     client = make_client(
         earnings_provider=FakeEarningsProvider(history),
