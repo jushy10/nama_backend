@@ -16,6 +16,7 @@ from app.stocks.entities import (
     EarningsMetrics,
     Logo,
     MoversBoard,
+    NextEarnings,
     Quote,
     ScreenedStock,
     SectorPerformance,
@@ -31,6 +32,7 @@ from app.stocks.ports import (
     CandleProvider,
     CompanyProfileProvider,
     ConstituentRepository,
+    EarningsCalendarProvider,
     EarningsHistoryProvider,
     LogoProvider,
     QuoteBatchProvider,
@@ -202,17 +204,20 @@ class GetStockEarnings:
     A dedicated dataset (actual vs estimate per quarter), not snapshot
     enrichment — so errors propagate to the caller rather than being swallowed,
     mirroring the candles and RSI endpoints. The trailing earnings ``metrics``
-    block *is* best-effort enrichment layered on top: drawn from the optional
-    fundamentals provider, it never sinks the (primary) beat history.
+    and the ``next_report`` forecast *are* best-effort enrichment layered on
+    top: drawn from the optional fundamentals and calendar providers, neither
+    ever sinks the (primary) beat history.
     """
 
     def __init__(
         self,
         provider: EarningsHistoryProvider,
         fundamentals_provider: StockFundamentalsProvider | None = None,
+        calendar_provider: EarningsCalendarProvider | None = None,
     ) -> None:
         self._provider = provider
         self._fundamentals_provider = fundamentals_provider
+        self._calendar_provider = calendar_provider
 
     def execute(self, symbol: str, *, limit: int = 4) -> EarningsHistory:
         if limit < 1:
@@ -220,7 +225,10 @@ class GetStockEarnings:
         normalized = _normalize_symbol(symbol)
         history = self._provider.get_earnings_history(normalized, limit=limit)
         metrics = self._metrics(normalized)
-        return replace(history, metrics=metrics) if metrics else history
+        next_report = self._next_report(normalized)
+        if metrics is None and next_report is None:
+            return history
+        return replace(history, metrics=metrics, next_report=next_report)
 
     def _metrics(self, symbol: str) -> EarningsMetrics | None:
         # Trailing earnings metrics ride on the same Finnhub fundamentals the
@@ -233,6 +241,16 @@ class GetStockEarnings:
         except (StockNotFound, StockDataUnavailable):
             return None
         return EarningsMetrics.from_key_metrics(fundamentals.metrics)
+
+    def _next_report(self, symbol: str) -> NextEarnings | None:
+        # The next scheduled report + consensus, from the earnings calendar;
+        # best-effort, like the metrics block above.
+        if self._calendar_provider is None:
+            return None
+        try:
+            return self._calendar_provider.get_next_earnings(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None
 
 
 class GetSectorPerformance:

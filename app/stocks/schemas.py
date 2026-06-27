@@ -179,13 +179,31 @@ class EarningsMetricsResponse(BaseModel):
     payout_ratio: float | None = None  # dividends / earnings (percent)
 
 
+class NextEarningsResponse(BaseModel):
+    """The next scheduled earnings report and the consensus going into it.
+
+    The forward complement to the past-only beat history: the expected report
+    date and where analysts expect EPS/revenue to land. ``session`` is when in
+    the trading day it's expected — "bmo" (before open), "amc" (after close),
+    "dmh" (during hours), or ``null``. Estimates are ``null`` when no consensus
+    is published yet."""
+
+    report_date: date | None = None  # expected announcement date
+    fiscal_year: int | None = None
+    fiscal_quarter: int | None = None
+    eps_estimate: float | None = None  # consensus EPS going in
+    revenue_estimate: float | None = None  # consensus revenue going in (raw)
+    session: str | None = None  # "bmo" | "amc" | "dmh" | null
+
+
 class EarningsHistoryResponse(BaseModel):
     """Recent quarterly earnings surprises (newest first) plus a beat summary.
 
     ``beat_rate`` is the percent of *scored* quarters (those with both an actual
     and an estimate) that met or beat — the "beats consistently?" read.
     ``count`` is how many quarters are returned. ``metrics`` is an optional
-    trailing earnings snapshot (best-effort; ``null`` when unavailable)."""
+    trailing earnings snapshot and ``next_report`` the next scheduled report's
+    consensus (both best-effort; ``null`` when unavailable)."""
 
     symbol: str
     count: int
@@ -194,6 +212,7 @@ class EarningsHistoryResponse(BaseModel):
     beat_rate: float | None = None  # percent of scored quarters that beat
     quarters: list[EarningsSurpriseResponse]
     metrics: EarningsMetricsResponse | None = None
+    next_report: NextEarningsResponse | None = None
 
 
 class SectorPerformanceResponse(BaseModel):

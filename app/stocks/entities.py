@@ -225,19 +225,41 @@ class EarningsMetrics:
 
 
 @dataclass(frozen=True)
+class NextEarnings:
+    """The next scheduled earnings report and the consensus going into it.
+
+    The forward complement to the (past-only) beat history: when the company is
+    expected to report next, and where analysts expect EPS/revenue to land.
+    ``session`` is when in the trading day it's expected — "bmo" (before market
+    open), "amc" (after market close), "dmh" (during market hours), or ``None``.
+    The estimates are ``None`` when no consensus has been published yet, and the
+    whole block is best-effort: absent when nothing is scheduled.
+    """
+
+    report_date: date | None  # expected announcement date
+    fiscal_year: int | None
+    fiscal_quarter: int | None
+    eps_estimate: float | None  # consensus EPS going in
+    revenue_estimate: float | None  # consensus revenue going in (raw)
+    session: str | None  # "bmo" | "amc" | "dmh" | None
+
+
+@dataclass(frozen=True)
 class EarningsHistory:
     """A run of recent quarterly earnings surprises for one symbol.
 
     Ordered newest quarter first — the order a "last N quarters" view reads in.
     The summary properties answer the checklist's "beats consistently?" question:
     of the quarters with both an actual and an estimate, how many met or beat.
-    ``metrics`` is an optional trailing earnings snapshot (best-effort) that
-    rides along with the per-quarter history.
+    ``metrics`` is an optional trailing earnings snapshot and ``next_report`` the
+    next scheduled report's consensus — both best-effort enrichment riding along
+    with the per-quarter history.
     """
 
     symbol: str
     quarters: tuple[EarningsSurprise, ...]
     metrics: EarningsMetrics | None = None
+    next_report: NextEarnings | None = None
 
     @property
     def scored(self) -> int:

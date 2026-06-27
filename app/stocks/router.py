@@ -25,6 +25,7 @@ from app.stocks.entities import (
     EarningsMetrics,
     KeyMetrics,
     MoversBoard,
+    NextEarnings,
     Quote,
     ScreenedStock,
     SectorPerformance,
@@ -35,6 +36,9 @@ from app.stocks.entities import (
 )
 from app.stocks.caching_company_profile_provider import CachingCompanyProfileProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.finnhub_earnings_calendar_provider import (
+    FinnhubEarningsCalendarProvider,
+)
 from app.stocks.finnhub_earnings_provider import FinnhubEarningsProvider
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
 from app.stocks.fmp_profile_provider import FmpProfileProvider
@@ -42,6 +46,7 @@ from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
 from app.stocks.ports import (
     CompanyProfileProvider,
+    EarningsCalendarProvider,
     EarningsHistoryProvider,
     LogoProvider,
     StockDataProvider,
@@ -56,6 +61,7 @@ from app.stocks.schemas import (
     EarningsSurpriseResponse,
     KeyMetricsResponse,
     MoversResponse,
+    NextEarningsResponse,
     QuoteResponse,
     RsiPointResponse,
     RsiResponse,
@@ -163,14 +169,24 @@ def get_earnings_provider() -> EarningsHistoryProvider:
     return FinnhubEarningsProvider(key)
 
 
+@lru_cache(maxsize=1)
+def get_earnings_calendar_provider() -> EarningsCalendarProvider | None:
+    # The next-report forecast is best-effort enrichment on the earnings
+    # endpoint (reuses the same Finnhub key the beat history needs); omitted
+    # when unconfigured rather than failing the response.
+    key = os.environ.get("FINNHUB_API_KEY")
+    return FinnhubEarningsCalendarProvider(key) if key else None
+
+
 def get_stock_earnings(
     provider: EarningsHistoryProvider = Depends(get_earnings_provider),
-    # Trailing earnings metrics are best-effort enrichment on top of the beat
-    # history — same Finnhub fundamentals the stock snapshot uses, omitted when
-    # unconfigured rather than failing the (primary) earnings response.
+    # Trailing earnings metrics + the next-report forecast are best-effort
+    # enrichment on top of the beat history — same Finnhub key the snapshot
+    # uses, omitted when unconfigured rather than failing the (primary) response.
     fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
+    calendar: EarningsCalendarProvider | None = Depends(get_earnings_calendar_provider),
 ) -> GetStockEarnings:
-    return GetStockEarnings(provider, fundamentals)
+    return GetStockEarnings(provider, fundamentals, calendar)
 
 
 @lru_cache(maxsize=1)
@@ -283,6 +299,21 @@ def _present_earnings_metrics(
     )
 
 
+def _present_next_earnings(
+    next_report: NextEarnings | None,
+) -> NextEarningsResponse | None:
+    if next_report is None:
+        return None
+    return NextEarningsResponse(
+        report_date=next_report.report_date,
+        fiscal_year=next_report.fiscal_year,
+        fiscal_quarter=next_report.fiscal_quarter,
+        eps_estimate=next_report.eps_estimate,
+        revenue_estimate=next_report.revenue_estimate,
+        session=next_report.session,
+    )
+
+
 def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
     """Presenter: earnings-history entity -> HTTP response DTO."""
     return EarningsHistoryResponse(
@@ -305,6 +336,7 @@ def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
             for q in history.quarters
         ],
         metrics=_present_earnings_metrics(history.metrics),
+        next_report=_present_next_earnings(history.next_report),
     )
 
 
