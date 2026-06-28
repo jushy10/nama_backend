@@ -1,8 +1,8 @@
 """Interface Adapter: recently-reported quarterly revenue from SEC EDGAR.
 
 SEC EDGAR's XBRL REST APIs expose what every US filer reported in its 10-Q/10-K
-filings — for free, with no API key. We read one company concept (revenue) and
-reduce it to a per-quarter map of actuals to overlay onto the EPS beat history,
+filings — for free, with no API key. We read the candidate revenue concepts and
+reduce them to a per-quarter map of actuals to overlay onto the EPS beat history,
 which is revenue-blind. This is the only module that knows EDGAR exists; swap it
 and nothing else changes.
 
@@ -107,7 +107,16 @@ class SecEdgarRevenueProvider(RevenueHistoryProvider):
     # -- revenue fetch ------------------------------------------------------
 
     def _fetch_revenue_rows(self, symbol: str, cik: int) -> list[dict]:
-        """Return the USD revenue facts for the first tag the filer reports."""
+        """Return the USD revenue facts merged across every candidate tag.
+
+        A filer can change which us-gaap concept it reports revenue under over
+        time — Alphabet moved from ``RevenueFromContractWithCustomerExcludingAssessedTax``
+        to ``Revenues`` — so we union all of them rather than trusting the first
+        tag that has data: a tag that went stale would otherwise mask the newer
+        quarters. Overlapping periods are de-duplicated downstream (the latest
+        filing wins per period end).
+        """
+        merged: list[dict] = []
         for tag in _REVENUE_TAGS:
             url = self._concept_url.format(cik=cik, tag=tag)
             try:
@@ -115,7 +124,7 @@ class SecEdgarRevenueProvider(RevenueHistoryProvider):
             except httpx.HTTPError as exc:
                 raise StockDataUnavailable(symbol, str(exc)) from exc
             if resp.status_code == 404:
-                continue  # the filer doesn't use this tag — try the next
+                continue  # the filer doesn't use this tag
             if resp.status_code != 200:
                 body = resp.text[:200].strip() or "<empty body>"
                 raise StockDataUnavailable(
@@ -131,8 +140,8 @@ class SecEdgarRevenueProvider(RevenueHistoryProvider):
             units = payload.get("units") if isinstance(payload, dict) else None
             rows = units.get("USD") if isinstance(units, dict) else None
             if rows:
-                return [r for r in rows if isinstance(r, dict)]
-        return []  # no revenue concept covered — best-effort empty
+                merged.extend(r for r in rows if isinstance(r, dict))
+        return merged  # empty when no revenue concept is covered (best-effort)
 
     def _get_json(self, symbol: str, url: str):
         try:
