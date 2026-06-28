@@ -35,22 +35,27 @@ from app.stocks.entities import (
     Timeframe,
 )
 from app.stocks.caching_company_profile_provider import CachingCompanyProfileProvider
+from app.stocks.caching_revenue_provider import CachingRevenueHistoryProvider
+from app.stocks.composite_company_profile_provider import (
+    CompositeCompanyProfileProvider,
+)
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.finnhub_company_profile_provider import FinnhubCompanyProfileProvider
 from app.stocks.finnhub_earnings_calendar_provider import (
     FinnhubEarningsCalendarProvider,
 )
 from app.stocks.finnhub_earnings_provider import FinnhubEarningsProvider
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
-from app.stocks.fmp_estimates_provider import FmpEstimatesProvider
 from app.stocks.fmp_profile_provider import FmpProfileProvider
 from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
+from app.stocks.sec_edgar_revenue_provider import SecEdgarRevenueProvider
 from app.stocks.ports import (
     CompanyProfileProvider,
     EarningsCalendarProvider,
-    EarningsEstimatesProvider,
     EarningsHistoryProvider,
     LogoProvider,
+    RevenueHistoryProvider,
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
@@ -108,14 +113,26 @@ def get_fundamentals_provider() -> StockFundamentalsProvider | None:
 
 @lru_cache(maxsize=1)
 def get_profile_provider() -> CompanyProfileProvider | None:
-    # Best-effort enrichment: without a key we simply omit the company
-    # description (price + the rest still serve). Reuses the same FMP key the
-    # constituents sync uses (financialmodelingprep.com). The provider is a
-    # singleton (lru_cache), so the TTL cache wrapped around it persists across
-    # requests — descriptions are near-static and FMP's free tier is only
-    # ~250 calls/day, so one upstream call per symbol per day keeps us in quota.
-    key = os.environ.get("FMP_API_KEY")
-    return CachingCompanyProfileProvider(FmpProfileProvider(key)) if key else None
+    # The clean display name and the business description come from different
+    # vendors on their free tiers: Finnhub carries the name, FMP the description.
+    # Each is wrapped in its own TTL cache (singletons, so the caches persist
+    # across requests) and merged behind one port. Both are best-effort: whichever
+    # keys are set contribute their field, and with neither the endpoint simply
+    # omits the name override + description. Caching keeps us under FMP's ~250/day
+    # free quota and Finnhub's per-minute rate limit.
+    finnhub_key = os.environ.get("FINNHUB_API_KEY")
+    fmp_key = os.environ.get("FMP_API_KEY")
+    name_source = (
+        CachingCompanyProfileProvider(FinnhubCompanyProfileProvider(finnhub_key))
+        if finnhub_key
+        else None
+    )
+    description_source = (
+        CachingCompanyProfileProvider(FmpProfileProvider(fmp_key)) if fmp_key else None
+    )
+    if name_source is None and description_source is None:
+        return None
+    return CompositeCompanyProfileProvider(name_source, description_source)
 
 
 def get_stock_info(
@@ -181,26 +198,28 @@ def get_earnings_calendar_provider() -> EarningsCalendarProvider | None:
 
 
 @lru_cache(maxsize=1)
-def get_earnings_estimates_provider() -> EarningsEstimatesProvider | None:
-    # Analyst estimates (multiple upcoming quarters + reported revenue) from FMP
-    # — the same key the profile/constituents use. Best-effort: omitted when
-    # unconfigured rather than failing the (primary) beat history.
-    key = os.environ.get("FMP_API_KEY")
-    return FmpEstimatesProvider(key) if key else None
+def get_revenue_provider() -> RevenueHistoryProvider:
+    # Reported quarterly revenue from SEC EDGAR — free and keyless, so it needs no
+    # env gate and is always available. Wrapped in a TTL cache (a singleton, so it
+    # persists across requests) to stay well under EDGAR's ~10 req/s limit.
+    # SEC_EDGAR_USER_AGENT lets ops set a real contact; EDGAR rejects generic agents.
+    user_agent = os.environ.get("SEC_EDGAR_USER_AGENT")
+    inner = (
+        SecEdgarRevenueProvider(user_agent) if user_agent else SecEdgarRevenueProvider()
+    )
+    return CachingRevenueHistoryProvider(inner)
 
 
 def get_stock_earnings(
     provider: EarningsHistoryProvider = Depends(get_earnings_provider),
-    # Trailing metrics, the next-report forecast, and the analyst estimates are
-    # best-effort enrichment on top of the beat history — omitted when their key
-    # is unconfigured rather than failing the (primary) response.
+    # Trailing metrics, the next-report forecast, and per-quarter revenue are
+    # best-effort enrichment on top of the beat history — a miss leaves the
+    # (primary) response intact rather than failing it.
     fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
     calendar: EarningsCalendarProvider | None = Depends(get_earnings_calendar_provider),
-    estimates: EarningsEstimatesProvider | None = Depends(
-        get_earnings_estimates_provider
-    ),
+    revenue: RevenueHistoryProvider = Depends(get_revenue_provider),
 ) -> GetStockEarnings:
-    return GetStockEarnings(provider, fundamentals, calendar, estimates)
+    return GetStockEarnings(provider, fundamentals, calendar, revenue)
 
 
 @lru_cache(maxsize=1)
@@ -343,18 +362,12 @@ def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
                 surprise=q.surprise,
                 surprise_percent=q.surprise_percent,
                 beat=q.beat,
-                revenue_estimate=q.revenue_estimate,
                 revenue_actual=q.revenue_actual,
             )
             for q in history.quarters
         ],
         metrics=_present_earnings_metrics(history.metrics),
         next_report=_present_next_earnings(history.next_report),
-        upcoming=[
-            r
-            for u in history.upcoming
-            if (r := _present_next_earnings(u)) is not None
-        ],
     )
 
 

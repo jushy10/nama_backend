@@ -156,10 +156,10 @@ class EarningsSurprise:
     estimate: float | None  # consensus EPS estimate going in
     surprise: float | None  # actual - estimate (EPS)
     surprise_percent: float | None  # surprise as a percent of the estimate
-    # Revenue for the quarter (raw, e.g. USD), best-effort from the earnings
-    # calendar: ``revenue_estimate`` is the consensus going in, ``revenue_actual``
-    # what was reported. ``None`` when the vendor doesn't cover the quarter.
-    revenue_estimate: float | None = None
+    # Revenue actually reported for the quarter (raw, e.g. USD), best-effort from
+    # SEC EDGAR's XBRL filings. ``None`` when the company isn't an EDGAR filer or
+    # the filing can't be aligned to this quarter. There's deliberately no
+    # consensus *estimate* here — that's licensed analyst data we don't source.
     revenue_actual: float | None = None
 
     @property
@@ -239,40 +239,21 @@ class NextEarnings:
 
 
 @dataclass(frozen=True)
-class EarningsEstimates:
-    """Analyst estimates for one symbol, from an estimates vendor.
-
-    Two slices used to enrich the beat history: ``upcoming`` is the consensus
-    for the next several *future* quarters (multiple, not just the next report),
-    and ``reported_revenue`` carries each recently-reported quarter's revenue —
-    the consensus estimate vs the actual — tagged by its announcement date, so it
-    can be matched onto the EPS quarters by period. Best-effort; empty when the
-    vendor has nothing.
-    """
-
-    upcoming: tuple[NextEarnings, ...] = ()
-    # (announcement_date, revenue_estimate, revenue_actual) per reported quarter
-    reported_revenue: tuple[tuple[date, float | None, float | None], ...] = ()
-
-
-@dataclass(frozen=True)
 class EarningsHistory:
     """A run of recent quarterly earnings surprises for one symbol.
 
     Ordered newest quarter first — the order a "last N quarters" view reads in.
     The summary properties answer the checklist's "beats consistently?" question:
     of the quarters with both an actual and an estimate, how many met or beat.
-    ``metrics`` is an optional trailing earnings snapshot, ``next_report`` the
-    next scheduled report's consensus, and ``upcoming`` the analyst consensus
-    for the next several quarters — all best-effort enrichment riding along with
-    the per-quarter history.
+    ``metrics`` is an optional trailing earnings snapshot and ``next_report`` the
+    next scheduled report's consensus — both best-effort enrichment riding along
+    with the per-quarter history.
     """
 
     symbol: str
     quarters: tuple[EarningsSurprise, ...]
     metrics: EarningsMetrics | None = None
     next_report: NextEarnings | None = None
-    upcoming: tuple[NextEarnings, ...] = ()
 
     @property
     def scored(self) -> int:

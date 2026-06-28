@@ -33,7 +33,7 @@ the code wins — fix this file.
                                 │ implemented by
                        ┌────────┴─────────┐
                        │  adapter         │  the ONLY code that knows a vendor
-                       │ *_provider.py    │  (Alpaca / Finnhub / FMP / Logo.dev / DB)
+                       │ *_provider.py    │  (Alpaca / Finnhub / FMP / Logo.dev / SEC EDGAR / DB)
                        └──────────────────┘
 ```
 
@@ -111,10 +111,12 @@ entities, and the vendor's failures into our domain exceptions. Swap vendors and
 only this one file changes.
 
 - `alpaca_provider.py` — Alpaca SDK → price/quote/candles/performance/sectors
-- `finnhub_*_provider.py` — Finnhub → fundamentals / earnings / calendar
-- `fmp_*_provider.py` — FMP (`httpx`) → company profile / analyst estimates
+- `finnhub_*_provider.py` — Finnhub → fundamentals / earnings / calendar / company name (`/stock/profile2`)
+- `fmp_profile_provider.py` — FMP (`httpx`) → company **description** (the clean display name now comes from Finnhub)
+- `sec_edgar_revenue_provider.py` — SEC EDGAR XBRL (`httpx`, free/keyless) → reported quarterly revenue actuals; resolves ticker→CIK and derives Q4 from the 10-K
 - `logodev_provider.py` — Logo.dev → logo image
-- `caching_company_profile_provider.py` — a decorator adapter (wraps another adapter to add a TTL cache; same port in, same port out)
+- `caching_company_profile_provider.py` / `caching_revenue_provider.py` — decorator adapters (wrap another adapter to add a TTL cache; same port in, same port out)
+- `composite_company_profile_provider.py` — merges a name source (Finnhub) + a description source (FMP) behind the one `CompanyProfileProvider` port; same shape as the cache decorator
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
 
 Naming: `<vendor>_<concern>_provider.py`.
@@ -246,7 +248,7 @@ app/
     ├── ports.py            # ── abstract interfaces (ABCs)
     ├── use_cases.py        # ── orchestration (one class per action)
     ├── exceptions.py       # ── domain errors
-    ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/FMP/Logo.dev)
+    ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/FMP/Logo.dev/SEC EDGAR)
     ├── constituents.py     # ── DB adapter: ORM model + SqlConstituentRepository
     ├── chart_window.py     # ── edge helper: range preset → time window
     ├── schemas.py          # ── HTTP response DTOs (pydantic)
