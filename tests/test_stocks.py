@@ -319,7 +319,6 @@ def a_key_metrics(**overrides) -> KeyMetrics:
         # Earnings-flavored (relocated to the earnings endpoint)
         eps=6.1, eps_growth_yoy=12.0, revenue_growth_yoy=8.0,
         gross_margin=44.0, operating_margin=30.0, net_margin=25.0,
-        roe=150.0, roic=40.0, payout_ratio=15.0,
     )
     base.update(overrides)
     return KeyMetrics(**base)
@@ -460,11 +459,14 @@ def test_earnings_metrics_projects_earnings_fields_from_key_metrics():
     assert em.eps == 6.1
     assert em.net_margin == 25.0
     assert em.eps_growth_yoy == 12.0
-    assert em.roic == 40.0
-    assert em.payout_ratio == 15.0
-    # ...and nothing valuation-flavored leaks across (it has no such fields)
+    assert em.revenue_growth_yoy == 8.0
+    # ...and nothing valuation-flavored leaks across (it has no such fields),
+    # nor the removed profitability/payout fields
     assert not hasattr(em, "pe")
     assert not hasattr(em, "beta")
+    assert not hasattr(em, "roe")
+    assert not hasattr(em, "roic")
+    assert not hasattr(em, "payout_ratio")
 
 
 def test_earnings_metrics_none_without_earnings_fields():
@@ -986,7 +988,7 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
     assert body["metrics"]["week_52_high"] == 320.0
     assert body["metrics"]["ps"] == 7.1
     assert body["metrics"]["debt_to_equity"] == 1.5
-    for moved in ("eps", "roe", "roic", "net_margin", "eps_growth_yoy", "payout_ratio"):
+    for moved in ("eps", "net_margin", "eps_growth_yoy"):
         assert moved not in body["metrics"], moved
 
 
@@ -1292,10 +1294,11 @@ def test_get_earnings_includes_metrics_block_from_fundamentals(make_client):
     assert metrics["eps"] == 6.1
     assert metrics["net_margin"] == 25.0
     assert metrics["revenue_growth_yoy"] == 8.0
-    assert metrics["payout_ratio"] == 15.0
-    # valuation/market metrics belong to the stock endpoint, not here
-    for stock_only in ("pe", "pb", "beta", "week_52_high"):
-        assert stock_only not in metrics, stock_only
+    assert metrics["gross_margin"] == 44.0
+    # valuation/market metrics belong to the stock endpoint, not here; ROE/ROIC
+    # and payout were removed entirely
+    for absent in ("pe", "pb", "beta", "week_52_high", "roe", "roic", "payout_ratio"):
+        assert absent not in metrics, absent
 
 
 def test_get_earnings_metrics_null_without_fundamentals(make_client):

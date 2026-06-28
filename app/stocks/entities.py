@@ -64,9 +64,9 @@ class KeyMetrics:
 
     All figures are *trailing* (derived from reported history). Forward-looking
     metrics (forward P/E, analyst price targets) need an estimates feed and are
-    deliberately out of scope. Margins, ROE/ROIC and the growth fields are
-    percent; ratios are plain multiples; the 52-week prices are in the quote
-    currency. The derived ``peg`` property combines two of these.
+    deliberately out of scope. Margins and the growth fields are percent; ratios
+    are plain multiples; the 52-week prices are in the quote currency. The
+    derived ``peg`` property combines two of these.
     """
 
     # Valuation
@@ -75,8 +75,6 @@ class KeyMetrics:
     ps: float | None = None  # price / sales
     eps: float | None = None  # trailing earnings per share
     # Profitability (percent)
-    roe: float | None = None  # return on equity
-    roic: float | None = None  # return on invested capital
     gross_margin: float | None = None
     operating_margin: float | None = None
     net_margin: float | None = None
@@ -90,8 +88,6 @@ class KeyMetrics:
     beta: float | None = None  # volatility vs the market (1.0 = moves with it)
     week_52_high: float | None = None
     week_52_low: float | None = None
-    # Dividend sustainability
-    payout_ratio: float | None = None  # dividends / earnings (percent)
 
     @property
     def peg(self) -> float | None:
@@ -183,10 +179,9 @@ class EarningsMetrics:
     """Trailing earnings / profitability metrics for one stock.
 
     The income-statement-flavored slice of the broader fundamentals: trailing
-    EPS, the year-over-year growth in EPS and revenue, the margin stack, the
-    returns (ROE/ROIC) and the dividend payout ratio. A projection of
-    ``KeyMetrics`` that rides alongside the quarterly beat history, so the
-    earnings view answers "how profitable, and growing how fast?" without a
+    EPS, the year-over-year growth in EPS and revenue, and the margin stack. A
+    projection of ``KeyMetrics`` that rides alongside the quarterly beat history,
+    so the earnings view answers "how profitable, and growing how fast?" without a
     second call. The valuation/market indicators (P/E, P/B, beta, …) stay with
     the price snapshot. Every field is optional and all are percentages except
     ``eps``.
@@ -198,9 +193,6 @@ class EarningsMetrics:
     gross_margin: float | None = None  # percent
     operating_margin: float | None = None  # percent
     net_margin: float | None = None  # percent
-    roe: float | None = None  # return on equity (percent)
-    roic: float | None = None  # return on invested capital (percent)
-    payout_ratio: float | None = None  # dividends / earnings (percent)
 
     @classmethod
     def from_key_metrics(cls, metrics: "KeyMetrics | None") -> "EarningsMetrics | None":
@@ -220,9 +212,6 @@ class EarningsMetrics:
             gross_margin=metrics.gross_margin,
             operating_margin=metrics.operating_margin,
             net_margin=metrics.net_margin,
-            roe=metrics.roe,
-            roic=metrics.roic,
-            payout_ratio=metrics.payout_ratio,
         )
         if all(value is None for value in astuple(projected)):
             return None

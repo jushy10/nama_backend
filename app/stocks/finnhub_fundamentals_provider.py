@@ -3,7 +3,7 @@
 Market data feeds (Alpaca) don't expose market cap or dividends, so those come
 from a fundamentals vendor. Finnhub's free ``/stock/metric`` endpoint returns a
 broad metrics object keyed by ticker; we pick out market cap, dividend, and the
-trailing valuation/health/growth indicators (P/E, P/B, margins, ROE, beta, …).
+trailing valuation/health/growth indicators (P/E, P/B, margins, beta, …).
 This is the only module that knows Finnhub exists; swap it and nothing else
 changes.
 
@@ -90,8 +90,6 @@ def _key_metrics(metric: dict) -> KeyMetrics | None:
         "pb": _first(metric, "pbQuarterly", "pbAnnual"),
         "ps": _first(metric, "psTTM", "psAnnual"),
         "eps": _first(metric, "epsTTM", "epsAnnual"),
-        "roe": _first(metric, "roeTTM", "roeRfy"),
-        "roic": _first(metric, "roicTTM", "roicAnnual"),
         "gross_margin": _first(metric, "grossMarginTTM", "grossMarginAnnual"),
         "operating_margin": _first(
             metric, "operatingMarginTTM", "operatingMarginAnnual"
@@ -114,7 +112,6 @@ def _key_metrics(metric: dict) -> KeyMetrics | None:
         "beta": _first(metric, "beta"),
         "week_52_high": _first(metric, "52WeekHigh"),
         "week_52_low": _first(metric, "52WeekLow"),
-        "payout_ratio": _first(metric, "payoutRatioTTM", "payoutRatioAnnual"),
     }
     if all(value is None for value in values.values()):
         return None
