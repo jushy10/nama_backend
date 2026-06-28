@@ -245,14 +245,17 @@ class EarningsHistory:
     Ordered newest quarter first — the order a "last N quarters" view reads in.
     The summary properties answer the checklist's "beats consistently?" question:
     of the quarters with both an actual and an estimate, how many met or beat.
-    ``metrics`` is an optional trailing earnings snapshot and ``next_report`` the
-    next scheduled report's consensus — both best-effort enrichment riding along
-    with the per-quarter history.
+    ``metrics`` is an optional trailing earnings snapshot, ``valuation`` the
+    point-in-time valuation/health/market ratios (P/E, PEG, P/B, beta, the
+    52-week range — the same ``KeyMetrics`` the stock snapshot carries), and
+    ``next_report`` the next scheduled report's consensus — all best-effort
+    enrichment riding along with the per-quarter history.
     """
 
     symbol: str
     quarters: tuple[EarningsSurprise, ...]
     metrics: EarningsMetrics | None = None
+    valuation: KeyMetrics | None = None
     next_report: NextEarnings | None = None
 
     @property
