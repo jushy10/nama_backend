@@ -6,13 +6,12 @@ framework or a concrete provider.
 """
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 
 from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     Constituent,
-    EarningsEstimates,
     EarningsHistory,
     EarningsMetrics,
     EarningsSurprise,
@@ -35,10 +34,10 @@ from app.stocks.ports import (
     CompanyProfileProvider,
     ConstituentRepository,
     EarningsCalendarProvider,
-    EarningsEstimatesProvider,
     EarningsHistoryProvider,
     LogoProvider,
     QuoteBatchProvider,
+    RevenueHistoryProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockFundamentalsProvider,
@@ -201,48 +200,26 @@ class GetStockRsi:
         return rsi_series(series, period)
 
 
-# A quarter is announced a few weeks after its period end; the next quarter's
-# announcement is ~90 days out, so this window matches exactly one event.
-_ANNOUNCE_WINDOW_DAYS = 75
+# A fiscal period end from the EPS feed (Finnhub) and from EDGAR's XBRL filings
+# can differ by a few days — a calendar quarter-end vs the company's own 52/53-week
+# fiscal end — so align within this tolerance rather than demanding an exact date.
+_PERIOD_MATCH_DAYS = 20
 
 
-def _overlay_revenue(
-    quarters: tuple[EarningsSurprise, ...],
-    reported_revenue: tuple[tuple, ...],
-) -> tuple[EarningsSurprise, ...]:
-    """Overlay reported revenue (estimate, actual) onto quarters, matching each
-    quarter's period end to the earnings announcement that follows it. Returns
-    the same tuple identity when nothing matched, so the caller can tell."""
-    if not reported_revenue:
-        return quarters
-    merged: list[EarningsSurprise] = []
-    changed = False
-    for q in quarters:
-        point = _match_revenue(q.period, reported_revenue)
-        if point is not None and (point[0] is not None or point[1] is not None):
-            merged.append(
-                replace(q, revenue_estimate=point[0], revenue_actual=point[1])
-            )
-            changed = True
-        else:
-            merged.append(q)
-    return tuple(merged) if changed else quarters
-
-
-def _match_revenue(period, reported_revenue):
-    """The (estimate, actual) whose announcement is the soonest within the window
-    after ``period`` (the quarter's end), or None when nothing fits."""
+def _match_revenue_actual(
+    period: date | None, revenue: dict[date, float]
+) -> float | None:
+    """The reported revenue whose period end is closest to ``period`` within the
+    match window, or None when nothing fits."""
     if period is None:
         return None
-    best_date = None
-    best = None
-    for announce_date, estimate, actual in reported_revenue:
-        delta = (announce_date - period).days
-        if 0 < delta <= _ANNOUNCE_WINDOW_DAYS and (
-            best_date is None or announce_date < best_date
-        ):
-            best_date, best = announce_date, (estimate, actual)
-    return best
+    best_key = None
+    best_gap = None
+    for end in revenue:
+        gap = abs((end - period).days)
+        if gap <= _PERIOD_MATCH_DAYS and (best_gap is None or gap < best_gap):
+            best_key, best_gap = end, gap
+    return revenue[best_key] if best_key is not None else None
 
 
 # Finnhub's free `/stock/earnings` returns only the last four quarters and
@@ -255,10 +232,11 @@ class GetStockEarnings:
 
     A dedicated dataset (actual vs estimate per quarter), not snapshot
     enrichment — so errors propagate to the caller rather than being swallowed,
-    mirroring the candles and RSI endpoints. The trailing earnings ``metrics``
-    and the ``next_report`` forecast *are* best-effort enrichment layered on
-    top: drawn from the optional fundamentals and calendar providers, neither
-    ever sinks the (primary) beat history.
+    mirroring the candles and RSI endpoints. Three best-effort layers ride on
+    top of the (primary) beat history, none of which can sink it: the trailing
+    earnings ``metrics`` (from fundamentals), the ``next_report`` forecast (from
+    the earnings calendar), and per-quarter ``revenue_actual`` (reported revenue
+    from SEC EDGAR, aligned onto each quarter by fiscal period end).
     """
 
     def __init__(
@@ -266,62 +244,37 @@ class GetStockEarnings:
         provider: EarningsHistoryProvider,
         fundamentals_provider: StockFundamentalsProvider | None = None,
         calendar_provider: EarningsCalendarProvider | None = None,
-        estimates_provider: EarningsEstimatesProvider | None = None,
+        revenue_provider: RevenueHistoryProvider | None = None,
     ) -> None:
         self._provider = provider
         self._fundamentals_provider = fundamentals_provider
         self._calendar_provider = calendar_provider
-        self._estimates_provider = estimates_provider
+        self._revenue_provider = revenue_provider
 
     def execute(self, symbol: str) -> EarningsHistory:
         normalized = _normalize_symbol(symbol)
         history = self._provider.get_earnings_history(
             normalized, limit=_EARNINGS_QUARTERS
         )
-        estimates = self._estimates(normalized)
-        # Reported revenue: the calendar's (Finnhub) merge first, then the richer
-        # estimates vendor (FMP) overlaid on top — FMP wins where both have it.
         quarters = self._with_revenue(normalized, history.quarters)
-        if estimates is not None:
-            quarters = _overlay_revenue(quarters, estimates.reported_revenue)
         metrics = self._metrics(normalized)
         next_report = self._next_report(normalized)
-        upcoming = estimates.upcoming if estimates is not None else ()
-        if (
-            quarters is history.quarters
-            and metrics is None
-            and next_report is None
-            and not upcoming
-        ):
+        if quarters is history.quarters and metrics is None and next_report is None:
             return history
         return replace(
-            history,
-            quarters=quarters,
-            metrics=metrics,
-            next_report=next_report,
-            upcoming=upcoming,
+            history, quarters=quarters, metrics=metrics, next_report=next_report
         )
-
-    def _estimates(self, symbol: str) -> EarningsEstimates | None:
-        # Forward multi-quarter consensus + reported revenue, from the estimates
-        # vendor; best-effort, like the other enrichment.
-        if self._estimates_provider is None:
-            return None
-        try:
-            return self._estimates_provider.get_estimates(symbol)
-        except (StockNotFound, StockDataUnavailable):
-            return None
 
     def _with_revenue(
         self, symbol: str, quarters: tuple[EarningsSurprise, ...]
     ) -> tuple[EarningsSurprise, ...]:
-        # Merge reported revenue (estimate vs actual) onto the EPS quarters from
-        # the calendar, keyed by fiscal year/quarter; best-effort. Returning the
-        # same tuple identity signals "nothing merged" so execute can short-circuit.
-        if self._calendar_provider is None:
+        # Overlay reported revenue actuals (SEC EDGAR) onto the EPS quarters,
+        # aligned by fiscal period end; best-effort. Returning the same tuple
+        # identity signals "nothing merged" so execute can short-circuit.
+        if self._revenue_provider is None:
             return quarters
         try:
-            revenue = self._calendar_provider.get_recent_revenue(symbol)
+            revenue = self._revenue_provider.get_quarterly_revenue(symbol)
         except (StockNotFound, StockDataUnavailable):
             return quarters
         if not revenue:
@@ -329,11 +282,9 @@ class GetStockEarnings:
         merged: list[EarningsSurprise] = []
         changed = False
         for q in quarters:
-            point = revenue.get((q.fiscal_year, q.fiscal_quarter))
-            if point is not None and (point[0] is not None or point[1] is not None):
-                merged.append(
-                    replace(q, revenue_estimate=point[0], revenue_actual=point[1])
-                )
+            actual = _match_revenue_actual(q.period, revenue)
+            if actual is not None:
+                merged.append(replace(q, revenue_actual=actual))
                 changed = True
             else:
                 merged.append(q)

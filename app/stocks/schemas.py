@@ -157,8 +157,7 @@ class EarningsSurpriseResponse(BaseModel):
     surprise: float | None = None  # actual - estimate (EPS)
     surprise_percent: float | None = None  # percent of estimate
     beat: bool | None = None  # met or beat the estimate
-    revenue_estimate: float | None = None  # consensus revenue going in (raw)
-    revenue_actual: float | None = None  # reported revenue (raw)
+    revenue_actual: float | None = None  # reported revenue for the quarter (raw)
 
 
 class EarningsMetricsResponse(BaseModel):
@@ -212,8 +211,6 @@ class EarningsHistoryResponse(BaseModel):
     quarters: list[EarningsSurpriseResponse]
     metrics: EarningsMetricsResponse | None = None
     next_report: NextEarningsResponse | None = None
-    # Consensus for the next several quarters (analyst estimates), nearest first.
-    upcoming: list[NextEarningsResponse] = []
 
 
 class SectorPerformanceResponse(BaseModel):

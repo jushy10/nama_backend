@@ -6,13 +6,12 @@ implementation. The core never imports Alpaca; Alpaca imports the core.
 """
 
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import date, datetime
 
 from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     Constituent,
-    EarningsEstimates,
     EarningsHistory,
     Logo,
     NextEarnings,
@@ -153,37 +152,28 @@ class EarningsCalendarProvider(ABC):
         """
         raise NotImplementedError
 
-    @abstractmethod
-    def get_recent_revenue(
-        self, symbol: str
-    ) -> dict[tuple[int, int], tuple[float | None, float | None]]:
-        """Return recently-reported revenue keyed by ``(fiscal_year, quarter)``.
 
-        Each value is ``(estimate, actual)`` — the consensus revenue going in
-        and what was reported — for merging onto the EPS beat history. Quarters
-        the vendor doesn't cover are simply absent; an empty map means no
-        revenue was available (best-effort, never an error for "no data").
+class RevenueHistoryProvider(ABC):
+    """A gateway for a stock's recently-reported quarterly revenue (actuals).
 
-        Raises:
-            StockDataUnavailable: the upstream source failed.
-        """
-        raise NotImplementedError
-
-
-class EarningsEstimatesProvider(ABC):
-    """A gateway for analyst estimates: forward quarters + reported revenue.
-
-    Richer than the earnings calendar — an estimates vendor that covers several
-    *future* quarters (not just the next report) and carries reported-quarter
-    revenue (consensus vs actual). Best-effort enrichment on the earnings
-    endpoint: an empty result (not an error) when the vendor has no coverage.
+    Sourced from company filings (SEC EDGAR's XBRL data), not the price feed or
+    an estimates vendor — so it carries only what the company actually reported,
+    never a consensus estimate. Best-effort enrichment on the earnings endpoint:
+    the use case aligns these figures onto the EPS beat history by fiscal period
+    end.
     """
 
     @abstractmethod
-    def get_estimates(self, symbol: str) -> EarningsEstimates:
-        """Return analyst estimates for the (already-normalized) symbol.
+    def get_quarterly_revenue(self, symbol: str) -> dict[date, float]:
+        """Return recently-reported quarterly revenue keyed by fiscal period end.
+
+        Each key is a quarter's period-end date and each value the revenue
+        reported for that quarter (raw, e.g. USD). Quarters that can't be derived
+        are simply absent; an empty map means no revenue was available
+        (best-effort, never an error for "no data").
 
         Raises:
+            StockNotFound: the symbol isn't a filer covered by the source.
             StockDataUnavailable: the upstream source failed.
         """
         raise NotImplementedError
