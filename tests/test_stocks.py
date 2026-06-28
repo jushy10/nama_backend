@@ -887,6 +887,44 @@ def test_earnings_use_case_metrics_best_effort_when_fundamentals_fail():
     assert history.quarters  # primary data survived
 
 
+def test_earnings_use_case_attaches_valuation_from_fundamentals():
+    # The valuation block carries the valuation/health/market slice of the same
+    # KeyMetrics the stock snapshot uses, derived property (PEG) included.
+    history = GetStockEarnings(
+        FakeEarningsProvider(a_history()),
+        FakeFundamentalsProvider(a_fundamentals()),
+    ).execute("AAPL")
+    assert history.valuation is not None
+    assert history.valuation.pe == 28.5
+    assert history.valuation.beta == 1.2
+    assert history.valuation.peg == a_key_metrics().peg  # 28.5 / 12.0, rounded
+
+
+def test_earnings_use_case_attaches_metrics_and_valuation_in_one_call():
+    # Both blocks come from a single fundamentals fetch — assert the provider
+    # isn't hit twice now that they share the call.
+    fundamentals = FakeFundamentalsProvider(a_fundamentals())
+    history = GetStockEarnings(
+        FakeEarningsProvider(a_history()), fundamentals
+    ).execute("AAPL")
+    assert history.metrics is not None and history.valuation is not None
+    assert fundamentals.received == ["AAPL"]  # fetched exactly once
+
+
+def test_earnings_use_case_valuation_none_without_fundamentals_provider():
+    history = GetStockEarnings(FakeEarningsProvider(a_history())).execute("AAPL")
+    assert history.valuation is None
+
+
+def test_earnings_use_case_valuation_best_effort_when_fundamentals_fail():
+    history = GetStockEarnings(
+        FakeEarningsProvider(a_history()),
+        FakeFundamentalsProvider(raises=StockDataUnavailable("AAPL", "boom")),
+    ).execute("AAPL")
+    assert history.valuation is None
+    assert history.quarters  # primary data survived
+
+
 def test_earnings_use_case_attaches_next_report_from_calendar():
     history = GetStockEarnings(
         FakeEarningsProvider(a_history()),
@@ -1552,6 +1590,31 @@ def test_get_earnings_includes_metrics_block_from_fundamentals(make_client):
 def test_get_earnings_metrics_null_without_fundamentals(make_client):
     client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
     assert client.get("/stocks/AAPL/earnings").json()["metrics"] is None
+
+
+def test_get_earnings_includes_valuation_block_from_fundamentals(make_client):
+    client = make_client(
+        earnings_provider=FakeEarningsProvider(a_history()),
+        fundamentals_provider=FakeFundamentalsProvider(a_fundamentals()),
+    )
+    valuation = client.get("/stocks/AAPL/earnings").json()["valuation"]
+    assert valuation["pe"] == 28.5
+    assert valuation["peg"] == a_key_metrics().peg  # derived from P/E and EPS growth
+    assert valuation["pb"] == 45.2
+    assert valuation["ps"] == 7.1
+    assert valuation["current_ratio"] == 0.9
+    assert valuation["debt_to_equity"] == 1.5
+    assert valuation["beta"] == 1.2
+    assert valuation["week_52_high"] == 320.0
+    assert valuation["week_52_low"] == 210.0
+    # earnings-flavored metrics live in `metrics`, not the valuation block
+    for absent in ("eps", "net_margin", "eps_growth_yoy", "revenue_growth_yoy"):
+        assert absent not in valuation, absent
+
+
+def test_get_earnings_valuation_null_without_fundamentals(make_client):
+    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
+    assert client.get("/stocks/AAPL/earnings").json()["valuation"] is None
 
 
 def test_get_earnings_includes_next_report_from_calendar(make_client):

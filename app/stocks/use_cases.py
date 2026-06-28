@@ -290,11 +290,12 @@ class GetStockEarnings:
     enrichment — so errors propagate to the caller rather than being swallowed,
     mirroring the candles and RSI endpoints. Several best-effort layers ride on
     top of the (primary) beat history, none of which can sink it: the trailing
-    earnings ``metrics`` (from fundamentals), the ``next_report`` forecast (from
-    the earnings calendar), per-quarter ``revenue_actual`` (reported revenue from
-    SEC EDGAR), and per-quarter ``revenue_breakdown`` (that revenue split by
-    segment and product/service, parsed from the filing itself). The two revenue
-    layers are aligned onto each quarter by fiscal period end.
+    earnings ``metrics`` and the ``valuation`` ratios (both from the same
+    fundamentals call), the ``next_report`` forecast (from the earnings
+    calendar), per-quarter ``revenue_actual`` (reported revenue from SEC EDGAR),
+    and per-quarter ``revenue_breakdown`` (that revenue split by segment and
+    product/service, parsed from the filing itself). The two revenue layers are
+    aligned onto each quarter by fiscal period end.
     """
 
     def __init__(
@@ -318,12 +319,28 @@ class GetStockEarnings:
         )
         quarters = self._with_revenue(normalized, history.quarters)
         quarters = self._with_breakdown(normalized, quarters)
-        metrics = self._metrics(normalized)
+        fundamentals = self._fundamentals(normalized)
+        # One fundamentals call feeds two blocks: the trailing earnings metrics
+        # and the valuation/health/market ratios (the same KeyMetrics the stock
+        # snapshot carries).
+        metrics = EarningsMetrics.from_key_metrics(
+            fundamentals.metrics if fundamentals else None
+        )
+        valuation = fundamentals.metrics if fundamentals else None
         next_report = self._next_report(normalized)
-        if quarters is history.quarters and metrics is None and next_report is None:
+        if (
+            quarters is history.quarters
+            and metrics is None
+            and valuation is None
+            and next_report is None
+        ):
             return history
         return replace(
-            history, quarters=quarters, metrics=metrics, next_report=next_report
+            history,
+            quarters=quarters,
+            metrics=metrics,
+            valuation=valuation,
+            next_report=next_report,
         )
 
     def _with_revenue(
@@ -372,17 +389,17 @@ class GetStockEarnings:
             for i, q in enumerate(quarters)
         )
 
-    def _metrics(self, symbol: str) -> EarningsMetrics | None:
-        # Trailing earnings metrics ride on the same Finnhub fundamentals the
-        # stock snapshot uses; best-effort, so a miss leaves the beat history
-        # intact rather than failing the request.
+    def _fundamentals(self, symbol: str) -> StockFundamentals | None:
+        # The trailing earnings metrics and the valuation ratios both ride on the
+        # same Finnhub fundamentals the stock snapshot uses; fetched once here and
+        # best-effort, so a miss leaves the beat history intact rather than
+        # failing the request.
         if self._fundamentals_provider is None:
             return None
         try:
-            fundamentals = self._fundamentals_provider.get_fundamentals(symbol)
+            return self._fundamentals_provider.get_fundamentals(symbol)
         except (StockNotFound, StockDataUnavailable):
             return None
-        return EarningsMetrics.from_key_metrics(fundamentals.metrics)
 
     def _next_report(self, symbol: str) -> NextEarnings | None:
         # The next scheduled report + consensus, from the earnings calendar;

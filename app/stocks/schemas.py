@@ -241,8 +241,10 @@ class EarningsHistoryResponse(BaseModel):
     ``beat_rate`` is the percent of *scored* quarters (those with both an actual
     and an estimate) that met or beat — the "beats consistently?" read.
     ``count`` is how many quarters are returned. ``metrics`` is an optional
-    trailing earnings snapshot and ``next_report`` the next scheduled report's
-    consensus (both best-effort; ``null`` when unavailable)."""
+    trailing earnings snapshot, ``valuation`` the point-in-time valuation/health/
+    market ratios (P/E, PEG, P/B, P/S, beta, the 52-week range — the same block
+    the stock endpoint serves), and ``next_report`` the next scheduled report's
+    consensus (all best-effort; ``null`` when unavailable)."""
 
     symbol: str
     count: int
@@ -251,6 +253,7 @@ class EarningsHistoryResponse(BaseModel):
     beat_rate: float | None = None  # percent of scored quarters that beat
     quarters: list[EarningsSurpriseResponse]
     metrics: EarningsMetricsResponse | None = None
+    valuation: KeyMetricsResponse | None = None
     next_report: NextEarningsResponse | None = None
 
 

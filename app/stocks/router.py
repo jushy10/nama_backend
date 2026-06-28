@@ -425,6 +425,9 @@ def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
             for q in history.quarters
         ],
         metrics=_present_earnings_metrics(history.metrics),
+        # The valuation block is the same KeyMetrics slice the stock endpoint
+        # serves, so it reuses that presenter.
+        valuation=_present_metrics(history.valuation),
         next_report=_present_next_earnings(history.next_report),
     )
 
