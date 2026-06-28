@@ -279,7 +279,7 @@ def _present_performance(
 
 def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
     # Valuation + health + market only; the earnings-flavored metrics (EPS,
-    # growth, margins, ROE/ROIC, payout) are surfaced on the earnings endpoint.
+    # growth, margins) are surfaced on the earnings endpoint.
     if metrics is None:
         return None
     return KeyMetricsResponse(
@@ -307,9 +307,6 @@ def _present_earnings_metrics(
         gross_margin=metrics.gross_margin,
         operating_margin=metrics.operating_margin,
         net_margin=metrics.net_margin,
-        roe=metrics.roe,
-        roic=metrics.roic,
-        payout_ratio=metrics.payout_ratio,
     )
 
 

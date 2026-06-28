@@ -31,10 +31,10 @@ class KeyMetricsResponse(BaseModel):
     """Trailing valuation, financial-health and market indicators.
 
     The valuation ratios and risk/range figures for the price snapshot. The
-    earnings-flavored metrics (EPS, growth, margins, ROE/ROIC, payout) live on
-    the earnings endpoint instead — see ``EarningsMetricsResponse``. All
-    trailing (no forward estimates); the ratios are plain multiples. Any field a
-    vendor doesn't cover is ``null``.
+    earnings-flavored metrics (EPS, growth, margins) live on the earnings
+    endpoint instead — see ``EarningsMetricsResponse``. All trailing (no forward
+    estimates); the ratios are plain multiples. Any field a vendor doesn't cover
+    is ``null``.
     """
 
     pe: float | None = None  # price / trailing EPS
@@ -164,10 +164,10 @@ class EarningsSurpriseResponse(BaseModel):
 class EarningsMetricsResponse(BaseModel):
     """Trailing earnings / profitability snapshot served with the beat history.
 
-    The income-statement-flavored metrics — trailing EPS, EPS/revenue growth,
-    the margin stack, ROE/ROIC and the dividend payout ratio. All percentages
-    except ``eps``; any field a vendor doesn't cover is ``null``. (Valuation and
-    market metrics live on the stock endpoint — see ``KeyMetricsResponse``.)
+    The income-statement-flavored metrics — trailing EPS, EPS/revenue growth and
+    the margin stack. All percentages except ``eps``; any field a vendor doesn't
+    cover is ``null``. (Valuation and market metrics live on the stock endpoint
+    — see ``KeyMetricsResponse``.)
     """
 
     eps: float | None = None  # trailing earnings per share
@@ -176,9 +176,6 @@ class EarningsMetricsResponse(BaseModel):
     gross_margin: float | None = None  # percent
     operating_margin: float | None = None  # percent
     net_margin: float | None = None  # percent
-    roe: float | None = None  # return on equity (percent)
-    roic: float | None = None  # return on invested capital (percent)
-    payout_ratio: float | None = None  # dividends / earnings (percent)
 
 
 class NextEarningsResponse(BaseModel):
