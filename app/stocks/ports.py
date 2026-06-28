@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from datetime import date, datetime
 
 from app.stocks.entities import (
+    AllTimeHigh,
     CandleSeries,
     CompanyProfile,
     Constituent,
@@ -68,6 +69,26 @@ class StockPerformanceProvider(ABC):
     @abstractmethod
     def get_performance(self, symbol: str) -> StockPerformance:
         """Return trailing-window performance for the (normalized) symbol.
+
+        Raises:
+            StockNotFound: the symbol has no price history.
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class AllTimeHighProvider(ABC):
+    """A gateway for a stock's all-time high over its available price history.
+
+    Derived from the full span of daily bars rather than the live snapshot, like
+    trailing performance — and likewise best-effort enrichment on the stock view,
+    so a failure here must not sink the price response. "All-time" is bounded by
+    how far back the source's history reaches (surfaced on the returned entity).
+    """
+
+    @abstractmethod
+    def get_all_time_high(self, symbol: str) -> AllTimeHigh:
+        """Return the all-time high for the (already-normalized) symbol.
 
         Raises:
             StockNotFound: the symbol has no price history.

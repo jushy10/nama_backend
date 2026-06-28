@@ -5,7 +5,7 @@ mapping is tested directly. Verifies an adapter's two jobs — translate
 Alpaca models -> Stock entity, and Alpaca failures -> domain exceptions.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -13,9 +13,17 @@ from alpaca.common.exceptions import APIError
 from alpaca.data.enums import Adjustment, DataFeed
 
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
-from app.stocks.entities import Candle, Quote, Stock, StockPerformance, Timeframe
+from app.stocks.entities import (
+    AllTimeHigh,
+    Candle,
+    Quote,
+    Stock,
+    StockPerformance,
+    Timeframe,
+)
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
+    AllTimeHighProvider,
     CandleProvider,
     QuoteBatchProvider,
     SectorPerformanceProvider,
@@ -374,6 +382,59 @@ def test_get_candles_api_error_translated_to_unavailable():
         p.get_candles("AAPL", Timeframe.HOUR_1, start=None, end=None)
 
 
+# --------------------------- all-time high ---------------------------
+
+
+def ath_bars():
+    """Daily history whose peak intraday high (130) prints on 2024-03-04, with the
+    earliest bar in 2016 — the bound the high is computed over."""
+    return [
+        make_bar(datetime(2016, 1, 4, tzinfo=timezone.utc), 90, 100, 88, 95),
+        make_bar(datetime(2024, 3, 4, tzinfo=timezone.utc), 120, 130, 118, 125),  # peak
+        make_bar(datetime(2026, 6, 18, tzinfo=timezone.utc), 110, 115, 108, 112),
+    ]
+
+
+def test_to_all_time_high_picks_peak_high_and_bounds():
+    high = AlpacaStockDataProvider._to_all_time_high(ath_bars())
+    assert isinstance(high, AllTimeHigh)
+    assert high.price == 130                    # the highest intraday high...
+    assert high.reached_on == date(2024, 3, 4)  # ...and the day it printed
+    assert high.since == date(2016, 1, 4)       # earliest bar = the history bound
+
+
+def test_get_all_time_high_reads_bars_from_client():
+    p = bars_provider(FakeBarsClient(bars_by_symbol={"AAPL": ath_bars()}))
+    high = p.get_all_time_high("AAPL")
+    assert high.price == 130
+    assert high.since == date(2016, 1, 4)
+
+
+def test_all_time_high_reads_consolidated_split_adjusted_feed():
+    # Same rationale as performance: the all-time high must come from the full
+    # consolidated, split-adjusted history, not IEX's gappy single-venue print.
+    client = FakeBarsClient(bars_by_symbol={"AAPL": ath_bars()})
+    p = bars_provider(client)
+    p.get_all_time_high("AAPL")
+    req = client.last_request
+    assert req.feed == DataFeed.SIP
+    assert req.adjustment == Adjustment.SPLIT
+    # `start` reaches back past the data floor; `end` is held back from now.
+    assert req.end is not None and req.start < req.end
+
+
+def test_get_all_time_high_empty_raises_not_found():
+    p = bars_provider(FakeBarsClient(bars_by_symbol={}))
+    with pytest.raises(StockNotFound):
+        p.get_all_time_high("ZZZZ")
+
+
+def test_get_all_time_high_api_error_translated_to_unavailable():
+    p = bars_provider(FakeBarsClient(error=APIError("boom")))
+    with pytest.raises(StockDataUnavailable):
+        p.get_all_time_high("AAPL")
+
+
 # --------------------------- port composition ---------------------------
 
 
@@ -387,6 +448,7 @@ def test_provider_implements_all_ports():
     assert isinstance(p, StockQuoteProvider)
     assert isinstance(p, QuoteBatchProvider)
     assert isinstance(p, StockPerformanceProvider)
+    assert isinstance(p, AllTimeHighProvider)
     assert isinstance(p, CandleProvider)
     assert isinstance(p, SectorPerformanceProvider)
 

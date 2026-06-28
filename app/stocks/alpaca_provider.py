@@ -19,6 +19,7 @@ from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 
 from app.stocks.entities import (
+    AllTimeHigh,
     Candle,
     CandleSeries,
     Quote,
@@ -29,6 +30,7 @@ from app.stocks.entities import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
+    AllTimeHighProvider,
     CandleProvider,
     QuoteBatchProvider,
     SectorPerformanceProvider,
@@ -79,18 +81,26 @@ class AlpacaStockDataProvider(
     StockQuoteProvider,
     QuoteBatchProvider,
     StockPerformanceProvider,
+    AllTimeHighProvider,
     CandleProvider,
     SectorPerformanceProvider,
 ):
     """Fetches stock data from Alpaca and maps it onto the Stock entity.
 
-    Also derives trailing-window performance from daily bars and historical
-    OHLC candles for charting.
+    Also derives trailing-window performance and the all-time high from daily
+    bars, and historical OHLC candles for charting.
     """
 
     # Lookback long enough to cover the 1-year window with margin for
     # weekends/holidays, so a bar exists at or before each target date.
     _PERFORMANCE_LOOKBACK_DAYS = 400
+
+    # Floor for the all-time-high history scan. Alpaca's market data begins
+    # ~2016; this sits well before that so the scan covers everything the feed
+    # carries without hardcoding the exact start. How far back the data really
+    # reaches is reported back via AllTimeHigh.since (the earliest bar returned),
+    # so a caller can see the bound on "all-time".
+    _HISTORY_START = datetime(2000, 1, 1, tzinfo=timezone.utc)
 
     # Trailing-window returns must read the *consolidated* close, not one venue's.
     # IEX is a single exchange (~2.5% of volume): its daily close isn't the
@@ -162,6 +172,14 @@ class AlpacaStockDataProvider(
 
     def get_performance(self, symbol: str) -> StockPerformance:
         return self._compute_performance(self._fetch_daily_bars(symbol))
+
+    def get_all_time_high(self, symbol: str) -> AllTimeHigh:
+        bars = self._fetch_all_daily_bars(symbol)
+        if not bars:
+            # No history at all -> treat like an unknown symbol so the caller's
+            # best-effort wrapper omits the field rather than failing the view.
+            raise StockNotFound(symbol)
+        return self._to_all_time_high(bars)
 
     def get_candles(
         self,
@@ -267,6 +285,29 @@ class AlpacaStockDataProvider(
             raise StockDataUnavailable(symbol, str(exc)) from exc
         return barset.data.get(symbol, [])
 
+    def _fetch_all_daily_bars(self, symbol: str):
+        """Every daily bar the feed carries for the symbol, for the all-time high.
+
+        Reads the SIP feed (full-market coverage and true intraday highs, the
+        same consolidated history the performance windows use) split-adjusted, so
+        old highs stay comparable to today's split-adjusted price. ``end`` is held
+        back from now by the SIP-on-free delay, like the performance fetch, and
+        ``start`` reaches back past Alpaca's data floor to capture all of it.
+        """
+        try:
+            request = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame.Day,
+                start=self._HISTORY_START,
+                end=datetime.now(timezone.utc) - self._SIP_FREE_DELAY,
+                adjustment=Adjustment.SPLIT,
+                feed=self._HISTORICAL_FEED,
+            )
+            barset = self._data.get_stock_bars(request)
+        except APIError as exc:
+            raise StockDataUnavailable(symbol, str(exc)) from exc
+        return barset.data.get(symbol, [])
+
     def _fetch_daily_bars_batch(self, symbols: list[str]) -> dict[str, list]:
         """Daily bars over the lookback for several symbols in one request.
 
@@ -353,6 +394,23 @@ class AlpacaStockDataProvider(
             previous_close=prev.close if prev else None,
             as_of=trade.timestamp,
             performance=performance,
+        )
+
+    # --- Mapping: Alpaca bars -> all-time high ---
+
+    @staticmethod
+    def _to_all_time_high(bars) -> AllTimeHigh:
+        """Highest intraday high across the history, with when and how far back.
+
+        ``since`` is the earliest bar's date — the bound on "all-time," since the
+        feed's history may not reach the stock's listing.
+        """
+        peak = max(bars, key=lambda bar: bar.high)
+        earliest = min(bar.timestamp for bar in bars)
+        return AllTimeHigh(
+            price=peak.high,
+            reached_on=peak.timestamp.date(),
+            since=earliest.date(),
         )
 
     # --- Mapping: Alpaca bars -> performance windows ---

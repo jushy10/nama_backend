@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
+    AllTimeHigh,
     Candle,
     CandleSeries,
     CompanyProfile,
@@ -34,6 +35,7 @@ from app.stocks.entities import (
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSignal
 from app.stocks.ports import (
+    AllTimeHighProvider,
     CandleProvider,
     CompanyProfileProvider,
     ConstituentRepository,
@@ -132,6 +134,22 @@ class FakePerformanceProvider(StockPerformanceProvider):
             raise self._raises
         assert self._performance is not None
         return self._performance
+
+
+class FakeAllTimeHighProvider(AllTimeHighProvider):
+    """Returns/raises whatever the test configured; records calls."""
+
+    def __init__(self, all_time_high=None, raises=None):
+        self._all_time_high = all_time_high
+        self._raises = raises
+        self.received: list[str] = []
+
+    def get_all_time_high(self, symbol: str) -> AllTimeHigh:
+        self.received.append(symbol)
+        if self._raises is not None:
+            raise self._raises
+        assert self._all_time_high is not None
+        return self._all_time_high
 
 
 class FakeFundamentalsProvider(StockFundamentalsProvider):
@@ -303,6 +321,14 @@ def a_performance(**overrides) -> StockPerformance:
     return StockPerformance(**base)
 
 
+def an_all_time_high(**overrides) -> AllTimeHigh:
+    base = dict(
+        price=350.0, reached_on=date(2026, 1, 5), since=date(2016, 1, 4),
+    )
+    base.update(overrides)
+    return AllTimeHigh(**base)
+
+
 def a_key_metrics(**overrides) -> KeyMetrics:
     base = dict(
         # Valuation / health / market (stay on the stock snapshot)
@@ -387,6 +413,25 @@ def test_entity_change_percent_guards_zero_division():
 def test_entity_spread():
     assert a_stock(bid=283.52, ask=313.43).spread == 29.91
     assert a_stock(bid=None).spread is None
+
+
+def test_entity_drawdown_from_high_is_negative_below_the_high():
+    s = a_stock(price=80.0, all_time_high=an_all_time_high(price=100.0))
+    assert s.drawdown_from_high == -20.0  # 20% below the all-time high
+
+
+def test_entity_drawdown_from_high_is_zero_at_the_high():
+    s = a_stock(price=100.0, all_time_high=an_all_time_high(price=100.0))
+    assert s.drawdown_from_high == 0.0
+
+
+def test_entity_drawdown_from_high_none_without_a_high():
+    assert a_stock(all_time_high=None).drawdown_from_high is None
+
+
+def test_entity_drawdown_from_high_guards_zero_high():
+    # A zero/missing high price can't anchor a percentage.
+    assert a_stock(all_time_high=an_all_time_high(price=0.0)).drawdown_from_high is None
 
 
 def test_quote_entity_mirrors_stock_change_rules():
@@ -579,12 +624,49 @@ def test_use_case_enrichment_is_best_effort():
         FakePerformanceProvider(raises=StockDataUnavailable("AAPL", "boom")),
         FakeFundamentalsProvider(raises=StockNotFound("AAPL")),
         FakeProfileProvider(raises=StockDataUnavailable("AAPL", "boom")),
+        FakeAllTimeHighProvider(raises=StockDataUnavailable("AAPL", "boom")),
     )
     stock = info.execute("AAPL")  # enrichment failures must not raise
     assert stock.price == 297.86
     assert stock.performance is None
     assert stock.market_cap is None
     assert stock.description is None
+    assert stock.all_time_high is None
+    assert stock.drawdown_from_high is None
+
+
+def test_use_case_attaches_all_time_high():
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock(price=297.86)),
+        all_time_high_provider=FakeAllTimeHighProvider(an_all_time_high(price=350.0)),
+    )
+    stock = info.execute("AAPL")
+    assert stock.all_time_high.price == 350.0
+    assert stock.all_time_high.since == date(2016, 1, 4)
+    assert stock.drawdown_from_high == -14.9  # ~15% off the high
+
+
+def test_use_case_folds_live_price_into_a_fresh_all_time_high():
+    # The history feed lags the live trade, so a stock printing a new high comes
+    # back with a recorded peak *below* the current price. The use case folds the
+    # live price in: the high becomes "now", and the drawdown reads 0 (not +).
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock(price=297.86)),
+        all_time_high_provider=FakeAllTimeHighProvider(
+            an_all_time_high(price=290.0, reached_on=date(2025, 12, 1))
+        ),
+    )
+    stock = info.execute("AAPL")
+    assert stock.all_time_high.price == 297.86                  # the live price wins
+    assert stock.all_time_high.reached_on == date(2026, 6, 18)  # as of the trade
+    assert stock.all_time_high.since == date(2016, 1, 4)        # bound preserved
+    assert stock.drawdown_from_high == 0.0
+
+
+def test_use_case_all_time_high_none_without_provider():
+    stock = GetStockInfo(FakeProvider(stock=a_stock())).execute("AAPL")
+    assert stock.all_time_high is None
+    assert stock.drawdown_from_high is None
 
 
 def test_quote_use_case_normalizes_symbol():
@@ -936,6 +1018,7 @@ def make_client():
         provider: StockDataProvider | None = None,
         logo_provider: LogoProvider | None = None,
         performance_provider: StockPerformanceProvider | None = None,
+        ath_provider: AllTimeHighProvider | None = None,
         fundamentals_provider: StockFundamentalsProvider | None = None,
         profile_provider: CompanyProfileProvider | None = None,
         candle_provider: CandleProvider | None = None,
@@ -948,7 +1031,11 @@ def make_client():
     ) -> TestClient:
         if provider is not None:
             app.dependency_overrides[get_stock_info] = lambda: GetStockInfo(
-                provider, performance_provider, fundamentals_provider, profile_provider
+                provider,
+                performance_provider,
+                fundamentals_provider,
+                profile_provider,
+                ath_provider,
             )
         if quote_provider is not None:
             app.dependency_overrides[get_stock_quote] = (
@@ -1039,6 +1126,18 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
         assert moved not in body["metrics"], moved
 
 
+def test_get_stock_includes_all_time_high_and_drawdown(make_client):
+    client = make_client(
+        FakeProvider(stock=a_stock(price=297.86)),
+        ath_provider=FakeAllTimeHighProvider(an_all_time_high(price=350.0)),
+    )
+    body = client.get("/stocks/AAPL").json()
+    assert body["all_time_high"] == {
+        "price": 350.0, "reached_on": "2026-01-05", "since": "2016-01-04",
+    }
+    assert body["drawdown_from_high"] == -14.9  # ~15% off the high
+
+
 def test_get_stock_enrichment_best_effort_returns_200(make_client):
     client = make_client(
         FakeProvider(stock=a_stock()),
@@ -1065,6 +1164,8 @@ def test_get_stock_without_enrichment_providers_nulls_fields(make_client):
     assert body["performance"] is None
     assert body["metrics"] is None
     assert body["description"] is None
+    assert body["all_time_high"] is None
+    assert body["drawdown_from_high"] is None
 
 
 # --------------------------- quote endpoint ---------------------------
