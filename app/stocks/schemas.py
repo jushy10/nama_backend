@@ -48,6 +48,20 @@ class KeyMetricsResponse(BaseModel):
     week_52_low: float | None = None
 
 
+class AllTimeHighResponse(BaseModel):
+    """A stock's all-time high over the available price history.
+
+    ``since`` is the earliest date that history covers — the bound on
+    "all-time," since a free feed may not reach back to the stock's listing, so a
+    caller can tell a true lifetime high from a within-window one. ``reached_on``
+    is when the high occurred. The percent the current price sits below it is
+    ``drawdown_from_high`` on the stock."""
+
+    price: float  # highest intraday price over the history
+    reached_on: date | None = None  # when the high was reached
+    since: date | None = None  # earliest date the history covers (the bound)
+
+
 class StockResponse(BaseModel):
     symbol: str
     name: str | None = None
@@ -70,6 +84,8 @@ class StockResponse(BaseModel):
     dividend_yield: float | None = None  # percent
     performance: StockPerformanceResponse | None = None
     metrics: KeyMetricsResponse | None = None
+    all_time_high: AllTimeHighResponse | None = None
+    drawdown_from_high: float | None = None  # percent below the all-time high (<= 0)
 
 
 class QuoteResponse(BaseModel):

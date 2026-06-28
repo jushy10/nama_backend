@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import date, datetime
 
 from app.stocks.entities import (
+    AllTimeHigh,
     CandleSeries,
     CompanyProfile,
     Constituent,
@@ -30,6 +31,7 @@ from app.stocks.entities import (
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSeries, rsi_series
 from app.stocks.ports import (
+    AllTimeHighProvider,
     CandleProvider,
     CompanyProfileProvider,
     ConstituentRepository,
@@ -70,11 +72,13 @@ class GetStockInfo:
         performance_provider: StockPerformanceProvider | None = None,
         fundamentals_provider: StockFundamentalsProvider | None = None,
         profile_provider: CompanyProfileProvider | None = None,
+        all_time_high_provider: AllTimeHighProvider | None = None,
     ) -> None:
         self._provider = provider
         self._performance_provider = performance_provider
         self._fundamentals_provider = fundamentals_provider
         self._profile_provider = profile_provider
+        self._all_time_high_provider = all_time_high_provider
 
     def execute(self, symbol: str) -> Stock:
         normalized = _normalize_symbol(symbol)
@@ -95,6 +99,7 @@ class GetStockInfo:
             ),
             dividend_yield=fundamentals.dividend_yield if fundamentals else None,
             metrics=fundamentals.metrics if fundamentals else None,
+            all_time_high=self._all_time_high(normalized, stock),
         )
 
     def _performance(self, symbol: str) -> StockPerformance | None:
@@ -104,6 +109,23 @@ class GetStockInfo:
             return self._performance_provider.get_performance(symbol)
         except (StockNotFound, StockDataUnavailable):
             return None  # best-effort: never sink the price response
+
+    def _all_time_high(self, symbol: str, stock: Stock) -> AllTimeHigh | None:
+        if self._all_time_high_provider is None:
+            return None
+        try:
+            high = self._all_time_high_provider.get_all_time_high(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None  # best-effort: never sink the price response
+        # "All-time" must include right now. The history feed lags the live trade
+        # (it ends a few minutes back), so when the current price has pushed past
+        # the recorded peak the stock is setting a new high — the high *is* the
+        # live price as of now. Folding it in here keeps all_time_high.price >=
+        # price, so the entity's drawdown_from_high never reads positive.
+        if stock.price > high.price:
+            as_of = stock.as_of.date() if stock.as_of else None
+            return replace(high, price=stock.price, reached_on=as_of)
+        return high
 
     def _fundamentals(self, symbol: str) -> StockFundamentals | None:
         if self._fundamentals_provider is None:

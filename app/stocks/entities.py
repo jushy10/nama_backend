@@ -308,6 +308,23 @@ class SectorPerformance:
 
 
 @dataclass(frozen=True)
+class AllTimeHigh:
+    """The highest price a stock has reached, and when it got there.
+
+    Derived from the full span of daily price history rather than the live
+    snapshot. "All-time" is bounded by how far back that history reaches: a free
+    market-data feed may only carry the last several years, so ``since`` records
+    the earliest date covered — letting a caller judge whether this high spans
+    the stock's whole life or just the vendor's window. ``price`` is the highest
+    intraday price seen over that history; ``reached_on`` is the day it occurred.
+    """
+
+    price: float  # highest intraday price over the available history
+    reached_on: date | None  # the day that high was reached
+    since: date | None  # earliest date the underlying history covers (the bound)
+
+
+@dataclass(frozen=True)
 class Stock:
     """A snapshot of a tradable stock at a point in time."""
 
@@ -331,6 +348,7 @@ class Stock:
     dividend_yield: float | None = None
     performance: StockPerformance | None = None
     metrics: KeyMetrics | None = None
+    all_time_high: AllTimeHigh | None = None
 
     @property
     def change(self) -> float | None:
@@ -352,6 +370,20 @@ class Stock:
         if self.bid is None or self.ask is None:
             return None
         return round(self.ask - self.bid, 4)
+
+    @property
+    def drawdown_from_high(self) -> float | None:
+        """Percent the latest price sits below its all-time high (``<= 0``).
+
+        ``0`` means the stock is at a fresh high; ``-18.4`` means 18.4% below it.
+        ``None`` when no all-time high is available. Measured against
+        ``all_time_high.price``, which the use case has already reconciled with
+        the live price (so a stock making a new high reads ``0``, never positive).
+        """
+        if self.all_time_high is None or not self.all_time_high.price:
+            return None
+        high = self.all_time_high.price
+        return round((self.price - high) / high * 100, 2)
 
 
 @dataclass(frozen=True)

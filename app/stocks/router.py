@@ -20,6 +20,7 @@ from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.constituents import SqlConstituentRepository
 from app.stocks.entities import (
+    AllTimeHigh,
     CandleSeries,
     EarningsHistory,
     EarningsMetrics,
@@ -51,6 +52,7 @@ from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
 from app.stocks.sec_edgar_revenue_provider import SecEdgarRevenueProvider
 from app.stocks.ports import (
+    AllTimeHighProvider,
     CompanyProfileProvider,
     EarningsCalendarProvider,
     EarningsHistoryProvider,
@@ -61,6 +63,7 @@ from app.stocks.ports import (
     StockPerformanceProvider,
 )
 from app.stocks.schemas import (
+    AllTimeHighResponse,
     CandleResponse,
     CandleSeriesResponse,
     EarningsHistoryResponse,
@@ -140,9 +143,12 @@ def get_stock_info(
     fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
     profile: CompanyProfileProvider | None = Depends(get_profile_provider),
 ) -> GetStockInfo:
-    # The Alpaca provider supplies both the snapshot and the performance windows.
+    # The Alpaca provider supplies the snapshot, the performance windows, and the
+    # all-time high — all derived from the same price feed, so one instance backs
+    # each capability via its respective port.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
-    return GetStockInfo(provider, performance, fundamentals, profile)
+    all_time_high = provider if isinstance(provider, AllTimeHighProvider) else None
+    return GetStockInfo(provider, performance, fundamentals, profile, all_time_high)
 
 
 def get_stock_quote(
@@ -263,6 +269,16 @@ def _present(stock: Stock) -> StockResponse:
         dividend_yield=stock.dividend_yield,
         performance=_present_performance(stock.performance),
         metrics=_present_metrics(stock.metrics),
+        all_time_high=_present_all_time_high(stock.all_time_high),
+        drawdown_from_high=stock.drawdown_from_high,
+    )
+
+
+def _present_all_time_high(high: AllTimeHigh | None) -> AllTimeHighResponse | None:
+    if high is None:
+        return None
+    return AllTimeHighResponse(
+        price=high.price, reached_on=high.reached_on, since=high.since
     )
 
 
