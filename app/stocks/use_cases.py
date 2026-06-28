@@ -200,30 +200,54 @@ class GetStockRsi:
         return rsi_series(series, period)
 
 
-# The EPS feed (Finnhub) labels each quarter with the calendar quarter-end nearest
-# the company's fiscal period end, so the two are at most ~6 weeks apart — even when
-# the fiscal end straddles a calendar-quarter boundary (Seagate's quarters end a few
-# days *into* the next quarter; Micron's end ~5 weeks *before* the label). A genuine
-# adjacent quarter is ~13 weeks away, so the nearest EDGAR end inside this window is
-# unambiguously the right one. (A calendar-quarter *bucket* match misaligns Seagate;
-# a tight day window misses Micron — nearest-within-6-weeks handles both.)
-_PERIOD_MATCH_DAYS = 45
+# The EPS feed (Finnhub) and SEC EDGAR date the same quarter differently: EDGAR
+# records the true fiscal period end, while Finnhub snaps the quarter to a nearby
+# calendar quarter-end. For an off-calendar filer those two dates can sit up to
+# ~two months apart (NVDA's quarter ends ~Apr 26, Ciena's ~May 2, each labelled a
+# calendar quarter away) — far enough that the snapped label can land closer to an
+# *adjacent* fiscal quarter than to its own, so pairing by closest date misaligns.
+#
+# Instead we align the two series by order: both list the same consecutive quarters
+# newest-first, so we walk them in lockstep and pair them off, using the dates only
+# to notice when one side runs a quarter ahead of the other (e.g. the EPS is
+# announced before the 10-Q is filed, so EDGAR hasn't got that quarter yet). Two
+# dates this close are taken to be the same quarter — comfortably above the worst
+# label gap (~65 days) yet well below the ~91-day spacing between quarters, so
+# neighbouring quarters never collide.
+_SAME_QUARTER_DAYS = 75
 
 
-def _match_revenue_actual(
-    period: date | None, revenue: dict[date, float]
-) -> float | None:
-    """The reported revenue whose fiscal period end is nearest ``period``, within
-    the match window; None when nothing falls inside it."""
-    if period is None:
-        return None
-    best = None
-    best_gap = None
-    for end, value in revenue.items():
-        gap = abs((end - period).days)
-        if gap <= _PERIOD_MATCH_DAYS and (best_gap is None or gap < best_gap):
-            best, best_gap = value, gap
-    return best
+def _align_revenue(
+    quarters: tuple[EarningsSurprise, ...], revenue: dict[date, float]
+) -> dict[int, float]:
+    """Map each EPS quarter (by its index) to its reported revenue actual.
+
+    Walks the EPS quarters and the EDGAR period ends together, newest-first, and
+    pairs them up. A quarter newer than anything EDGAR has filed (or one with no
+    period) is left unmatched, as is revenue belonging to a quarter newer than any
+    in the EPS history.
+    """
+    dated = sorted(
+        ((i, q.period) for i, q in enumerate(quarters) if q.period is not None),
+        key=lambda pair: pair[1],
+        reverse=True,
+    )
+    ends = sorted(revenue, reverse=True)
+    matched: dict[int, float] = {}
+    i = j = 0
+    while i < len(dated) and j < len(ends):
+        index, period = dated[i]
+        end = ends[j]
+        gap = (period - end).days
+        if gap > _SAME_QUARTER_DAYS:
+            i += 1  # this EPS quarter is newer than any revenue on file — skip it
+        elif gap < -_SAME_QUARTER_DAYS:
+            j += 1  # this revenue is newer than the EPS quarter — skip it
+        else:
+            matched[index] = revenue[end]
+            i += 1
+            j += 1
+    return matched
 
 
 # Finnhub's free `/stock/earnings` returns only the last four quarters and
@@ -273,7 +297,7 @@ class GetStockEarnings:
         self, symbol: str, quarters: tuple[EarningsSurprise, ...]
     ) -> tuple[EarningsSurprise, ...]:
         # Overlay reported revenue actuals (SEC EDGAR) onto the EPS quarters,
-        # aligned by fiscal period end; best-effort. Returning the same tuple
+        # aligned quarter-by-quarter; best-effort. Returning the same tuple
         # identity signals "nothing merged" so execute can short-circuit.
         if self._revenue_provider is None:
             return quarters
@@ -283,16 +307,13 @@ class GetStockEarnings:
             return quarters
         if not revenue:
             return quarters
-        merged: list[EarningsSurprise] = []
-        changed = False
-        for q in quarters:
-            actual = _match_revenue_actual(q.period, revenue)
-            if actual is not None:
-                merged.append(replace(q, revenue_actual=actual))
-                changed = True
-            else:
-                merged.append(q)
-        return tuple(merged) if changed else quarters
+        matched = _align_revenue(quarters, revenue)
+        if not matched:
+            return quarters
+        return tuple(
+            replace(q, revenue_actual=matched[i]) if i in matched else q
+            for i, q in enumerate(quarters)
+        )
 
     def _metrics(self, symbol: str) -> EarningsMetrics | None:
         # Trailing earnings metrics ride on the same Finnhub fundamentals the
