@@ -113,9 +113,10 @@ only this one file changes.
 - `alpaca_provider.py` — Alpaca SDK → price/quote/candles/performance/sectors
 - `finnhub_*_provider.py` — Finnhub → fundamentals / earnings / calendar / company name (`/stock/profile2`)
 - `fmp_profile_provider.py` — FMP (`httpx`) → company **description** (the clean display name now comes from Finnhub)
-- `sec_edgar_revenue_provider.py` — SEC EDGAR XBRL (`httpx`, free/keyless) → reported quarterly revenue actuals; resolves ticker→CIK and derives Q4 from the 10-K
+- `sec_edgar_revenue_provider.py` — SEC EDGAR XBRL **flat API** (`httpx`, free/keyless) → reported quarterly revenue *totals*; resolves ticker→CIK and derives Q4 from the 10-K
+- `sec_edgar_segment_revenue_provider.py` — SEC EDGAR **inline XBRL** (the raw 10-Q/10-K documents; the flat API drops the dimensional contexts) → per-quarter revenue split by operating segment and product/service; parses several recent filings and keeps standalone-quarter, member-qualified facts
 - `logodev_provider.py` — Logo.dev → logo image
-- `caching_company_profile_provider.py` / `caching_revenue_provider.py` — decorator adapters (wrap another adapter to add a TTL cache; same port in, same port out)
+- `caching_company_profile_provider.py` / `caching_revenue_provider.py` / `caching_segment_revenue_provider.py` — decorator adapters (wrap another adapter to add a TTL cache; same port in, same port out)
 - `composite_company_profile_provider.py` — merges a name source (Finnhub) + a description source (FMP) behind the one `CompanyProfileProvider` port; same shape as the cache decorator
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
 

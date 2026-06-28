@@ -25,6 +25,8 @@ from app.stocks.entities import (
     Logo,
     NextEarnings,
     Quote,
+    RevenueBreakdown,
+    RevenueComponent,
     SectorPerformance,
     Stock,
     StockFundamentals,
@@ -45,6 +47,7 @@ from app.stocks.ports import (
     QuoteBatchProvider,
     RevenueHistoryProvider,
     SectorPerformanceProvider,
+    SegmentRevenueProvider,
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
@@ -260,6 +263,19 @@ class FakeRevenueProvider(RevenueHistoryProvider):
         return self._revenue
 
 
+class FakeSegmentRevenueProvider(SegmentRevenueProvider):
+    """Returns/raises whatever the test configured for segment revenue."""
+
+    def __init__(self, breakdowns=None, raises: Exception | None = None):
+        self._breakdowns = breakdowns or {}
+        self._raises = raises
+
+    def get_quarterly_segment_revenue(self, symbol: str) -> dict:
+        if self._raises is not None:
+            raise self._raises
+        return self._breakdowns
+
+
 def a_logo(content: bytes = b"\x89PNG\r\n", media_type: str = "image/png") -> Logo:
     return Logo(content=content, media_type=media_type)
 
@@ -390,6 +406,18 @@ def a_next_earnings(**overrides) -> NextEarnings:
     )
     base.update(overrides)
     return NextEarnings(**base)
+
+
+def a_breakdown(**overrides) -> RevenueBreakdown:
+    base = dict(
+        by_segment=(
+            RevenueComponent("North America", 100e9),
+            RevenueComponent("International", 35e9),
+        ),
+        by_product=(RevenueComponent("Online Stores", 60e9),),
+    )
+    base.update(overrides)
+    return RevenueBreakdown(**base)
 
 
 # --------------------------- entity rules (pure) ---------------------------
@@ -1010,6 +1038,76 @@ def test_earnings_use_case_revenue_best_effort_when_symbol_not_filed():
     assert result.quarters  # primary data survived
 
 
+def test_earnings_use_case_merges_breakdown_into_quarters():
+    history = a_history((
+        a_surprise(fiscal_year=2026, fiscal_quarter=1, period=date(2026, 3, 31)),
+        a_surprise(fiscal_year=2025, fiscal_quarter=4, period=date(2025, 12, 31)),
+    ))
+    breakdowns = {
+        date(2026, 3, 31): a_breakdown(),
+        date(2025, 12, 31): a_breakdown(by_product=(RevenueComponent("Cloud", 50e9),)),
+    }
+    result = GetStockEarnings(
+        FakeEarningsProvider(history),
+        segment_revenue_provider=FakeSegmentRevenueProvider(breakdowns),
+    ).execute("AAPL")
+    q0, q1 = result.quarters
+    assert q0.revenue_breakdown == a_breakdown()
+    assert q1.revenue_breakdown.by_product == (RevenueComponent("Cloud", 50e9),)
+
+
+def test_earnings_use_case_breakdown_aligns_by_period_end():
+    # A breakdown a full quarter away from the period must not attach to it — the
+    # same order-aware alignment the revenue actuals use.
+    history = a_history((a_surprise(period=date(2026, 3, 31)),))
+    breakdowns = {date(2025, 12, 31): a_breakdown()}  # a quarter off
+    result = GetStockEarnings(
+        FakeEarningsProvider(history),
+        segment_revenue_provider=FakeSegmentRevenueProvider(breakdowns),
+    ).execute("AAPL")
+    assert result.quarters[0].revenue_breakdown is None
+
+
+def test_earnings_use_case_revenue_and_breakdown_overlay_together():
+    history = a_history((a_surprise(period=date(2026, 3, 31)),))
+    result = GetStockEarnings(
+        FakeEarningsProvider(history),
+        revenue_provider=FakeRevenueProvider({date(2026, 3, 31): 97.0e9}),
+        segment_revenue_provider=FakeSegmentRevenueProvider(
+            {date(2026, 3, 31): a_breakdown()}
+        ),
+    ).execute("AAPL")
+    q0 = result.quarters[0]
+    assert q0.revenue_actual == 97.0e9
+    assert q0.revenue_breakdown == a_breakdown()
+
+
+def test_earnings_use_case_breakdown_none_without_provider():
+    result = GetStockEarnings(FakeEarningsProvider(a_history())).execute("AAPL")
+    assert result.quarters[0].revenue_breakdown is None
+
+
+def test_earnings_use_case_breakdown_best_effort_when_provider_fails():
+    result = GetStockEarnings(
+        FakeEarningsProvider(a_history()),
+        segment_revenue_provider=FakeSegmentRevenueProvider(
+            raises=StockDataUnavailable("AAPL", "boom")
+        ),
+    ).execute("AAPL")
+    assert result.quarters[0].revenue_breakdown is None  # untouched, history intact
+
+
+def test_earnings_use_case_breakdown_best_effort_when_symbol_not_filed():
+    result = GetStockEarnings(
+        FakeEarningsProvider(a_history()),
+        segment_revenue_provider=FakeSegmentRevenueProvider(
+            raises=StockNotFound("ZZZZ")
+        ),
+    ).execute("AAPL")
+    assert result.quarters[0].revenue_breakdown is None
+    assert result.quarters  # primary data survived
+
+
 # --------------------------- API ---------------------------
 
 @pytest.fixture
@@ -1027,6 +1125,7 @@ def make_client():
         earnings_provider: EarningsHistoryProvider | None = None,
         calendar_provider: EarningsCalendarProvider | None = None,
         revenue_provider: RevenueHistoryProvider | None = None,
+        segment_revenue_provider: SegmentRevenueProvider | None = None,
         quote_provider: StockQuoteProvider | None = None,
     ) -> TestClient:
         if provider is not None:
@@ -1059,6 +1158,7 @@ def make_client():
                 fundamentals_provider,
                 calendar_provider,
                 revenue_provider,
+                segment_revenue_provider,
             )
         return TestClient(app)
 
@@ -1486,6 +1586,28 @@ def test_get_earnings_quarters_revenue_null_without_revenue_provider(make_client
     client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
     q = client.get("/stocks/AAPL/earnings").json()["quarters"][0]
     assert q["revenue_actual"] is None
+
+
+def test_get_earnings_quarters_carry_revenue_breakdown(make_client):
+    history = a_history((a_surprise(period=date(2026, 3, 31)),))
+    client = make_client(
+        earnings_provider=FakeEarningsProvider(history),
+        segment_revenue_provider=FakeSegmentRevenueProvider(
+            {date(2026, 3, 31): a_breakdown()}
+        ),
+    )
+    bd = client.get("/stocks/AAPL/earnings").json()["quarters"][0]["revenue_breakdown"]
+    assert bd["by_segment"] == [
+        {"label": "North America", "amount": 100e9},
+        {"label": "International", "amount": 35e9},
+    ]
+    assert bd["by_product"] == [{"label": "Online Stores", "amount": 60e9}]
+
+
+def test_get_earnings_quarters_breakdown_null_without_provider(make_client):
+    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
+    q = client.get("/stocks/AAPL/earnings").json()["quarters"][0]
+    assert q["revenue_breakdown"] is None
 
 
 def test_get_earnings_response_has_no_upcoming_field(make_client):

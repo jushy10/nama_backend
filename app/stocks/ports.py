@@ -17,6 +17,7 @@ from app.stocks.entities import (
     Logo,
     NextEarnings,
     Quote,
+    RevenueBreakdown,
     SectorPerformance,
     Stock,
     StockFundamentals,
@@ -192,6 +193,38 @@ class RevenueHistoryProvider(ABC):
         reported for that quarter (raw, e.g. USD). Quarters that can't be derived
         are simply absent; an empty map means no revenue was available
         (best-effort, never an error for "no data").
+
+        Raises:
+            StockNotFound: the symbol isn't a filer covered by the source.
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class SegmentRevenueProvider(ABC):
+    """A gateway for a stock's reported revenue broken out by segment/product.
+
+    The disaggregated companion to ``RevenueHistoryProvider``: where that port
+    yields one revenue total per quarter, this one yields how each quarter's
+    revenue split across reportable operating segments and product/service lines.
+    Sourced from company filings (the SEC EDGAR XBRL the filer tagged), so it
+    carries only what the company actually reported — never an estimate. Keyed by
+    fiscal period end so the use case can align it onto the EPS beat history the
+    same way the revenue actuals are. Best-effort enrichment on the earnings
+    endpoint.
+    """
+
+    @abstractmethod
+    def get_quarterly_segment_revenue(
+        self, symbol: str
+    ) -> dict[date, RevenueBreakdown]:
+        """Return per-quarter revenue breakdowns keyed by fiscal period end.
+
+        Each key is a quarter's period-end date and each value a
+        ``RevenueBreakdown`` (segment and/or product/service components) for that
+        quarter. Quarters whose filing discloses no breakdown are simply absent;
+        an empty map means none was available (best-effort, never an error for
+        "no data").
 
         Raises:
             StockNotFound: the symbol isn't a filer covered by the source.

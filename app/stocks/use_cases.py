@@ -7,6 +7,7 @@ framework or a concrete provider.
 
 from dataclasses import replace
 from datetime import date, datetime
+from typing import TypeVar
 
 from app.stocks.entities import (
     AllTimeHigh,
@@ -41,6 +42,7 @@ from app.stocks.ports import (
     QuoteBatchProvider,
     RevenueHistoryProvider,
     SectorPerformanceProvider,
+    SegmentRevenueProvider,
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
@@ -238,35 +240,39 @@ class GetStockRsi:
 # neighbouring quarters never collide.
 _SAME_QUARTER_DAYS = 75
 
+_T = TypeVar("_T")
 
-def _align_revenue(
-    quarters: tuple[EarningsSurprise, ...], revenue: dict[date, float]
-) -> dict[int, float]:
-    """Map each EPS quarter (by its index) to its reported revenue actual.
+
+def _align_to_quarters(
+    quarters: tuple[EarningsSurprise, ...], by_period_end: dict[date, _T]
+) -> dict[int, _T]:
+    """Map each EPS quarter (by its index) to the EDGAR value for that quarter.
 
     Walks the EPS quarters and the EDGAR period ends together, newest-first, and
-    pairs them up. A quarter newer than anything EDGAR has filed (or one with no
-    period) is left unmatched, as is revenue belonging to a quarter newer than any
-    in the EPS history.
+    pairs them up by fiscal period end. Used for both overlays that key off the
+    same filings — the per-quarter revenue actuals and the segment/product
+    breakdowns — so they align identically. A quarter newer than anything EDGAR
+    has filed (or one with no period) is left unmatched, as is an EDGAR period
+    belonging to a quarter newer than any in the EPS history.
     """
     dated = sorted(
         ((i, q.period) for i, q in enumerate(quarters) if q.period is not None),
         key=lambda pair: pair[1],
         reverse=True,
     )
-    ends = sorted(revenue, reverse=True)
-    matched: dict[int, float] = {}
+    ends = sorted(by_period_end, reverse=True)
+    matched: dict[int, _T] = {}
     i = j = 0
     while i < len(dated) and j < len(ends):
         index, period = dated[i]
         end = ends[j]
         gap = (period - end).days
         if gap > _SAME_QUARTER_DAYS:
-            i += 1  # this EPS quarter is newer than any revenue on file — skip it
+            i += 1  # this EPS quarter is newer than any EDGAR period — skip it
         elif gap < -_SAME_QUARTER_DAYS:
-            j += 1  # this revenue is newer than the EPS quarter — skip it
+            j += 1  # this EDGAR period is newer than the EPS quarter — skip it
         else:
-            matched[index] = revenue[end]
+            matched[index] = by_period_end[end]
             i += 1
             j += 1
     return matched
@@ -282,11 +288,13 @@ class GetStockEarnings:
 
     A dedicated dataset (actual vs estimate per quarter), not snapshot
     enrichment — so errors propagate to the caller rather than being swallowed,
-    mirroring the candles and RSI endpoints. Three best-effort layers ride on
+    mirroring the candles and RSI endpoints. Several best-effort layers ride on
     top of the (primary) beat history, none of which can sink it: the trailing
     earnings ``metrics`` (from fundamentals), the ``next_report`` forecast (from
-    the earnings calendar), and per-quarter ``revenue_actual`` (reported revenue
-    from SEC EDGAR, aligned onto each quarter by fiscal period end).
+    the earnings calendar), per-quarter ``revenue_actual`` (reported revenue from
+    SEC EDGAR), and per-quarter ``revenue_breakdown`` (that revenue split by
+    segment and product/service, parsed from the filing itself). The two revenue
+    layers are aligned onto each quarter by fiscal period end.
     """
 
     def __init__(
@@ -295,11 +303,13 @@ class GetStockEarnings:
         fundamentals_provider: StockFundamentalsProvider | None = None,
         calendar_provider: EarningsCalendarProvider | None = None,
         revenue_provider: RevenueHistoryProvider | None = None,
+        segment_revenue_provider: SegmentRevenueProvider | None = None,
     ) -> None:
         self._provider = provider
         self._fundamentals_provider = fundamentals_provider
         self._calendar_provider = calendar_provider
         self._revenue_provider = revenue_provider
+        self._segment_revenue_provider = segment_revenue_provider
 
     def execute(self, symbol: str) -> EarningsHistory:
         normalized = _normalize_symbol(symbol)
@@ -307,6 +317,7 @@ class GetStockEarnings:
             normalized, limit=_EARNINGS_QUARTERS
         )
         quarters = self._with_revenue(normalized, history.quarters)
+        quarters = self._with_breakdown(normalized, quarters)
         metrics = self._metrics(normalized)
         next_report = self._next_report(normalized)
         if quarters is history.quarters and metrics is None and next_report is None:
@@ -329,11 +340,35 @@ class GetStockEarnings:
             return quarters
         if not revenue:
             return quarters
-        matched = _align_revenue(quarters, revenue)
+        matched = _align_to_quarters(quarters, revenue)
         if not matched:
             return quarters
         return tuple(
             replace(q, revenue_actual=matched[i]) if i in matched else q
+            for i, q in enumerate(quarters)
+        )
+
+    def _with_breakdown(
+        self, symbol: str, quarters: tuple[EarningsSurprise, ...]
+    ) -> tuple[EarningsSurprise, ...]:
+        # Overlay each quarter's segment/product revenue breakdown (parsed from
+        # the SEC EDGAR filings), aligned by period end like the revenue actuals;
+        # best-effort, and same identity-preserving short-circuit as _with_revenue.
+        if self._segment_revenue_provider is None:
+            return quarters
+        try:
+            breakdowns = self._segment_revenue_provider.get_quarterly_segment_revenue(
+                symbol
+            )
+        except (StockNotFound, StockDataUnavailable):
+            return quarters
+        if not breakdowns:
+            return quarters
+        matched = _align_to_quarters(quarters, breakdowns)
+        if not matched:
+            return quarters
+        return tuple(
+            replace(q, revenue_breakdown=matched[i]) if i in matched else q
             for i, q in enumerate(quarters)
         )
 
