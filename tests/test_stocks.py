@@ -864,6 +864,50 @@ def test_earnings_use_case_ignores_revenue_a_full_quarter_away():
     assert result.quarters[0].revenue_actual is None
 
 
+def test_earnings_use_case_aligns_offset_labels_to_their_own_quarter():
+    # NVDA/Ciena-style: the EPS feed snaps each quarter to a calendar quarter-end
+    # ~2 months *after* the true fiscal period end EDGAR records. Pairing by closest
+    # date would pull every label onto the next quarter's revenue (Mar-31 is nearer
+    # Apr-26 than its own Jan-25); aligning the two newest-first keeps each quarter
+    # on its own revenue, and matches the latest quarter the old window missed.
+    history = a_history((
+        a_surprise(fiscal_year=2027, fiscal_quarter=1, period=date(2026, 6, 30)),
+        a_surprise(fiscal_year=2026, fiscal_quarter=4, period=date(2026, 3, 31)),
+        a_surprise(fiscal_year=2026, fiscal_quarter=3, period=date(2025, 12, 31)),
+    ))
+    revenue = {
+        date(2026, 4, 26): 81.6e9,   # true end of the Jun-30-labelled quarter
+        date(2026, 1, 25): 68.1e9,   # true end of the Mar-31-labelled quarter
+        date(2025, 10, 26): 57.0e9,  # true end of the Dec-31-labelled quarter
+    }
+    result = GetStockEarnings(
+        FakeEarningsProvider(history),
+        revenue_provider=FakeRevenueProvider(revenue),
+    ).execute("NVDA")
+    q0, q1, q2 = result.quarters
+    assert q0.revenue_actual == 81.6e9
+    assert q1.revenue_actual == 68.1e9
+    assert q2.revenue_actual == 57.0e9
+
+
+def test_earnings_use_case_leaves_latest_quarter_empty_when_revenue_not_filed():
+    # The EPS announcement (Finnhub) can precede the 10-Q/XBRL (EDGAR) by a few
+    # days, so the newest quarter has no revenue on file yet. It stays empty while
+    # the older quarter still lines up — the alignment must not shift onto it.
+    history = a_history((
+        a_surprise(fiscal_year=2026, fiscal_quarter=2, period=date(2026, 6, 30)),
+        a_surprise(fiscal_year=2026, fiscal_quarter=1, period=date(2026, 3, 31)),
+    ))
+    revenue = {date(2026, 3, 29): 90.0e9}  # only the older quarter is filed
+    result = GetStockEarnings(
+        FakeEarningsProvider(history),
+        revenue_provider=FakeRevenueProvider(revenue),
+    ).execute("AAPL")
+    q0, q1 = result.quarters
+    assert q0.revenue_actual is None
+    assert q1.revenue_actual == 90.0e9
+
+
 def test_earnings_use_case_revenue_best_effort_when_provider_fails():
     result = GetStockEarnings(
         FakeEarningsProvider(a_history()),
