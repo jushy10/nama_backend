@@ -16,6 +16,7 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.sec_edgar_revenue_provider import SecEdgarRevenueProvider
 
 _REVENUE_TAG = "RevenueFromContractWithCustomerExcludingAssessedTax"
+_REVENUE_TAG_INCL = "RevenueFromContractWithCustomerIncludingAssessedTax"
 
 # A ticker->CIK file shaped like SEC's company_tickers.json (an object of rows).
 _TICKERS = {"0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}}
@@ -135,6 +136,32 @@ def test_merges_revenue_across_tags_when_a_filer_switches():
         date(2025, 3, 29): 90e9,  # only in the second tag
         date(2025, 6, 28): 96e9,
     }
+
+
+def test_merges_revenue_when_filer_switches_to_including_assessed_tax():
+    # Lumentum (LITE) reported revenue under the "Excluding assessed tax" concept
+    # through FY2025, then switched to the "Including" sibling starting FY2026.
+    # Both variants must be fetched and merged, or the newer quarters vanish
+    # behind the now-stale Excluding tag (the symptom that prompted adding it).
+    excl = _units(_fact("2025-03-30", "2025-06-28", 481e6, filed="2025-08-19"))
+    incl = _units(
+        _fact("2025-06-29", "2025-09-27", 534e6, filed="2025-11-05"),
+        _fact("2025-09-28", "2025-12-27", 666e6, filed="2026-02-04"),
+    )
+    p = provider_with(
+        [
+            ("company_tickers", 200, _TICKERS),
+            (_REVENUE_TAG, 200, excl),
+            (_REVENUE_TAG_INCL, 200, incl),
+        ]
+    )
+    assert p.get_quarterly_revenue("AAPL") == {
+        date(2025, 6, 28): 481e6,  # last quarter under the Excluding tag
+        date(2025, 9, 27): 534e6,  # first two under the Including tag
+        date(2025, 12, 27): 666e6,
+    }
+    # The Including-variant URL was actually requested, not just assumed present.
+    assert any(_REVENUE_TAG_INCL in u for u in p._http.requests)
 
 
 def test_overlapping_period_across_tags_takes_the_latest_filing():

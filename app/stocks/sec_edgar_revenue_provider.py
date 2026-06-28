@@ -29,11 +29,14 @@ import httpx
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import RevenueHistoryProvider
 
-# us-gaap revenue concepts, newest convention first. Filers tag revenue
-# differently (and switched tags when ASC 606 landed), so we try in order and
-# take the first that yields data.
+# us-gaap revenue concepts. Filers tag revenue differently and change tags over
+# time — across the ASC 606 transition (older filings used SalesRevenueNet), and
+# between the assessed-tax presentations (Lumentum moved from the Excluding to the
+# Including variant in FY2026). We fetch every candidate and merge the facts (see
+# _fetch_revenue_rows), so a tag going stale never hides the newer quarters.
 _REVENUE_TAGS = (
     "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
     "Revenues",
     "SalesRevenueNet",
 )
