@@ -813,11 +813,12 @@ def test_earnings_use_case_merges_revenue_into_quarters():
     assert q1.revenue_actual == 88.0e9
 
 
-def test_earnings_use_case_matches_revenue_by_nearest_period_end():
+def test_earnings_use_case_matches_revenue_by_calendar_quarter():
     # EDGAR's fiscal end can differ from the EPS feed's calendar quarter-end by a
-    # few days; the nearest end within the window still matches.
+    # few days (Apple's late-September year-end vs a Sep-30 label) — same calendar
+    # quarter, so it matches.
     history = a_history((a_surprise(period=date(2025, 9, 30)),))
-    revenue = {date(2025, 9, 27): 94.0e9}  # 3 days off — inside the tolerance
+    revenue = {date(2025, 9, 27): 94.0e9}  # 3 days off, same quarter
     result = GetStockEarnings(
         FakeEarningsProvider(history),
         revenue_provider=FakeRevenueProvider(revenue),
@@ -825,8 +826,21 @@ def test_earnings_use_case_matches_revenue_by_nearest_period_end():
     assert result.quarters[0].revenue_actual == 94.0e9
 
 
-def test_earnings_use_case_ignores_revenue_outside_match_window():
-    # A period end a whole quarter away must not be mismatched onto this quarter.
+def test_earnings_use_case_matches_offset_fiscal_calendar():
+    # Micron's fiscal quarters end ~5 weeks before the calendar quarter-end the EPS
+    # feed labels them with (Aug-28 fiscal end vs a Sep-30 label) — far outside any
+    # day-proximity window, but the same calendar quarter, so it still matches.
+    history = a_history((a_surprise(period=date(2025, 9, 30)),))
+    revenue = {date(2025, 8, 28): 11.31e9}
+    result = GetStockEarnings(
+        FakeEarningsProvider(history),
+        revenue_provider=FakeRevenueProvider(revenue),
+    ).execute("MU")
+    assert result.quarters[0].revenue_actual == 11.31e9
+
+
+def test_earnings_use_case_ignores_a_different_calendar_quarter():
+    # A period in a different calendar quarter must not be mismatched onto this one.
     history = a_history((a_surprise(period=date(2026, 3, 31)),))
     revenue = {date(2025, 12, 31): 88.0e9}
     result = GetStockEarnings(

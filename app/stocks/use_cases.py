@@ -200,26 +200,35 @@ class GetStockRsi:
         return rsi_series(series, period)
 
 
-# A fiscal period end from the EPS feed (Finnhub) and from EDGAR's XBRL filings
-# can differ by a few days — a calendar quarter-end vs the company's own 52/53-week
-# fiscal end — so align within this tolerance rather than demanding an exact date.
-_PERIOD_MATCH_DAYS = 20
+def _calendar_quarter(d: date) -> tuple[int, int]:
+    """The (year, quarter-index) calendar bucket a date falls in — Q1 = Jan–Mar."""
+    return (d.year, (d.month - 1) // 3)
 
 
 def _match_revenue_actual(
     period: date | None, revenue: dict[date, float]
 ) -> float | None:
-    """The reported revenue whose period end is closest to ``period`` within the
-    match window, or None when nothing fits."""
+    """The reported revenue for the same fiscal quarter as ``period``.
+
+    The EPS feed (Finnhub) labels each quarter with a calendar quarter-end, while
+    EDGAR carries the company's actual fiscal period-end — which can sit a month or
+    more inside that calendar quarter (Micron's fiscal quarters end in late
+    Feb/May/Aug/Nov, ~5 weeks before the Mar/Jun/Sep/Dec labels). Both fall in the
+    *same calendar quarter*, so we match on that bucket rather than a day-proximity
+    window that such offset fiscal calendars would slip past. Among any same-quarter
+    candidates the closest to ``period`` wins (there is normally exactly one)."""
     if period is None:
         return None
-    best_key = None
+    target = _calendar_quarter(period)
+    best = None
     best_gap = None
-    for end in revenue:
+    for end, value in revenue.items():
+        if _calendar_quarter(end) != target:
+            continue
         gap = abs((end - period).days)
-        if gap <= _PERIOD_MATCH_DAYS and (best_gap is None or gap < best_gap):
-            best_key, best_gap = end, gap
-    return revenue[best_key] if best_key is not None else None
+        if best_gap is None or gap < best_gap:
+            best, best_gap = value, gap
+    return best
 
 
 # Finnhub's free `/stock/earnings` returns only the last four quarters and
