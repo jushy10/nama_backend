@@ -115,6 +115,42 @@ def test_falls_back_to_next_revenue_tag_on_404():
     assert any("Revenues.json" in u for u in p._http.requests)
 
 
+def test_merges_revenue_across_tags_when_a_filer_switches():
+    # A filer can move revenue from one tag to another over time (Alphabet did);
+    # the union must include the newer quarters, not just the first tag's stale data.
+    old = _units(_fact("2023-12-30", "2024-03-30", 80e9, filed="2024-04-25"))
+    new = _units(
+        _fact("2024-12-28", "2025-03-29", 90e9, filed="2025-04-24"),
+        _fact("2025-03-30", "2025-06-28", 96e9, filed="2025-07-24"),
+    )
+    p = provider_with(
+        [
+            ("company_tickers", 200, _TICKERS),
+            (_REVENUE_TAG, 200, old),
+            ("Revenues", 200, new),
+        ]
+    )
+    assert p.get_quarterly_revenue("AAPL") == {
+        date(2024, 3, 30): 80e9,  # only in the (now-stale) first tag
+        date(2025, 3, 29): 90e9,  # only in the second tag
+        date(2025, 6, 28): 96e9,
+    }
+
+
+def test_overlapping_period_across_tags_takes_the_latest_filing():
+    # The same quarter under two tags resolves to the most-recently-filed value.
+    first = _units(_fact("2024-12-28", "2025-03-29", 90e9, filed="2025-04-24"))
+    restated = _units(_fact("2024-12-28", "2025-03-29", 91e9, filed="2025-08-01"))
+    p = provider_with(
+        [
+            ("company_tickers", 200, _TICKERS),
+            (_REVENUE_TAG, 200, first),
+            ("Revenues", 200, restated),
+        ]
+    )
+    assert p.get_quarterly_revenue("AAPL") == {date(2025, 3, 29): 91e9}
+
+
 def test_no_revenue_tag_covered_returns_empty():
     # Every revenue tag 404s -> best-effort empty, not an error.
     p = provider_with([("company_tickers", 200, _TICKERS)])
