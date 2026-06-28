@@ -200,33 +200,28 @@ class GetStockRsi:
         return rsi_series(series, period)
 
 
-def _calendar_quarter(d: date) -> tuple[int, int]:
-    """The (year, quarter-index) calendar bucket a date falls in — Q1 = Jan–Mar."""
-    return (d.year, (d.month - 1) // 3)
+# The EPS feed (Finnhub) labels each quarter with the calendar quarter-end nearest
+# the company's fiscal period end, so the two are at most ~6 weeks apart — even when
+# the fiscal end straddles a calendar-quarter boundary (Seagate's quarters end a few
+# days *into* the next quarter; Micron's end ~5 weeks *before* the label). A genuine
+# adjacent quarter is ~13 weeks away, so the nearest EDGAR end inside this window is
+# unambiguously the right one. (A calendar-quarter *bucket* match misaligns Seagate;
+# a tight day window misses Micron — nearest-within-6-weeks handles both.)
+_PERIOD_MATCH_DAYS = 45
 
 
 def _match_revenue_actual(
     period: date | None, revenue: dict[date, float]
 ) -> float | None:
-    """The reported revenue for the same fiscal quarter as ``period``.
-
-    The EPS feed (Finnhub) labels each quarter with a calendar quarter-end, while
-    EDGAR carries the company's actual fiscal period-end — which can sit a month or
-    more inside that calendar quarter (Micron's fiscal quarters end in late
-    Feb/May/Aug/Nov, ~5 weeks before the Mar/Jun/Sep/Dec labels). Both fall in the
-    *same calendar quarter*, so we match on that bucket rather than a day-proximity
-    window that such offset fiscal calendars would slip past. Among any same-quarter
-    candidates the closest to ``period`` wins (there is normally exactly one)."""
+    """The reported revenue whose fiscal period end is nearest ``period``, within
+    the match window; None when nothing falls inside it."""
     if period is None:
         return None
-    target = _calendar_quarter(period)
     best = None
     best_gap = None
     for end, value in revenue.items():
-        if _calendar_quarter(end) != target:
-            continue
         gap = abs((end - period).days)
-        if best_gap is None or gap < best_gap:
+        if gap <= _PERIOD_MATCH_DAYS and (best_gap is None or gap < best_gap):
             best, best_gap = value, gap
     return best
 

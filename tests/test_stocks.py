@@ -813,12 +813,12 @@ def test_earnings_use_case_merges_revenue_into_quarters():
     assert q1.revenue_actual == 88.0e9
 
 
-def test_earnings_use_case_matches_revenue_by_calendar_quarter():
+def test_earnings_use_case_matches_revenue_by_nearest_period_end():
     # EDGAR's fiscal end can differ from the EPS feed's calendar quarter-end by a
-    # few days (Apple's late-September year-end vs a Sep-30 label) — same calendar
-    # quarter, so it matches.
+    # few days (Apple's late-September year-end vs a Sep-30 label); the nearest end
+    # within the window matches.
     history = a_history((a_surprise(period=date(2025, 9, 30)),))
-    revenue = {date(2025, 9, 27): 94.0e9}  # 3 days off, same quarter
+    revenue = {date(2025, 9, 27): 94.0e9}  # 3 days off
     result = GetStockEarnings(
         FakeEarningsProvider(history),
         revenue_provider=FakeRevenueProvider(revenue),
@@ -828,8 +828,8 @@ def test_earnings_use_case_matches_revenue_by_calendar_quarter():
 
 def test_earnings_use_case_matches_offset_fiscal_calendar():
     # Micron's fiscal quarters end ~5 weeks before the calendar quarter-end the EPS
-    # feed labels them with (Aug-28 fiscal end vs a Sep-30 label) — far outside any
-    # day-proximity window, but the same calendar quarter, so it still matches.
+    # feed labels them with (Aug-28 fiscal end vs a Sep-30 label) — too far for a
+    # tight window, but within ~6 weeks, so the nearest match still lands.
     history = a_history((a_surprise(period=date(2025, 9, 30)),))
     revenue = {date(2025, 8, 28): 11.31e9}
     result = GetStockEarnings(
@@ -839,8 +839,22 @@ def test_earnings_use_case_matches_offset_fiscal_calendar():
     assert result.quarters[0].revenue_actual == 11.31e9
 
 
-def test_earnings_use_case_ignores_a_different_calendar_quarter():
-    # A period in a different calendar quarter must not be mismatched onto this one.
+def test_earnings_use_case_matches_across_a_calendar_quarter_boundary():
+    # Seagate's fiscal quarters end a few days INTO the next calendar quarter (Oct 3
+    # for the quarter the EPS feed labels Sep 30), so the two dates sit in different
+    # calendar quarters yet are only days apart — proximity must still match them.
+    history = a_history((a_surprise(period=date(2025, 9, 30)),))
+    revenue = {date(2025, 10, 3): 2.63e9}
+    result = GetStockEarnings(
+        FakeEarningsProvider(history),
+        revenue_provider=FakeRevenueProvider(revenue),
+    ).execute("STX")
+    assert result.quarters[0].revenue_actual == 2.63e9
+
+
+def test_earnings_use_case_ignores_revenue_a_full_quarter_away():
+    # An end a full quarter (~13 weeks) from the period is a different quarter and
+    # must not be matched onto this one.
     history = a_history((a_surprise(period=date(2026, 3, 31)),))
     revenue = {date(2025, 12, 31): 88.0e9}
     result = GetStockEarnings(
