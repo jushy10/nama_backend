@@ -26,6 +26,7 @@ from app.stocks.entities import (
     KeyMetrics,
     MoversBoard,
     NextEarnings,
+    QuarterlyGrowth,
     Quote,
     ScreenedStock,
     SectorPerformance,
@@ -64,6 +65,7 @@ from app.stocks.schemas import (
     KeyMetricsResponse,
     MoversResponse,
     NextEarningsResponse,
+    QuarterlyGrowthResponse,
     QuoteResponse,
     RsiPointResponse,
     RsiResponse,
@@ -328,6 +330,22 @@ def _present_next_earnings(
     )
 
 
+def _present_quarterly_growth(
+    growth: QuarterlyGrowth | None,
+) -> QuarterlyGrowthResponse | None:
+    if growth is None:
+        return None
+    return QuarterlyGrowthResponse(
+        period=growth.period,
+        fiscal_year=growth.fiscal_year,
+        fiscal_quarter=growth.fiscal_quarter,
+        eps_growth_yoy=growth.eps_growth_yoy,
+        eps_growth_qoq=growth.eps_growth_qoq,
+        revenue_growth_yoy=growth.revenue_growth_yoy,
+        revenue_growth_qoq=growth.revenue_growth_qoq,
+    )
+
+
 def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
     """Presenter: earnings-history entity -> HTTP response DTO."""
     return EarningsHistoryResponse(
@@ -358,6 +376,7 @@ def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
             for u in history.upcoming
             if (r := _present_next_earnings(u)) is not None
         ],
+        quarterly_growth=_present_quarterly_growth(history.quarterly_growth),
     )
 
 

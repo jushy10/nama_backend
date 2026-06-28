@@ -24,6 +24,7 @@ from app.stocks.entities import (
     KeyMetrics,
     Logo,
     NextEarnings,
+    QuarterlyGrowth,
     Quote,
     SectorPerformance,
     Stock,
@@ -473,6 +474,71 @@ def test_earnings_metrics_none_without_earnings_fields():
     assert EarningsMetrics.from_key_metrics(None) is None
 
 
+def test_quarterly_growth_yoy_and_qoq_from_series():
+    quarters = (
+        a_surprise(fiscal_year=2026, fiscal_quarter=1, period=date(2026, 3, 31),
+                   actual=2.20, revenue_actual=110.0e9),
+        a_surprise(fiscal_year=2025, fiscal_quarter=4, period=date(2025, 12, 31),
+                   actual=2.00, revenue_actual=100.0e9),
+        a_surprise(fiscal_year=2025, fiscal_quarter=3, period=date(2025, 9, 30),
+                   actual=1.80, revenue_actual=95.0e9),
+        a_surprise(fiscal_year=2025, fiscal_quarter=2, period=date(2025, 6, 30),
+                   actual=1.50, revenue_actual=90.0e9),
+        a_surprise(fiscal_year=2025, fiscal_quarter=1, period=date(2025, 3, 31),
+                   actual=2.00, revenue_actual=100.0e9),
+    )
+    g = QuarterlyGrowth.from_quarters(quarters)
+    assert g is not None
+    assert (g.fiscal_year, g.fiscal_quarter) == (2026, 1)
+    # YoY: 2026Q1 vs 2025Q1 -> +10% EPS (2.20 vs 2.00), +10% revenue (110 vs 100)
+    assert g.eps_growth_yoy == 10.0
+    assert g.revenue_growth_yoy == 10.0
+    # QoQ: 2026Q1 vs 2025Q4 -> +10% EPS (2.20 vs 2.00), +10% revenue (110 vs 100)
+    assert g.eps_growth_qoq == 10.0
+    assert g.revenue_growth_qoq == 10.0
+
+
+def test_quarterly_growth_yoy_matches_by_fiscal_label_not_offset():
+    # A gap in the series: 2025Q1 is the 3rd entry, not the 5th. Label-matching
+    # must still pair 2026Q1 with 2025Q1 rather than counting four positions back.
+    quarters = (
+        a_surprise(fiscal_year=2026, fiscal_quarter=1, actual=2.20),
+        a_surprise(fiscal_year=2025, fiscal_quarter=4, actual=2.00),
+        a_surprise(fiscal_year=2025, fiscal_quarter=1, actual=1.10),
+    )
+    g = QuarterlyGrowth.from_quarters(quarters)
+    assert g.eps_growth_yoy == 100.0  # 2.20 vs 1.10
+    assert g.eps_growth_qoq == 10.0  # 2.20 vs 2.00
+
+
+def test_quarterly_growth_yoy_none_without_year_ago_quarter():
+    quarters = (
+        a_surprise(fiscal_year=2026, fiscal_quarter=1, actual=2.20),
+        a_surprise(fiscal_year=2025, fiscal_quarter=4, actual=2.00),
+    )
+    g = QuarterlyGrowth.from_quarters(quarters)
+    assert g is not None
+    assert g.eps_growth_yoy is None  # no 2025Q1 in the series
+    assert g.eps_growth_qoq == 10.0
+
+
+def test_quarterly_growth_eps_none_when_prior_eps_non_positive():
+    # A swing out of a loss isn't a meaningful percent; revenue (positive base) is.
+    quarters = (
+        a_surprise(fiscal_year=2026, fiscal_quarter=1, actual=0.50, revenue_actual=110.0e9),
+        a_surprise(fiscal_year=2025, fiscal_quarter=4, actual=-0.20, revenue_actual=100.0e9),
+    )
+    g = QuarterlyGrowth.from_quarters(quarters)
+    assert g is not None
+    assert g.eps_growth_qoq is None  # prior EPS was a loss -> undefined
+    assert g.revenue_growth_qoq == 10.0
+
+
+def test_quarterly_growth_none_without_enough_history():
+    assert QuarterlyGrowth.from_quarters((a_surprise(),)) is None  # lone quarter
+    assert QuarterlyGrowth.from_quarters(()) is None  # no quarters
+
+
 def test_candle_is_bullish():
     assert a_candle(open=100.0, close=110.0).is_bullish is True   # up -> green
     assert a_candle(open=110.0, close=100.0).is_bullish is False  # down -> red
@@ -737,10 +803,12 @@ def test_earnings_use_case_normalizes_symbol_and_forwards_limit():
     assert fake.received == [("AAPL", 8)]
 
 
-def test_earnings_use_case_defaults_to_four_quarters():
+def test_earnings_use_case_default_fetches_growth_lookback():
+    # The default returns 4 quarters, but the use case fetches a year of extra
+    # history (5) so the latest quarter has its year-ago comparable for YoY.
     fake = FakeEarningsProvider(a_history())
     GetStockEarnings(fake).execute("AAPL")
-    assert fake.received == [("AAPL", 4)]
+    assert fake.received == [("AAPL", 5)]
 
 
 @pytest.mark.parametrize("bad", ["", "   ", "123", "AA1", "TOOLONG"])
@@ -884,6 +952,39 @@ def test_earnings_use_case_estimates_best_effort_when_provider_fails():
     ).execute("AAPL")
     assert result.upcoming == ()
     assert result.quarters  # primary data survived
+
+
+def test_earnings_use_case_attaches_quarterly_growth():
+    history = a_history((
+        a_surprise(fiscal_year=2026, fiscal_quarter=1, period=date(2026, 3, 31), actual=2.20),
+        a_surprise(fiscal_year=2025, fiscal_quarter=4, period=date(2025, 12, 31), actual=2.00),
+        a_surprise(fiscal_year=2025, fiscal_quarter=1, period=date(2025, 3, 31), actual=2.00),
+    ))
+    result = GetStockEarnings(FakeEarningsProvider(history)).execute("AAPL")
+    assert result.quarterly_growth is not None
+    assert result.quarterly_growth.eps_growth_yoy == 10.0  # 2026Q1 vs 2025Q1
+    assert result.quarterly_growth.eps_growth_qoq == 10.0  # 2026Q1 vs 2025Q4
+
+
+def test_earnings_use_case_quarterly_growth_none_without_enough_history():
+    # The default single-quarter history has nothing to compare against.
+    result = GetStockEarnings(FakeEarningsProvider(a_history())).execute("AAPL")
+    assert result.quarterly_growth is None
+
+
+def test_earnings_use_case_trims_to_limit_but_derives_growth_from_lookback():
+    quarters = (
+        a_surprise(fiscal_year=2026, fiscal_quarter=1, period=date(2026, 3, 31), actual=2.20),
+        a_surprise(fiscal_year=2025, fiscal_quarter=4, period=date(2025, 12, 31), actual=2.00),
+        a_surprise(fiscal_year=2025, fiscal_quarter=3, period=date(2025, 9, 30), actual=1.80),
+        a_surprise(fiscal_year=2025, fiscal_quarter=2, period=date(2025, 6, 30), actual=1.50),
+        a_surprise(fiscal_year=2025, fiscal_quarter=1, period=date(2025, 3, 31), actual=2.00),
+    )
+    fake = FakeEarningsProvider(a_history(quarters))
+    result = GetStockEarnings(fake).execute("AAPL", limit=2)
+    assert fake.received == [("AAPL", 5)]  # fetched the lookback window...
+    assert len(result.quarters) == 2  # ...but returned only the 2 asked for
+    assert result.quarterly_growth.eps_growth_yoy == 10.0  # still computed: 2026Q1 vs 2025Q1
 
 
 # --------------------------- API ---------------------------
@@ -1377,6 +1478,26 @@ def test_get_earnings_upcoming_empty_without_estimates(make_client):
     assert client.get("/stocks/AAPL/earnings").json()["upcoming"] == []
 
 
+def test_get_earnings_includes_quarterly_growth(make_client):
+    history = a_history((
+        a_surprise(fiscal_year=2026, fiscal_quarter=1, period=date(2026, 3, 31), actual=2.20),
+        a_surprise(fiscal_year=2025, fiscal_quarter=4, period=date(2025, 12, 31), actual=2.00),
+        a_surprise(fiscal_year=2025, fiscal_quarter=1, period=date(2025, 3, 31), actual=2.00),
+    ))
+    client = make_client(earnings_provider=FakeEarningsProvider(history))
+    g = client.get("/stocks/AAPL/earnings").json()["quarterly_growth"]
+    assert g is not None
+    assert g["fiscal_year"] == 2026
+    assert g["eps_growth_yoy"] == 10.0  # 2026Q1 vs 2025Q1
+    assert g["eps_growth_qoq"] == 10.0  # 2026Q1 vs 2025Q4
+
+
+def test_get_earnings_quarterly_growth_null_without_history(make_client):
+    # A single reported quarter has nothing to compare against.
+    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
+    assert client.get("/stocks/AAPL/earnings").json()["quarterly_growth"] is None
+
+
 def test_get_earnings_honors_limit(make_client):
     fake = FakeEarningsProvider(a_history())
     client = make_client(earnings_provider=fake)
@@ -1384,11 +1505,13 @@ def test_get_earnings_honors_limit(make_client):
     assert fake.received == [("AAPL", 12)]
 
 
-def test_get_earnings_defaults_to_four_quarters(make_client):
+def test_get_earnings_default_fetches_growth_lookback(make_client):
+    # The endpoint still defaults to 4 *returned* quarters; internally it pulls
+    # one extra (5) for the latest quarter's YoY lookback.
     fake = FakeEarningsProvider(a_history())
     client = make_client(earnings_provider=fake)
     client.get("/stocks/AAPL/earnings")
-    assert fake.received == [("AAPL", 4)]
+    assert fake.received == [("AAPL", 5)]
 
 
 def test_get_earnings_invalid_symbol_400(make_client):

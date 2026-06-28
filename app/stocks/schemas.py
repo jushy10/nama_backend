@@ -181,6 +181,28 @@ class EarningsMetricsResponse(BaseModel):
     payout_ratio: float | None = None  # dividends / earnings (percent)
 
 
+class QuarterlyGrowthResponse(BaseModel):
+    """The latest reported quarter's growth, year-over-year and quarter-over-quarter.
+
+    ``*_yoy`` compares the most recent reported quarter to the same fiscal
+    quarter a year earlier (the seasonality-free growth read); ``*_qoq`` to the
+    immediately preceding quarter (sequential momentum, seasonally noisy). EPS
+    legs come from the beat history, revenue legs from the best-effort revenue
+    overlay (so ``null`` more often). All percentages; a leg is ``null`` when its
+    comparison quarter is missing or the base EPS is non-positive. Note this is
+    quarter-vs-quarter — unlike the *trailing-twelve-month* growth carried on
+    ``EarningsMetricsResponse``.
+    """
+
+    period: date | None = None  # fiscal period end of the quarter described
+    fiscal_year: int | None = None
+    fiscal_quarter: int | None = None
+    eps_growth_yoy: float | None = None  # percent
+    eps_growth_qoq: float | None = None  # percent
+    revenue_growth_yoy: float | None = None  # percent
+    revenue_growth_qoq: float | None = None  # percent
+
+
 class NextEarningsResponse(BaseModel):
     """The next scheduled earnings report and the consensus going into it.
 
@@ -204,8 +226,9 @@ class EarningsHistoryResponse(BaseModel):
     ``beat_rate`` is the percent of *scored* quarters (those with both an actual
     and an estimate) that met or beat — the "beats consistently?" read.
     ``count`` is how many quarters are returned. ``metrics`` is an optional
-    trailing earnings snapshot and ``next_report`` the next scheduled report's
-    consensus (both best-effort; ``null`` when unavailable)."""
+    trailing earnings snapshot, ``next_report`` the next scheduled report's
+    consensus, and ``quarterly_growth`` the latest quarter's YoY/QoQ growth (all
+    best-effort; ``null`` when unavailable)."""
 
     symbol: str
     count: int
@@ -217,6 +240,9 @@ class EarningsHistoryResponse(BaseModel):
     next_report: NextEarningsResponse | None = None
     # Consensus for the next several quarters (analyst estimates), nearest first.
     upcoming: list[NextEarningsResponse] = []
+    # The latest reported quarter's growth vs the year-ago quarter and the prior
+    # quarter; null when there isn't enough history to compute any leg.
+    quarterly_growth: QuarterlyGrowthResponse | None = None
 
 
 class SectorPerformanceResponse(BaseModel):

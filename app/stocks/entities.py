@@ -178,6 +178,101 @@ class EarningsSurprise:
         return self.actual >= self.estimate
 
 
+def _growth_pct(current: float | None, prior: float | None) -> float | None:
+    """Percent change from ``prior`` to ``current``, or ``None`` when that can't
+    be a meaningful growth figure.
+
+    Guards on a positive base: a missing side, or a non-positive prior (an EPS
+    loss), makes the percentage misleading rather than informative — the same
+    positive-only stance ``KeyMetrics.peg`` takes. Revenue is effectively always
+    positive, so the guard really only bites on EPS coming out of a loss.
+    """
+    if current is None or prior is None or prior <= 0:
+        return None
+    return round((current - prior) / prior * 100, 1)
+
+
+@dataclass(frozen=True)
+class QuarterlyGrowth:
+    """The latest reported quarter's growth, year-over-year and quarter-over-quarter.
+
+    Two reads on the most recent reported quarter: ``*_yoy`` compares it to the
+    same fiscal quarter a year earlier (cancels seasonality — the standard growth
+    read), ``*_qoq`` to the immediately preceding quarter (a sequential
+    "momentum" read, which is seasonally noisy for most businesses). EPS figures
+    come from the beat history; revenue from the best-effort revenue overlay, so
+    the revenue legs are ``None`` more often. All percentages; any leg whose
+    comparison quarter is absent (or whose base EPS is non-positive) is ``None``.
+
+    Distinct from ``EarningsMetrics.eps_growth_yoy`` / ``revenue_growth_yoy``,
+    which are *trailing-twelve-month* figures from the fundamentals vendor — this
+    is quarter-versus-quarter, computed from the reported series itself.
+    """
+
+    period: date | None  # fiscal period end of the quarter described (the latest)
+    fiscal_year: int | None
+    fiscal_quarter: int | None
+    eps_growth_yoy: float | None = None  # percent
+    eps_growth_qoq: float | None = None  # percent
+    revenue_growth_yoy: float | None = None  # percent
+    revenue_growth_qoq: float | None = None  # percent
+
+    @classmethod
+    def from_quarters(
+        cls, quarters: tuple["EarningsSurprise", ...]
+    ) -> "QuarterlyGrowth | None":
+        """Derive the latest quarter's YoY/QoQ growth from the surprise series.
+
+        ``quarters`` is the reported history newest-first (the ``EarningsHistory``
+        invariant). The year-ago quarter is matched by fiscal label —
+        ``(fiscal_year - 1, fiscal_quarter)`` — so a gap in the series can't line
+        the latest quarter up against the wrong one; the prior quarter is simply
+        the next entry. ``None`` when there are no quarters, or when no leg can be
+        computed (a lone quarter, or no comparable EPS/revenue) — mirroring how
+        ``EarningsMetrics`` declines to build an all-empty block.
+        """
+        if not quarters:
+            return None
+        latest = quarters[0]
+        prior = quarters[1] if len(quarters) > 1 else None
+        year_ago = None
+        if latest.fiscal_year is not None and latest.fiscal_quarter is not None:
+            for q in quarters[1:]:
+                if (
+                    q.fiscal_year == latest.fiscal_year - 1
+                    and q.fiscal_quarter == latest.fiscal_quarter
+                ):
+                    year_ago = q
+                    break
+        growth = cls(
+            period=latest.period,
+            fiscal_year=latest.fiscal_year,
+            fiscal_quarter=latest.fiscal_quarter,
+            eps_growth_yoy=(
+                _growth_pct(latest.actual, year_ago.actual) if year_ago else None
+            ),
+            eps_growth_qoq=_growth_pct(latest.actual, prior.actual) if prior else None,
+            revenue_growth_yoy=(
+                _growth_pct(latest.revenue_actual, year_ago.revenue_actual)
+                if year_ago
+                else None
+            ),
+            revenue_growth_qoq=(
+                _growth_pct(latest.revenue_actual, prior.revenue_actual)
+                if prior
+                else None
+            ),
+        )
+        if (
+            growth.eps_growth_yoy is None
+            and growth.eps_growth_qoq is None
+            and growth.revenue_growth_yoy is None
+            and growth.revenue_growth_qoq is None
+        ):
+            return None
+        return growth
+
+
 @dataclass(frozen=True)
 class EarningsMetrics:
     """Trailing earnings / profitability metrics for one stock.
@@ -274,8 +369,9 @@ class EarningsHistory:
     The summary properties answer the checklist's "beats consistently?" question:
     of the quarters with both an actual and an estimate, how many met or beat.
     ``metrics`` is an optional trailing earnings snapshot, ``next_report`` the
-    next scheduled report's consensus, and ``upcoming`` the analyst consensus
-    for the next several quarters — all best-effort enrichment riding along with
+    next scheduled report's consensus, ``upcoming`` the analyst consensus for the
+    next several quarters, and ``quarterly_growth`` the latest quarter's YoY/QoQ
+    growth derived from the series — all best-effort enrichment riding along with
     the per-quarter history.
     """
 
@@ -284,6 +380,7 @@ class EarningsHistory:
     metrics: EarningsMetrics | None = None
     next_report: NextEarnings | None = None
     upcoming: tuple[NextEarnings, ...] = ()
+    quarterly_growth: QuarterlyGrowth | None = None
 
     @property
     def scored(self) -> int:

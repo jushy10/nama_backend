@@ -19,6 +19,7 @@ from app.stocks.entities import (
     Logo,
     MoversBoard,
     NextEarnings,
+    QuarterlyGrowth,
     Quote,
     ScreenedStock,
     SectorPerformance,
@@ -205,6 +206,11 @@ class GetStockRsi:
 # announcement is ~90 days out, so this window matches exactly one event.
 _ANNOUNCE_WINDOW_DAYS = 75
 
+# The latest quarter's YoY growth compares it to the same quarter a year earlier
+# — the 5th quarter back — so we always pull at least this many, even when the
+# caller asks for fewer, then trim the lookback tail off the returned series.
+_GROWTH_LOOKBACK_QUARTERS = 5
+
 
 def _overlay_revenue(
     quarters: tuple[EarningsSurprise, ...],
@@ -272,29 +278,31 @@ class GetStockEarnings:
         if limit < 1:
             raise ValueError("'limit' must be at least 1.")
         normalized = _normalize_symbol(symbol)
-        history = self._provider.get_earnings_history(normalized, limit=limit)
+        # Pull a year of extra history beyond what's returned so the latest
+        # quarter has its year-ago comparable for YoY growth; a small `limit`
+        # wouldn't otherwise include it. The lookback tail is trimmed off below.
+        fetch_limit = max(limit, _GROWTH_LOOKBACK_QUARTERS)
+        history = self._provider.get_earnings_history(normalized, limit=fetch_limit)
         estimates = self._estimates(normalized)
         # Reported revenue: the calendar's (Finnhub) merge first, then the richer
         # estimates vendor (FMP) overlaid on top — FMP wins where both have it.
         quarters = self._with_revenue(normalized, history.quarters)
         if estimates is not None:
             quarters = _overlay_revenue(quarters, estimates.reported_revenue)
+        # Derive growth from the full (revenue-enriched) window, then trim the
+        # lookback tail to the quarters the caller actually asked for.
+        quarterly_growth = QuarterlyGrowth.from_quarters(quarters)
+        quarters = quarters[:limit]
         metrics = self._metrics(normalized)
         next_report = self._next_report(normalized)
         upcoming = estimates.upcoming if estimates is not None else ()
-        if (
-            quarters is history.quarters
-            and metrics is None
-            and next_report is None
-            and not upcoming
-        ):
-            return history
         return replace(
             history,
             quarters=quarters,
             metrics=metrics,
             next_report=next_report,
             upcoming=upcoming,
+            quarterly_growth=quarterly_growth,
         )
 
     def _estimates(self, symbol: str) -> EarningsEstimates | None:
