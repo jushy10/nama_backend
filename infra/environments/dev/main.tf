@@ -153,11 +153,12 @@ module "app" {
   }
 
   # Plain (non-secret) config for the AI analysis endpoint, so the Bedrock model
-  # and region are swappable without a code change. The model id may need to name
-  # a cross-region inference profile, and must be access-enabled in this account.
+  # and region are swappable without a code change. Using Claude Sonnet 4.6 —
+  # Opus 4.8 isn't entitled to this account on Bedrock. The model id is a
+  # cross-region inference profile and must be access-enabled in this account.
   extra_environment = {
     BEDROCK_REGION            = "us-east-1"
-    BEDROCK_ANALYSIS_MODEL_ID = "us.anthropic.claude-opus-4-8"
+    BEDROCK_ANALYSIS_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
   }
 
   # Grant the task role bedrock:InvokeModel for the AI analysis endpoint
