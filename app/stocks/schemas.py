@@ -314,3 +314,26 @@ class MoversResponse(BaseModel):
     as_of: datetime | None = None
     gainers: list[ScreenedStockResponse]
     losers: list[ScreenedStockResponse]
+
+
+class InvestmentAnalysisResponse(BaseModel):
+    """An AI-generated, balanced buy/hold/sell read on a stock.
+
+    ``recommendation`` is the headline call ("buy"/"hold"/"sell") and
+    ``confidence`` how firmly it's held ("low"/"medium"/"high"); ``thesis`` is a
+    few sentences of reasoning, with ``strengths`` (the bull case) and ``risks``
+    (the bear case) as short bullets. ``disclaimer`` is a fixed reminder that this
+    is informational, not financial advice — authored by the service, not the
+    model. ``model`` and ``generated_at`` record what produced the analysis and
+    when. Reasoned only over the figures the other stock endpoints expose;
+    descriptive, not advice."""
+
+    symbol: str
+    recommendation: str  # "buy" | "hold" | "sell"
+    confidence: str  # "low" | "medium" | "high"
+    thesis: str
+    strengths: list[str]  # bull-case points
+    risks: list[str]  # bear-case points
+    disclaimer: str
+    model: str  # the model that produced the analysis
+    generated_at: datetime

@@ -14,6 +14,7 @@ from app.stocks.entities import (
     CompanyProfile,
     Constituent,
     EarningsHistory,
+    InvestmentAnalysis,
     Logo,
     NextEarnings,
     Quote,
@@ -327,4 +328,37 @@ class ConstituentRepository(ABC):
     @abstractmethod
     def all(self) -> tuple[Constituent, ...]:
         """Return every known constituent."""
+        raise NotImplementedError
+
+
+class InvestmentAnalysisProvider(ABC):
+    """A gateway that turns the data already gathered for a stock into a short,
+    AI-generated buy / hold / sell read.
+
+    Unlike the other ports this one isn't handed a symbol to look up — the use
+    case has already assembled the enriched ``Stock`` (price, performance,
+    valuation/health metrics) and, when available, the recent
+    ``EarningsHistory``. The adapter only reasons over what it's given and never
+    fetches outside data. This backs a dedicated endpoint (its own reason to
+    exist, not best-effort enrichment), so a failure surfaces as an error rather
+    than being swallowed.
+    """
+
+    @abstractmethod
+    def analyze(
+        self, stock: Stock, earnings: EarningsHistory | None = None
+    ) -> InvestmentAnalysis:
+        """Return a buy/hold/sell analysis built from the supplied data.
+
+        Args:
+            stock: the enriched snapshot to reason over (price, performance,
+                valuation/health metrics).
+            earnings: recent quarterly beat history when available, else
+                ``None`` (the earnings source isn't configured, or doesn't cover
+                the symbol) — the analysis can stand without it.
+
+        Raises:
+            StockDataUnavailable: the model call failed or returned no usable
+                result.
+        """
         raise NotImplementedError
