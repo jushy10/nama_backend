@@ -80,9 +80,11 @@ def test_maps_key_metrics_from_same_payload():
                 "pbQuarterly": 45.2,
                 "psTTM": 7.1,
                 "epsTTM": 6.1,
+                "freeCashFlowPerShareTTM": 6.43,
                 "grossMarginTTM": 44.0,
                 "operatingMarginTTM": 30.0,
                 "netProfitMarginTTM": 25.0,
+                "roeTTM": 147.4,
                 "currentRatioQuarterly": 0.9,
                 "totalDebt/totalEquityQuarterly": 1.5,
                 "epsGrowthTTMYoy": 10.0,
@@ -99,7 +101,9 @@ def test_maps_key_metrics_from_same_payload():
     assert m.pb == 45.2
     assert m.ps == 7.1
     assert m.eps == 6.1
+    assert m.fcf_per_share == 6.43
     assert m.net_margin == 25.0
+    assert m.roe == 147.4
     assert m.current_ratio == 0.9
     assert m.debt_to_equity == 1.5
     assert m.eps_growth_yoy == 10.0
@@ -116,6 +120,8 @@ def test_key_metrics_fall_back_to_annual_keys():
                 "pbAnnual": 3.0,
                 "psAnnual": 2.0,
                 "epsAnnual": 4.0,
+                "freeCashFlowPerShareAnnual": 5.5,
+                "roeRfy": 30.0,
                 "currentRatioAnnual": 1.4,
                 "totalDebt/totalEquityAnnual": 0.8,
             }
@@ -126,6 +132,8 @@ def test_key_metrics_fall_back_to_annual_keys():
     assert m.pb == 3.0
     assert m.ps == 2.0
     assert m.eps == 4.0
+    assert m.fcf_per_share == 5.5
+    assert m.roe == 30.0
     assert m.current_ratio == 1.4
     assert m.debt_to_equity == 0.8
 

@@ -30,10 +30,11 @@ class StockPerformanceResponse(BaseModel):
 class KeyMetricsResponse(BaseModel):
     """Trailing valuation, financial-health and market indicators.
 
-    The valuation ratios and risk/range figures for the price snapshot. The
-    earnings-flavored metrics (EPS, growth, margins) live on the earnings
+    The valuation ratios, returns and risk/range figures for the price snapshot.
+    The earnings-flavored metrics (EPS, growth, margins) live on the earnings
     endpoint instead — see ``EarningsMetricsResponse``. All trailing (no forward
-    estimates); the ratios are plain multiples. Any field a vendor doesn't cover
+    estimates); the ratios are plain multiples, ``roe`` is a percent, and
+    ``fcf_per_share`` is in the quote currency. Any field a vendor doesn't cover
     is ``null``.
     """
 
@@ -41,6 +42,8 @@ class KeyMetricsResponse(BaseModel):
     peg: float | None = None  # trailing P/E / trailing EPS growth (not forward)
     pb: float | None = None  # price / book value
     ps: float | None = None  # price / sales
+    fcf_per_share: float | None = None  # trailing free cash flow per share
+    roe: float | None = None  # return on equity (percent)
     current_ratio: float | None = None
     debt_to_equity: float | None = None
     beta: float | None = None
