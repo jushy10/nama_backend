@@ -390,6 +390,8 @@ def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
         peg=metrics.peg,
         pb=metrics.pb,
         ps=metrics.ps,
+        fcf_per_share=metrics.fcf_per_share,
+        roe=metrics.roe,
         current_ratio=metrics.current_ratio,
         debt_to_equity=metrics.debt_to_equity,
         beta=metrics.beta,

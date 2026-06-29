@@ -391,6 +391,7 @@ def a_key_metrics(**overrides) -> KeyMetrics:
     base = dict(
         # Valuation / health / market (stay on the stock snapshot)
         pe=28.5, pb=45.2, ps=7.1, beta=1.2,
+        fcf_per_share=6.43, roe=147.4,
         current_ratio=0.9, debt_to_equity=1.5,
         week_52_high=320.0, week_52_low=210.0,
         # Earnings-flavored (relocated to the earnings endpoint)
@@ -1389,6 +1390,8 @@ def test_bedrock_adapter_renders_figures_into_prompt():
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Stock: AAPL" in prompt
     assert "P/E (trailing): 28.50" in prompt  # a metric rendered from KeyMetrics
+    assert "FCF/share (trailing): 6.43" in prompt  # ROE/FCF per share ride along too
+    assert "ROE %: 147.40" in prompt
     assert "Recent earnings" in prompt  # the beat history was included
 
 
@@ -1500,6 +1503,8 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
     assert body["metrics"]["week_52_high"] == 320.0
     assert body["metrics"]["ps"] == 7.1
     assert body["metrics"]["debt_to_equity"] == 1.5
+    assert body["metrics"]["fcf_per_share"] == 6.43  # trailing free cash flow per share
+    assert body["metrics"]["roe"] == 147.4  # return on equity (percent)
     for moved in ("eps", "net_margin", "eps_growth_yoy"):
         assert moved not in body["metrics"], moved
 
@@ -1842,6 +1847,9 @@ def test_get_earnings_includes_valuation_block_from_fundamentals(make_client):
     assert valuation["peg"] == a_key_metrics().peg  # derived from P/E and EPS growth
     assert valuation["pb"] == 45.2
     assert valuation["ps"] == 7.1
+    # the same KeyMetrics block as the stock endpoint, so ROE and FCF/share ride along
+    assert valuation["fcf_per_share"] == 6.43
+    assert valuation["roe"] == 147.4
     assert valuation["current_ratio"] == 0.9
     assert valuation["debt_to_equity"] == 1.5
     assert valuation["beta"] == 1.2

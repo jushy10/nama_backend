@@ -64,9 +64,10 @@ class KeyMetrics:
 
     All figures are *trailing* (derived from reported history). Forward-looking
     metrics (forward P/E, analyst price targets) need an estimates feed and are
-    deliberately out of scope. Margins and the growth fields are percent; ratios
-    are plain multiples; the 52-week prices are in the quote currency. The
-    derived ``peg`` property combines two of these.
+    deliberately out of scope. Margins, ROE and the growth fields are percent;
+    the ratios are plain multiples; the per-share figures (EPS, free cash flow
+    per share) and the 52-week prices are in the quote currency. The derived
+    ``peg`` property combines two of these.
     """
 
     # Valuation
@@ -74,10 +75,12 @@ class KeyMetrics:
     pb: float | None = None  # price / book value
     ps: float | None = None  # price / sales
     eps: float | None = None  # trailing earnings per share
+    fcf_per_share: float | None = None  # trailing free cash flow per share
     # Profitability (percent)
     gross_margin: float | None = None
     operating_margin: float | None = None
     net_margin: float | None = None
+    roe: float | None = None  # return on equity (percent)
     # Financial health
     current_ratio: float | None = None  # current assets / current liabilities
     debt_to_equity: float | None = None  # total debt / equity
