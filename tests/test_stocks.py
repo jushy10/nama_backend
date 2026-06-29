@@ -24,6 +24,8 @@ from app.stocks.entities import (
     EarningsHistory,
     EarningsMetrics,
     EarningsSurprise,
+    ForwardEstimate,
+    GrowthMetrics,
     InvestmentAnalysis,
     KeyMetrics,
     Logo,
@@ -441,6 +443,12 @@ def an_estimates(**overrides) -> AnalystEstimates:
         eps_avg=8.0, eps_low=7.4, eps_high=8.6, revenue_avg=420_000_000_000.0,
         num_analysts_eps=30, num_analysts_revenue=28,
         eps_avg_fy2=9.2, fiscal_year_fy2=2027,
+        forward_years=(
+            ForwardEstimate(2026, date(2026, 9, 30), 8.0, 420_000_000_000.0),
+            ForwardEstimate(2027, date(2027, 9, 30), 9.2, 455_000_000_000.0),
+            ForwardEstimate(2028, date(2028, 9, 30), 10.0, 490_000_000_000.0),
+            ForwardEstimate(2029, date(2029, 9, 30), 11.0, 520_000_000_000.0),
+        ),
     )
     base.update(overrides)
     return AnalystEstimates(**base)
@@ -651,6 +659,52 @@ def test_stock_forward_pe_none_without_estimates():
     stock = a_stock()
     assert stock.forward_pe is None
     assert stock.forward_ps is None
+
+
+def test_analyst_estimates_forward_cagr():
+    est = an_estimates()  # EPS 8.0→9.2→10.0→11.0, revenue 420→455→490→520 (B)
+    assert est.forward_eps_cagr() == 11.2        # (11.0/8.0)^(1/3) - 1
+    assert est.forward_revenue_cagr() == 7.38    # (520/420)^(1/3) - 1
+    assert est.forward_cagr_span() == 3
+    assert est.forward_eps_cagr(max_years=1) == 15.0  # 9.2/8.0 - 1, 1-yr window
+
+
+def test_analyst_estimates_forward_cagr_none_without_series():
+    bare = AnalystEstimates(
+        fiscal_year=2026, period_end=date(2026, 9, 30), eps_avg=8.0, eps_low=None,
+        eps_high=None, revenue_avg=400e9, num_analysts_eps=None,
+        num_analysts_revenue=None,
+    )
+    assert bare.forward_eps_cagr() is None       # only FY1, no series to span
+    assert bare.forward_cagr_span() is None
+
+
+def test_growth_metrics_build_combines_trailing_and_forward():
+    g = GrowthMetrics.build(a_key_metrics(), an_estimates())
+    assert g.revenue_yoy == 8.0     # trailing, from KeyMetrics (Finnhub TTM)
+    assert g.eps_yoy == 12.0
+    assert g.forward_eps_cagr == 11.2       # forward CAGR, from estimates series
+    assert g.forward_revenue_cagr == 7.38
+    assert g.forward_years == 3
+
+
+def test_growth_metrics_build_trailing_only_without_estimates():
+    g = GrowthMetrics.build(a_key_metrics(), None)
+    assert g.revenue_yoy == 8.0
+    assert g.forward_eps_cagr is None
+    assert g.forward_years is None
+
+
+def test_growth_metrics_build_none_when_no_growth_anywhere():
+    assert GrowthMetrics.build(None, None) is None
+    assert GrowthMetrics.build(KeyMetrics(pe=20.0), None) is None  # no growth fields
+
+
+def test_stock_growth_property():
+    stock = a_stock(metrics=a_key_metrics(), analyst_estimates=an_estimates())
+    assert stock.growth.eps_yoy == 12.0           # trailing
+    assert stock.growth.forward_eps_cagr == 11.2  # forward
+    assert a_stock().growth is None               # neither source attached
 
 
 # --------------------------- chart window (range -> start/end) ---------------------------
@@ -1630,6 +1684,22 @@ def test_get_stock_includes_forward_estimates(make_client):
     assert body["analyst_estimates"]["eps_avg"] == 8.0
     assert body["analyst_estimates"]["num_analysts_eps"] == 30
     assert body["analyst_estimates"]["eps_avg_fy2"] == 9.2
+
+
+def test_get_stock_includes_growth_block(make_client):
+    # Both legs: trailing YoY rides on the Finnhub fundamentals, forward CAGR on
+    # the FMP estimates — combined into one `growth` block on the snapshot.
+    client = make_client(
+        FakeProvider(stock=a_stock()),
+        fundamentals_provider=FakeFundamentalsProvider(a_fundamentals()),
+        estimates_provider=FakeEstimatesProvider(an_estimates()),
+    )
+    g = client.get("/stocks/AAPL").json()["growth"]
+    assert g["revenue_yoy"] == 8.0          # trailing (Finnhub TTM)
+    assert g["eps_yoy"] == 12.0
+    assert g["forward_eps_cagr"] == 11.2     # forward CAGR (FMP estimates)
+    assert g["forward_revenue_cagr"] == 7.38
+    assert g["forward_years"] == 3
 
 
 def test_get_stock_includes_all_time_high_and_drawdown(make_client):

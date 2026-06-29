@@ -23,7 +23,7 @@ from datetime import date
 
 import httpx
 
-from app.stocks.entities import AnalystEstimates
+from app.stocks.entities import AnalystEstimates, ForwardEstimate
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.ports import AnalystEstimatesProvider
 
@@ -77,6 +77,17 @@ class FmpEstimatesProvider(AnalystEstimatesProvider):
             return _EMPTY
         period_end, eps_avg, eps_low, eps_high, revenue_avg, n_eps, n_rev = forward[0]
         fy2 = forward[1] if len(forward) > 1 else None
+        # The full forward series (every estimated year) backs the multi-year
+        # expected-growth CAGRs; row = (period_end, epsAvg, low, high, revAvg, ...).
+        forward_years = tuple(
+            ForwardEstimate(
+                fiscal_year=row[0].year,
+                period_end=row[0],
+                eps_avg=row[1],
+                revenue_avg=row[4],
+            )
+            for row in forward
+        )
         return AnalystEstimates(
             fiscal_year=period_end.year,
             period_end=period_end,
@@ -88,6 +99,7 @@ class FmpEstimatesProvider(AnalystEstimatesProvider):
             num_analysts_revenue=n_rev,
             eps_avg_fy2=fy2[1] if fy2 else None,
             fiscal_year_fy2=fy2[0].year if fy2 else None,
+            forward_years=forward_years,
         )
 
     def _fetch_estimates(self, symbol: str) -> list:

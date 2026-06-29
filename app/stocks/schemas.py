@@ -72,6 +72,21 @@ class AnalystEstimatesResponse(BaseModel):
     fiscal_year_fy2: int | None = None
 
 
+class GrowthMetricsResponse(BaseModel):
+    """Revenue & earnings growth — trailing actuals plus forward consensus.
+
+    ``*_yoy`` is the *trailing* one-year change from reported figures (Finnhub
+    TTM); ``forward_*_cagr`` is the analyst-*expected* compound annual growth over
+    the next ``forward_years`` fiscal years (FMP estimates). All percent; any leg
+    whose source is unavailable is ``null``."""
+
+    revenue_yoy: float | None = None  # trailing 1-yr revenue growth %
+    eps_yoy: float | None = None  # trailing 1-yr EPS growth %
+    forward_revenue_cagr: float | None = None  # expected N-yr revenue CAGR %
+    forward_eps_cagr: float | None = None  # expected N-yr EPS CAGR %
+    forward_years: int | None = None  # horizon the forward CAGR spans
+
+
 class AllTimeHighResponse(BaseModel):
     """A stock's all-time high over the available price history.
 
@@ -111,6 +126,7 @@ class StockResponse(BaseModel):
     analyst_estimates: AnalystEstimatesResponse | None = None  # forward consensus
     forward_pe: float | None = None  # price / FY1 estimated EPS (forward, best-effort)
     forward_ps: float | None = None  # market cap / FY1 estimated revenue (forward)
+    growth: GrowthMetricsResponse | None = None  # trailing YoY + forward CAGR
     all_time_high: AllTimeHighResponse | None = None
     drawdown_from_high: float | None = None  # percent below the all-time high (<= 0)
 

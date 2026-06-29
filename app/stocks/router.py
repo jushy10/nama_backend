@@ -26,6 +26,7 @@ from app.stocks.entities import (
     CandleSeries,
     EarningsHistory,
     EarningsMetrics,
+    GrowthMetrics,
     InvestmentAnalysis,
     KeyMetrics,
     MoversBoard,
@@ -83,6 +84,7 @@ from app.stocks.schemas import (
     EarningsHistoryResponse,
     EarningsMetricsResponse,
     EarningsSurpriseResponse,
+    GrowthMetricsResponse,
     InvestmentAnalysisResponse,
     KeyMetricsResponse,
     MoversResponse,
@@ -359,6 +361,7 @@ def _present(stock: Stock) -> StockResponse:
         analyst_estimates=_present_estimates(stock.analyst_estimates),
         forward_pe=stock.forward_pe,
         forward_ps=stock.forward_ps,
+        growth=_present_growth(stock.growth),
         all_time_high=_present_all_time_high(stock.all_time_high),
         drawdown_from_high=stock.drawdown_from_high,
     )
@@ -438,6 +441,20 @@ def _present_estimates(
         num_analysts_revenue=estimates.num_analysts_revenue,
         eps_avg_fy2=estimates.eps_avg_fy2,
         fiscal_year_fy2=estimates.fiscal_year_fy2,
+    )
+
+
+def _present_growth(growth: GrowthMetrics | None) -> GrowthMetricsResponse | None:
+    # Trailing YoY (from the Finnhub metrics) + forward CAGR (from the FMP
+    # estimates) — both already on the stock, combined into one block.
+    if growth is None:
+        return None
+    return GrowthMetricsResponse(
+        revenue_yoy=growth.revenue_yoy,
+        eps_yoy=growth.eps_yoy,
+        forward_revenue_cagr=growth.forward_revenue_cagr,
+        forward_eps_cagr=growth.forward_eps_cagr,
+        forward_years=growth.forward_years,
     )
 
 
