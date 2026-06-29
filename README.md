@@ -108,10 +108,13 @@ offline with a fake provider.
 
 The response also carries best-effort enrichment: a **performance** object of
 trailing price returns (`1w`, `1m`, `3m`, `6m`, `ytd`, `1y`) computed from
-Alpaca daily bars, plus **market cap** and **dividend** (`dividend_per_share`,
-`dividend_yield`) from [Finnhub](https://finnhub.io). These never fail the
-request — if a source is down, unkeyed, or doesn't cover the symbol, that field
-comes back `null` and the price still returns.
+Alpaca daily bars, **market cap** and **dividend** (`dividend_per_share`,
+`dividend_yield`) from [Finnhub](https://finnhub.io), and **forward analyst
+estimates** from [FMP](https://site.financialmodelingprep.com) — a `forward_pe`
+and `forward_ps` (price / next-fiscal-year consensus EPS and revenue) plus the
+raw `analyst_estimates` block (FY1/FY2 consensus EPS, revenue, analyst counts).
+These never fail the request — if a source is down, unkeyed, or doesn't cover the
+symbol, that field comes back `null` and the price still returns.
 
 Credentials come from the environment (like `DATABASE_URL`):
 
@@ -119,6 +122,7 @@ Credentials come from the environment (like `DATABASE_URL`):
 export APCA_API_KEY_ID=...
 export APCA_API_SECRET_KEY=...
 export FINNHUB_API_KEY=...        # optional: enables market cap + dividend
+export FMP_API_KEY=...            # optional: enables forward estimates + description
 export LOGODEV_TOKEN=...          # required for /logo: publishable key from logo.dev
 curl localhost:8080/stocks/AAPL
 ```

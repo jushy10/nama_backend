@@ -111,6 +111,158 @@ class KeyMetrics:
 
 
 @dataclass(frozen=True)
+class ForwardEstimate:
+    """One fiscal year's slice of the forward consensus series.
+
+    The per-year row behind ``AnalystEstimates.forward_years`` — just the mean EPS
+    and revenue for a single future fiscal year, used to compute multi-year
+    expected-growth rates. (FY1's low/high/analyst-count detail lives on
+    ``AnalystEstimates`` itself.)"""
+
+    fiscal_year: int
+    period_end: date
+    eps_avg: float | None
+    revenue_avg: float | None
+
+
+# Default horizon for the forward "next couple years" growth average.
+_FORWARD_CAGR_YEARS = 3
+
+
+def _forward_cagr(values: list, max_years: int) -> float | None:
+    """Compound annual growth rate (percent) over a soonest-first forward series.
+
+    Spans the first value to the one ``min(max_years, available steps)`` out — so a
+    5-year series with ``max_years=3`` gives the FY1→FY4 CAGR. ``None`` unless at
+    least two positive values are present (growth off a non-positive base is
+    meaningless)."""
+    series = [v for v in values if isinstance(v, (int, float)) and v > 0]
+    if len(series) < 2:
+        return None
+    n = min(max_years, len(series) - 1)
+    return round(((series[n] / series[0]) ** (1 / n) - 1) * 100, 2)
+
+
+@dataclass(frozen=True)
+class AnalystEstimates:
+    """Forward sell-side consensus estimates for a stock's next fiscal years.
+
+    The forward-looking complement to the (trailing) ``KeyMetrics``: where those
+    say what the business *has* done, these say what analysts *expect* it to do.
+    Sourced from an estimates vendor — not the price feed or company filings (which
+    carry only reported actuals) — so each figure is a consensus mean across however
+    many analysts contributed, and the ``num_analysts_*`` counts report that breadth.
+
+    ``fiscal_year`` / ``period_end`` identify **FY1**, the nearest full fiscal year
+    still being estimated; ``eps_avg_fy2`` / ``fiscal_year_fy2`` carry the year after,
+    kept so a next-twelve-months blend can be derived later. EPS figures are per
+    share; ``revenue_avg`` is raw (e.g. USD). Best-effort enrichment: every field is
+    optional and the whole block is ``is_empty`` when the vendor covers no forward
+    year for the symbol.
+
+    The valuation calcs that need a live price (``forward_pe``) or market cap
+    (``forward_ps``) take it as an argument rather than storing it — the estimate is
+    a fact about the company, the multiple a fact about the company *at today's
+    price*, the same split that keeps the trailing P/E off the bare ``EarningsHistory``.
+    """
+
+    fiscal_year: int | None  # FY1: the nearest forward fiscal year
+    period_end: date | None  # FY1 fiscal period-end date
+    eps_avg: float | None  # FY1 consensus EPS (mean estimate)
+    eps_low: float | None  # FY1 low estimate
+    eps_high: float | None  # FY1 high estimate
+    revenue_avg: float | None  # FY1 consensus revenue (raw, e.g. USD)
+    num_analysts_eps: int | None  # analysts behind the EPS consensus
+    num_analysts_revenue: int | None  # analysts behind the revenue consensus
+    eps_avg_fy2: float | None = None  # FY2 consensus EPS (the year after FY1)
+    fiscal_year_fy2: int | None = None
+    # Full forward series (soonest-first), one row per estimated fiscal year —
+    # backs the multi-year expected-growth CAGRs below.
+    forward_years: tuple[ForwardEstimate, ...] = ()
+
+    @property
+    def is_empty(self) -> bool:
+        """True when neither headline estimate is present — nothing worth attaching."""
+        return self.eps_avg is None and self.revenue_avg is None
+
+    def forward_pe(self, price: float | None) -> float | None:
+        """Forward P/E: ``price`` divided by the FY1 consensus EPS.
+
+        The forward analogue of ``KeyMetrics.pe`` (which divides by *trailing* EPS):
+        "what the price implies about *expected* earnings". ``None`` unless the price
+        and a *positive* FY1 EPS are both present — a non-positive estimate (an
+        expected loss) makes the multiple meaningless, the same guard the trailing
+        ``peg`` uses.
+        """
+        if price is None or self.eps_avg is None or self.eps_avg <= 0:
+            return None
+        return round(price / self.eps_avg, 2)
+
+    def forward_ps(self, market_cap: float | None) -> float | None:
+        """Forward P/S: ``market_cap`` divided by the FY1 consensus revenue.
+
+        ``None`` unless the market cap and a positive FY1 revenue are both present.
+        """
+        if market_cap is None or not self.revenue_avg or self.revenue_avg <= 0:
+            return None
+        return round(market_cap / self.revenue_avg, 2)
+
+    def forward_eps_cagr(self, max_years: int = _FORWARD_CAGR_YEARS) -> float | None:
+        """Analyst-expected EPS compound annual growth over the next few years."""
+        return _forward_cagr([y.eps_avg for y in self.forward_years], max_years)
+
+    def forward_revenue_cagr(self, max_years: int = _FORWARD_CAGR_YEARS) -> float | None:
+        """Analyst-expected revenue compound annual growth over the next few years."""
+        return _forward_cagr([y.revenue_avg for y in self.forward_years], max_years)
+
+    def forward_cagr_span(self, max_years: int = _FORWARD_CAGR_YEARS) -> int | None:
+        """Horizon (years) the forward CAGRs span — ``min(max_years, available)``."""
+        steps = len(self.forward_years) - 1
+        return min(max_years, steps) if steps >= 1 else None
+
+
+@dataclass(frozen=True)
+class GrowthMetrics:
+    """Revenue and earnings growth — trailing actuals and forward consensus.
+
+    Two complementary reads on the same two lines (revenue, EPS): ``*_yoy`` is the
+    *trailing* one-year change from reported figures (the Finnhub TTM growth carried
+    on ``KeyMetrics``); ``forward_*_cagr`` is the analyst-*expected* compound annual
+    growth over the next ``forward_years`` fiscal years (from ``AnalystEstimates``).
+    All percent. Best-effort: any leg whose source is absent is ``None``."""
+
+    revenue_yoy: float | None = None  # trailing 1-yr revenue growth (percent)
+    eps_yoy: float | None = None  # trailing 1-yr EPS growth (percent)
+    forward_revenue_cagr: float | None = None  # expected N-yr revenue CAGR (percent)
+    forward_eps_cagr: float | None = None  # expected N-yr EPS CAGR (percent)
+    forward_years: int | None = None  # horizon (years) the forward CAGR spans
+
+    @classmethod
+    def build(
+        cls,
+        metrics: "KeyMetrics | None",
+        estimates: "AnalystEstimates | None",
+    ) -> "GrowthMetrics | None":
+        """Assemble from the trailing ``KeyMetrics`` and forward ``AnalystEstimates``
+        already attached to the stock. ``None`` when neither source contributes a
+        single growth figure."""
+        rev_yoy = metrics.revenue_growth_yoy if metrics else None
+        eps_yoy = metrics.eps_growth_yoy if metrics else None
+        fwd_rev = estimates.forward_revenue_cagr() if estimates else None
+        fwd_eps = estimates.forward_eps_cagr() if estimates else None
+        if all(v is None for v in (rev_yoy, eps_yoy, fwd_rev, fwd_eps)):
+            return None
+        has_forward = fwd_rev is not None or fwd_eps is not None
+        return cls(
+            revenue_yoy=rev_yoy,
+            eps_yoy=eps_yoy,
+            forward_revenue_cagr=fwd_rev,
+            forward_eps_cagr=fwd_eps,
+            forward_years=estimates.forward_cagr_span() if has_forward else None,
+        )
+
+
+@dataclass(frozen=True)
 class CompanyProfile:
     """A company's clean display name and a short summary of what it does.
 
@@ -503,7 +655,8 @@ class Stock:
     dividend_per_share: float | None = None
     dividend_yield: float | None = None
     performance: StockPerformance | None = None
-    metrics: KeyMetrics | None = None
+    metrics: KeyMetrics | None = None  # trailing valuation/health/market ratios
+    analyst_estimates: AnalystEstimates | None = None  # forward consensus (FY1/FY2)
     all_time_high: AllTimeHigh | None = None
 
     @property
@@ -540,6 +693,36 @@ class Stock:
             return None
         high = self.all_time_high.price
         return round((self.price - high) / high * 100, 2)
+
+    @property
+    def forward_pe(self) -> float | None:
+        """Forward P/E from analyst consensus: today's price / FY1 estimated EPS.
+
+        The forward complement to the trailing P/E carried on ``metrics``. ``None``
+        when no estimates are attached or the FY1 EPS isn't usable (the calc and its
+        guards live on ``AnalystEstimates`` — this just feeds it the live price).
+        """
+        if self.analyst_estimates is None:
+            return None
+        return self.analyst_estimates.forward_pe(self.price)
+
+    @property
+    def forward_ps(self) -> float | None:
+        """Forward P/S from analyst consensus: market cap / FY1 estimated revenue.
+
+        ``None`` when no estimates (or no market cap) are attached.
+        """
+        if self.analyst_estimates is None:
+            return None
+        return self.analyst_estimates.forward_ps(self.market_cap)
+
+    @property
+    def growth(self) -> GrowthMetrics | None:
+        """Revenue/earnings growth — trailing YoY (from ``metrics``) plus forward
+        expected CAGR (from ``analyst_estimates``), grouped. Both legs are already
+        fetched for the snapshot, so this just combines them; ``None`` when neither
+        source is attached."""
+        return GrowthMetrics.build(self.metrics, self.analyst_estimates)
 
 
 @dataclass(frozen=True)

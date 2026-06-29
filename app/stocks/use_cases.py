@@ -11,6 +11,7 @@ from typing import TypeVar
 
 from app.stocks.entities import (
     AllTimeHigh,
+    AnalystEstimates,
     AnalystRecommendations,
     CandleSeries,
     CompanyProfile,
@@ -35,6 +36,7 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSeries, rsi_series
 from app.stocks.ports import (
     AllTimeHighProvider,
+    AnalystEstimatesProvider,
     CandleProvider,
     CompanyProfileProvider,
     ConstituentRepository,
@@ -67,9 +69,10 @@ def _normalize_symbol(symbol: str) -> str:
 class GetStockInfo:
     """Use case: retrieve information about a single stock by its symbol.
 
-    The price snapshot is required; performance, fundamentals and the company
-    description are optional, best-effort enrichment. If those sources fail or
-    aren't configured, the stock is still returned with those fields left unset.
+    The price snapshot is required; performance, fundamentals, the company
+    description and the forward analyst estimates are optional, best-effort
+    enrichment. If those sources fail or aren't configured, the stock is still
+    returned with those fields left unset.
     """
 
     def __init__(
@@ -79,12 +82,14 @@ class GetStockInfo:
         fundamentals_provider: StockFundamentalsProvider | None = None,
         profile_provider: CompanyProfileProvider | None = None,
         all_time_high_provider: AllTimeHighProvider | None = None,
+        estimates_provider: AnalystEstimatesProvider | None = None,
     ) -> None:
         self._provider = provider
         self._performance_provider = performance_provider
         self._fundamentals_provider = fundamentals_provider
         self._profile_provider = profile_provider
         self._all_time_high_provider = all_time_high_provider
+        self._estimates_provider = estimates_provider
 
     def execute(self, symbol: str) -> Stock:
         normalized = _normalize_symbol(symbol)
@@ -105,6 +110,7 @@ class GetStockInfo:
             ),
             dividend_yield=fundamentals.dividend_yield if fundamentals else None,
             metrics=fundamentals.metrics if fundamentals else None,
+            analyst_estimates=self._estimates(normalized),
             all_time_high=self._all_time_high(normalized, stock),
         )
 
@@ -149,6 +155,18 @@ class GetStockInfo:
             return self._profile_provider.get_profile(symbol)
         except (StockNotFound, StockDataUnavailable):
             return None  # best-effort: never sink the price response
+
+    def _estimates(self, symbol: str) -> AnalystEstimates | None:
+        # Forward analyst estimates back the snapshot's forward P/E; best-effort, so
+        # a miss (or an uncovered symbol's empty block) just omits the forward
+        # metrics rather than failing the price response.
+        if self._estimates_provider is None:
+            return None
+        try:
+            estimates = self._estimates_provider.get_estimates(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None  # best-effort: never sink the price response
+        return None if estimates.is_empty else estimates
 
 
 class GetStockQuote:

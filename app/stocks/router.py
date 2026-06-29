@@ -22,10 +22,12 @@ from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.constituents import SqlConstituentRepository
 from app.stocks.entities import (
     AllTimeHigh,
+    AnalystEstimates,
     AnalystRecommendations,
     CandleSeries,
     EarningsHistory,
     EarningsMetrics,
+    GrowthMetrics,
     InvestmentAnalysis,
     KeyMetrics,
     MoversBoard,
@@ -41,6 +43,7 @@ from app.stocks.entities import (
     Timeframe,
 )
 from app.stocks.caching_company_profile_provider import CachingCompanyProfileProvider
+from app.stocks.caching_estimates_provider import CachingAnalystEstimatesProvider
 from app.stocks.caching_revenue_provider import CachingRevenueHistoryProvider
 from app.stocks.caching_segment_revenue_provider import CachingSegmentRevenueProvider
 from app.stocks.composite_company_profile_provider import (
@@ -54,6 +57,7 @@ from app.stocks.finnhub_earnings_calendar_provider import (
 from app.stocks.finnhub_earnings_provider import FinnhubEarningsProvider
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
 from app.stocks.finnhub_recommendation_provider import FinnhubRecommendationProvider
+from app.stocks.fmp_estimates_provider import FmpEstimatesProvider
 from app.stocks.fmp_profile_provider import FmpProfileProvider
 from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
@@ -63,6 +67,7 @@ from app.stocks.sec_edgar_segment_revenue_provider import (
 )
 from app.stocks.ports import (
     AllTimeHighProvider,
+    AnalystEstimatesProvider,
     CompanyProfileProvider,
     EarningsCalendarProvider,
     EarningsHistoryProvider,
@@ -77,11 +82,13 @@ from app.stocks.ports import (
 )
 from app.stocks.schemas import (
     AllTimeHighResponse,
+    AnalystEstimatesResponse,
     CandleResponse,
     CandleSeriesResponse,
     EarningsHistoryResponse,
     EarningsMetricsResponse,
     EarningsSurpriseResponse,
+    GrowthMetricsResponse,
     InvestmentAnalysisResponse,
     KeyMetricsResponse,
     MoversResponse,
@@ -158,17 +165,31 @@ def get_profile_provider() -> CompanyProfileProvider | None:
     return CompositeCompanyProfileProvider(name_source, description_source)
 
 
+@lru_cache(maxsize=1)
+def get_estimates_provider() -> AnalystEstimatesProvider | None:
+    # Forward analyst estimates back the snapshot's forward P/E — best-effort
+    # enrichment, so without a key we simply omit the forward metrics (price +
+    # trailing ratios still serve). FMP's free tier serves the annual cadence; the
+    # TTL cache (a singleton, so it persists across requests) keeps us under FMP's
+    # ~250/day free quota. Same FMP key the profile + constituents sync use.
+    key = os.environ.get("FMP_API_KEY")
+    return CachingAnalystEstimatesProvider(FmpEstimatesProvider(key)) if key else None
+
+
 def get_stock_info(
     provider: StockDataProvider = Depends(get_provider),
     fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
     profile: CompanyProfileProvider | None = Depends(get_profile_provider),
+    estimates: AnalystEstimatesProvider | None = Depends(get_estimates_provider),
 ) -> GetStockInfo:
     # The Alpaca provider supplies the snapshot, the performance windows, and the
     # all-time high — all derived from the same price feed, so one instance backs
     # each capability via its respective port.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
     all_time_high = provider if isinstance(provider, AllTimeHighProvider) else None
-    return GetStockInfo(provider, performance, fundamentals, profile, all_time_high)
+    return GetStockInfo(
+        provider, performance, fundamentals, profile, all_time_high, estimates
+    )
 
 
 def get_stock_quote(
@@ -364,6 +385,10 @@ def _present(stock: Stock) -> StockResponse:
         dividend_yield=stock.dividend_yield,
         performance=_present_performance(stock.performance),
         metrics=_present_metrics(stock.metrics),
+        analyst_estimates=_present_estimates(stock.analyst_estimates),
+        forward_pe=stock.forward_pe,
+        forward_ps=stock.forward_ps,
+        growth=_present_growth(stock.growth),
         all_time_high=_present_all_time_high(stock.all_time_high),
         drawdown_from_high=stock.drawdown_from_high,
     )
@@ -424,6 +449,41 @@ def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
         beta=metrics.beta,
         week_52_high=metrics.week_52_high,
         week_52_low=metrics.week_52_low,
+    )
+
+
+def _present_estimates(
+    estimates: AnalystEstimates | None,
+) -> AnalystEstimatesResponse | None:
+    # Forward consensus (FY1/FY2) on the stock snapshot; the derived forward_pe /
+    # forward_ps are presented as their own top-level fields (they need the price).
+    if estimates is None:
+        return None
+    return AnalystEstimatesResponse(
+        fiscal_year=estimates.fiscal_year,
+        period_end=estimates.period_end,
+        eps_avg=estimates.eps_avg,
+        eps_low=estimates.eps_low,
+        eps_high=estimates.eps_high,
+        revenue_avg=estimates.revenue_avg,
+        num_analysts_eps=estimates.num_analysts_eps,
+        num_analysts_revenue=estimates.num_analysts_revenue,
+        eps_avg_fy2=estimates.eps_avg_fy2,
+        fiscal_year_fy2=estimates.fiscal_year_fy2,
+    )
+
+
+def _present_growth(growth: GrowthMetrics | None) -> GrowthMetricsResponse | None:
+    # Trailing YoY (from the Finnhub metrics) + forward CAGR (from the FMP
+    # estimates) — both already on the stock, combined into one block.
+    if growth is None:
+        return None
+    return GrowthMetricsResponse(
+        revenue_yoy=growth.revenue_yoy,
+        eps_yoy=growth.eps_yoy,
+        forward_revenue_cagr=growth.forward_revenue_cagr,
+        forward_eps_cagr=growth.forward_eps_cagr,
+        forward_years=growth.forward_years,
     )
 
 

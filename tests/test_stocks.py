@@ -15,6 +15,7 @@ from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     AllTimeHigh,
+    AnalystEstimates,
     AnalystRecommendations,
     Candle,
     CandleSeries,
@@ -24,6 +25,8 @@ from app.stocks.entities import (
     EarningsHistory,
     EarningsMetrics,
     EarningsSurprise,
+    ForwardEstimate,
+    GrowthMetrics,
     InvestmentAnalysis,
     KeyMetrics,
     Logo,
@@ -44,6 +47,7 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSignal
 from app.stocks.ports import (
     AllTimeHighProvider,
+    AnalystEstimatesProvider,
     CandleProvider,
     CompanyProfileProvider,
     ConstituentRepository,
@@ -197,6 +201,22 @@ class FakeProfileProvider(CompanyProfileProvider):
             raise self._raises
         assert self._profile is not None
         return self._profile
+
+
+class FakeEstimatesProvider(AnalystEstimatesProvider):
+    """Returns/raises whatever the test configured; records calls."""
+
+    def __init__(self, estimates=None, raises=None):
+        self._estimates = estimates
+        self._raises = raises
+        self.received: list[str] = []
+
+    def get_estimates(self, symbol: str) -> AnalystEstimates:
+        self.received.append(symbol)
+        if self._raises is not None:
+            raise self._raises
+        assert self._estimates is not None
+        return self._estimates
 
 
 class FakeCandleProvider(CandleProvider):
@@ -423,6 +443,23 @@ def a_profile(
     return CompanyProfile(description=description, name=name)
 
 
+def an_estimates(**overrides) -> AnalystEstimates:
+    base = dict(
+        fiscal_year=2026, period_end=date(2026, 9, 30),
+        eps_avg=8.0, eps_low=7.4, eps_high=8.6, revenue_avg=420_000_000_000.0,
+        num_analysts_eps=30, num_analysts_revenue=28,
+        eps_avg_fy2=9.2, fiscal_year_fy2=2027,
+        forward_years=(
+            ForwardEstimate(2026, date(2026, 9, 30), 8.0, 420_000_000_000.0),
+            ForwardEstimate(2027, date(2027, 9, 30), 9.2, 455_000_000_000.0),
+            ForwardEstimate(2028, date(2028, 9, 30), 10.0, 490_000_000_000.0),
+            ForwardEstimate(2029, date(2029, 9, 30), 11.0, 520_000_000_000.0),
+        ),
+    )
+    base.update(overrides)
+    return AnalystEstimates(**base)
+
+
 def a_sector(**overrides) -> SectorPerformance:
     base = dict(
         sector="Technology", symbol="XLK", price=255.0, previous_close=250.0,
@@ -595,6 +632,87 @@ def test_candle_is_bullish():
     assert a_candle(open=100.0, close=100.0).is_bullish is True   # doji -> green
 
 
+def test_analyst_estimates_forward_pe():
+    est = an_estimates(eps_avg=8.0)
+    assert est.forward_pe(280.0) == 35.0                          # 280 / 8.0
+    assert est.forward_pe(None) is None                           # no price
+    assert an_estimates(eps_avg=None).forward_pe(280.0) is None   # no estimate
+    assert an_estimates(eps_avg=-1.0).forward_pe(280.0) is None   # expected loss
+
+
+def test_analyst_estimates_forward_ps():
+    est = an_estimates(revenue_avg=400e9)
+    assert est.forward_ps(2_000e9) == 5.0                         # 2.0T / 400B
+    assert est.forward_ps(None) is None
+    assert an_estimates(revenue_avg=None).forward_ps(2_000e9) is None
+
+
+def test_analyst_estimates_is_empty():
+    assert an_estimates(eps_avg=None, revenue_avg=None).is_empty is True
+    assert an_estimates(eps_avg=8.0).is_empty is False
+
+
+def test_stock_forward_pe_and_ps_delegate_to_estimates():
+    stock = a_stock(
+        price=280.0, market_cap=2_000e9,
+        analyst_estimates=an_estimates(eps_avg=8.0, revenue_avg=400e9),
+    )
+    assert stock.forward_pe == 35.0
+    assert stock.forward_ps == 5.0
+
+
+def test_stock_forward_pe_none_without_estimates():
+    stock = a_stock()
+    assert stock.forward_pe is None
+    assert stock.forward_ps is None
+
+
+def test_analyst_estimates_forward_cagr():
+    est = an_estimates()  # EPS 8.0→9.2→10.0→11.0, revenue 420→455→490→520 (B)
+    assert est.forward_eps_cagr() == 11.2        # (11.0/8.0)^(1/3) - 1
+    assert est.forward_revenue_cagr() == 7.38    # (520/420)^(1/3) - 1
+    assert est.forward_cagr_span() == 3
+    assert est.forward_eps_cagr(max_years=1) == 15.0  # 9.2/8.0 - 1, 1-yr window
+
+
+def test_analyst_estimates_forward_cagr_none_without_series():
+    bare = AnalystEstimates(
+        fiscal_year=2026, period_end=date(2026, 9, 30), eps_avg=8.0, eps_low=None,
+        eps_high=None, revenue_avg=400e9, num_analysts_eps=None,
+        num_analysts_revenue=None,
+    )
+    assert bare.forward_eps_cagr() is None       # only FY1, no series to span
+    assert bare.forward_cagr_span() is None
+
+
+def test_growth_metrics_build_combines_trailing_and_forward():
+    g = GrowthMetrics.build(a_key_metrics(), an_estimates())
+    assert g.revenue_yoy == 8.0     # trailing, from KeyMetrics (Finnhub TTM)
+    assert g.eps_yoy == 12.0
+    assert g.forward_eps_cagr == 11.2       # forward CAGR, from estimates series
+    assert g.forward_revenue_cagr == 7.38
+    assert g.forward_years == 3
+
+
+def test_growth_metrics_build_trailing_only_without_estimates():
+    g = GrowthMetrics.build(a_key_metrics(), None)
+    assert g.revenue_yoy == 8.0
+    assert g.forward_eps_cagr is None
+    assert g.forward_years is None
+
+
+def test_growth_metrics_build_none_when_no_growth_anywhere():
+    assert GrowthMetrics.build(None, None) is None
+    assert GrowthMetrics.build(KeyMetrics(pe=20.0), None) is None  # no growth fields
+
+
+def test_stock_growth_property():
+    stock = a_stock(metrics=a_key_metrics(), analyst_estimates=an_estimates())
+    assert stock.growth.eps_yoy == 12.0           # trailing
+    assert stock.growth.forward_eps_cagr == 11.2  # forward
+    assert a_stock().growth is None               # neither source attached
+
+
 # --------------------------- chart window (range -> start/end) ---------------------------
 
 def test_resolve_window_lookback():
@@ -692,6 +810,44 @@ def test_use_case_without_enrichment_leaves_fields_none():
     assert stock.performance is None
     assert stock.metrics is None
     assert stock.description is None
+    assert stock.analyst_estimates is None
+    assert stock.forward_pe is None
+
+
+def test_use_case_attaches_analyst_estimates():
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock(price=280.0)),
+        estimates_provider=FakeEstimatesProvider(an_estimates(eps_avg=8.0)),
+    )
+    stock = info.execute("AAPL")
+    assert stock.analyst_estimates.eps_avg == 8.0
+    assert stock.forward_pe == 35.0  # 280 / 8.0
+
+
+def test_use_case_estimates_are_best_effort():
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock()),
+        estimates_provider=FakeEstimatesProvider(
+            raises=StockDataUnavailable("AAPL", "boom")
+        ),
+    )
+    stock = info.execute("AAPL")  # a miss must not raise
+    assert stock.analyst_estimates is None
+    assert stock.forward_pe is None
+
+
+def test_use_case_drops_empty_estimates_block():
+    # An uncovered symbol comes back as an all-None estimates -> omitted, not attached.
+    empty = AnalystEstimates(
+        fiscal_year=None, period_end=None, eps_avg=None, eps_low=None,
+        eps_high=None, revenue_avg=None, num_analysts_eps=None,
+        num_analysts_revenue=None,
+    )
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock()),
+        estimates_provider=FakeEstimatesProvider(empty),
+    )
+    assert info.execute("AAPL").analyst_estimates is None
 
 
 def test_use_case_enrichment_is_best_effort():
@@ -1299,6 +1455,7 @@ def make_client():
         ath_provider: AllTimeHighProvider | None = None,
         fundamentals_provider: StockFundamentalsProvider | None = None,
         profile_provider: CompanyProfileProvider | None = None,
+        estimates_provider: AnalystEstimatesProvider | None = None,
         candle_provider: CandleProvider | None = None,
         rsi_provider: CandleProvider | None = None,
         sector_provider: SectorPerformanceProvider | None = None,
@@ -1317,6 +1474,7 @@ def make_client():
                 fundamentals_provider,
                 profile_provider,
                 ath_provider,
+                estimates_provider,
             )
         if quote_provider is not None:
             app.dependency_overrides[get_stock_quote] = (
@@ -1350,6 +1508,7 @@ def make_client():
                     fundamentals_provider,
                     profile_provider,
                     ath_provider,
+                    estimates_provider,
                 ),
                 analysis_provider,
                 earnings_provider,
@@ -1611,6 +1770,45 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
     assert body["metrics"]["roe"] == 147.4  # return on equity (percent)
     for moved in ("eps", "net_margin", "eps_growth_yoy"):
         assert moved not in body["metrics"], moved
+
+
+def test_get_stock_includes_forward_estimates(make_client):
+    client = make_client(
+        FakeProvider(stock=a_stock(price=280.0)),
+        # market_cap is enrichment from the fundamentals feed, so forward P/S needs
+        # it supplied here (forward P/E only needs the live price).
+        fundamentals_provider=FakeFundamentalsProvider(
+            a_fundamentals(market_cap=2_000_000_000_000.0)
+        ),
+        estimates_provider=FakeEstimatesProvider(
+            an_estimates(eps_avg=8.0, revenue_avg=400_000_000_000.0)
+        ),
+    )
+    body = client.get("/stocks/AAPL").json()
+    # Derived forward multiples ride at the top level (they need the live price)…
+    assert body["forward_pe"] == 35.0          # 280 / 8.0
+    assert body["forward_ps"] == 5.0           # 2.0T / 400B
+    # …and the raw consensus block carries FY1 + FY2.
+    assert body["analyst_estimates"]["fiscal_year"] == 2026
+    assert body["analyst_estimates"]["eps_avg"] == 8.0
+    assert body["analyst_estimates"]["num_analysts_eps"] == 30
+    assert body["analyst_estimates"]["eps_avg_fy2"] == 9.2
+
+
+def test_get_stock_includes_growth_block(make_client):
+    # Both legs: trailing YoY rides on the Finnhub fundamentals, forward CAGR on
+    # the FMP estimates — combined into one `growth` block on the snapshot.
+    client = make_client(
+        FakeProvider(stock=a_stock()),
+        fundamentals_provider=FakeFundamentalsProvider(a_fundamentals()),
+        estimates_provider=FakeEstimatesProvider(an_estimates()),
+    )
+    g = client.get("/stocks/AAPL").json()["growth"]
+    assert g["revenue_yoy"] == 8.0          # trailing (Finnhub TTM)
+    assert g["eps_yoy"] == 12.0
+    assert g["forward_eps_cagr"] == 11.2     # forward CAGR (FMP estimates)
+    assert g["forward_revenue_cagr"] == 7.38
+    assert g["forward_years"] == 3
 
 
 def test_get_stock_includes_all_time_high_and_drawdown(make_client):
