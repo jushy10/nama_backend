@@ -31,6 +31,12 @@ variable "extra_secrets" {
   default     = {}
 }
 
+variable "extra_environment" {
+  description = "Plain (non-secret) environment variables injected into the container: a map of ENV_VAR_NAME => value. Use extra_secrets for sensitive values."
+  type        = map(string)
+  default     = {}
+}
+
 variable "enable_bedrock_invoke" {
   description = "Grant the task role permission to invoke Anthropic Claude models on Amazon Bedrock (for the AI stock-analysis endpoint). Off by default so the module stays generic; the consuming service opts in."
   type        = bool

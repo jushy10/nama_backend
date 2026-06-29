@@ -152,6 +152,15 @@ module "app" {
     FMP_API_KEY         = module.fmp_api_key.arn
   }
 
+  # Plain (non-secret) config for the AI analysis endpoint, so the Bedrock model
+  # and region are swappable without a code change. Using Claude Sonnet 4.6 —
+  # Opus 4.8 isn't entitled to this account on Bedrock. The model id is a
+  # cross-region inference profile and must be access-enabled in this account.
+  extra_environment = {
+    BEDROCK_REGION            = "us-east-1"
+    BEDROCK_ANALYSIS_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+  }
+
   # Grant the task role bedrock:InvokeModel for the AI analysis endpoint
   # (GET /stocks/{symbol}/analysis). Bedrock authenticates as the task role, so
   # there's no API key — but the model must be access-enabled in this account /

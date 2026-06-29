@@ -111,7 +111,7 @@ entities, and the vendor's failures into our domain exceptions. Swap vendors and
 only this one file changes.
 
 - `alpaca_provider.py` — Alpaca SDK → price/quote/candles/performance/sectors
-- `finnhub_*_provider.py` — Finnhub → fundamentals / earnings / calendar / company name (`/stock/profile2`)
+- `finnhub_*_provider.py` — Finnhub → fundamentals / earnings / calendar / company name (`/stock/profile2`) / analyst recommendation trends (`/stock/recommendation`)
 - `fmp_profile_provider.py` — FMP (`httpx`) → company **description** (the clean display name now comes from Finnhub)
 - `sec_edgar_revenue_provider.py` — SEC EDGAR XBRL **flat API** (`httpx`, free/keyless) → reported quarterly revenue *totals*; resolves ticker→CIK and derives Q4 from the 10-K
 - `sec_edgar_segment_revenue_provider.py` — SEC EDGAR **inline XBRL** (the raw 10-Q/10-K documents; the flat API drops the dimensional contexts) → per-quarter revenue split by operating segment and product/service; parses several recent filings and keeps standalone-quarter, member-qualified facts

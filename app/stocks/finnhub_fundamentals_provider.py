@@ -90,11 +90,15 @@ def _key_metrics(metric: dict) -> KeyMetrics | None:
         "pb": _first(metric, "pbQuarterly", "pbAnnual"),
         "ps": _first(metric, "psTTM", "psAnnual"),
         "eps": _first(metric, "epsTTM", "epsAnnual"),
+        "fcf_per_share": _first(
+            metric, "freeCashFlowPerShareTTM", "freeCashFlowPerShareAnnual"
+        ),
         "gross_margin": _first(metric, "grossMarginTTM", "grossMarginAnnual"),
         "operating_margin": _first(
             metric, "operatingMarginTTM", "operatingMarginAnnual"
         ),
         "net_margin": _first(metric, "netProfitMarginTTM", "netProfitMarginAnnual"),
+        "roe": _first(metric, "roeTTM", "roeRfy"),
         "current_ratio": _first(
             metric, "currentRatioQuarterly", "currentRatioAnnual"
         ),

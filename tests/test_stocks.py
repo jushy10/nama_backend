@@ -16,6 +16,7 @@ from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
+    AnalystRecommendations,
     Candle,
     CandleSeries,
     CompanyProfile,
@@ -32,6 +33,7 @@ from app.stocks.entities import (
     NextEarnings,
     Quote,
     Recommendation,
+    RecommendationTrend,
     RevenueBreakdown,
     RevenueComponent,
     SectorPerformance,
@@ -54,6 +56,7 @@ from app.stocks.ports import (
     InvestmentAnalysisProvider,
     LogoProvider,
     QuoteBatchProvider,
+    RecommendationProvider,
     RevenueHistoryProvider,
     SectorPerformanceProvider,
     SegmentRevenueProvider,
@@ -71,6 +74,7 @@ from app.stocks.router import (
     get_stock_info,
     get_stock_logo,
     get_stock_quote,
+    get_stock_recommendations,
     get_stock_rsi,
 )
 from app.stocks.use_cases import (
@@ -81,6 +85,7 @@ from app.stocks.use_cases import (
     GetStockInfo,
     GetStockLogo,
     GetStockQuote,
+    GetStockRecommendations,
     GetStockRsi,
     ScreenStocks,
 )
@@ -411,6 +416,7 @@ def a_key_metrics(**overrides) -> KeyMetrics:
     base = dict(
         # Valuation / health / market (stay on the stock snapshot)
         pe=28.5, pb=45.2, ps=7.1, beta=1.2,
+        fcf_per_share=6.43, roe=147.4,
         current_ratio=0.9, debt_to_equity=1.5,
         week_52_high=320.0, week_52_low=210.0,
         # Earnings-flavored (relocated to the earnings endpoint)
@@ -1344,6 +1350,100 @@ def test_earnings_use_case_breakdown_best_effort_when_symbol_not_filed():
     assert result.quarters  # primary data survived
 
 
+# ----------------------- recommendations -----------------------
+
+class FakeRecommendationProvider(RecommendationProvider):
+    """Returns/raises whatever the test configured; records calls."""
+
+    def __init__(self, recs=None, raises=None):
+        self._recs = recs
+        self._raises = raises
+        self.received: list[str] = []
+
+    def get_recommendations(self, symbol: str) -> AnalystRecommendations:
+        self.received.append(symbol)
+        if self._raises is not None:
+            raise self._raises
+        assert self._recs is not None
+        return self._recs
+
+
+def _a_trend(period, *, strong_buy=0, buy=0, hold=0, sell=0, strong_sell=0):
+    return RecommendationTrend(
+        period=period,
+        strong_buy=strong_buy,
+        buy=buy,
+        hold=hold,
+        sell=sell,
+        strong_sell=strong_sell,
+    )
+
+
+def test_recommendation_trend_total_score_and_consensus():
+    t = _a_trend(date(2026, 6, 1), strong_buy=13, buy=24, hold=7)
+    assert t.total == 44
+    # weighted = 13*1 + 24*2 + 7*3 = 82; 82 / 44 = 1.86
+    assert t.score == 1.86
+    assert t.consensus == "Buy"  # 1.5 < 1.86 <= 2.5
+
+
+def test_recommendation_trend_empty_has_no_score():
+    t = _a_trend(date(2026, 6, 1))
+    assert t.total == 0
+    assert t.score is None
+    assert t.consensus is None
+
+
+@pytest.mark.parametrize(
+    "trend, label",
+    [
+        (_a_trend(date(2026, 6, 1), strong_buy=10), "Strong Buy"),  # mean 1.0
+        (_a_trend(date(2026, 6, 1), hold=10), "Hold"),  # mean 3.0
+        (_a_trend(date(2026, 6, 1), strong_sell=10), "Strong Sell"),  # mean 5.0
+    ],
+)
+def test_recommendation_consensus_bands(trend, label):
+    assert trend.consensus == label
+
+
+def test_recommendations_direction_upgraded_when_more_bullish():
+    newer = _a_trend(date(2026, 6, 1), strong_buy=20, buy=10, hold=2)  # mean 1.44
+    older = _a_trend(date(2026, 5, 1), strong_buy=5, buy=10, hold=15, sell=2)  # 2.44
+    recs = AnalystRecommendations("AAPL", (newer, older))
+    assert recs.latest is newer
+    assert recs.direction == "upgraded"
+
+
+def test_recommendations_direction_none_with_one_snapshot():
+    recs = AnalystRecommendations("AAPL", (_a_trend(date(2026, 6, 1), buy=1),))
+    assert recs.direction is None
+
+
+def test_recommendations_empty_has_no_latest_or_direction():
+    recs = AnalystRecommendations("ZZZZ", ())
+    assert recs.latest is None
+    assert recs.direction is None
+
+
+def test_recommendations_use_case_normalizes_symbol():
+    fake = FakeRecommendationProvider(AnalystRecommendations("AAPL", ()))
+    GetStockRecommendations(fake).execute("  aapl ")
+    assert fake.received == ["AAPL"]
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "123", "TOOLONG"])
+def test_recommendations_use_case_rejects_invalid_symbols(bad):
+    fake = FakeRecommendationProvider(AnalystRecommendations("AAPL", ()))
+    with pytest.raises(ValueError):
+        GetStockRecommendations(fake).execute(bad)
+
+
+def test_recommendations_use_case_propagates_not_found():
+    fake = FakeRecommendationProvider(raises=StockNotFound("ZZZZ"))
+    with pytest.raises(StockNotFound):
+        GetStockRecommendations(fake).execute("ZZZZ")
+
+
 # --------------------------- API ---------------------------
 
 @pytest.fixture
@@ -1365,6 +1465,7 @@ def make_client():
         segment_revenue_provider: SegmentRevenueProvider | None = None,
         quote_provider: StockQuoteProvider | None = None,
         analysis_provider: InvestmentAnalysisProvider | None = None,
+        recommendation_provider: RecommendationProvider | None = None,
     ) -> TestClient:
         if provider is not None:
             app.dependency_overrides[get_stock_info] = lambda: GetStockInfo(
@@ -1411,6 +1512,10 @@ def make_client():
                 ),
                 analysis_provider,
                 earnings_provider,
+            )
+        if recommendation_provider is not None:
+            app.dependency_overrides[get_stock_recommendations] = (
+                lambda: GetStockRecommendations(recommendation_provider)
             )
         return TestClient(app)
 
@@ -1548,6 +1653,8 @@ def test_bedrock_adapter_renders_figures_into_prompt():
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Stock: AAPL" in prompt
     assert "P/E (trailing): 28.50" in prompt  # a metric rendered from KeyMetrics
+    assert "FCF/share (trailing): 6.43" in prompt  # ROE/FCF per share ride along too
+    assert "ROE %: 147.40" in prompt
     assert "Recent earnings" in prompt  # the beat history was included
 
 
@@ -1659,6 +1766,8 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
     assert body["metrics"]["week_52_high"] == 320.0
     assert body["metrics"]["ps"] == 7.1
     assert body["metrics"]["debt_to_equity"] == 1.5
+    assert body["metrics"]["fcf_per_share"] == 6.43  # trailing free cash flow per share
+    assert body["metrics"]["roe"] == 147.4  # return on equity (percent)
     for moved in ("eps", "net_margin", "eps_growth_yoy"):
         assert moved not in body["metrics"], moved
 
@@ -2040,6 +2149,9 @@ def test_get_earnings_includes_valuation_block_from_fundamentals(make_client):
     assert valuation["peg"] == a_key_metrics().peg  # derived from P/E and EPS growth
     assert valuation["pb"] == 45.2
     assert valuation["ps"] == 7.1
+    # the same KeyMetrics block as the stock endpoint, so ROE and FCF/share ride along
+    assert valuation["fcf_per_share"] == 6.43
+    assert valuation["roe"] == 147.4
     assert valuation["current_ratio"] == 0.9
     assert valuation["debt_to_equity"] == 1.5
     assert valuation["beta"] == 1.2
@@ -2449,3 +2561,80 @@ def test_get_screener_upstream_failure_502(make_screener_client):
     # Real universe, but the quote feed yields nothing -> 502.
     client = make_screener_client(a_screener(quotes={}))
     assert client.get("/stocks/screener").status_code == 502
+
+
+# ---------------------- recommendations endpoint ----------------------
+
+def test_get_recommendations_returns_200_with_consensus_and_direction(make_client):
+    recs = AnalystRecommendations(
+        "AAPL",
+        (
+            _a_trend(date(2026, 6, 1), strong_buy=13, buy=24, hold=7),  # mean 1.86
+            _a_trend(date(2026, 5, 1), strong_buy=10, buy=20, hold=10, sell=1),  # 2.05
+        ),
+    )
+    client = make_client(recommendation_provider=FakeRecommendationProvider(recs))
+    r = client.get("/stocks/AAPL/recommendations")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["symbol"] == "AAPL"
+    assert body["count"] == 2
+    assert body["direction"] == "upgraded"  # consensus got more bullish MoM
+    assert body["latest"]["consensus"] == "Buy"
+    assert body["latest"]["score"] == 1.86
+    assert body["latest"]["total"] == 44
+    assert len(body["trends"]) == 2
+
+
+def test_get_recommendations_sets_cache_header(make_client):
+    recs = AnalystRecommendations("AAPL", (_a_trend(date(2026, 6, 1), buy=5),))
+    client = make_client(recommendation_provider=FakeRecommendationProvider(recs))
+    r = client.get("/stocks/AAPL/recommendations")
+    assert r.headers["cache-control"] == "public, max-age=300"
+
+
+def test_get_recommendations_empty_coverage_is_200(make_client):
+    client = make_client(
+        recommendation_provider=FakeRecommendationProvider(
+            AnalystRecommendations("ZZZZ", ())
+        )
+    )
+    r = client.get("/stocks/ZZZZ/recommendations")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 0
+    assert body["latest"] is None
+    assert body["direction"] is None
+    assert body["trends"] == []
+
+
+def test_get_recommendations_normalizes_lowercase(make_client):
+    fake = FakeRecommendationProvider(AnalystRecommendations("AAPL", ()))
+    client = make_client(recommendation_provider=fake)
+    client.get("/stocks/aapl/recommendations")
+    assert fake.received == ["AAPL"]
+
+
+def test_get_recommendations_invalid_symbol_400(make_client):
+    client = make_client(
+        recommendation_provider=FakeRecommendationProvider(
+            AnalystRecommendations("AAPL", ())
+        )
+    )
+    assert client.get("/stocks/123/recommendations").status_code == 400
+
+
+def test_get_recommendations_unknown_symbol_404(make_client):
+    client = make_client(
+        recommendation_provider=FakeRecommendationProvider(raises=StockNotFound("ZZZZ"))
+    )
+    assert client.get("/stocks/ZZZZ/recommendations").status_code == 404
+
+
+def test_get_recommendations_upstream_failure_502(make_client):
+    client = make_client(
+        recommendation_provider=FakeRecommendationProvider(
+            raises=StockDataUnavailable("AAPL", "boom")
+        )
+    )
+    assert client.get("/stocks/AAPL/recommendations").status_code == 502

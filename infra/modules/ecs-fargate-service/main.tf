@@ -16,6 +16,12 @@ locals {
     ],
     [for env_name, arn in var.extra_secrets : { name = env_name, valueFrom = arn }],
   )
+
+  # Container "environment" entries: plain (non-secret) env var name -> value.
+  # Key-sorted iteration keeps the order stable across plans (no perpetual diff).
+  container_environment = [
+    for env_name, value in var.extra_environment : { name = env_name, value = value }
+  ]
 }
 
 # ---------------------------------------------------------------------------
@@ -378,6 +384,9 @@ resource "aws_ecs_task_definition" "this" {
             "awslogs-stream-prefix" = "app"
           }
         }
+      },
+      length(local.container_environment) == 0 ? {} : {
+        environment = local.container_environment
       },
       length(local.container_secrets) == 0 ? {} : {
         secrets = local.container_secrets

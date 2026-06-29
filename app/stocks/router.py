@@ -23,6 +23,7 @@ from app.stocks.constituents import SqlConstituentRepository
 from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
+    AnalystRecommendations,
     CandleSeries,
     EarningsHistory,
     EarningsMetrics,
@@ -32,6 +33,7 @@ from app.stocks.entities import (
     MoversBoard,
     NextEarnings,
     Quote,
+    RecommendationTrend,
     RevenueBreakdown,
     ScreenedStock,
     SectorPerformance,
@@ -54,6 +56,7 @@ from app.stocks.finnhub_earnings_calendar_provider import (
 )
 from app.stocks.finnhub_earnings_provider import FinnhubEarningsProvider
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
+from app.stocks.finnhub_recommendation_provider import FinnhubRecommendationProvider
 from app.stocks.fmp_estimates_provider import FmpEstimatesProvider
 from app.stocks.fmp_profile_provider import FmpProfileProvider
 from app.stocks.logodev_provider import LogoDevProvider
@@ -70,6 +73,7 @@ from app.stocks.ports import (
     EarningsHistoryProvider,
     InvestmentAnalysisProvider,
     LogoProvider,
+    RecommendationProvider,
     RevenueHistoryProvider,
     SegmentRevenueProvider,
     StockDataProvider,
@@ -90,6 +94,8 @@ from app.stocks.schemas import (
     MoversResponse,
     NextEarningsResponse,
     QuoteResponse,
+    RecommendationsResponse,
+    RecommendationTrendResponse,
     RevenueBreakdownResponse,
     RevenueComponentResponse,
     RsiPointResponse,
@@ -108,6 +114,7 @@ from app.stocks.use_cases import (
     GetStockInfo,
     GetStockLogo,
     GetStockQuote,
+    GetStockRecommendations,
     GetStockRsi,
     ScreenStocks,
 )
@@ -318,6 +325,26 @@ def get_stock_analysis(
 
 
 @lru_cache(maxsize=1)
+def get_recommendation_provider() -> RecommendationProvider:
+    # Analyst recommendation trends are this endpoint's primary data (its own card
+    # on the stock page), so a missing key is a hard 503 — same shape as the
+    # earnings provider — rather than a silently empty response. Reuses the free
+    # Finnhub key the other fundamentals endpoints share.
+    key = os.environ.get("FINNHUB_API_KEY")
+    if not key:
+        raise HTTPException(
+            503, "Recommendation data is not configured (FINNHUB_API_KEY)."
+        )
+    return FinnhubRecommendationProvider(key)
+
+
+def get_stock_recommendations(
+    provider: RecommendationProvider = Depends(get_recommendation_provider),
+) -> GetStockRecommendations:
+    return GetStockRecommendations(provider)
+
+
+@lru_cache(maxsize=1)
 def get_logo_provider() -> LogoProvider:
     # Logo.dev keeps logos current through rebrands/symbol changes. It needs a
     # free *publishable* token (logo.dev, 500k/mo); without it the logo endpoint
@@ -415,6 +442,8 @@ def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
         peg=metrics.peg,
         pb=metrics.pb,
         ps=metrics.ps,
+        fcf_per_share=metrics.fcf_per_share,
+        roe=metrics.roe,
         current_ratio=metrics.current_ratio,
         debt_to_equity=metrics.debt_to_equity,
         beta=metrics.beta,
@@ -558,6 +587,36 @@ def _present_analysis(analysis: InvestmentAnalysis) -> InvestmentAnalysisRespons
         disclaimer=_ANALYSIS_DISCLAIMER,
         model=analysis.model,
         generated_at=analysis.generated_at,
+    )
+
+
+def _present_recommendation_trend(
+    trend: RecommendationTrend,
+) -> RecommendationTrendResponse:
+    return RecommendationTrendResponse(
+        period=trend.period,
+        strong_buy=trend.strong_buy,
+        buy=trend.buy,
+        hold=trend.hold,
+        sell=trend.sell,
+        strong_sell=trend.strong_sell,
+        total=trend.total,
+        score=trend.score,
+        consensus=trend.consensus,
+    )
+
+
+def _present_recommendations(
+    recs: AnalystRecommendations,
+) -> RecommendationsResponse:
+    """Presenter: analyst-recommendations entity -> HTTP response DTO."""
+    latest = recs.latest
+    return RecommendationsResponse(
+        symbol=recs.symbol,
+        count=len(recs.trends),
+        direction=recs.direction,
+        latest=_present_recommendation_trend(latest) if latest else None,
+        trends=[_present_recommendation_trend(t) for t in recs.trends],
     )
 
 
@@ -872,6 +931,28 @@ def get_stock_analysis_endpoint(
     # one generation rather than re-billing per request.
     response.headers["Cache-Control"] = "public, max-age=300"
     return _present_analysis(analysis)
+
+
+@router.get(
+    "/stocks/{symbol}/recommendations", response_model=RecommendationsResponse
+)
+def get_stock_recommendations_endpoint(
+    symbol: str,
+    response: Response,
+    use_case: GetStockRecommendations = Depends(get_stock_recommendations),
+) -> RecommendationsResponse:
+    try:
+        recs = use_case.execute(symbol)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    # Analyst ratings move slowly (monthly snapshots), so cache briefly: a burst
+    # of viewers collapses onto one upstream call, like the screener board.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return _present_recommendations(recs)
 
 
 @router.get("/sectors", response_model=SectorBoardResponse)
