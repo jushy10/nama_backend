@@ -31,6 +31,12 @@ variable "extra_secrets" {
   default     = {}
 }
 
+variable "enable_bedrock_invoke" {
+  description = "Grant the task role permission to invoke Anthropic Claude models on Amazon Bedrock (for the AI stock-analysis endpoint). Off by default so the module stays generic; the consuming service opts in."
+  type        = bool
+  default     = false
+}
+
 variable "container_port" {
   description = "Port the app listens on inside the container."
   type        = number

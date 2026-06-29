@@ -17,6 +17,7 @@ from app.stocks.entities import (
     EarningsHistory,
     EarningsMetrics,
     EarningsSurprise,
+    InvestmentAnalysis,
     Logo,
     MoversBoard,
     NextEarnings,
@@ -38,6 +39,7 @@ from app.stocks.ports import (
     ConstituentRepository,
     EarningsCalendarProvider,
     EarningsHistoryProvider,
+    InvestmentAnalysisProvider,
     LogoProvider,
     QuoteBatchProvider,
     RevenueHistoryProvider,
@@ -408,6 +410,51 @@ class GetStockEarnings:
             return None
         try:
             return self._calendar_provider.get_next_earnings(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None
+
+
+class GetStockAnalysis:
+    """Use case: an AI-generated buy/hold/sell read on a single stock.
+
+    Reuses ``GetStockInfo`` to assemble the enriched snapshot (price plus the
+    best-effort performance/fundamentals/valuation enrichment), best-effort adds
+    the recent earnings beat history as extra context, then asks the injected
+    analyzer to weigh it all. The snapshot and the analysis are the primary data
+    — a bad/unknown symbol or a model failure propagates — while the earnings
+    context is best-effort, so a miss there leaves the analysis intact rather
+    than failing it. The analyzer reasons only over what it's handed; it fetches
+    nothing itself.
+    """
+
+    def __init__(
+        self,
+        stock_info: GetStockInfo,
+        analyzer: InvestmentAnalysisProvider,
+        earnings_provider: EarningsHistoryProvider | None = None,
+    ) -> None:
+        self._stock_info = stock_info
+        self._analyzer = analyzer
+        self._earnings_provider = earnings_provider
+
+    def execute(self, symbol: str) -> InvestmentAnalysis:
+        normalized = _normalize_symbol(symbol)
+        # The enriched snapshot is primary: a bad symbol (ValueError), an unknown
+        # one (StockNotFound), or an upstream failure (StockDataUnavailable) all
+        # propagate rather than yielding an analysis of nothing.
+        stock = self._stock_info.execute(normalized)
+        earnings = self._earnings(normalized)
+        return self._analyzer.analyze(stock, earnings)
+
+    def _earnings(self, symbol: str) -> EarningsHistory | None:
+        # Best-effort context: the beat history sharpens the analysis but isn't
+        # required, so a missing provider or an upstream miss simply omits it.
+        if self._earnings_provider is None:
+            return None
+        try:
+            return self._earnings_provider.get_earnings_history(
+                symbol, limit=_EARNINGS_QUARTERS
+            )
         except (StockNotFound, StockDataUnavailable):
             return None
 

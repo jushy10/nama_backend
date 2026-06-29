@@ -3,11 +3,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install the app + Postgres driver. Copying just the metadata + package keeps
-# the build small and cache-friendly.
+# Install the app + Postgres driver + the Bedrock (Anthropic) SDK for the AI
+# analysis endpoint. Copying just the metadata + package keeps the build small
+# and cache-friendly.
 COPY pyproject.toml ./
 COPY app ./app
-RUN pip install --no-cache-dir ".[postgres]"
+RUN pip install --no-cache-dir ".[postgres,bedrock]"
 
 # Migration config + ops scripts, so `alembic upgrade head` and the constituents
 # sync can run from this image (e.g. one-off ECS tasks in the VPC against RDS).

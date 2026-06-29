@@ -582,3 +582,51 @@ class MoversBoard:
     as_of: datetime | None
     gainers: tuple[ScreenedStock, ...]
     losers: tuple[ScreenedStock, ...]
+
+
+class Recommendation(str, Enum):
+    """The headline buy / hold / sell call of an AI stock analysis.
+
+    The string values double as the JSON the model returns and the API serves,
+    the same convention as ``Timeframe`` and ``StockIndex``.
+    """
+
+    BUY = "buy"
+    HOLD = "hold"
+    SELL = "sell"
+
+
+class Confidence(str, Enum):
+    """How firmly an analysis holds its recommendation, given the data."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+@dataclass(frozen=True)
+class InvestmentAnalysis:
+    """An AI-generated, balanced read on whether a stock looks like a buy.
+
+    Produced by a language model from the figures the rest of the slice already
+    gathers — the price snapshot, trailing performance, the valuation/health
+    metrics, and the recent earnings beat history — never from outside data the
+    model happens to recall. It is informational, not personalized financial
+    advice: the model fills in the substance below, and the edge (the presenter)
+    is what attaches the disclaimer.
+
+    ``recommendation`` is the headline call and ``confidence`` how firmly it's
+    held; ``thesis`` is a few sentences of reasoning, with ``strengths`` (the
+    bull case) and ``risks`` (the bear case) as short bullet points. ``model``
+    records which model produced it and ``generated_at`` when, so a cached or
+    stored analysis stays traceable.
+    """
+
+    symbol: str
+    recommendation: Recommendation
+    confidence: Confidence
+    thesis: str
+    strengths: tuple[str, ...]
+    risks: tuple[str, ...]
+    model: str
+    generated_at: datetime

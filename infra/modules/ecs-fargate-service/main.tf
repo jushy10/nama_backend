@@ -142,6 +142,37 @@ resource "aws_iam_role" "task" {
   tags               = var.tags
 }
 
+# Optional: let the app (its task role) invoke Anthropic Claude models on Amazon
+# Bedrock for the AI stock-analysis endpoint. Bedrock authenticates as the task,
+# so there is no API key to store — this policy is what grants access. Scoped to
+# the Anthropic foundation models plus the cross-region inference profiles that
+# front them (newer models are invoked through a profile, not the bare model id).
+data "aws_caller_identity" "current" {}
+
+data "aws_iam_policy_document" "task_bedrock" {
+  count = var.enable_bedrock_invoke ? 1 : 0
+
+  statement {
+    sid = "InvokeAnthropicModels"
+    actions = [
+      "bedrock:InvokeModel",
+      "bedrock:InvokeModelWithResponseStream",
+    ]
+    resources = [
+      "arn:aws:bedrock:*::foundation-model/anthropic.*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*.anthropic.*",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "task_bedrock" {
+  count = var.enable_bedrock_invoke ? 1 : 0
+
+  name_prefix = "bedrock-"
+  role        = aws_iam_role.task.id
+  policy      = data.aws_iam_policy_document.task_bedrock[0].json
+}
+
 # ---------------------------------------------------------------------------
 # Networking: a public ALB, and a task SG that only accepts traffic from it.
 # Tasks also carry app_security_group_id so the database accepts them.

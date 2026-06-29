@@ -152,6 +152,13 @@ module "app" {
     FMP_API_KEY         = module.fmp_api_key.arn
   }
 
+  # Grant the task role bedrock:InvokeModel for the AI analysis endpoint
+  # (GET /stocks/{symbol}/analysis). Bedrock authenticates as the task role, so
+  # there's no API key — but the model must be access-enabled in this account /
+  # region, and BEDROCK_ANALYSIS_MODEL_ID may need to name a cross-region
+  # inference profile (defaults to us.anthropic.claude-opus-4-8 in code).
+  enable_bedrock_invoke = true
+
   enable_https    = true
   domain_name     = var.domain_name
   route53_zone_id = module.dns.zone_id

@@ -18,6 +18,13 @@ dependencies = [
 postgres = [
     "psycopg[binary]>=3.1",
 ]
+# Claude on Amazon Bedrock for the AI analysis endpoint (GET
+# /stocks/{symbol}/analysis). Heavy (pulls boto3) and only needed where that
+# endpoint serves, so it's an opt-in extra like the Postgres driver — the
+# adapter imports it lazily, so the app and the offline tests run without it.
+bedrock = [
+    "anthropic[bedrock]>=0.40",
+]
 dev = [
     "pytest>=8.0",
 ]

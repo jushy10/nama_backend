@@ -11,20 +11,24 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     AllTimeHigh,
     Candle,
     CandleSeries,
     CompanyProfile,
+    Confidence,
     Constituent,
     EarningsHistory,
     EarningsMetrics,
     EarningsSurprise,
+    InvestmentAnalysis,
     KeyMetrics,
     Logo,
     NextEarnings,
     Quote,
+    Recommendation,
     RevenueBreakdown,
     RevenueComponent,
     SectorPerformance,
@@ -43,6 +47,7 @@ from app.stocks.ports import (
     ConstituentRepository,
     EarningsCalendarProvider,
     EarningsHistoryProvider,
+    InvestmentAnalysisProvider,
     LogoProvider,
     QuoteBatchProvider,
     RevenueHistoryProvider,
@@ -56,6 +61,7 @@ from app.stocks.ports import (
 from app.stocks.router import (
     get_screener,
     get_sector_performance,
+    get_stock_analysis,
     get_stock_candles,
     get_stock_earnings,
     get_stock_info,
@@ -65,6 +71,7 @@ from app.stocks.router import (
 )
 from app.stocks.use_cases import (
     GetSectorPerformance,
+    GetStockAnalysis,
     GetStockCandles,
     GetStockEarnings,
     GetStockInfo,
@@ -274,6 +281,41 @@ class FakeSegmentRevenueProvider(SegmentRevenueProvider):
         if self._raises is not None:
             raise self._raises
         return self._breakdowns
+
+
+class FakeAnalysisProvider(InvestmentAnalysisProvider):
+    """Returns/raises whatever the test configured; records (symbol, had_earnings)."""
+
+    def __init__(
+        self,
+        analysis: InvestmentAnalysis | None = None,
+        raises: Exception | None = None,
+    ):
+        self._analysis = analysis
+        self._raises = raises
+        self.received: list[tuple[str, bool]] = []
+
+    def analyze(self, stock, earnings=None) -> InvestmentAnalysis:
+        self.received.append((stock.symbol, earnings is not None))
+        if self._raises is not None:
+            raise self._raises
+        assert self._analysis is not None
+        return self._analysis
+
+
+def an_analysis(**overrides) -> InvestmentAnalysis:
+    base = dict(
+        symbol="AAPL",
+        recommendation=Recommendation.HOLD,
+        confidence=Confidence.MEDIUM,
+        thesis="Solid franchise; the valuation already reflects much of the growth.",
+        strengths=("Consistent earnings beats", "Strong net margin"),
+        risks=("Above-average P/E", "Decelerating revenue growth"),
+        model="claude-opus-4-8",
+        generated_at=datetime(2026, 6, 18, 20, 0, tzinfo=timezone.utc),
+    )
+    base.update(overrides)
+    return InvestmentAnalysis(**base)
 
 
 def a_logo(content: bytes = b"\x89PNG\r\n", media_type: str = "image/png") -> Logo:
@@ -1165,6 +1207,7 @@ def make_client():
         revenue_provider: RevenueHistoryProvider | None = None,
         segment_revenue_provider: SegmentRevenueProvider | None = None,
         quote_provider: StockQuoteProvider | None = None,
+        analysis_provider: InvestmentAnalysisProvider | None = None,
     ) -> TestClient:
         if provider is not None:
             app.dependency_overrides[get_stock_info] = lambda: GetStockInfo(
@@ -1198,6 +1241,18 @@ def make_client():
                 revenue_provider,
                 segment_revenue_provider,
             )
+        if analysis_provider is not None:
+            app.dependency_overrides[get_stock_analysis] = lambda: GetStockAnalysis(
+                GetStockInfo(
+                    provider,
+                    performance_provider,
+                    fundamentals_provider,
+                    profile_provider,
+                    ath_provider,
+                ),
+                analysis_provider,
+                earnings_provider,
+            )
         return TestClient(app)
 
     yield _make
@@ -1220,6 +1275,191 @@ def test_get_stock_returns_200_with_computed_fields(make_client):
 def test_get_stock_normalizes_lowercase(make_client):
     client = make_client(FakeProvider(stock=a_stock()))
     assert client.get("/stocks/aapl").json()["symbol"] == "AAPL"
+
+
+# --------------------------- AI analysis ---------------------------
+
+# A stub Bedrock client so the real adapter's prompt-building and parse/translate
+# logic runs offline — no anthropic package, no network. Attribute shapes match
+# what the Anthropic SDK returns (message.content -> blocks with .type/.name/.input).
+class _StubBlock:
+    def __init__(self, type, name=None, input=None):
+        self.type = type
+        self.name = name
+        self.input = input
+
+
+class _StubMessage:
+    def __init__(self, content):
+        self.content = content
+
+
+class _StubMessages:
+    def __init__(self, message, recorder):
+        self._message = message
+        self._recorder = recorder
+
+    def create(self, **kwargs):
+        self._recorder.append(kwargs)
+        return self._message
+
+
+class _StubClient:
+    def __init__(self, message):
+        self.calls: list[dict] = []
+        self.messages = _StubMessages(message, self.calls)
+
+
+class _BoomMessages:
+    def create(self, **kwargs):
+        raise RuntimeError("bedrock exploded")
+
+
+class _BoomClient:
+    messages = _BoomMessages()
+
+
+def _tool_message(**input_overrides) -> _StubMessage:
+    payload = dict(
+        recommendation="hold",
+        confidence="medium",
+        thesis="Balanced.",
+        strengths=["High net margin", ""],  # the blank entry should be dropped
+        risks=["Elevated P/E"],
+    )
+    payload.update(input_overrides)
+    return _StubMessage([_StubBlock("tool_use", name="submit_analysis", input=payload)])
+
+
+def test_analysis_use_case_passes_stock_and_earnings():
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(info, analyzer, FakeEarningsProvider(a_history()))
+    analysis = use_case.execute("aapl")
+    assert analysis.recommendation is Recommendation.HOLD
+    assert analyzer.received == [("AAPL", True)]  # normalized symbol, earnings supplied
+
+
+def test_analysis_use_case_earnings_is_best_effort():
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info, analyzer, FakeEarningsProvider(raises=StockDataUnavailable("AAPL", "boom"))
+    )
+    analysis = use_case.execute("AAPL")  # earnings failure must not sink the analysis
+    assert analysis.recommendation is Recommendation.HOLD
+    assert analyzer.received == [("AAPL", False)]  # earnings omitted
+
+
+def test_analysis_use_case_propagates_stock_not_found():
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(raises=StockNotFound("ZZZZ")))
+    with pytest.raises(StockNotFound):
+        GetStockAnalysis(info, analyzer).execute("ZZZZ")
+    assert analyzer.received == []  # analyzer never called when the snapshot fails
+
+
+def test_analysis_use_case_propagates_model_failure():
+    analyzer = FakeAnalysisProvider(raises=StockDataUnavailable("AAPL", "model down"))
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    with pytest.raises(StockDataUnavailable):
+        GetStockAnalysis(info, analyzer).execute("AAPL")
+
+
+def test_bedrock_adapter_parses_tool_call_into_entity():
+    client = _StubClient(_tool_message())
+    provider = BedrockAnalysisProvider(client=client, model_id="test-model")
+    analysis = provider.analyze(a_stock(metrics=a_key_metrics()), a_history())
+    assert analysis.symbol == "AAPL"
+    assert analysis.recommendation is Recommendation.HOLD
+    assert analysis.confidence is Confidence.MEDIUM
+    assert analysis.strengths == ("High net margin",)  # blank entry dropped
+    assert analysis.risks == ("Elevated P/E",)
+    assert analysis.model == "test-model"
+    # The model was actually pinned to the forced tool, with our model id.
+    assert client.calls[0]["tool_choice"] == {"type": "tool", "name": "submit_analysis"}
+    assert client.calls[0]["model"] == "test-model"
+
+
+def test_bedrock_adapter_renders_figures_into_prompt():
+    client = _StubClient(_tool_message())
+    BedrockAnalysisProvider(client=client).analyze(
+        a_stock(metrics=a_key_metrics()), a_history()
+    )
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "Stock: AAPL" in prompt
+    assert "P/E (trailing): 28.50" in prompt  # a metric rendered from KeyMetrics
+    assert "Recent earnings" in prompt  # the beat history was included
+
+
+def test_bedrock_adapter_raises_when_no_tool_call():
+    client = _StubClient(_StubMessage([_StubBlock("text")]))  # model didn't call it
+    with pytest.raises(StockDataUnavailable):
+        BedrockAnalysisProvider(client=client).analyze(a_stock())
+
+
+def test_bedrock_adapter_maps_client_error_to_domain_error():
+    with pytest.raises(StockDataUnavailable):
+        BedrockAnalysisProvider(client=_BoomClient()).analyze(a_stock())
+
+
+def test_bedrock_adapter_rejects_offschema_value():
+    client = _StubClient(_tool_message(recommendation="strong_buy"))  # not in the enum
+    with pytest.raises(StockDataUnavailable):
+        BedrockAnalysisProvider(client=client).analyze(a_stock())
+
+
+def test_get_analysis_returns_200(make_client):
+    client = make_client(
+        provider=FakeProvider(stock=a_stock()),
+        analysis_provider=FakeAnalysisProvider(an_analysis()),
+    )
+    r = client.get("/stocks/AAPL/analysis")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["symbol"] == "AAPL"
+    assert body["recommendation"] == "hold"
+    assert body["confidence"] == "medium"
+    assert body["strengths"] and body["risks"]
+    assert "not financial advice" in body["disclaimer"].lower()
+    assert body["model"] == "claude-opus-4-8"
+
+
+def test_get_analysis_normalizes_and_supplies_earnings(make_client):
+    analyzer = FakeAnalysisProvider(an_analysis())
+    client = make_client(
+        provider=FakeProvider(stock=a_stock()),
+        analysis_provider=analyzer,
+        earnings_provider=FakeEarningsProvider(a_history()),
+    )
+    assert client.get("/stocks/aapl/analysis").status_code == 200
+    assert analyzer.received == [("AAPL", True)]
+
+
+def test_get_analysis_404_when_symbol_unknown(make_client):
+    client = make_client(
+        provider=FakeProvider(raises=StockNotFound("ZZZZ")),
+        analysis_provider=FakeAnalysisProvider(an_analysis()),
+    )
+    assert client.get("/stocks/ZZZZ/analysis").status_code == 404
+
+
+def test_get_analysis_502_when_model_fails(make_client):
+    client = make_client(
+        provider=FakeProvider(stock=a_stock()),
+        analysis_provider=FakeAnalysisProvider(
+            raises=StockDataUnavailable("AAPL", "bedrock timeout")
+        ),
+    )
+    assert client.get("/stocks/AAPL/analysis").status_code == 502
+
+
+def test_get_analysis_400_on_bad_symbol(make_client):
+    client = make_client(
+        provider=FakeProvider(stock=a_stock()),
+        analysis_provider=FakeAnalysisProvider(an_analysis()),
+    )
+    assert client.get("/stocks/TOOLONG/analysis").status_code == 400
 
 
 def test_get_stock_invalid_symbol_400(make_client):

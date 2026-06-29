@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
+from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.constituents import SqlConstituentRepository
 from app.stocks.entities import (
@@ -24,6 +25,7 @@ from app.stocks.entities import (
     CandleSeries,
     EarningsHistory,
     EarningsMetrics,
+    InvestmentAnalysis,
     KeyMetrics,
     MoversBoard,
     NextEarnings,
@@ -61,6 +63,7 @@ from app.stocks.ports import (
     CompanyProfileProvider,
     EarningsCalendarProvider,
     EarningsHistoryProvider,
+    InvestmentAnalysisProvider,
     LogoProvider,
     RevenueHistoryProvider,
     SegmentRevenueProvider,
@@ -75,6 +78,7 @@ from app.stocks.schemas import (
     EarningsHistoryResponse,
     EarningsMetricsResponse,
     EarningsSurpriseResponse,
+    InvestmentAnalysisResponse,
     KeyMetricsResponse,
     MoversResponse,
     NextEarningsResponse,
@@ -91,6 +95,7 @@ from app.stocks.schemas import (
 )
 from app.stocks.use_cases import (
     GetSectorPerformance,
+    GetStockAnalysis,
     GetStockCandles,
     GetStockEarnings,
     GetStockInfo,
@@ -250,6 +255,45 @@ def get_stock_earnings(
     segment_revenue: SegmentRevenueProvider = Depends(get_segment_revenue_provider),
 ) -> GetStockEarnings:
     return GetStockEarnings(provider, fundamentals, calendar, revenue, segment_revenue)
+
+
+@lru_cache(maxsize=1)
+def get_analysis_provider() -> InvestmentAnalysisProvider:
+    # AI analysis is this endpoint's primary data, so it's required — but unlike
+    # the API-key vendors there's no secret to gate on: Bedrock authenticates
+    # through the process's AWS credentials (the ECS task role in production), so
+    # the IAM policy is what enables it. Region + model id are config with sane
+    # defaults (the model id may be a cross-region inference profile). A missing
+    # 'anthropic' Bedrock extra surfaces as a clean 503 here rather than a 500.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_ANALYSIS_MODEL_ID")
+    try:
+        if model_id:
+            return BedrockAnalysisProvider(model_id=model_id, region=region)
+        return BedrockAnalysisProvider(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI analysis is not configured (install the 'bedrock' extra)."
+        ) from exc
+
+
+@lru_cache(maxsize=1)
+def get_analysis_earnings_provider() -> EarningsHistoryProvider | None:
+    # The beat history is best-effort *context* for the analysis, not its primary
+    # data — so unlike the earnings endpoint a missing Finnhub key just omits it
+    # rather than 503-ing. Reuses the same key when present.
+    key = os.environ.get("FINNHUB_API_KEY")
+    return FinnhubEarningsProvider(key) if key else None
+
+
+def get_stock_analysis(
+    stock_info: GetStockInfo = Depends(get_stock_info),
+    analyzer: InvestmentAnalysisProvider = Depends(get_analysis_provider),
+    earnings: EarningsHistoryProvider | None = Depends(get_analysis_earnings_provider),
+) -> GetStockAnalysis:
+    # Reuses the stock snapshot wiring wholesale (price + enrichment), then layers
+    # the analyzer and the best-effort beat history on top.
+    return GetStockAnalysis(stock_info, analyzer, earnings)
 
 
 @lru_cache(maxsize=1)
@@ -429,6 +473,31 @@ def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
         # serves, so it reuses that presenter.
         valuation=_present_metrics(history.valuation),
         next_report=_present_next_earnings(history.next_report),
+    )
+
+
+# Authored by the service, not the model: the analysis is informational only.
+_ANALYSIS_DISCLAIMER = (
+    "AI-generated for informational and educational purposes only — not financial "
+    "advice. Markets carry risk; do your own research before investing."
+)
+
+
+def _present_analysis(analysis: InvestmentAnalysis) -> InvestmentAnalysisResponse:
+    """Presenter: investment-analysis entity -> HTTP response DTO.
+
+    The disclaimer is attached here, at the edge — it's a property of the service,
+    not something the model is trusted to author."""
+    return InvestmentAnalysisResponse(
+        symbol=analysis.symbol,
+        recommendation=analysis.recommendation.value,
+        confidence=analysis.confidence.value,
+        thesis=analysis.thesis,
+        strengths=list(analysis.strengths),
+        risks=list(analysis.risks),
+        disclaimer=_ANALYSIS_DISCLAIMER,
+        model=analysis.model,
+        generated_at=analysis.generated_at,
     )
 
 
@@ -722,6 +791,27 @@ def get_stock_earnings_endpoint(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present_earnings(history)
+
+
+@router.get("/stocks/{symbol}/analysis", response_model=InvestmentAnalysisResponse)
+def get_stock_analysis_endpoint(
+    symbol: str,
+    response: Response,
+    use_case: GetStockAnalysis = Depends(get_stock_analysis),
+) -> InvestmentAnalysisResponse:
+    try:
+        analysis = use_case.execute(symbol)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    # The model call is slow and metered, and an analysis only drifts as the
+    # underlying figures do — cache briefly so a burst of viewers collapses onto
+    # one generation rather than re-billing per request.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return _present_analysis(analysis)
 
 
 @router.get("/sectors", response_model=SectorBoardResponse)
