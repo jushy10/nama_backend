@@ -48,6 +48,30 @@ class KeyMetricsResponse(BaseModel):
     week_52_low: float | None = None
 
 
+class AnalystEstimatesResponse(BaseModel):
+    """Forward sell-side consensus estimates for the next fiscal year(s).
+
+    The forward-looking complement to ``KeyMetricsResponse`` (which is all
+    trailing): what analysts *expect*, not what the company has reported.
+    ``fiscal_year`` is FY1 — the nearest full fiscal year still being estimated —
+    and ``eps_avg`` / ``revenue_avg`` its consensus means (``eps_avg_fy2`` is the
+    year after, for a next-twelve-months blend). The ``num_analysts_*`` counts
+    report consensus breadth. EPS is per share; revenue is raw (e.g. USD). The
+    derived multiples ride on the stock response as ``forward_pe`` / ``forward_ps``.
+    Any field a vendor doesn't cover is ``null``."""
+
+    fiscal_year: int | None = None  # FY1: the nearest forward fiscal year
+    period_end: date | None = None  # FY1 fiscal period-end date
+    eps_avg: float | None = None  # FY1 consensus EPS (mean)
+    eps_low: float | None = None
+    eps_high: float | None = None
+    revenue_avg: float | None = None  # FY1 consensus revenue (raw)
+    num_analysts_eps: int | None = None
+    num_analysts_revenue: int | None = None
+    eps_avg_fy2: float | None = None  # FY2 consensus EPS (year after FY1)
+    fiscal_year_fy2: int | None = None
+
+
 class AllTimeHighResponse(BaseModel):
     """A stock's all-time high over the available price history.
 
@@ -83,7 +107,10 @@ class StockResponse(BaseModel):
     dividend_per_share: float | None = None  # $ per share, annual
     dividend_yield: float | None = None  # percent
     performance: StockPerformanceResponse | None = None
-    metrics: KeyMetricsResponse | None = None
+    metrics: KeyMetricsResponse | None = None  # trailing valuation/health/market
+    analyst_estimates: AnalystEstimatesResponse | None = None  # forward consensus
+    forward_pe: float | None = None  # price / FY1 estimated EPS (forward, best-effort)
+    forward_ps: float | None = None  # market cap / FY1 estimated revenue (forward)
     all_time_high: AllTimeHighResponse | None = None
     drawdown_from_high: float | None = None  # percent below the all-time high (<= 0)
 

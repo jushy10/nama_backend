@@ -15,6 +15,7 @@ from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     AllTimeHigh,
+    AnalystEstimates,
     Candle,
     CandleSeries,
     CompanyProfile,
@@ -42,6 +43,7 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSignal
 from app.stocks.ports import (
     AllTimeHighProvider,
+    AnalystEstimatesProvider,
     CandleProvider,
     CompanyProfileProvider,
     ConstituentRepository,
@@ -192,6 +194,22 @@ class FakeProfileProvider(CompanyProfileProvider):
             raise self._raises
         assert self._profile is not None
         return self._profile
+
+
+class FakeEstimatesProvider(AnalystEstimatesProvider):
+    """Returns/raises whatever the test configured; records calls."""
+
+    def __init__(self, estimates=None, raises=None):
+        self._estimates = estimates
+        self._raises = raises
+        self.received: list[str] = []
+
+    def get_estimates(self, symbol: str) -> AnalystEstimates:
+        self.received.append(symbol)
+        if self._raises is not None:
+            raise self._raises
+        assert self._estimates is not None
+        return self._estimates
 
 
 class FakeCandleProvider(CandleProvider):
@@ -417,6 +435,17 @@ def a_profile(
     return CompanyProfile(description=description, name=name)
 
 
+def an_estimates(**overrides) -> AnalystEstimates:
+    base = dict(
+        fiscal_year=2026, period_end=date(2026, 9, 30),
+        eps_avg=8.0, eps_low=7.4, eps_high=8.6, revenue_avg=420_000_000_000.0,
+        num_analysts_eps=30, num_analysts_revenue=28,
+        eps_avg_fy2=9.2, fiscal_year_fy2=2027,
+    )
+    base.update(overrides)
+    return AnalystEstimates(**base)
+
+
 def a_sector(**overrides) -> SectorPerformance:
     base = dict(
         sector="Technology", symbol="XLK", price=255.0, previous_close=250.0,
@@ -589,6 +618,41 @@ def test_candle_is_bullish():
     assert a_candle(open=100.0, close=100.0).is_bullish is True   # doji -> green
 
 
+def test_analyst_estimates_forward_pe():
+    est = an_estimates(eps_avg=8.0)
+    assert est.forward_pe(280.0) == 35.0                          # 280 / 8.0
+    assert est.forward_pe(None) is None                           # no price
+    assert an_estimates(eps_avg=None).forward_pe(280.0) is None   # no estimate
+    assert an_estimates(eps_avg=-1.0).forward_pe(280.0) is None   # expected loss
+
+
+def test_analyst_estimates_forward_ps():
+    est = an_estimates(revenue_avg=400e9)
+    assert est.forward_ps(2_000e9) == 5.0                         # 2.0T / 400B
+    assert est.forward_ps(None) is None
+    assert an_estimates(revenue_avg=None).forward_ps(2_000e9) is None
+
+
+def test_analyst_estimates_is_empty():
+    assert an_estimates(eps_avg=None, revenue_avg=None).is_empty is True
+    assert an_estimates(eps_avg=8.0).is_empty is False
+
+
+def test_stock_forward_pe_and_ps_delegate_to_estimates():
+    stock = a_stock(
+        price=280.0, market_cap=2_000e9,
+        analyst_estimates=an_estimates(eps_avg=8.0, revenue_avg=400e9),
+    )
+    assert stock.forward_pe == 35.0
+    assert stock.forward_ps == 5.0
+
+
+def test_stock_forward_pe_none_without_estimates():
+    stock = a_stock()
+    assert stock.forward_pe is None
+    assert stock.forward_ps is None
+
+
 # --------------------------- chart window (range -> start/end) ---------------------------
 
 def test_resolve_window_lookback():
@@ -686,6 +750,44 @@ def test_use_case_without_enrichment_leaves_fields_none():
     assert stock.performance is None
     assert stock.metrics is None
     assert stock.description is None
+    assert stock.analyst_estimates is None
+    assert stock.forward_pe is None
+
+
+def test_use_case_attaches_analyst_estimates():
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock(price=280.0)),
+        estimates_provider=FakeEstimatesProvider(an_estimates(eps_avg=8.0)),
+    )
+    stock = info.execute("AAPL")
+    assert stock.analyst_estimates.eps_avg == 8.0
+    assert stock.forward_pe == 35.0  # 280 / 8.0
+
+
+def test_use_case_estimates_are_best_effort():
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock()),
+        estimates_provider=FakeEstimatesProvider(
+            raises=StockDataUnavailable("AAPL", "boom")
+        ),
+    )
+    stock = info.execute("AAPL")  # a miss must not raise
+    assert stock.analyst_estimates is None
+    assert stock.forward_pe is None
+
+
+def test_use_case_drops_empty_estimates_block():
+    # An uncovered symbol comes back as an all-None estimates -> omitted, not attached.
+    empty = AnalystEstimates(
+        fiscal_year=None, period_end=None, eps_avg=None, eps_low=None,
+        eps_high=None, revenue_avg=None, num_analysts_eps=None,
+        num_analysts_revenue=None,
+    )
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock()),
+        estimates_provider=FakeEstimatesProvider(empty),
+    )
+    assert info.execute("AAPL").analyst_estimates is None
 
 
 def test_use_case_enrichment_is_best_effort():
@@ -1199,6 +1301,7 @@ def make_client():
         ath_provider: AllTimeHighProvider | None = None,
         fundamentals_provider: StockFundamentalsProvider | None = None,
         profile_provider: CompanyProfileProvider | None = None,
+        estimates_provider: AnalystEstimatesProvider | None = None,
         candle_provider: CandleProvider | None = None,
         rsi_provider: CandleProvider | None = None,
         sector_provider: SectorPerformanceProvider | None = None,
@@ -1216,6 +1319,7 @@ def make_client():
                 fundamentals_provider,
                 profile_provider,
                 ath_provider,
+                estimates_provider,
             )
         if quote_provider is not None:
             app.dependency_overrides[get_stock_quote] = (
@@ -1249,6 +1353,7 @@ def make_client():
                     fundamentals_provider,
                     profile_provider,
                     ath_provider,
+                    estimates_provider,
                 ),
                 analysis_provider,
                 earnings_provider,
@@ -1502,6 +1607,29 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
     assert body["metrics"]["debt_to_equity"] == 1.5
     for moved in ("eps", "net_margin", "eps_growth_yoy"):
         assert moved not in body["metrics"], moved
+
+
+def test_get_stock_includes_forward_estimates(make_client):
+    client = make_client(
+        FakeProvider(stock=a_stock(price=280.0)),
+        # market_cap is enrichment from the fundamentals feed, so forward P/S needs
+        # it supplied here (forward P/E only needs the live price).
+        fundamentals_provider=FakeFundamentalsProvider(
+            a_fundamentals(market_cap=2_000_000_000_000.0)
+        ),
+        estimates_provider=FakeEstimatesProvider(
+            an_estimates(eps_avg=8.0, revenue_avg=400_000_000_000.0)
+        ),
+    )
+    body = client.get("/stocks/AAPL").json()
+    # Derived forward multiples ride at the top level (they need the live price)…
+    assert body["forward_pe"] == 35.0          # 280 / 8.0
+    assert body["forward_ps"] == 5.0           # 2.0T / 400B
+    # …and the raw consensus block carries FY1 + FY2.
+    assert body["analyst_estimates"]["fiscal_year"] == 2026
+    assert body["analyst_estimates"]["eps_avg"] == 8.0
+    assert body["analyst_estimates"]["num_analysts_eps"] == 30
+    assert body["analyst_estimates"]["eps_avg_fy2"] == 9.2
 
 
 def test_get_stock_includes_all_time_high_and_drawdown(make_client):
