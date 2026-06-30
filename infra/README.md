@@ -81,8 +81,28 @@ The app reads `DATABASE_URL` (see [`app/db.py`](../app/db.py)). Because the DB i
 - **App runs in AWS (the intended path):** deploy the FastAPI app into the VPC
   (ECS/EC2/Lambda), attach `app_security_group_id`, and inject the
   `/nama/dev/database-url` SecureString as the `DATABASE_URL` env var.
-- **Local testing:** open an SSH/SSM tunnel through a bastion in the VPC, then
-  point `DATABASE_URL` at `localhost:<forwarded-port>`.
+- **Local access (the secure path):** tunnel to the private DB through the
+  `module "bastion"` SSM jump host. It opens **no inbound ports** and has **no SSH
+  key** — AWS Systems Manager brokers the connection, so the database never
+  becomes publicly reachable. One-time local setup: install the AWS CLI's
+  [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html).
+
+  ```sh
+  # IDs/host come from `terraform output` (bastion_instance_id, database_address).
+  BASTION=$(terraform -chdir=environments/dev output -raw bastion_instance_id)
+  DBHOST=$(terraform -chdir=environments/dev output -raw database_address)
+
+  # Forward localhost:5432 -> RDS:5432 through the bastion. Leave this running.
+  aws ssm start-session --target "$BASTION" \
+    --document-name AWS-StartPortForwardingSessionToRemoteHost \
+    --parameters "{\"host\":[\"$DBHOST\"],\"portNumber\":[\"5432\"],\"localPortNumber\":[\"5432\"]}"
+  ```
+
+  In another shell, point any client (`psql`, DBeaver, TablePlus, …) at
+  `localhost:5432`. The username/password/db name are in the
+  `/nama/dev/database-url` SecureString (`aws ssm get-parameter --name
+  /nama/dev/database-url --with-decryption --query Parameter.Value --output
+  text`); use `sslmode=require` and swap the host for `localhost`.
 
 ### Cost & teardown
 
@@ -90,6 +110,15 @@ The app reads `DATABASE_URL` (see [`app/db.py`](../app/db.py)). Because the DB i
 running. It bills whether or not you use it — `terraform destroy` (or remove the
 `module "database"` block and apply) when you're done experimenting.
 `deletion_protection` is off and `skip_final_snapshot` is on for easy teardown.
+
+The `module "bastion"` jump host is a `t4g.nano` + 8 GB gp3 — roughly **$4/mo**
+if left on. It only needs to be running while you're tunnelling, so stop it when
+idle and start it before a session (SSM works as soon as it boots):
+
+```sh
+aws ec2 stop-instances  --instance-ids "$(terraform -chdir=environments/dev output -raw bastion_instance_id)"
+aws ec2 start-instances --instance-ids "$(terraform -chdir=environments/dev output -raw bastion_instance_id)"
+```
 
 > Provisioning RDS takes several minutes, so the `apply` step runs longer than
 > the SSM-only deploys did.
