@@ -1,0 +1,118 @@
+# A tiny SSM-managed bastion: the secure jump host for reaching the *private*
+# RDS database from a laptop. It opens NO inbound ports and has NO SSH key —
+# access is brokered entirely by AWS Systems Manager (Session Manager), which the
+# preinstalled SSM agent dials out to. You port-forward a local port through it:
+#
+#   aws ssm start-session --target <instance-id> \
+#     --document-name AWS-StartPortForwardingSessionToRemoteHost \
+#     --parameters '{"host":["<rds-address>"],"portNumber":["5432"],"localPortNumber":["5432"]}'
+#
+# then point any Postgres client at localhost:5432. The database stays private;
+# nothing about it becomes publicly reachable.
+
+# Amazon Linux 2023 (arm64). The SSM agent ships preinstalled, so the instance is
+# Session-Manager-ready the moment it finishes booting. most_recent keeps it on a
+# patched image at apply time.
+data "aws_ami" "al2023" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023*-arm64"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["arm64"]
+  }
+}
+
+# The bastion's identity. Exactly one managed policy —
+# AmazonSSMManagedInstanceCore — the minimum the SSM agent needs to register the
+# instance and broker sessions. No other permissions.
+data "aws_iam_policy_document" "assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "this" {
+  name_prefix        = "${var.name}-"
+  assume_role_policy = data.aws_iam_policy_document.assume.json
+  tags               = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_core" {
+  role       = aws_iam_role.this.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "this" {
+  name_prefix = "${var.name}-"
+  role        = aws_iam_role.this.name
+  tags        = var.tags
+}
+
+# The bastion's own security group: no ingress whatsoever (Session Manager needs
+# none), all egress (to reach the SSM endpoints and the database). Permission to
+# actually hit Postgres comes from also attaching the database's app SG to the
+# instance via var.extra_security_group_ids.
+resource "aws_security_group" "this" {
+  name_prefix = "${var.name}-"
+  description = "SSM bastion for ${var.name} — no inbound, egress only"
+  vpc_id      = var.vpc_id
+
+  egress {
+    description = "All outbound (SSM endpoints + database)"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = var.tags
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_instance" "this" {
+  ami                  = data.aws_ami.al2023.id
+  instance_type        = var.instance_type
+  iam_instance_profile = aws_iam_instance_profile.this.name
+
+  subnet_id = var.subnet_id
+
+  # Own SG (egress only) + the database's app SG (which is what the db SG accepts
+  # 5432 from). Together: the bastion can reach the DB; nothing can reach the
+  # bastion.
+  vpc_security_group_ids = concat([aws_security_group.this.id], var.extra_security_group_ids)
+
+  # Default-VPC subnets are public; a public IP lets the SSM agent reach the
+  # Systems Manager endpoints over the IGW (no NAT, no VPC endpoints needed).
+  # This is NOT an exposure — the security group opens zero inbound ports.
+  associate_public_ip_address = true
+
+  # No key_name on purpose: access is SSM-only. Force IMDSv2 and clamp the
+  # metadata hop limit so the instance role's credentials can't be reached from a
+  # container/SSRF pivot.
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
+  root_block_device {
+    volume_size = 8
+    volume_type = "gp3"
+    encrypted   = true
+  }
+
+  tags = merge(var.tags, { Name = var.name })
+}

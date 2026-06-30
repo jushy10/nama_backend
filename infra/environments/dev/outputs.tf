@@ -23,6 +23,16 @@ output "database_url_ssm_parameter" {
   value       = module.database.database_url_ssm_name
 }
 
+output "database_address" {
+  description = "RDS hostname (no port) — the `host` for SSM port-forwarding through the bastion."
+  value       = module.database.address
+}
+
+output "bastion_instance_id" {
+  description = "SSM bastion instance id — the --target for `aws ssm start-session` to tunnel to the database."
+  value       = module.bastion.instance_id
+}
+
 output "app_security_group_id" {
   description = "Attach this SG to compute (ECS/EC2/Lambda) that needs the database."
   value       = module.database.app_security_group_id

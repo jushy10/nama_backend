@@ -51,6 +51,20 @@ module "database" {
   database_url_ssm_name = "/nama/dev/database-url"
 }
 
+# A small SSM-managed bastion for reaching the *private* database from a laptop.
+# It opens no inbound ports and has no SSH key — you tunnel through it with
+# Session Manager port forwarding (see infra/README.md → "Connecting the app").
+# It carries the database's app SG, so it is allowed to reach Postgres on 5432.
+module "bastion" {
+  source = "../../modules/bastion-ssm"
+
+  name      = "nama-dev-bastion"
+  vpc_id    = data.aws_vpc.default.id
+  subnet_id = local.app_subnet_ids[0]
+
+  extra_security_group_ids = [module.database.app_security_group_id]
+}
+
 # Stock-data credentials for the stocks feature (GET /stocks/{symbol}). Created
 # as SecureString placeholders; set the REAL values out of band so they never
 # live in code or Terraform state:
