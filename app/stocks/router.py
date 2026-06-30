@@ -20,6 +20,7 @@ from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.constituents import SqlConstituentRepository
+from app.stocks.stock_estimates_repository import SqlAnalystEstimatesRepository
 from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
@@ -43,7 +44,7 @@ from app.stocks.entities import (
     Timeframe,
 )
 from app.stocks.caching_company_profile_provider import CachingCompanyProfileProvider
-from app.stocks.caching_estimates_provider import CachingAnalystEstimatesProvider
+from app.stocks.db_cached_estimates_provider import DbCachedAnalystEstimatesProvider
 from app.stocks.caching_revenue_provider import CachingRevenueHistoryProvider
 from app.stocks.caching_segment_revenue_provider import CachingSegmentRevenueProvider
 from app.stocks.composite_company_profile_provider import (
@@ -166,14 +167,26 @@ def get_profile_provider() -> CompanyProfileProvider | None:
 
 
 @lru_cache(maxsize=1)
-def get_estimates_provider() -> AnalystEstimatesProvider | None:
+def _fmp_estimates_provider() -> AnalystEstimatesProvider | None:
+    # The live FMP client is a process singleton (one httpx connection pool); the
+    # DB cache that wraps it is built per request, since it needs the request session.
+    key = os.environ.get("FMP_API_KEY")
+    return FmpEstimatesProvider(key) if key else None
+
+
+def get_estimates_provider(
+    db: Session = Depends(get_db),
+) -> AnalystEstimatesProvider | None:
     # Forward analyst estimates back the snapshot's forward P/E — best-effort
     # enrichment, so without a key we simply omit the forward metrics (price +
-    # trailing ratios still serve). FMP's free tier serves the annual cadence; the
-    # TTL cache (a singleton, so it persists across requests) keeps us under FMP's
-    # ~250/day free quota. Same FMP key the profile + constituents sync use.
-    key = os.environ.get("FMP_API_KEY")
-    return CachingAnalystEstimatesProvider(FmpEstimatesProvider(key)) if key else None
+    # trailing ratios still serve). A persistent DB cache (refreshed monthly out of
+    # band by scripts/sync_estimates.py + lazily on a miss) sits in front of FMP so
+    # the endpoint rarely calls it, staying under the ~250/day free quota — and it
+    # serves a stale row if FMP is down. Same FMP key the profile + constituents use.
+    inner = _fmp_estimates_provider()
+    if inner is None:
+        return None
+    return DbCachedAnalystEstimatesProvider(inner, SqlAnalystEstimatesRepository(db))
 
 
 def get_stock_info(

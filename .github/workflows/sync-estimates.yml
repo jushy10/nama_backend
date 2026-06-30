@@ -1,0 +1,108 @@
+name: Sync analyst estimates
+run-name: Sync analyst estimates
+
+# Monthly (and on-demand). Forward analyst estimates revise only a handful of times
+# a quarter, and the stock endpoint fills new symbols lazily, so this just keeps the
+# already-stored rows fresh. It runs scripts/sync_estimates.py as a one-off ECS task
+# — inside the VPC, where it can reach the private RDS — on the latest deployed image.
+# The script refreshes the stalest rows up to SYNC_ESTIMATES_LIMIT, staying under
+# FMP's ~250-calls/day free quota.
+#
+# The app task injects DATABASE_URL but NOT the FMP key (that's build/ops-time only,
+# deliberately kept out of the runtime task), so this workflow reads the key from SSM
+# and passes it to the task as an environment override.
+
+on:
+  workflow_dispatch: {}
+  # 1st of the month, 08:00 UTC. Monthly is plenty for slow-moving estimates; exact
+  # timing doesn't matter, so GitHub delaying scheduled runs under load is fine.
+  # Caveats: scheduled workflows run only from the default branch, and GitHub
+  # auto-disables the schedule after 60 days with no repo activity.
+  schedule:
+    - cron: "0 8 1 * *"
+
+concurrency:
+  group: sync-estimates
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # Match module "app" { name = "nama-dev" } in environments/dev.
+  ECS_CLUSTER: nama-dev
+  ECS_SERVICE: nama-dev
+  FMP_SSM_PARAM: /nama/dev/fmp-api-key
+  # Rows to refresh per run; keeps FMP calls under the ~250/day free quota.
+  SYNC_ESTIMATES_LIMIT: "200"
+
+jobs:
+  sync:
+    name: Sync analyst estimates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run the estimates sync as a one-off ECS task
+        run: |
+          set -euo pipefail
+
+          status=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" != "ACTIVE" ]; then
+            echo "::error::ECS service '$ECS_SERVICE' is not ACTIVE ($status) — deploy the app first."
+            exit 1
+          fi
+
+          fmp_key=$(aws ssm get-parameter --name "$FMP_SSM_PARAM" --with-decryption \
+            --query 'Parameter.Value' --output text)
+          echo "::add-mask::$fmp_key"
+          if [ -z "$fmp_key" ] || [ "$fmp_key" = "REPLACE_ME_VIA_PUT_PARAMETER" ]; then
+            echo "::error::$FMP_SSM_PARAM is unset or still the placeholder — put the real FMP key in SSM first."
+            exit 1
+          fi
+
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' --output json)
+
+          # Build the override with jq so the key is injected safely (no shell
+          # interpolation into the JSON).
+          overrides=$(jq -nc --arg key "$fmp_key" --arg limit "$SYNC_ESTIMATES_LIMIT" '{
+            containerOverrides: [{
+              name: "app",
+              command: ["python", "scripts/sync_estimates.py"],
+              environment: [
+                { name: "FMP_API_KEY", value: $key },
+                { name: "SYNC_ESTIMATES_LIMIT", value: $limit }
+              ]
+            }]
+          }')
+
+          echo "Starting estimates sync task…"
+          task_arn=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$ECS_SERVICE" \
+            --launch-type FARGATE \
+            --network-configuration "$netcfg" \
+            --started-by "gha-sync-est-${GITHUB_SHA::7}" \
+            --overrides "$overrides" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "Task: $task_arn"
+
+          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$task_arn"
+
+          exit_code=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task_arn" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          reason=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task_arn" \
+            --query 'tasks[0].stoppedReason' --output text)
+          echo "Sync task stopped (exitCode=$exit_code, reason=$reason)"
+          if [ "$exit_code" != "0" ]; then
+            echo "::error::Estimates sync failed — check the task's CloudWatch logs."
+            exit 1
+          fi
+          echo "Analyst estimates synced."

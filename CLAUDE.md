@@ -116,9 +116,11 @@ only this one file changes.
 - `sec_edgar_revenue_provider.py` — SEC EDGAR XBRL **flat API** (`httpx`, free/keyless) → reported quarterly revenue *totals*; resolves ticker→CIK and derives Q4 from the 10-K
 - `sec_edgar_segment_revenue_provider.py` — SEC EDGAR **inline XBRL** (the raw 10-Q/10-K documents; the flat API drops the dimensional contexts) → per-quarter revenue split by operating segment and product/service; parses several recent filings and keeps standalone-quarter, member-qualified facts
 - `logodev_provider.py` — Logo.dev → logo image
-- `caching_company_profile_provider.py` / `caching_revenue_provider.py` / `caching_segment_revenue_provider.py` — decorator adapters (wrap another adapter to add a TTL cache; same port in, same port out)
+- `caching_company_profile_provider.py` / `caching_revenue_provider.py` / `caching_segment_revenue_provider.py` — decorator adapters (wrap another adapter to add an in-process TTL cache; same port in, same port out)
+- `db_cached_estimates_provider.py` — decorator on the `AnalystEstimatesProvider` port backed by a **persistent DB cache** (the `AnalystEstimatesRepository`) instead of an in-process map: shared across instances, survives restarts, serves a stale row if FMP is down. Fills lazily on a miss; refreshed monthly by `scripts/sync_estimates.py`. This is what the stock endpoint wires for estimates (the in-memory `caching_estimates_provider.py` is now unused)
 - `composite_company_profile_provider.py` — merges a name source (Finnhub) + a description source (FMP) behind the one `CompanyProfileProvider` port; same shape as the cache decorator
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
+- `stock_estimates_repository.py` — owns the `stocks` anchor model (UUID id, unique `symbol`, optional `name`) + the `stock_analyst_estimates` model **and** `SqlAnalystEstimatesRepository` (the `AnalystEstimatesRepository` port); same pattern as `constituents.py`
 
 Naming: `<vendor>_<concern>_provider.py`.
 
@@ -257,6 +259,7 @@ app/
 tests/                      # offline; fakes injected through the ports
 alembic/                    # database migrations
 scripts/sync_constituents.py# ops-time sync (FMP → DB), not called while serving
+scripts/sync_estimates.py   # monthly cron (GH Action): refresh stored estimates, FMP → DB
 infra/                      # Terraform (modules + environments)
 ```
 
