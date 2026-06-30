@@ -20,6 +20,7 @@ from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.constituents import SqlConstituentRepository
+from app.stocks.stock_profile_repository import SqlCompanyProfileRepository
 from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
@@ -42,7 +43,7 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
-from app.stocks.caching_company_profile_provider import CachingCompanyProfileProvider
+from app.stocks.db_cached_company_profile_provider import DbCachedCompanyProfileProvider
 from app.stocks.caching_revenue_provider import CachingRevenueHistoryProvider
 from app.stocks.caching_segment_revenue_provider import CachingSegmentRevenueProvider
 from app.stocks.composite_company_profile_provider import (
@@ -141,27 +142,33 @@ def get_fundamentals_provider() -> StockFundamentalsProvider | None:
 
 
 @lru_cache(maxsize=1)
-def get_profile_provider() -> CompanyProfileProvider | None:
-    # The clean display name and the business description come from different
-    # vendors on their free tiers: Finnhub carries the name, FMP the description.
-    # Each is wrapped in its own TTL cache (singletons, so the caches persist
-    # across requests) and merged behind one port. Both are best-effort: whichever
-    # keys are set contribute their field, and with neither the endpoint simply
-    # omits the name override + description. Caching keeps us under FMP's ~250/day
-    # free quota and Finnhub's per-minute rate limit.
+def _composite_profile_provider() -> CompanyProfileProvider | None:
+    # The clean display name and the business description come from different vendors
+    # on their free tiers: Finnhub carries the name, FMP the description, merged behind
+    # one port. Both are best-effort: whichever keys are set contribute their field,
+    # and with neither the endpoint omits the name override + description. The composite
+    # is a process singleton (one httpx pool per vendor); the DB cache that wraps it is
+    # built per request, since it needs the request session.
     finnhub_key = os.environ.get("FINNHUB_API_KEY")
     fmp_key = os.environ.get("FMP_API_KEY")
-    name_source = (
-        CachingCompanyProfileProvider(FinnhubCompanyProfileProvider(finnhub_key))
-        if finnhub_key
-        else None
-    )
-    description_source = (
-        CachingCompanyProfileProvider(FmpProfileProvider(fmp_key)) if fmp_key else None
-    )
+    name_source = FinnhubCompanyProfileProvider(finnhub_key) if finnhub_key else None
+    description_source = FmpProfileProvider(fmp_key) if fmp_key else None
     if name_source is None and description_source is None:
         return None
     return CompositeCompanyProfileProvider(name_source, description_source)
+
+
+def get_profile_provider(
+    db: Session = Depends(get_db),
+) -> CompanyProfileProvider | None:
+    # A persistent DB cache (refreshed quarterly out of band by scripts/sync_profiles.py
+    # + lazily on a miss) sits in front of the vendors so the endpoint rarely calls
+    # them, staying under FMP's ~250/day free quota — and it serves a stale profile if
+    # a vendor is down. Profiles barely change, so the cached row stays good for months.
+    inner = _composite_profile_provider()
+    if inner is None:
+        return None
+    return DbCachedCompanyProfileProvider(inner, SqlCompanyProfileRepository(db))
 
 
 def get_stock_info(

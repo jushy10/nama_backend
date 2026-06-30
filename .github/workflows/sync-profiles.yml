@@ -1,0 +1,107 @@
+name: Sync company profiles
+run-name: Sync company profiles
+
+# Quarterly (and on-demand). A company's name and description barely change, and the
+# stock endpoint fills new symbols lazily, so this just keeps the already-stored rows
+# from drifting. It runs scripts/sync_profiles.py as a one-off ECS task — inside the
+# VPC, where it can reach the private RDS — on the latest deployed image. The script
+# refreshes the stalest rows up to SYNC_PROFILES_LIMIT, staying under FMP's
+# ~250-calls/day free quota.
+#
+# Name comes from Finnhub, description from FMP. The runtime task already carries
+# FINNHUB_API_KEY; the FMP key is build/ops-time only (kept out of the runtime task),
+# so this workflow reads it from SSM and passes it as an environment override.
+
+on:
+  workflow_dispatch: {}
+  # 1st of Jan/Apr/Jul/Oct, 08:00 UTC. Quarterly is plenty for near-static profiles;
+  # exact timing doesn't matter. Caveats: scheduled workflows run only from the default
+  # branch, and GitHub auto-disables the schedule after 60 days with no repo activity.
+  schedule:
+    - cron: "0 8 1 */3 *"
+
+concurrency:
+  group: sync-profiles
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # Match module "app" { name = "nama-dev" } in environments/dev.
+  ECS_CLUSTER: nama-dev
+  ECS_SERVICE: nama-dev
+  FMP_SSM_PARAM: /nama/dev/fmp-api-key
+  # Rows to refresh per run; keeps FMP calls under the ~250/day free quota.
+  SYNC_PROFILES_LIMIT: "200"
+
+jobs:
+  sync:
+    name: Sync company profiles
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run the profile sync as a one-off ECS task
+        run: |
+          set -euo pipefail
+
+          status=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" != "ACTIVE" ]; then
+            echo "::error::ECS service '$ECS_SERVICE' is not ACTIVE ($status) — deploy the app first."
+            exit 1
+          fi
+
+          fmp_key=$(aws ssm get-parameter --name "$FMP_SSM_PARAM" --with-decryption \
+            --query 'Parameter.Value' --output text)
+          echo "::add-mask::$fmp_key"
+          if [ -z "$fmp_key" ] || [ "$fmp_key" = "REPLACE_ME_VIA_PUT_PARAMETER" ]; then
+            echo "::error::$FMP_SSM_PARAM is unset or still the placeholder — put the real FMP key in SSM first."
+            exit 1
+          fi
+
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' --output json)
+
+          # Build the override with jq so the key is injected safely (no shell
+          # interpolation into the JSON).
+          overrides=$(jq -nc --arg key "$fmp_key" --arg limit "$SYNC_PROFILES_LIMIT" '{
+            containerOverrides: [{
+              name: "app",
+              command: ["python", "scripts/sync_profiles.py"],
+              environment: [
+                { name: "FMP_API_KEY", value: $key },
+                { name: "SYNC_PROFILES_LIMIT", value: $limit }
+              ]
+            }]
+          }')
+
+          echo "Starting profile sync task…"
+          task_arn=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$ECS_SERVICE" \
+            --launch-type FARGATE \
+            --network-configuration "$netcfg" \
+            --started-by "gha-sync-prof-${GITHUB_SHA::7}" \
+            --overrides "$overrides" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "Task: $task_arn"
+
+          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$task_arn"
+
+          exit_code=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task_arn" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          reason=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task_arn" \
+            --query 'tasks[0].stoppedReason' --output text)
+          echo "Sync task stopped (exitCode=$exit_code, reason=$reason)"
+          if [ "$exit_code" != "0" ]; then
+            echo "::error::Profile sync failed — check the task's CloudWatch logs."
+            exit 1
+          fi
+          echo "Company profiles synced."

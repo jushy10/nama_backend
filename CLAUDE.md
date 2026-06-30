@@ -123,9 +123,12 @@ only this one file changes.
 - `logodev_provider.py` — Logo.dev → logo image
 - `caching_company_profile_provider.py` / `caching_revenue_provider.py` / `caching_segment_revenue_provider.py` — decorator adapters (wrap another adapter to add an in-process TTL cache; same port in, same port out)
 - `adapters/db_cached_estimates_adapter.py` — decorator on the `AnalystEstimatesProvider` port backed by a **persistent DB cache** (the `AnalystEstimatesRepository`) instead of an in-process map: shared across instances, survives restarts, serves a stale row if FMP is down. Fills lazily on a miss; refreshed out of band by the estimates cron endpoint (`app/stocks/endpoints/cron_estimates_endpoints.py`). This is what the stock endpoint wires for estimates (the in-memory `adapters/caching_estimates_adapter.py` is now unused). `adapters/fmp_estimates_adapter.py` is the live FMP source it wraps
-- `composite_company_profile_provider.py` — merges a name source (Finnhub) + a description source (FMP) behind the one `CompanyProfileProvider` port; same shape as the cache decorator
+- `db_cached_company_profile_provider.py` — the profile counterpart: a decorator on the `CompanyProfileProvider` port backed by a **persistent DB cache** (the `CompanyProfileRepository`); shared, survives restarts, serves a stale profile if a vendor is down. Fills lazily on a miss; refreshed quarterly by `scripts/sync_profiles.py`. What the stock endpoint wires for the profile now (the in-memory `caching_company_profile_provider.py` is unused)
+- `composite_company_profile_provider.py` — merges a name source (Finnhub) + a description source (FMP) behind the one `CompanyProfileProvider` port; same shape as the cache decorator (the DB cache wraps this composite)
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
-- The estimates **persistence** is split into three layers in the sub-slice: `estimates/models.py` (the ORM models for the `stocks` anchor + `stock_analyst_estimates`, plus simple query functions), `estimates/db_repository.py` (the concrete `SqlAnalystEstimatesRepository` — maps rows⇄entity and calls the model queries), and `estimates/repository.py` (the abstract `AnalystEstimatesRepository` port the use case is injected with). Same DB-owns-the-schema idea as `constituents.py`, split across the port / concrete / model boundary
+- `stock_record.py` — owns the shared `stocks` anchor model (UUID id, unique `symbol`, optional `name`) + `get_or_create_stock`; per-feature tables hang off it, so no one feature owns the anchor
+- The estimates **persistence** is split into three layers in the sub-slice: `estimates/models.py` (the ORM model for `stock_analyst_estimates` + simple query functions; it imports the shared `StockRecord` from `stock_record.py`), `estimates/db_repository.py` (the concrete `SqlAnalystEstimatesRepository` — maps rows⇄entity and calls the model queries), and `estimates/repository.py` (the abstract `AnalystEstimatesRepository` port the use case is injected with). Same DB-owns-the-schema idea as `constituents.py`, split across the port / concrete / model boundary
+- `stock_profile_repository.py` — owns the `stock_company_profile` model (the description; the name rides the `stocks` anchor) **and** `SqlCompanyProfileRepository` (the `CompanyProfileRepository` port)
 
 Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<concern>_adapter.py` for those under `app/stocks/adapters/`.
 
@@ -273,12 +276,13 @@ app/
     ├── use_cases.py        # ── orchestration (one class per action)
     ├── exceptions.py       # ── domain errors
     ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/FMP/Logo.dev/SEC EDGAR)
+    ├── stock_record.py     # ── shared `stocks` anchor (ORM) + get_or_create_stock
     ├── adapters/           # ── vendor adapters as *_adapter.py (estimates: FMP + caches)
     ├── estimates/          # ── analyst-estimates sub-slice:
     │   ├── estimates_ports.py   #    live-source port (AnalystEstimatesProvider)
     │   ├── repository.py        #    abstract persistence port (injected into the use case)
     │   ├── db_repository.py     #    concrete repo: maps row⇄entity, calls models
-    │   ├── models.py            #    ORM models (stocks anchor + estimates) + query fns
+    │   ├── models.py            #    estimates ORM table + query fns (anchor from stock_record)
     │   ├── use_cases.py         #    SyncAnalystEstimates (out-of-band refresh)
     │   └── router.py            #    provider wiring for the snapshot read path
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
@@ -290,6 +294,7 @@ app/
 tests/                      # offline; fakes through the ports (mirrors app: tests/estimates, tests/adapters)
 alembic/                    # database migrations
 scripts/sync_constituents.py# ops-time sync (FMP → DB), not called while serving
+scripts/sync_profiles.py    # quarterly cron (GH Action): refresh stored profiles, Finnhub+FMP → DB
 infra/                      # Terraform (modules + environments)
 ```
 

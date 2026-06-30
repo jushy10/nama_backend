@@ -7,6 +7,7 @@ implementation. The core never imports Alpaca; Alpaca imports the core.
 
 from abc import ABC, abstractmethod
 from datetime import date, datetime
+from typing import NamedTuple
 
 from app.stocks.entities import (
     AllTimeHigh,
@@ -134,6 +135,40 @@ class CompanyProfileProvider(ABC):
             StockNotFound: the symbol is not covered by the source.
             StockDataUnavailable: the upstream source failed.
         """
+        raise NotImplementedError
+
+
+class CachedProfile(NamedTuple):
+    """A stored company profile plus when it was last fetched — the repository's read
+    shape, pairing the entity with its fetch time so the cache decorator can judge
+    staleness in one query."""
+
+    profile: CompanyProfile
+    fetched_at: datetime
+
+
+class CompanyProfileRepository(ABC):
+    """A persistent store for a company's profile (name + business description).
+
+    The database-backed companion to ``CompanyProfileProvider``: the live providers
+    hit the vendors (Finnhub for the name, FMP for the description), this caches the
+    merged result so the endpoint rarely does. Company profiles are near-immutable, so
+    a cached row stays good for a long time — and caching the description keeps the
+    endpoint under FMP's ~250-calls/day free quota. Refreshed lazily on a miss and by
+    an out-of-band job.
+    """
+
+    @abstractmethod
+    def get(self, symbol: str) -> CachedProfile | None:
+        """Return the stored profile for the (already-normalized) symbol, or ``None``
+        when nothing is stored yet — the miss the cache decorator fills live."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def upsert(self, symbol: str, profile: CompanyProfile) -> None:
+        """Insert or replace the stored profile for the symbol, stamping the fetch
+        time. The name is written onto the shared ``stocks`` row; the description onto
+        the profile row."""
         raise NotImplementedError
 
 
