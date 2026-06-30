@@ -474,16 +474,15 @@ def _present_estimates(
 
 
 def _present_growth(growth: GrowthMetrics | None) -> GrowthMetricsResponse | None:
-    # Trailing YoY (from the Finnhub metrics) + forward CAGR (from the FMP
-    # estimates) — both already on the stock, combined into one block.
+    # Trailing YoY (from the Finnhub metrics) + forward 1-yr growth (FY1→FY2, from
+    # the FMP estimates) — both already on the stock, combined into one block.
     if growth is None:
         return None
     return GrowthMetricsResponse(
         revenue_yoy=growth.revenue_yoy,
         eps_yoy=growth.eps_yoy,
-        forward_revenue_cagr=growth.forward_revenue_cagr,
-        forward_eps_cagr=growth.forward_eps_cagr,
-        forward_years=growth.forward_years,
+        forward_revenue_growth=growth.forward_revenue_growth,
+        forward_eps_growth=growth.forward_eps_growth,
     )
 
 

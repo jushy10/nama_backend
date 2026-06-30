@@ -667,38 +667,33 @@ def test_stock_forward_pe_none_without_estimates():
     assert stock.forward_ps is None
 
 
-def test_analyst_estimates_forward_cagr():
+def test_analyst_estimates_forward_growth():
     est = an_estimates()  # EPS 8.0→9.2→10.0→11.0, revenue 420→455→490→520 (B)
-    assert est.forward_eps_cagr() == 11.2        # (11.0/8.0)^(1/3) - 1
-    assert est.forward_revenue_cagr() == 7.38    # (520/420)^(1/3) - 1
-    assert est.forward_cagr_span() == 3
-    assert est.forward_eps_cagr(max_years=1) == 15.0  # 9.2/8.0 - 1, 1-yr window
+    assert est.forward_eps_growth() == 15.0       # 9.2/8.0 - 1, FY1→FY2
+    assert est.forward_revenue_growth() == 8.33   # 455/420 - 1, FY1→FY2
 
 
-def test_analyst_estimates_forward_cagr_none_without_series():
+def test_analyst_estimates_forward_growth_none_without_series():
     bare = AnalystEstimates(
         fiscal_year=2026, period_end=date(2026, 9, 30), eps_avg=8.0, eps_low=None,
         eps_high=None, revenue_avg=400e9, num_analysts_eps=None,
         num_analysts_revenue=None,
     )
-    assert bare.forward_eps_cagr() is None       # only FY1, no series to span
-    assert bare.forward_cagr_span() is None
+    assert bare.forward_eps_growth() is None      # only FY1, no FY2 to compare
 
 
 def test_growth_metrics_build_combines_trailing_and_forward():
     g = GrowthMetrics.build(a_key_metrics(), an_estimates())
     assert g.revenue_yoy == 8.0     # trailing, from KeyMetrics (Finnhub TTM)
     assert g.eps_yoy == 12.0
-    assert g.forward_eps_cagr == 11.2       # forward CAGR, from estimates series
-    assert g.forward_revenue_cagr == 7.38
-    assert g.forward_years == 3
+    assert g.forward_eps_growth == 15.0       # forward FY1→FY2, from estimates series
+    assert g.forward_revenue_growth == 8.33
 
 
 def test_growth_metrics_build_trailing_only_without_estimates():
     g = GrowthMetrics.build(a_key_metrics(), None)
     assert g.revenue_yoy == 8.0
-    assert g.forward_eps_cagr is None
-    assert g.forward_years is None
+    assert g.forward_eps_growth is None
 
 
 def test_growth_metrics_build_none_when_no_growth_anywhere():
@@ -708,9 +703,9 @@ def test_growth_metrics_build_none_when_no_growth_anywhere():
 
 def test_stock_growth_property():
     stock = a_stock(metrics=a_key_metrics(), analyst_estimates=an_estimates())
-    assert stock.growth.eps_yoy == 12.0           # trailing
-    assert stock.growth.forward_eps_cagr == 11.2  # forward
-    assert a_stock().growth is None               # neither source attached
+    assert stock.growth.eps_yoy == 12.0            # trailing
+    assert stock.growth.forward_eps_growth == 15.0  # forward FY1→FY2
+    assert a_stock().growth is None                # neither source attached
 
 
 # --------------------------- chart window (range -> start/end) ---------------------------
@@ -1796,8 +1791,8 @@ def test_get_stock_includes_forward_estimates(make_client):
 
 
 def test_get_stock_includes_growth_block(make_client):
-    # Both legs: trailing YoY rides on the Finnhub fundamentals, forward CAGR on
-    # the FMP estimates — combined into one `growth` block on the snapshot.
+    # Both legs: trailing YoY rides on the Finnhub fundamentals, forward 1-yr growth
+    # (FY1→FY2) on the FMP estimates — combined into one `growth` block on the snapshot.
     client = make_client(
         FakeProvider(stock=a_stock()),
         fundamentals_provider=FakeFundamentalsProvider(a_fundamentals()),
@@ -1806,9 +1801,8 @@ def test_get_stock_includes_growth_block(make_client):
     g = client.get("/stocks/AAPL").json()["growth"]
     assert g["revenue_yoy"] == 8.0          # trailing (Finnhub TTM)
     assert g["eps_yoy"] == 12.0
-    assert g["forward_eps_cagr"] == 11.2     # forward CAGR (FMP estimates)
-    assert g["forward_revenue_cagr"] == 7.38
-    assert g["forward_years"] == 3
+    assert g["forward_eps_growth"] == 15.0      # forward FY1→FY2 (FMP estimates)
+    assert g["forward_revenue_growth"] == 8.33
 
 
 def test_get_stock_includes_all_time_high_and_drawdown(make_client):
