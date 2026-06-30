@@ -89,7 +89,7 @@ def test_picks_nearest_forward_year_as_fy1_then_fy2():
     assert est.fiscal_year_fy2 == 2027
 
 
-def test_populates_full_forward_series_for_cagr():
+def test_populates_full_forward_series_for_growth():
     http = _stable(
         _row("2026-09-30", eps=8.0, rev=420e9),
         _row("2027-09-30", eps=9.2, rev=455e9),
@@ -100,7 +100,7 @@ def test_populates_full_forward_series_for_cagr():
     assert [(y.fiscal_year, y.eps_avg, y.revenue_avg) for y in est.forward_years] == [
         (2026, 8.0, 420e9), (2027, 9.2, 455e9), (2028, 11.0, 490e9)
     ]
-    assert est.forward_eps_cagr() is not None  # derives from the series
+    assert est.forward_eps_growth() == 15.0  # FY1→FY2 (9.2/8.0 - 1), from the series
 
 
 def test_forward_pe_and_ps_from_returned_estimates():

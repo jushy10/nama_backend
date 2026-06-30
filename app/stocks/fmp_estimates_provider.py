@@ -77,8 +77,8 @@ class FmpEstimatesProvider(AnalystEstimatesProvider):
             return _EMPTY
         period_end, eps_avg, eps_low, eps_high, revenue_avg, n_eps, n_rev = forward[0]
         fy2 = forward[1] if len(forward) > 1 else None
-        # The full forward series (every estimated year) backs the multi-year
-        # expected-growth CAGRs; row = (period_end, epsAvg, low, high, revAvg, ...).
+        # The full forward series (every estimated year) backs the one-year
+        # forward growth (FY1→FY2); row = (period_end, epsAvg, low, high, revAvg, ...).
         forward_years = tuple(
             ForwardEstimate(
                 fiscal_year=row[0].year,
