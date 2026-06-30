@@ -81,6 +81,14 @@ The app reads `DATABASE_URL` (see [`app/db.py`](../app/db.py)). Because the DB i
 - **App runs in AWS (the intended path):** deploy the FastAPI app into the VPC
   (ECS/EC2/Lambda), attach `app_security_group_id`, and inject the
   `/nama/dev/database-url` SecureString as the `DATABASE_URL` env var.
+> **Bootstrap note:** the bastion is the first real EC2 instance in this stack
+> (everything else is serverless Fargate), so `nama-ci` needs EC2-instance and
+> instance-profile permissions it didn't before — the `ManageBastionEc2` and
+> `ManageNamaInstanceProfiles` statements in
+> [`ci-iam-policy.json`](ci-iam-policy.json). **Re-paste the updated policy onto
+> the `nama-ci` user before the apply runs**, or the apply fails with
+> `AccessDenied` on `iam:CreateInstanceProfile`.
+
 - **Local access (the secure path):** tunnel to the private DB through the
   `module "bastion"` SSM jump host. It opens **no inbound ports** and has **no SSH
   key** — AWS Systems Manager brokers the connection, so the database never

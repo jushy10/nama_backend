@@ -64,7 +64,8 @@ resource "aws_iam_instance_profile" "this" {
 # instance via var.extra_security_group_ids.
 resource "aws_security_group" "this" {
   name_prefix = "${var.name}-"
-  description = "SSM bastion for ${var.name} — no inbound, egress only"
+  # ASCII only: EC2 rejects non-ASCII characters in a security-group description.
+  description = "SSM bastion for ${var.name} - no inbound, egress only"
   vpc_id      = var.vpc_id
 
   egress {
