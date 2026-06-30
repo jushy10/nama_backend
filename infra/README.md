@@ -188,7 +188,10 @@ until CI pushes one**. So:
 
 1. **Update `nama-ci`'s policy** (it now needs ECS/ECR/ELB/logs + IAM for
    `nama-*` roles) — re-paste [`ci-iam-policy.json`](ci-iam-policy.json), or use
-   the managed `PowerUserAccess` policy **plus** the `ManageNamaRoles` statement.
+   the managed `PowerUserAccess` policy **plus** the `ManageNamaRoles` and
+   `ManageNamaInstanceProfiles` statements (PowerUser covers every service action
+   but no IAM writes, so those two `iam:*` statements are all the inline policy
+   needs — keeping it well under the 2 KB inline-policy limit).
 2. **Merge → the [Infrastructure](../.github/workflows/infra.yml) workflow applies.**
    The ECS service comes up but its tasks can't start yet (no image) — expected.
 3. **The [Build & Deploy App](../.github/workflows/app-image.yml) workflow** builds
@@ -289,7 +292,8 @@ for a built SPA is pennies). `terraform destroy` (or remove `module "frontend"` 
    ECS/ECR/ELB/logs + IAM scoped to `nama-*` roles (the app), and `s3:*` on
    `nama-frontend-*` + `cloudfront:*` (the static frontend). Broad on
    services, careful on IAM. Re-paste it whenever this file changes — or attach
-   the managed `PowerUserAccess` policy plus the `ManageNamaRoles` statement.
+   the managed `PowerUserAccess` policy plus the `ManageNamaRoles` and
+   `ManageNamaInstanceProfiles` statements.
 3. **GitHub** — under **Settings → Secrets and variables → Actions**:
    - Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
    - Variables: `TF_STATE_BUCKET` (required), `AWS_REGION` (optional)
