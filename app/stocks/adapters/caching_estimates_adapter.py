@@ -17,7 +17,7 @@ import threading
 import time
 
 from app.stocks.entities import AnalystEstimates
-from app.stocks.ports import AnalystEstimatesProvider
+from app.stocks.estimates.ports import AnalystEstimatesProvider
 
 
 class CachingAnalystEstimatesProvider(AnalystEstimatesProvider):

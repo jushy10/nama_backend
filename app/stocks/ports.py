@@ -10,7 +10,6 @@ from datetime import date, datetime
 
 from app.stocks.entities import (
     AllTimeHigh,
-    AnalystEstimates,
     AnalystRecommendations,
     CandleSeries,
     CompanyProfile,
@@ -119,35 +118,11 @@ class StockFundamentalsProvider(ABC):
         raise NotImplementedError
 
 
-class AnalystEstimatesProvider(ABC):
-    """A gateway for a stock's forward analyst consensus estimates.
-
-    Forward EPS/revenue expectations come from a sell-side estimates vendor — not
-    the price feed or company filings — so this carries consensus *estimates*, never
-    reported actuals. Best-effort enrichment on the stock snapshot (it backs the
-    forward P/E and forward P/S), so a failure here must not sink the price response.
-    """
-
-    @abstractmethod
-    def get_estimates(self, symbol: str) -> AnalystEstimates:
-        """Return forward consensus estimates for the (already-normalized) symbol.
-
-        Returns an ``is_empty`` ``AnalystEstimates`` (all ``None``) when the source
-        covers no forward fiscal year for the symbol — "no data" is not an error for
-        best-effort enrichment.
-
-        Raises:
-            StockNotFound: the symbol is not covered by the source.
-            StockDataUnavailable: the upstream source failed.
-        """
-        raise NotImplementedError
-
-
 class CompanyProfileProvider(ABC):
-    """A gateway for a company's business description (what the company does).
+    """A gateway for a company's clean display name.
 
     Comes from a company-profile vendor, not the price feed — market data APIs
-    expose a ticker's name and exchange but not a business summary. Best-effort
+    expose a ticker's full legal title but not the tidy display name. Best-effort
     enrichment, like fundamentals: a failure here must not sink the price view.
     """
 

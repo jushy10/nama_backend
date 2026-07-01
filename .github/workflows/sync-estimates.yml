@@ -1,0 +1,74 @@
+name: Sync analyst estimates
+run-name: Sync analyst estimates
+
+# Monthly (and on-demand). Forward analyst estimates revise only a handful of times a
+# quarter, and the stock endpoint fills new symbols lazily, so this just keeps the
+# already-stored rows fresh. It POSTs the deployed app's estimates cron endpoint
+# (app/stocks/estimates/cron_estimates_endpoints.py), which runs the SyncAnalystEstimates
+# use case and refreshes the stalest rows up to SYNC_ESTIMATES_LIMIT, staying under FMP's
+# ~250-calls/day free quota. (Replaces the old one-off ECS task that ran
+# scripts/sync_estimates.py.)
+#
+# Two operational notes:
+#  - The endpoint reads FMP_API_KEY from the *serving* task's environment, so unlike the
+#    old approach the running app must carry the FMP key.
+#  - The endpoint is unauthenticated, so it must not be reachable from the public
+#    internet. This workflow just triggers it; it relies on network isolation for safety.
+#
+# Requires the repo/environment variable API_BASE_URL — the deployed app's base URL,
+# reachable from the GitHub runner.
+
+on:
+  workflow_dispatch: {}
+  # 1st of the month, 08:00 UTC. Monthly is plenty for slow-moving estimates; exact
+  # timing doesn't matter, so GitHub delaying scheduled runs under load is fine.
+  # Caveats: scheduled workflows run only from the default branch, and GitHub
+  # auto-disables the schedule after 60 days with no repo activity.
+  schedule:
+    - cron: "0 8 1 * *"
+
+concurrency:
+  group: sync-estimates
+  cancel-in-progress: false
+
+env:
+  # Max stored rows to refresh per run; keeps FMP calls under the ~250/day free quota.
+  SYNC_ESTIMATES_LIMIT: "200"
+
+jobs:
+  sync:
+    name: Sync analyst estimates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Trigger the estimates refresh
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${API_BASE_URL:-}" ]; then
+            echo "::error::API_BASE_URL is not set — add it as a repo/environment variable pointing at the deployed app."
+            exit 1
+          fi
+
+          url="${API_BASE_URL%/}/internal/estimates/sync?limit=${SYNC_ESTIMATES_LIMIT}"
+          echo "POST $url"
+
+          # Capture the body and status separately. The refresh runs synchronously and
+          # can make a few hundred sequential FMP calls, so allow a generous timeout.
+          http_code=$(curl -sS -X POST "$url" \
+            --max-time 900 \
+            -o /tmp/sync_estimates_response.json \
+            -w '%{http_code}')
+
+          echo "HTTP $http_code"
+          cat /tmp/sync_estimates_response.json 2>/dev/null || true
+          echo
+
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Estimates sync failed (HTTP $http_code) — check the app logs."
+            exit 1
+          fi
+          echo "Analyst estimates synced."

@@ -251,18 +251,17 @@ class GrowthMetrics:
 
 @dataclass(frozen=True)
 class CompanyProfile:
-    """A company's clean display name and a short summary of what it does.
+    """A company's clean display name.
 
     Sourced from a company-profile vendor, not the price feed. Market data APIs
     (e.g. Alpaca) return a ticker's name and exchange, but Alpaca's name is the
     full legal instrument title ("Apple Inc. Common Stock") rather than the tidy
-    display name. The profile vendor carries both a clean ``name`` ("Apple Inc.")
-    and the business ``description`` the stock view surfaces; either is ``None``
-    when the vendor doesn't cover the symbol (best-effort enrichment). The call
-    yields more (sector, website, …), left out until something needs it.
+    display name. The profile vendor carries the clean ``name`` ("Apple Inc.") the
+    stock view prefers; ``None`` when the vendor doesn't cover the symbol
+    (best-effort enrichment). The call yields more (description, sector, website,
+    …), left out until something needs it.
     """
 
-    description: str | None
     name: str | None = None
 
 
@@ -637,7 +636,6 @@ class Stock:
     as_of: datetime | None
     # Enrichment beyond the raw snapshot; optional so the price-only view of a
     # Stock stays valid when these sources are unavailable (best-effort).
-    description: str | None = None  # what the company does, from a profile vendor
     market_cap: float | None = None
     dividend_per_share: float | None = None
     dividend_yield: float | None = None

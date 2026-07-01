@@ -104,23 +104,45 @@ assembles entities, applies enrichment, and enforces multi-source orchestration
 (ranking in `ScreenStocks`, revenue overlay in `GetStockEarnings`). It depends
 only on entities + ports — never a framework, never a concrete provider.
 
-### 4. Adapters — `app/stocks/*_provider.py`, `app/stocks/constituents.py`
+### 4. Adapters — `app/stocks/*_provider.py`, `app/stocks/adapters/*_adapter.py`, `app/stocks/constituents.py`
 *Interface Adapters.* Each implements a port and is **the only module that knows
 a given vendor exists**. It translates the vendor's SDK/HTTP/ORM models into our
 entities, and the vendor's failures into our domain exceptions. Swap vendors and
 only this one file changes.
 
+> Most adapters still sit flat in `app/stocks/` as `<vendor>_<concern>_provider.py`.
+> The analyst-estimates adapters have moved into `app/stocks/adapters/` and are named
+> `*_adapter.py` (`fmp_estimates_adapter.py`, `db_cached_estimates_adapter.py`,
+> `caching_estimates_adapter.py`); other features' adapters can migrate there over time.
+
 - `alpaca_provider.py` — Alpaca SDK → price/quote/candles/performance/sectors
 - `finnhub_*_provider.py` — Finnhub → fundamentals / earnings / calendar / company name (`/stock/profile2`) / analyst recommendation trends (`/stock/recommendation`)
-- `fmp_profile_provider.py` — FMP (`httpx`) → company **description** (the clean display name now comes from Finnhub)
 - `sec_edgar_revenue_provider.py` — SEC EDGAR XBRL **flat API** (`httpx`, free/keyless) → reported quarterly revenue *totals*; resolves ticker→CIK and derives Q4 from the 10-K
 - `sec_edgar_segment_revenue_provider.py` — SEC EDGAR **inline XBRL** (the raw 10-Q/10-K documents; the flat API drops the dimensional contexts) → per-quarter revenue split by operating segment and product/service; parses several recent filings and keeps standalone-quarter, member-qualified facts
 - `logodev_provider.py` — Logo.dev → logo image
-- `caching_company_profile_provider.py` / `caching_revenue_provider.py` / `caching_segment_revenue_provider.py` — decorator adapters (wrap another adapter to add a TTL cache; same port in, same port out)
-- `composite_company_profile_provider.py` — merges a name source (Finnhub) + a description source (FMP) behind the one `CompanyProfileProvider` port; same shape as the cache decorator
+- `caching_company_profile_provider.py` / `caching_revenue_provider.py` / `caching_segment_revenue_provider.py` — decorator adapters (wrap another adapter to add an in-process TTL cache; same port in, same port out)
+- `adapters/db_cached_estimates_adapter.py` — decorator on the `AnalystEstimatesProvider` port backed by a **persistent DB cache** (the `AnalystEstimatesRepository`) instead of an in-process map: shared across instances, survives restarts, serves a stale row if FMP is down. Fills lazily on a miss; refreshed out of band by the estimates cron endpoint (`app/stocks/endpoints/cron_estimates_endpoints.py`). This is what the stock endpoint wires for estimates (the in-memory `adapters/caching_estimates_adapter.py` is now unused). `adapters/fmp_estimates_adapter.py` is the live FMP source it wraps
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
+- `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table) + `get_or_create_stock`. Owned by no single feature; per-feature tables hang off it and import it from here
+- The estimates **persistence** is split into three layers in the sub-slice: `estimates/models.py` (the ORM model for `stock_analyst_estimates` + simple query functions; it imports the shared `StockRecord` from `stocks/models.py`), `estimates/db_repository.py` (the concrete `SqlAnalystEstimatesRepository` — maps rows⇄entity and calls the model queries), and `estimates/repository.py` (the abstract `AnalystEstimatesRepository` port the use case is injected with). Same DB-owns-the-schema idea as `constituents.py`, split across the port / concrete / model boundary
 
-Naming: `<vendor>_<concern>_provider.py`.
+Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<concern>_adapter.py` for those under `app/stocks/adapters/`.
+
+> **The analyst-estimates sub-slice — `app/stocks/estimates/`.** Estimates are broken
+> out as a self-contained vertical slice rather than living flat in `app/stocks/`:
+> - `ports.py` — the live-source port (`AnalystEstimatesProvider`).
+> - `repository.py` — the **abstract** persistence port (`AnalystEstimatesRepository`), injected into the use case.
+> - `db_repository.py` — its **concrete** SQLAlchemy implementation.
+> - `models.py` — the ORM model for `stock_analyst_estimates` + simple query functions (the shared `stocks` anchor is imported from `app/stocks/stocks/models.py`).
+> - `use_cases.py` → `SyncAnalystEstimates` — the out-of-band refresh.
+> - `router.py` → `get_estimates_provider` — the provider wiring the snapshot reads through.
+>
+> The vendor adapters it uses sit in `app/stocks/adapters/`; the HTTP cron entrypoint
+> (`app/stocks/endpoints/cron_estimates_endpoints.py`, `POST /internal/estimates/sync`)
+> lives in `app/stocks/endpoints/`. The refresh is invoked over HTTP by the
+> `sync-estimates` workflow — there is no `scripts/sync_estimates.py` any more. The cron
+> endpoint is **unauthenticated** and must not be publicly reachable (it spends FMP quota
+> + writes the DB), and it reads `FMP_API_KEY` from the serving task's env.
 
 ### 5. DTOs — `app/stocks/schemas.py`
 Pydantic `BaseModel`s for HTTP responses. Pydantic is a serialization detail, so
@@ -149,7 +171,7 @@ translates them.
 - *Primary* (the endpoint's reason to exist, e.g. price, earnings history): the
   provider is required, errors **propagate** to the endpoint, and a missing API
   key is a hard **503** in the wiring.
-- *Enrichment* (nice-to-have, e.g. market cap, description, next-report): the
+- *Enrichment* (nice-to-have, e.g. market cap, company name, next-report): the
   provider is typed `| None`, the use case wraps the call in
   `try/except (StockNotFound, StockDataUnavailable): return None`, and a missing
   key just makes the provider `None` and silently omits the field. **Enrichment
@@ -250,11 +272,23 @@ app/
     ├── use_cases.py        # ── orchestration (one class per action)
     ├── exceptions.py       # ── domain errors
     ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/FMP/Logo.dev/SEC EDGAR)
+    ├── adapters/           # ── vendor adapters as *_adapter.py (estimates: FMP + caches)
+    ├── stocks/             # ── shared `stocks` anchor slice:
+    │   └── models.py            #    StockRecord (the `stocks` table) + get_or_create_stock
+    ├── estimates/          # ── analyst-estimates sub-slice:
+    │   ├── ports.py             #    live-source port (AnalystEstimatesProvider)
+    │   ├── repository.py        #    abstract persistence port (injected into the use case)
+    │   ├── db_repository.py     #    concrete repo: maps row⇄entity, calls models
+    │   ├── models.py            #    stock_analyst_estimates ORM + query fns (anchor from stocks/)
+    │   ├── use_cases.py         #    SyncAnalystEstimates (out-of-band refresh)
+    │   └── router.py            #    provider wiring for the snapshot read path
+    ├── endpoints/          # ── HTTP endpoints outside a read slice:
+    │   └── cron_estimates_endpoints.py  #  POST /internal/estimates/sync (drives the sync)
     ├── constituents.py     # ── DB adapter: ORM model + SqlConstituentRepository
     ├── chart_window.py     # ── edge helper: range preset → time window
     ├── schemas.py          # ── HTTP response DTOs (pydantic)
     └── router.py           # ── endpoints + presenters + DI wiring (composition root)
-tests/                      # offline; fakes injected through the ports
+tests/                      # offline; fakes through the ports (mirrors app: tests/stocks, tests/estimates, tests/adapters)
 alembic/                    # database migrations
 scripts/sync_constituents.py# ops-time sync (FMP → DB), not called while serving
 infra/                      # Terraform (modules + environments)

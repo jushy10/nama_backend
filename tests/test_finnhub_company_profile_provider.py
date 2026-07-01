@@ -1,8 +1,8 @@
 """Unit tests for the Finnhub company-profile adapter (/stock/profile2).
 
 No network: the httpx client is swapped for a fake. Verifies the clean name is
-extracted (with no description), an unknown symbol degrades to no name, and HTTP
-failures become domain errors.
+extracted, an unknown symbol degrades to no name, and HTTP failures become
+domain errors.
 """
 
 from types import SimpleNamespace
@@ -47,14 +47,13 @@ def provider_with(http) -> FinnhubCompanyProfileProvider:
     return p
 
 
-def test_returns_clean_name_and_no_description():
+def test_returns_clean_name():
     http = FakeHttpClient(
         json_data={"name": "Apple Inc.", "ticker": "AAPL", "finnhubIndustry": "Tech"}
     )
     profile = provider_with(http).get_profile("AAPL")
     assert isinstance(profile, CompanyProfile)
     assert profile.name == "Apple Inc."
-    assert profile.description is None  # Finnhub carries no description
 
 
 def test_unknown_symbol_yields_no_name():
