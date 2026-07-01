@@ -241,12 +241,75 @@ def test_derives_period_end_and_fiscal_labels_from_the_announcement():
 def test_reported_quarters_carry_revenue_actual():
     tl = provider_with(_full_ticker()).get_quarterly_earnings("AAPL")
     by_quarter = {(q.fiscal_year, q.fiscal_quarter): q for q in tl.past}
-    # matched from the income statement by calendar year+quarter
+    # matched from the income statement column most recently preceding the announcement
     assert by_quarter[(2025, 4)].revenue_actual == 5.0e9
     assert by_quarter[(2025, 3)].revenue_actual == 4.0e9
     assert by_quarter[(2025, 1)].revenue_actual == 2.0e9
     # upcoming quarters carry the estimate, never a reported actual
     assert all(q.revenue_actual is None for q in tl.future)
+
+
+def _off_calendar_ticker(income_stmt) -> FakeTicker:
+    """An MU-like off-calendar filer: fiscal quarters ending late Feb/May/Aug/Nov, each
+    announced ~4 weeks later (late Mar/Jun/Sep/Dec). The calendar-derived label therefore
+    names the *previous* calendar quarter (e.g. the May-ended quarter, announced late June,
+    is labelled Q1 ending Mar 31)."""
+    return FakeTicker(
+        earnings_dates=_earnings_dates(
+            [
+                ("2025-09-24", 2.5, 2.8),  # quarter ended 2025-08-28 → label (2025, 2)
+                ("2025-12-18", 2.9, 3.0),  # quarter ended 2025-11-27 → label (2025, 3)
+                ("2026-03-20", 3.1, 3.2),  # quarter ended 2026-02-26 → label (2025, 4)
+                ("2026-06-26", 3.4, 3.5),  # quarter ended 2026-05-28 → label (2026, 1)
+            ]
+        ),
+        eps_estimate=_estimate_frame({}),
+        revenue=_estimate_frame({}),
+        income_stmt=income_stmt,
+    )
+
+
+def test_off_calendar_filer_pairs_revenue_with_the_eps_quarter():
+    # Regression: the income statement used to be keyed by the calendar label's
+    # year+quarter, which for an off-calendar filer picks the PREVIOUS fiscal quarter's
+    # column (the newest row here, labelled 2026 Q1, would take the 2026-02-26 revenue
+    # alongside the May-quarter EPS). Matching by true period proximity keeps each row's
+    # EPS and revenue on the same fiscal quarter, even though the label stays offset.
+    ticker = _off_calendar_ticker(
+        _income_stmt(
+            {  # true fiscal period ends, ~a month before each announcement
+                "2026-05-28": 9.30e9,
+                "2026-02-26": 8.05e9,
+                "2025-11-27": 8.71e9,
+                "2025-08-28": 7.75e9,
+            }
+        )
+    )
+    tl = provider_with(ticker).get_quarterly_earnings("MU")
+    by_report = {q.report_date: q for q in tl.past}
+    assert by_report[date(2026, 6, 26)].revenue_actual == 9.30e9  # not 8.05e9 (prev quarter)
+    assert by_report[date(2026, 3, 20)].revenue_actual == 8.05e9
+    assert by_report[date(2025, 12, 18)].revenue_actual == 8.71e9
+    assert by_report[date(2025, 9, 24)].revenue_actual == 7.75e9
+
+
+def test_stale_income_statement_drops_revenue_rather_than_misattaching():
+    # The income statement hasn't published the just-announced quarter yet: the nearest
+    # preceding column is the previous quarter, ~4 months before the announcement — the
+    # newest row must carry no revenue rather than the wrong quarter's figure.
+    ticker = _off_calendar_ticker(
+        _income_stmt(
+            {
+                "2026-02-26": 8.05e9,
+                "2025-11-27": 8.71e9,
+                "2025-08-28": 7.75e9,
+            }
+        )
+    )
+    tl = provider_with(ticker).get_quarterly_earnings("MU")
+    by_report = {q.report_date: q for q in tl.past}
+    assert by_report[date(2026, 6, 26)].revenue_actual is None  # not 8.05e9
+    assert by_report[date(2026, 3, 20)].revenue_actual == 8.05e9  # older rows still match
 
 
 def test_income_statement_failure_degrades_gracefully():

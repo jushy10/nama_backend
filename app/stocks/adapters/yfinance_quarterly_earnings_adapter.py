@@ -15,9 +15,13 @@ from three yfinance surfaces:
   and it yields both even when ``earnings_dates`` lists only a single scheduled future date
   (which is common). A scheduled date from ``earnings_dates`` is attached as the report date
   when one lines up with the quarter.
-- ``Ticker.quarterly_income_stmt`` — the reported ``Total Revenue`` per quarter, matched to
-  the past quarters by calendar year+quarter to supply ``revenue_actual``. Best-effort
-  enrichment: a failure fetching it drops the reported revenue but never sinks the timeline.
+- ``Ticker.quarterly_income_stmt`` — the reported ``Total Revenue`` per quarter, supplying
+  the past quarters' ``revenue_actual``. Its columns carry the *true* fiscal period-end
+  dates, so each quarter's revenue is the column most recently preceding its announcement
+  date — never the calendar-derived fiscal label, which for an off-calendar filer (e.g. MU,
+  quarters ending late Feb/May/Aug/Nov) names a different fiscal quarter than the one the
+  EPS was reported for. Best-effort enrichment: a failure fetching it drops the reported
+  revenue but never sinks the timeline.
 
 Fiscal alignment is best-effort: ``earnings_dates`` carries only the announcement date, not
 a fiscal label, so a quarter's ``period_end`` (and hence ``fiscal_year`` / ``fiscal_quarter``)
@@ -25,6 +29,8 @@ is derived as the most recent calendar quarter-end before the announcement; the 
 quarters are anchored one quarter past the latest reported one. That's exact for
 calendar-fiscal-year companies and off-by-a-label for others (e.g. a company whose fiscal Q1
 ends in December) — a documented limitation of a source that doesn't report fiscal periods.
+The offset is cosmetic only: within a row, the EPS and the revenue always belong to the same
+fiscal quarter, because revenue is matched by real period proximity, not by that label.
 
 This is the only module that knows ``yfinance``/Yahoo exists; swap it and nothing else
 changes. It is deliberately defensive — Yahoo is an unofficial, best-effort feed that
@@ -52,6 +58,13 @@ from app.stocks.exceptions import StockDataUnavailable
 # The two forward quarters Yahoo publishes structured estimates for, in order: the current
 # quarter (in progress, next to report) and the one after it.
 _FORWARD_LABELS = ("0q", "+1q")
+
+# The longest plausible gap between a fiscal quarter's end and its earnings announcement.
+# Announcements land ~3–8 weeks after the close (the 10-Q deadline is 40–45 days; year-end
+# reports stretch longer), while the *previous* quarter's end sits a further ~13 weeks back —
+# ≥ ~115 days before the announcement — so this cap separates "the quarter being announced"
+# from "the income statement hasn't published this quarter yet".
+_MAX_REPORT_LAG_DAYS = 90
 
 
 class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
@@ -162,7 +175,7 @@ def _upcoming_quarters(
 
 
 def _build_reported(
-    row: dict, revenue_actual_by_period: dict[tuple[int, int], float]
+    row: dict, revenue_by_period_end: dict[date, float]
 ) -> QuarterlyEarnings:
     """One reported quarter from an ``earnings_dates`` row: the reported EPS against the
     estimate that preceded it (surprise computed here, not read from Yahoo's own
@@ -193,7 +206,7 @@ def _build_reported(
         eps_surprise=surprise,
         eps_surprise_percent=surprise_percent,
         revenue_estimate=None,
-        revenue_actual=revenue_actual_by_period.get((fiscal_year, fiscal_quarter)),
+        revenue_actual=_revenue_for(report_date, revenue_by_period_end),
     )
 
 
@@ -246,12 +259,13 @@ def _next_quarter_end(period_end: date) -> date:
     return date(period_end.year, month, day)
 
 
-def _revenue_actuals(frame) -> dict[tuple[int, int], float]:
-    """``quarterly_income_stmt`` → reported ``Total Revenue`` keyed by (year, calendar
-    quarter). Matching by calendar quarter rather than exact date keeps it robust to fiscal
-    period-ends that fall a few days off the calendar quarter-end (and consistent with the
-    calendar fiscal labels the reported quarters already carry)."""
-    out: dict[tuple[int, int], float] = {}
+def _revenue_actuals(frame) -> dict[date, float]:
+    """``quarterly_income_stmt`` → reported ``Total Revenue`` keyed by the column's *true*
+    fiscal period-end date, matched to the reported quarters by announcement-date proximity
+    (``_revenue_for``). Never keyed by the calendar fiscal label: for an off-calendar filer
+    the label names a different fiscal quarter than the one the EPS was reported for, so a
+    label match would pair one quarter's EPS with another quarter's revenue."""
+    out: dict[date, float] = {}
     if frame is None or getattr(frame, "empty", True):
         return out
     try:
@@ -265,8 +279,24 @@ def _revenue_actuals(frame) -> dict[tuple[int, int], float]:
         revenue = _num(value)
         if day is None or revenue is None:
             continue
-        out[(day.year, _quarter_of(day))] = revenue
+        out[day] = revenue
     return out
+
+
+def _revenue_for(report_date: date, revenue_by_period_end: dict[date, float]) -> float | None:
+    """The reported revenue for the quarter announced on ``report_date``: the income
+    statement's most recent period end preceding the announcement — earnings are announced
+    weeks after the quarter closes, so that column is the quarter being reported. If the
+    nearest preceding column is older than a plausible announcement lag, the statement
+    doesn't carry this quarter yet; return nothing rather than the previous quarter's
+    revenue."""
+    preceding = [end for end in revenue_by_period_end if end < report_date]
+    if not preceding:
+        return None
+    period_end = max(preceding)
+    if (report_date - period_end).days > _MAX_REPORT_LAG_DAYS:
+        return None
+    return revenue_by_period_end[period_end]
 
 
 def _parse_rows(frame) -> list[dict]:
