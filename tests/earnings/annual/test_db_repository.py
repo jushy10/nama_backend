@@ -1,0 +1,187 @@
+"""Tests for the database-backed AnnualEarningsRepository.
+
+Offline: an in-memory SQLite database stands in for the real table. Verifies the round-trip
+(entities -> rows -> entities) including the canonical chronological order, whole-window
+replace on upsert (no duplicate rows, other stocks untouched), the parent ``stocks`` row +
+name fill-but-don't-clobber, and a clean miss.
+"""
+
+from datetime import datetime, timedelta, timezone
+from datetime import date
+
+import pytest
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import Session
+
+from app.db import Base
+from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
+from app.stocks.earnings.annual.entities import (
+    AnnualEarnings,
+    AnnualEarningsTimeline,
+)
+from app.stocks.earnings.annual.models import (
+    StockAnnualEarningsRecord,
+    StockRecord,
+)
+
+_NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        yield db
+
+
+def repo(session) -> SqlAnnualEarningsRepository:
+    return SqlAnnualEarningsRepository(session, now=lambda: _NOW)
+
+
+def _reported(
+    fy: int, eps: float, *, revenue_actual: float | None = None, net_income: float | None = None
+) -> AnnualEarnings:
+    return AnnualEarnings(
+        fiscal_year=fy,
+        period_end=date(fy, 12, 31),
+        eps_actual=eps,
+        eps_estimate=None,
+        revenue_actual=revenue_actual,
+        revenue_estimate=None,
+        net_income=net_income,
+    )
+
+
+def _upcoming(fy: int, eps_estimate: float, revenue: float | None) -> AnnualEarnings:
+    return AnnualEarnings(
+        fiscal_year=fy,
+        period_end=date(fy, 12, 31),
+        eps_actual=None,
+        eps_estimate=eps_estimate,
+        revenue_actual=None,
+        revenue_estimate=revenue,
+    )
+
+
+def _timeline() -> AnnualEarningsTimeline:
+    # Built out of order on purpose — the repository re-sorts to the canonical chronological
+    # order on read.
+    return AnnualEarningsTimeline(
+        symbol="AAPL",
+        years=(
+            _reported(2024, 6.0, revenue_actual=400e9, net_income=100e9),
+            _reported(2023, 5.5),
+            _upcoming(2026, 7.0, 450e9),
+            _upcoming(2025, 6.5, 420e9),
+        ),
+    )
+
+
+def test_get_on_empty_table_is_a_miss(session):
+    assert repo(session).get("AAPL") is None
+
+
+def test_roundtrips_the_timeline(session):
+    r = repo(session)
+    r.upsert("AAPL", "Apple Inc.", _timeline())
+
+    tl = r.get("AAPL")
+    assert isinstance(tl, AnnualEarningsTimeline)
+    # Canonical order: chronological — ascending by fiscal_year, oldest reported year through
+    # furthest upcoming — regardless of the insert order.
+    assert [y.fiscal_year for y in tl.years] == [2023, 2024, 2025, 2026]
+
+    y2024 = next(y for y in tl.years if y.fiscal_year == 2024)
+    assert y2024.eps_actual == 6.0
+    assert y2024.revenue_actual == 400e9 and y2024.net_income == 100e9
+    assert y2024.eps_estimate is None and y2024.revenue_estimate is None
+    assert y2024.is_reported is True
+
+    upcoming = tl.future[0]  # 2025, soonest upcoming
+    assert upcoming.fiscal_year == 2025
+    assert upcoming.eps_actual is None and upcoming.revenue_estimate == 420e9
+    assert upcoming.revenue_actual is None and upcoming.net_income is None
+    assert upcoming.is_reported is False
+
+
+def test_upsert_stamps_the_fetch_time(session):
+    # fetched_at isn't part of the read shape, but it's still written — the cron's
+    # stalest-first refresh orders by it — so verify the stamp lands on the rows. SQLite hands
+    # the timestamp back naive (Postgres keeps the zone); normalize to UTC.
+    repo(session).upsert("AAPL", "Apple Inc.", _timeline())
+    stamp = session.execute(select(StockAnnualEarningsRecord.fetched_at)).scalars().first()
+    assert stamp.replace(tzinfo=timezone.utc) == _NOW
+
+
+def test_upsert_replaces_the_whole_window(session):
+    r = repo(session)
+    r.upsert("AAPL", "Apple Inc.", _timeline())  # 4 years
+    r.upsert(
+        "AAPL",
+        "Apple Inc.",
+        AnnualEarningsTimeline("AAPL", (_reported(2025, 7.0),)),
+    )  # now just 1
+
+    tl = r.get("AAPL")
+    assert [y.fiscal_year for y in tl.years] == [2025]
+    rows = session.execute(
+        select(func.count()).select_from(StockAnnualEarningsRecord)
+    ).scalar_one()
+    assert rows == 1  # old window cleared, not duplicated
+
+
+def test_upsert_leaves_other_stocks_untouched(session):
+    r = repo(session)
+    r.upsert("AAPL", "Apple Inc.", _timeline())
+    r.upsert("MSFT", "Microsoft", AnnualEarningsTimeline("MSFT", (_reported(2024, 11.0),)))
+
+    r.upsert("AAPL", "Apple Inc.", AnnualEarningsTimeline("AAPL", (_reported(2025, 7.0),)))
+
+    assert len(r.get("MSFT").years) == 1  # MSFT survived AAPL's rewrite
+
+
+def test_creates_the_parent_stock_row(session):
+    repo(session).upsert("AAPL", "Apple Inc.", _timeline())
+    stock = session.execute(
+        select(StockRecord).where(StockRecord.symbol == "AAPL")
+    ).scalar_one()
+    assert stock.name == "Apple Inc." and stock.id is not None
+
+
+def test_fills_a_missing_name_but_never_clobbers_a_known_one(session):
+    r = repo(session)
+    r.upsert("AAPL", None, _timeline())
+    assert (
+        session.execute(
+            select(StockRecord.name).where(StockRecord.symbol == "AAPL")
+        ).scalar_one()
+        is None
+    )
+
+    r.upsert("AAPL", "Apple Inc.", _timeline())
+    r.upsert("AAPL", None, _timeline())  # a nameless refresh must not erase it
+    assert (
+        session.execute(
+            select(StockRecord.name).where(StockRecord.symbol == "AAPL")
+        ).scalar_one()
+        == "Apple Inc."
+    )
+
+
+def test_refresh_targets_orders_stalest_first_and_carries_the_name(session):
+    # refresh_targets wraps the stalest-first query the cron walks; a stock's rows share a
+    # fetch stamp, so an older upsert sorts ahead of a newer one, each paired with its name.
+    older = SqlAnnualEarningsRepository(session, now=lambda: _NOW - timedelta(days=10))
+    newer = SqlAnnualEarningsRepository(session, now=lambda: _NOW)
+    older.upsert(
+        "MSFT",
+        "Microsoft",
+        AnnualEarningsTimeline("MSFT", (_reported(2024, 11.0),)),
+    )
+    newer.upsert("AAPL", "Apple Inc.", _timeline())
+
+    targets = newer.refresh_targets(10)
+    assert [t.symbol for t in targets] == ["MSFT", "AAPL"]  # stalest first
+    assert targets[0] == ("MSFT", "Microsoft")  # RefreshTarget carries the stored name
+    assert newer.refresh_targets(1) == [("MSFT", "Microsoft")]  # limit respected

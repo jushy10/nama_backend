@@ -1,0 +1,80 @@
+name: Sync annual earnings
+run-name: Sync annual earnings
+
+# Weekly (and on-demand). Reported fiscal years and forward-year estimates change through the
+# year, and the read endpoint fills new symbols lazily, so this just keeps the already-stored
+# rows fresh. It POSTs the deployed app's annual-earnings cron endpoint
+# (app/stocks/endpoints/cron_annual_earnings_endpoints.py), which runs the SyncAnnualEarnings
+# use case and refreshes the stalest stocks up to SYNC_ANNUAL_EARNINGS_LIMIT, keeping the
+# sequential Yahoo calls gentle on its rate limits.
+#
+# Two operational notes:
+#  - The live source is yfinance (Yahoo), which needs no API key — so the serving task carries
+#    no credential. Yahoo does rate-limit / block data-centre IPs, so a run may serve fewer
+#    rows than the limit; that's fine, the next run retries the stalest first. In particular
+#    the reported years come from the fundamentals (income-statement) endpoint, which Yahoo
+#    gates hardest from data-centre IPs, so from the deployed host the forward years may
+#    populate while the reported ones don't. An empty result from Yahoo is never stored (it
+#    would wipe a stock's window), so a transient block leaves the cached years intact.
+#  - The endpoint is unauthenticated, so it must not be reachable from the public internet.
+#    This workflow just triggers it; it relies on network isolation for safety.
+#
+# Requires the repo/environment variable API_BASE_URL — the deployed app's base URL, reachable
+# from the GitHub runner.
+
+on:
+  workflow_dispatch: {}
+  # Mondays, 09:00 UTC — an hour after the quarterly-earnings sync, so the two don't hit Yahoo
+  # from the same host at once. Weekly keeps forward estimates and freshly-reported years
+  # current; exact timing doesn't matter, so GitHub delaying scheduled runs under load is fine.
+  # Caveats: scheduled workflows run only from the default branch, and GitHub auto-disables the
+  # schedule after 60 days with no repo activity.
+  schedule:
+    - cron: "0 9 * * 1"
+
+concurrency:
+  group: sync-annual-earnings
+  cancel-in-progress: false
+
+env:
+  # Max stored stocks to refresh per run; kept modest so the sequential Yahoo calls stay gentle
+  # on its rate limits.
+  SYNC_ANNUAL_EARNINGS_LIMIT: "200"
+
+jobs:
+  sync:
+    name: Sync annual earnings
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Trigger the annual-earnings refresh
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${API_BASE_URL:-}" ]; then
+            echo "::error::API_BASE_URL is not set — add it as a repo/environment variable pointing at the deployed app."
+            exit 1
+          fi
+
+          url="${API_BASE_URL%/}/internal/earnings/annual/sync?limit=${SYNC_ANNUAL_EARNINGS_LIMIT}"
+          echo "POST $url"
+
+          # Capture the body and status separately. The refresh runs synchronously and can make
+          # a few hundred sequential Yahoo calls, so allow a generous timeout.
+          http_code=$(curl -sS -X POST "$url" \
+            --max-time 900 \
+            -o /tmp/sync_annual_earnings_response.json \
+            -w '%{http_code}')
+
+          echo "HTTP $http_code"
+          cat /tmp/sync_annual_earnings_response.json 2>/dev/null || true
+          echo
+
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Annual-earnings sync failed (HTTP $http_code) — check the app logs."
+            exit 1
+          fi
+          echo "Annual earnings synced."
