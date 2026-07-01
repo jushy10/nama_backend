@@ -5,26 +5,23 @@ refresh is a use case (``SyncAnalystEstimates``) invoked over HTTP, so a schedul
 (the sync-estimates GitHub workflow, or any cron) drives it by POSTing here. The
 endpoint runs the refresh synchronously and returns a small JSON summary.
 
-Wiring lives here, the composition-root way: build the live FMP adapter + the SQL
-repository and hand them to the use case. The FMP key is read from the runtime
-environment, so — unlike the old one-off ECS task that received the key as an
-override — the *serving* task must carry ``FMP_API_KEY`` for this to work (a missing
-key is a 503, like the other key-gated providers).
+Wiring lives here, the composition-root way: build the live yfinance (Yahoo) adapter +
+the SQL repository and hand them to the use case. yfinance reads Yahoo's public data
+with no API key, so — unlike the old FMP path — there's no credential to gate on; the
+sync is always constructable.
 
-Security: this endpoint is intentionally **unauthenticated**. It spends FMP quota and
-writes the database, so it relies on network isolation — it must not be reachable
-from the public internet. Put a guard (auth token / private networking) in front
-before exposing it.
+Security: this endpoint is intentionally **unauthenticated**. It writes the database
+(and hits Yahoo), so it relies on network isolation — it must not be reachable from the
+public internet. Put a guard (auth token / private networking) in front before
+exposing it.
 """
 
-import os
-
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.fmp_estimates_adapter import FmpEstimatesProvider
+from app.stocks.adapters.yfinance_estimates_adapter import YfinanceEstimatesProvider
 from app.stocks.estimates.db_repository import SqlAnalystEstimatesRepository
 from app.stocks.estimates.use_cases import EstimatesSyncReport, SyncAnalystEstimates
 
@@ -41,14 +38,10 @@ class EstimatesSyncResponse(BaseModel):
 
 
 def get_sync_estimates(db: Session = Depends(get_db)) -> SyncAnalystEstimates:
-    # The refresh reads FMP directly (not the DB cache it fills), so it needs the FMP
-    # key in the serving environment. Required here — a sync with no source to read is
-    # a hard 503, the same shape as the other key-gated providers.
-    key = os.environ.get("FMP_API_KEY")
-    if not key:
-        raise HTTPException(503, "Estimates sync is not configured (FMP_API_KEY).")
+    # The refresh reads Yahoo directly (not the DB cache it fills). yfinance needs no
+    # key, so there's nothing to gate on — the sync is always wired.
     return SyncAnalystEstimates(
-        FmpEstimatesProvider(key), SqlAnalystEstimatesRepository(db)
+        YfinanceEstimatesProvider(), SqlAnalystEstimatesRepository(db)
     )
 
 
@@ -66,13 +59,13 @@ def sync_estimates_endpoint(
         ge=1,
         le=1000,
         description=(
-            "Max stored rows to refresh this run, stalest first. Held below the "
-            "vendor's ~250-calls/day free quota."
+            "Max stored rows to refresh this run, stalest first. Kept modest so the "
+            "sequential Yahoo calls stay gentle on its rate limits."
         ),
     ),
     use_case: SyncAnalystEstimates = Depends(get_sync_estimates),
 ) -> EstimatesSyncResponse:
-    # Runs synchronously: a few hundred sequential FMP calls can take a while, so the
+    # Runs synchronously: a few hundred sequential Yahoo calls can take a while, so the
     # caller (and any proxy / load balancer in front) must allow a long enough idle
     # timeout, or pass a smaller `limit`.
     report = use_case.execute(limit=limit)

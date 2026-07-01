@@ -2,14 +2,12 @@
 
 Offline: a fake SyncAnalystEstimates is injected through dependency_overrides, so this
 checks only the controller — that it invokes the use case with the requested limit,
-presents the summary, validates the limit, and gates on a missing FMP key — without
-touching FMP or the database.
+presents the summary, and validates the limit — without touching Yahoo or the database.
 """
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.db import get_db
 from app.stocks.endpoints import cron_estimates_endpoints as cron
 from app.stocks.estimates.use_cases import EstimatesSyncReport, SyncAnalystEstimates
 
@@ -56,12 +54,10 @@ def test_rejects_an_out_of_range_limit():
     assert fake.calls == []
 
 
-def test_missing_fmp_key_is_a_503(monkeypatch):
-    # Exercise the real DI (no use-case override) with no key in the environment.
+def test_sync_is_wired_without_any_api_key(monkeypatch):
+    # yfinance needs no credential, so the real DI builds the use case with no key in
+    # the environment (the old FMP path 503'd here). Resolve the dependency directly —
+    # actually POSTing would reach Yahoo — and assert it produced the use case.
     monkeypatch.delenv("FMP_API_KEY", raising=False)
-    app = FastAPI()
-    app.include_router(cron.router)
-    # get_sync_estimates depends on get_db; stub it so the 503 path needs no real DB.
-    app.dependency_overrides[get_db] = lambda: None
-    resp = TestClient(app).post("/internal/estimates/sync")
-    assert resp.status_code == 503
+    use_case = cron.get_sync_estimates(db=None)
+    assert isinstance(use_case, SyncAnalystEstimates)
