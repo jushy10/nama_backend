@@ -2,8 +2,8 @@
 
 No real time and no real vendor: an injected clock drives expiry and a recording
 inner provider counts upstream calls. Verifies the cache's contract — serve
-within the window, refetch after it, isolate symbols, cache "no description", and
-never pin a failure.
+within the window, refetch after it, isolate symbols, cache "no name", and never
+pin a failure.
 """
 
 import pytest
@@ -46,11 +46,11 @@ def cache_of(inner, ttl=100.0, clock=None):
 
 
 def test_serves_from_cache_within_ttl():
-    inner = RecordingInner([CompanyProfile("Apple makes phones.")])
+    inner = RecordingInner([CompanyProfile("Apple Inc.")])
     cache = cache_of(inner)
     first = cache.get_profile("AAPL")
     second = cache.get_profile("AAPL")
-    assert first.description == "Apple makes phones."
+    assert first.name == "Apple Inc."
     assert second == first
     assert inner.received == ["AAPL"]  # second hit served from cache
 
@@ -59,27 +59,27 @@ def test_refetches_after_ttl_expires():
     clock = FakeClock()
     inner = RecordingInner([CompanyProfile("v1"), CompanyProfile("v2")])
     cache = cache_of(inner, ttl=100.0, clock=clock)
-    assert cache.get_profile("AAPL").description == "v1"
+    assert cache.get_profile("AAPL").name == "v1"
     clock.advance(101.0)  # past the TTL window
-    assert cache.get_profile("AAPL").description == "v2"
+    assert cache.get_profile("AAPL").name == "v2"
     assert inner.received == ["AAPL", "AAPL"]
 
 
 def test_caches_symbols_independently():
     inner = RecordingInner([CompanyProfile("A"), CompanyProfile("M")])
     cache = cache_of(inner)
-    assert cache.get_profile("AAPL").description == "A"
-    assert cache.get_profile("MSFT").description == "M"
-    assert cache.get_profile("AAPL").description == "A"  # still cached
+    assert cache.get_profile("AAPL").name == "A"
+    assert cache.get_profile("MSFT").name == "M"
+    assert cache.get_profile("AAPL").name == "A"  # still cached
     assert inner.received == ["AAPL", "MSFT"]
 
 
-def test_caches_absent_description():
-    # An uncovered symbol (no description) is cached too, so it isn't re-fetched.
+def test_caches_absent_name():
+    # An uncovered symbol (no name) is cached too, so it isn't re-fetched.
     inner = RecordingInner([CompanyProfile(None)])
     cache = cache_of(inner)
-    assert cache.get_profile("ZZZZ").description is None
-    assert cache.get_profile("ZZZZ").description is None
+    assert cache.get_profile("ZZZZ").name is None
+    assert cache.get_profile("ZZZZ").name is None
     assert inner.received == ["ZZZZ"]
 
 
@@ -91,5 +91,5 @@ def test_failure_is_not_cached():
     cache = cache_of(inner)
     with pytest.raises(StockDataUnavailable):
         cache.get_profile("AAPL")
-    assert cache.get_profile("AAPL").description == "recovered"
+    assert cache.get_profile("AAPL").name == "recovered"
     assert inner.received == ["AAPL", "AAPL"]

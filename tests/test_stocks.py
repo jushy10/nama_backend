@@ -436,11 +436,8 @@ def a_fundamentals(**overrides) -> StockFundamentals:
     return StockFundamentals(**base)
 
 
-def a_profile(
-    description: str = "Apple Inc. designs and sells consumer electronics.",
-    name: str | None = None,
-) -> CompanyProfile:
-    return CompanyProfile(description=description, name=name)
+def a_profile(name: str | None = None) -> CompanyProfile:
+    return CompanyProfile(name=name)
 
 
 def an_estimates(**overrides) -> AnalystEstimates:
@@ -768,7 +765,6 @@ def test_use_case_merges_enrichment():
     assert stock.performance.one_year == 21.0
     assert stock.metrics.pe == 28.5
     assert stock.metrics.beta == 1.2
-    assert stock.description == "Apple Inc. designs and sells consumer electronics."
 
 
 def test_use_case_prefers_profile_name_over_feed_name():
@@ -804,7 +800,6 @@ def test_use_case_without_enrichment_leaves_fields_none():
     assert stock.dividend_yield is None
     assert stock.performance is None
     assert stock.metrics is None
-    assert stock.description is None
     assert stock.analyst_estimates is None
     assert stock.forward_pe is None
 
@@ -857,7 +852,6 @@ def test_use_case_enrichment_is_best_effort():
     assert stock.price == 297.86
     assert stock.performance is None
     assert stock.market_cap is None
-    assert stock.description is None
     assert stock.all_time_high is None
     assert stock.drawdown_from_high is None
 
@@ -1749,7 +1743,6 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
     assert body["market_cap"] == 3_120_000_000_000.0
     assert body["dividend_per_share"] == 1.0
     assert body["dividend_yield"] == 0.42
-    assert body["description"] == "Apple Inc. designs and sells consumer electronics."
     # nested performance is serialized with finance-style JSON keys
     assert body["performance"] == {
         "1w": 1.2, "1m": -0.4, "3m": 5.1, "6m": 8.7, "ytd": 12.3, "1y": 21.0,
@@ -1832,7 +1825,6 @@ def test_get_stock_enrichment_best_effort_returns_200(make_client):
     assert body["price"] == 297.86
     assert body["market_cap"] is None
     assert body["performance"] is None
-    assert body["description"] is None
 
 
 def test_get_stock_without_enrichment_providers_nulls_fields(make_client):
@@ -1842,7 +1834,6 @@ def test_get_stock_without_enrichment_providers_nulls_fields(make_client):
     assert body["dividend_per_share"] is None
     assert body["performance"] is None
     assert body["metrics"] is None
-    assert body["description"] is None
     assert body["all_time_high"] is None
     assert body["drawdown_from_high"] is None
 

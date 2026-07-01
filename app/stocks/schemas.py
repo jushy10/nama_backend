@@ -107,7 +107,6 @@ class StockResponse(BaseModel):
     symbol: str
     name: str | None = None
     exchange: str | None = None
-    description: str | None = None  # what the company does (best-effort, may be null)
     price: float
     change: float | None = None
     change_percent: float | None = None

@@ -69,10 +69,10 @@ def _normalize_symbol(symbol: str) -> str:
 class GetStockInfo:
     """Use case: retrieve information about a single stock by its symbol.
 
-    The price snapshot is required; performance, fundamentals, the company
-    description and the forward analyst estimates are optional, best-effort
-    enrichment. If those sources fail or aren't configured, the stock is still
-    returned with those fields left unset.
+    The price snapshot is required; performance, fundamentals, the clean company
+    name and the forward analyst estimates are optional, best-effort enrichment.
+    If those sources fail or aren't configured, the stock is still returned with
+    those fields left unset.
     """
 
     def __init__(
@@ -103,7 +103,6 @@ class GetStockInfo:
             # back to the feed's name when the profile is missing or unconfigured.
             name=profile.name if profile and profile.name else stock.name,
             performance=self._performance(normalized),
-            description=profile.description if profile else None,
             market_cap=fundamentals.market_cap if fundamentals else None,
             dividend_per_share=(
                 fundamentals.dividend_per_share if fundamentals else None
@@ -148,7 +147,7 @@ class GetStockInfo:
             return None  # best-effort
 
     def _profile(self, symbol: str) -> CompanyProfile | None:
-        # One call feeds two fields — the clean name and the description.
+        # Supplies the clean display name that overrides the price feed's title.
         if self._profile_provider is None:
             return None
         try:

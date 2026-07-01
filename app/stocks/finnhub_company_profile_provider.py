@@ -2,11 +2,9 @@
 
 Finnhub's free ``/stock/profile2`` endpoint returns a tidy company name
 ("Apple Inc.") — the display name the stock view prefers over the price feed's
-full legal title ("Apple Inc. Common Stock"). It carries no business
-description, so this fills only the *name* half of ``CompanyProfile``; the
-description comes from a different vendor and the two are merged behind the port
-by ``CompositeCompanyProfileProvider``. This is the only module that knows
-Finnhub profiles exist.
+full legal title ("Apple Inc. Common Stock"). That clean name is the whole of
+``CompanyProfile`` the endpoint uses. This is the only module that knows Finnhub
+profiles exist.
 
 Docs: https://finnhub.io/docs/api/company-profile2
 """
@@ -46,7 +44,7 @@ class FinnhubCompanyProfileProvider(CompanyProfileProvider):
         # Finnhub returns a JSON object; an unknown symbol comes back as ``{}``,
         # which maps cleanly to "no name" (best-effort enrichment).
         data = payload if isinstance(payload, dict) else {}
-        return CompanyProfile(name=_clean(data.get("name")), description=None)
+        return CompanyProfile(name=_clean(data.get("name")))
 
 
 def _clean(value: object) -> str | None:

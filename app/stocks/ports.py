@@ -119,10 +119,10 @@ class StockFundamentalsProvider(ABC):
 
 
 class CompanyProfileProvider(ABC):
-    """A gateway for a company's business description (what the company does).
+    """A gateway for a company's clean display name.
 
     Comes from a company-profile vendor, not the price feed — market data APIs
-    expose a ticker's name and exchange but not a business summary. Best-effort
+    expose a ticker's full legal title but not the tidy display name. Best-effort
     enrichment, like fundamentals: a failure here must not sink the price view.
     """
 

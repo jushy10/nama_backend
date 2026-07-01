@@ -117,13 +117,11 @@ only this one file changes.
 
 - `alpaca_provider.py` — Alpaca SDK → price/quote/candles/performance/sectors
 - `finnhub_*_provider.py` — Finnhub → fundamentals / earnings / calendar / company name (`/stock/profile2`) / analyst recommendation trends (`/stock/recommendation`)
-- `fmp_profile_provider.py` — FMP (`httpx`) → company **description** (the clean display name now comes from Finnhub)
 - `sec_edgar_revenue_provider.py` — SEC EDGAR XBRL **flat API** (`httpx`, free/keyless) → reported quarterly revenue *totals*; resolves ticker→CIK and derives Q4 from the 10-K
 - `sec_edgar_segment_revenue_provider.py` — SEC EDGAR **inline XBRL** (the raw 10-Q/10-K documents; the flat API drops the dimensional contexts) → per-quarter revenue split by operating segment and product/service; parses several recent filings and keeps standalone-quarter, member-qualified facts
 - `logodev_provider.py` — Logo.dev → logo image
 - `caching_company_profile_provider.py` / `caching_revenue_provider.py` / `caching_segment_revenue_provider.py` — decorator adapters (wrap another adapter to add an in-process TTL cache; same port in, same port out)
 - `adapters/db_cached_estimates_adapter.py` — decorator on the `AnalystEstimatesProvider` port backed by a **persistent DB cache** (the `AnalystEstimatesRepository`) instead of an in-process map: shared across instances, survives restarts, serves a stale row if FMP is down. Fills lazily on a miss; refreshed out of band by the estimates cron endpoint (`app/stocks/endpoints/cron_estimates_endpoints.py`). This is what the stock endpoint wires for estimates (the in-memory `adapters/caching_estimates_adapter.py` is now unused). `adapters/fmp_estimates_adapter.py` is the live FMP source it wraps
-- `composite_company_profile_provider.py` — merges a name source (Finnhub) + a description source (FMP) behind the one `CompanyProfileProvider` port; same shape as the cache decorator
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
 - `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table) + `get_or_create_stock`. Owned by no single feature; per-feature tables hang off it and import it from here
 - The estimates **persistence** is split into three layers in the sub-slice: `estimates/models.py` (the ORM model for `stock_analyst_estimates` + simple query functions; it imports the shared `StockRecord` from `stocks/models.py`), `estimates/db_repository.py` (the concrete `SqlAnalystEstimatesRepository` — maps rows⇄entity and calls the model queries), and `estimates/repository.py` (the abstract `AnalystEstimatesRepository` port the use case is injected with). Same DB-owns-the-schema idea as `constituents.py`, split across the port / concrete / model boundary
@@ -173,7 +171,7 @@ translates them.
 - *Primary* (the endpoint's reason to exist, e.g. price, earnings history): the
   provider is required, errors **propagate** to the endpoint, and a missing API
   key is a hard **503** in the wiring.
-- *Enrichment* (nice-to-have, e.g. market cap, description, next-report): the
+- *Enrichment* (nice-to-have, e.g. market cap, company name, next-report): the
   provider is typed `| None`, the use case wraps the call in
   `try/except (StockNotFound, StockDataUnavailable): return None`, and a missing
   key just makes the provider `None` and silently omits the field. **Enrichment

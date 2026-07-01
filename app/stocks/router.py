@@ -45,9 +45,6 @@ from app.stocks.entities import (
 from app.stocks.caching_company_profile_provider import CachingCompanyProfileProvider
 from app.stocks.caching_revenue_provider import CachingRevenueHistoryProvider
 from app.stocks.caching_segment_revenue_provider import CachingSegmentRevenueProvider
-from app.stocks.composite_company_profile_provider import (
-    CompositeCompanyProfileProvider,
-)
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.finnhub_company_profile_provider import FinnhubCompanyProfileProvider
 from app.stocks.finnhub_earnings_calendar_provider import (
@@ -56,7 +53,6 @@ from app.stocks.finnhub_earnings_calendar_provider import (
 from app.stocks.finnhub_earnings_provider import FinnhubEarningsProvider
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
 from app.stocks.finnhub_recommendation_provider import FinnhubRecommendationProvider
-from app.stocks.fmp_profile_provider import FmpProfileProvider
 from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
 from app.stocks.sec_edgar_revenue_provider import SecEdgarRevenueProvider
@@ -142,26 +138,15 @@ def get_fundamentals_provider() -> StockFundamentalsProvider | None:
 
 @lru_cache(maxsize=1)
 def get_profile_provider() -> CompanyProfileProvider | None:
-    # The clean display name and the business description come from different
-    # vendors on their free tiers: Finnhub carries the name, FMP the description.
-    # Each is wrapped in its own TTL cache (singletons, so the caches persist
-    # across requests) and merged behind one port. Both are best-effort: whichever
-    # keys are set contribute their field, and with neither the endpoint simply
-    # omits the name override + description. Caching keeps us under FMP's ~250/day
-    # free quota and Finnhub's per-minute rate limit.
+    # The clean display name comes from Finnhub's free profile endpoint — best-effort
+    # enrichment, so without a key we simply omit the name override (the price feed's
+    # legal title still serves). Wrapped in a TTL cache (a singleton, so it persists
+    # across requests) to stay under Finnhub's per-minute rate limit; the name is
+    # near-static.
     finnhub_key = os.environ.get("FINNHUB_API_KEY")
-    fmp_key = os.environ.get("FMP_API_KEY")
-    name_source = (
-        CachingCompanyProfileProvider(FinnhubCompanyProfileProvider(finnhub_key))
-        if finnhub_key
-        else None
-    )
-    description_source = (
-        CachingCompanyProfileProvider(FmpProfileProvider(fmp_key)) if fmp_key else None
-    )
-    if name_source is None and description_source is None:
+    if not finnhub_key:
         return None
-    return CompositeCompanyProfileProvider(name_source, description_source)
+    return CachingCompanyProfileProvider(FinnhubCompanyProfileProvider(finnhub_key))
 
 
 def get_stock_info(
@@ -355,7 +340,6 @@ def _present(stock: Stock) -> StockResponse:
         symbol=stock.symbol,
         name=stock.name,
         exchange=stock.exchange,
-        description=stock.description,
         price=stock.price,
         change=stock.change,
         change_percent=stock.change_percent,
