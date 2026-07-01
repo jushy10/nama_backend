@@ -4,14 +4,16 @@ run-name: Sync analyst estimates
 # Monthly (and on-demand). Forward analyst estimates revise only a handful of times a
 # quarter, and the stock endpoint fills new symbols lazily, so this just keeps the
 # already-stored rows fresh. It POSTs the deployed app's estimates cron endpoint
-# (app/stocks/estimates/cron_estimates_endpoints.py), which runs the SyncAnalystEstimates
-# use case and refreshes the stalest rows up to SYNC_ESTIMATES_LIMIT, staying under FMP's
-# ~250-calls/day free quota. (Replaces the old one-off ECS task that ran
-# scripts/sync_estimates.py.)
+# (app/stocks/endpoints/cron_estimates_endpoints.py), which runs the SyncAnalystEstimates
+# use case and refreshes the stalest rows up to SYNC_ESTIMATES_LIMIT, keeping the
+# sequential Yahoo calls gentle on its rate limits. (Replaces the old one-off ECS task
+# that ran scripts/sync_estimates.py.)
 #
 # Two operational notes:
-#  - The endpoint reads FMP_API_KEY from the *serving* task's environment, so unlike the
-#    old approach the running app must carry the FMP key.
+#  - The live source is yfinance (Yahoo), which needs no API key — so, unlike the old FMP
+#    path, the serving task carries no estimates credential. Yahoo does rate-limit /
+#    block data-centre IPs, so a run may serve fewer rows than the limit; that's fine, the
+#    next run retries the stalest first.
 #  - The endpoint is unauthenticated, so it must not be reachable from the public
 #    internet. This workflow just triggers it; it relies on network isolation for safety.
 #
@@ -32,7 +34,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Max stored rows to refresh per run; keeps FMP calls under the ~250/day free quota.
+  # Max stored rows to refresh per run; kept modest so the sequential Yahoo calls stay
+  # gentle on its rate limits.
   SYNC_ESTIMATES_LIMIT: "200"
 
 jobs:
@@ -57,7 +60,7 @@ jobs:
           echo "POST $url"
 
           # Capture the body and status separately. The refresh runs synchronously and
-          # can make a few hundred sequential FMP calls, so allow a generous timeout.
+          # can make a few hundred sequential Yahoo calls, so allow a generous timeout.
           http_code=$(curl -sS -X POST "$url" \
             --max-time 900 \
             -o /tmp/sync_estimates_response.json \
