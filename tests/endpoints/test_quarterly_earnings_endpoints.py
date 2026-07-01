@@ -54,6 +54,7 @@ def _timeline() -> QuarterlyEarningsTimeline:
                 eps_surprise=0.3,
                 eps_surprise_percent=10.0,
                 revenue_estimate=None,
+                revenue_actual=5.0e9,
             ),
             QuarterlyEarnings(
                 fiscal_year=2026,
@@ -81,8 +82,10 @@ def test_presents_the_timeline_with_counts():
     reported, upcoming = body["quarters"]
     assert (reported["fiscal_year"], reported["fiscal_quarter"]) == (2025, 4)
     assert reported["eps_actual"] == 3.3 and reported["eps_surprise_percent"] == 10.0
+    assert reported["revenue_actual"] == 5.0e9 and reported["revenue_estimate"] is None
     assert reported["beat"] is True and reported["is_reported"] is True
     assert upcoming["eps_actual"] is None and upcoming["revenue_estimate"] == 100e9
+    assert upcoming["revenue_actual"] is None
     assert upcoming["beat"] is None and upcoming["is_reported"] is False
     assert fake.calls == ["AAPL"]
 

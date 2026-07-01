@@ -78,6 +78,7 @@ def _present_quarter(quarter: QuarterlyEarnings) -> QuarterlyEarningsQuarterResp
         eps_surprise=quarter.eps_surprise,
         eps_surprise_percent=quarter.eps_surprise_percent,
         revenue_estimate=quarter.revenue_estimate,
+        revenue_actual=quarter.revenue_actual,
         beat=quarter.beat,
         is_reported=quarter.is_reported,
     )

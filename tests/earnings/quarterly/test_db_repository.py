@@ -38,7 +38,9 @@ def repo(session) -> SqlQuarterlyEarningsRepository:
     return SqlQuarterlyEarningsRepository(session, now=lambda: _NOW)
 
 
-def _reported(fy: int, fq: int, actual: float, estimate: float) -> QuarterlyEarnings:
+def _reported(
+    fy: int, fq: int, actual: float, estimate: float, revenue_actual: float | None = None
+) -> QuarterlyEarnings:
     return QuarterlyEarnings(
         fiscal_year=fy,
         fiscal_quarter=fq,
@@ -49,6 +51,7 @@ def _reported(fy: int, fq: int, actual: float, estimate: float) -> QuarterlyEarn
         eps_surprise=round(actual - estimate, 4),
         eps_surprise_percent=round((actual - estimate) / abs(estimate) * 100, 2),
         revenue_estimate=None,
+        revenue_actual=revenue_actual,
     )
 
 
@@ -70,7 +73,7 @@ def _timeline() -> QuarterlyEarningsTimeline:
     return QuarterlyEarningsTimeline(
         symbol="AAPL",
         quarters=(
-            _reported(2025, 4, 3.0, 2.8),
+            _reported(2025, 4, 3.0, 2.8, revenue_actual=5.0e9),
             _reported(2025, 3, 2.5, 2.4),
             _upcoming(2026, 1, 3.1, 100e9),
             _upcoming(2026, 2, 3.3, 110e9),
@@ -99,10 +102,12 @@ def test_roundtrips_the_timeline(session):
     q4 = tl.quarters[0]
     assert q4.eps_actual == 3.0 and q4.eps_estimate == 2.8
     assert q4.eps_surprise == 0.2 and q4.eps_surprise_percent == 7.14
+    assert q4.revenue_actual == 5.0e9
     assert q4.is_reported and q4.beat is True
 
     upcoming = tl.future[0]
     assert upcoming.eps_actual is None and upcoming.revenue_estimate == 100e9
+    assert upcoming.revenue_actual is None
     assert upcoming.is_reported is False
 
 
