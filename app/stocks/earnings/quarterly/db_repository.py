@@ -48,15 +48,11 @@ def _to_entity(row: StockQuarterlyEarningsRecord) -> QuarterlyEarnings:
 def _to_timeline(
     symbol: str, rows: list[StockQuarterlyEarningsRecord]
 ) -> QuarterlyEarningsTimeline:
-    """Rebuild the timeline in its canonical order: reported quarters newest-first,
-    then upcoming quarters soonest-first — the order the entity documents, regardless
-    of the row order the query returned."""
-    quarters = [_to_entity(row) for row in rows]
-    reported = sorted(
-        (q for q in quarters if q.is_reported), key=_quarter_key, reverse=True
-    )
-    upcoming = sorted((q for q in quarters if not q.is_reported), key=_quarter_key)
-    return QuarterlyEarningsTimeline(symbol=symbol, quarters=tuple(reported + upcoming))
+    """Rebuild the timeline in its canonical chronological order — ascending by
+    ``(fiscal_year, fiscal_quarter)``, oldest reported quarter through furthest upcoming
+    — the order the entity documents, regardless of the row order the query returned."""
+    quarters = sorted((_to_entity(row) for row in rows), key=_quarter_key)
+    return QuarterlyEarningsTimeline(symbol=symbol, quarters=tuple(quarters))
 
 
 class SqlQuarterlyEarningsRepository(QuarterlyEarningsRepository):

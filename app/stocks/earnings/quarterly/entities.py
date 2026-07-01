@@ -66,10 +66,12 @@ class QuarterlyEarnings:
 class QuarterlyEarningsTimeline:
     """A stock's recent reported quarters plus its upcoming ones.
 
-    ``quarters`` runs reported-newest-first and then upcoming-soonest-first; the
-    ``past`` / ``future`` views split it on ``is_reported`` while preserving that order.
-    Best-effort: an uncovered symbol yields an empty (``is_empty``) timeline rather than
-    an error, the same contract the estimates slice uses.
+    ``quarters`` runs in chronological order — ascending by ``(fiscal_year,
+    fiscal_quarter)``, so the oldest reported quarter leads through to the furthest
+    upcoming one. The ``past`` / ``future`` views split it on ``is_reported`` while
+    preserving that order (past = oldest→newest reported, future = soonest→furthest
+    upcoming). Best-effort: an uncovered symbol yields an empty (``is_empty``) timeline
+    rather than an error, the same contract the estimates slice uses.
     """
 
     symbol: str
@@ -82,7 +84,7 @@ class QuarterlyEarningsTimeline:
 
     @property
     def past(self) -> tuple[QuarterlyEarnings, ...]:
-        """The reported quarters, newest first."""
+        """The reported quarters, oldest first."""
         return tuple(q for q in self.quarters if q.is_reported)
 
     @property

@@ -91,15 +91,15 @@ def test_roundtrips_the_timeline(session):
 
     tl = r.get("AAPL")
     assert isinstance(tl, QuarterlyEarningsTimeline)
-    # Canonical order: reported newest-first, then upcoming soonest-first — regardless
-    # of the insert order.
+    # Canonical order: chronological — ascending by (fiscal_year, fiscal_quarter), oldest
+    # reported quarter through furthest upcoming — regardless of the insert order.
     assert [(q.fiscal_year, q.fiscal_quarter) for q in tl.quarters] == [
-        (2025, 4),
         (2025, 3),
+        (2025, 4),
         (2026, 1),
         (2026, 2),
     ]
-    q4 = tl.quarters[0]
+    q4 = next(q for q in tl.quarters if (q.fiscal_year, q.fiscal_quarter) == (2025, 4))
     assert q4.eps_actual == 3.0 and q4.eps_estimate == 2.8
     assert q4.eps_surprise == 0.2 and q4.eps_surprise_percent == 7.14
     assert q4.revenue_actual == 5.0e9
