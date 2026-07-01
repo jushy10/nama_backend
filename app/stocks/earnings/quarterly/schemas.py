@@ -23,6 +23,7 @@ class QuarterlyEarningsQuarterResponse(BaseModel):
     eps_surprise: float | None
     eps_surprise_percent: float | None
     revenue_estimate: float | None
+    revenue_actual: float | None
     beat: bool | None
     is_reported: bool
 

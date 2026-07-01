@@ -41,6 +41,7 @@ def _to_entity(row: StockQuarterlyEarningsRecord) -> QuarterlyEarnings:
         eps_surprise=row.eps_surprise,
         eps_surprise_percent=row.eps_surprise_percent,
         revenue_estimate=row.revenue_estimate,
+        revenue_actual=row.revenue_actual,
     )
 
 
@@ -100,6 +101,7 @@ class SqlQuarterlyEarningsRepository(QuarterlyEarningsRepository):
                     eps_surprise=quarter.eps_surprise,
                     eps_surprise_percent=quarter.eps_surprise_percent,
                     revenue_estimate=quarter.revenue_estimate,
+                    revenue_actual=quarter.revenue_actual,
                     fetched_at=now,
                 )
             )

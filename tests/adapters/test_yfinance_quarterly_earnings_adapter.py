@@ -42,13 +42,25 @@ def _estimate_frame(avgs: dict) -> pd.DataFrame:
     )
 
 
+def _income_stmt(revenue_by_date: dict) -> pd.DataFrame:
+    """A date-columned income statement like ``quarterly_income_stmt``:
+    ``{"2025-12-31": 5e9}`` → a frame with a ``Total Revenue`` row over period-end columns."""
+    columns = pd.DatetimeIndex([pd.Timestamp(d) for d in revenue_by_date])
+    return pd.DataFrame(
+        [list(revenue_by_date.values())], index=["Total Revenue"], columns=columns
+    )
+
+
 class FakeTicker:
     """Stands in for ``yfinance.Ticker``; serves canned frames, or raises."""
 
-    def __init__(self, *, earnings_dates=None, eps_estimate=None, revenue=None, error=None):
+    def __init__(
+        self, *, earnings_dates=None, eps_estimate=None, revenue=None, income_stmt=None, error=None
+    ):
         self._earnings_dates = earnings_dates
         self._eps_estimate = eps_estimate
         self._revenue = revenue
+        self._income_stmt = income_stmt
         self._error = error
 
     @property
@@ -68,6 +80,14 @@ class FakeTicker:
         if self._error is not None:
             raise self._error
         return self._revenue
+
+    @property
+    def quarterly_income_stmt(self):
+        if self._error is not None:
+            raise self._error
+        if isinstance(self._income_stmt, Exception):  # a selective income-stmt failure
+            raise self._income_stmt
+        return self._income_stmt
 
 
 def provider_with(ticker: FakeTicker) -> YfinanceQuarterlyEarningsProvider:
@@ -92,6 +112,14 @@ def _full_ticker(future=(("2026-05-01", 3.1, _NAN),)) -> FakeTicker:
         earnings_dates=dates,
         eps_estimate=_estimate_frame({"0q": 3.1, "+1q": 3.3, "0y": 12.0, "+1y": 14.0}),
         revenue=_estimate_frame({"0q": 100e9, "+1q": 110e9, "0y": 420e9, "+1y": 455e9}),
+        income_stmt=_income_stmt(
+            {  # reported revenue by fiscal period end (calendar quarters here)
+                "2025-12-31": 5.0e9,  # fy2025 q4
+                "2025-09-30": 4.0e9,  # fy2025 q3
+                "2025-06-30": 3.0e9,  # fy2025 q2
+                "2025-03-31": 2.0e9,  # fy2025 q1
+            }
+        ),
     )
 
 
@@ -191,6 +219,30 @@ def test_derives_period_end_and_fiscal_labels_from_the_announcement():
     q1 = next(q for q in tl.past if (q.fiscal_year, q.fiscal_quarter) == (2025, 1))
     assert q1.report_date == date(2025, 5, 1)
     assert q1.period_end == date(2025, 3, 31)  # most recent quarter-end before the report
+
+
+def test_reported_quarters_carry_revenue_actual():
+    tl = provider_with(_full_ticker()).get_quarterly_earnings("AAPL")
+    by_quarter = {(q.fiscal_year, q.fiscal_quarter): q for q in tl.past}
+    # matched from the income statement by calendar year+quarter
+    assert by_quarter[(2025, 4)].revenue_actual == 5.0e9
+    assert by_quarter[(2025, 3)].revenue_actual == 4.0e9
+    assert by_quarter[(2025, 1)].revenue_actual == 2.0e9
+    # upcoming quarters carry the estimate, never a reported actual
+    assert all(q.revenue_actual is None for q in tl.future)
+
+
+def test_income_statement_failure_degrades_gracefully():
+    # A blocked/failed income statement drops revenue_actual but must not sink the timeline.
+    ticker = FakeTicker(
+        earnings_dates=_earnings_dates(_reported_dates()),
+        eps_estimate=_estimate_frame({"0q": 3.1, "+1q": 3.3}),
+        revenue=_estimate_frame({"0q": 100e9, "+1q": 110e9}),
+        income_stmt=RuntimeError("income statement blocked"),
+    )
+    tl = provider_with(ticker).get_quarterly_earnings("AAPL")
+    assert len(tl.past) == 4  # timeline intact
+    assert all(q.revenue_actual is None for q in tl.past)  # just no reported revenue
 
 
 def test_reported_without_an_estimate_has_no_surprise():
