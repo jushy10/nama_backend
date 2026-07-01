@@ -1,9 +1,9 @@
 """Tests for the analyst-estimates query methods in models.py.
 
-Offline, against in-memory SQLite: exercises the thin data-access layer directly —
-get-or-create semantics on the stocks anchor, the two row lookups, and the
-stalest-first ordering/limit of the refresh query — without going through the
-repository's entity mapping.
+Offline, against in-memory SQLite: exercises the thin data-access layer directly — the
+two row lookups and the stalest-first ordering/limit of the refresh query — without
+going through the repository's entity mapping. (The shared ``stocks`` anchor's
+get-or-create is tested in ``tests/stocks/test_models.py``.)
 """
 
 from datetime import datetime, timedelta, timezone
@@ -32,20 +32,6 @@ def _store(session, symbol, name, fetched_at) -> None:
     stock = models.get_or_create_stock(session, symbol, name)
     session.add(StockAnalystEstimatesRecord(stock_id=stock.id, fetched_at=fetched_at))
     session.commit()
-
-
-def test_get_or_create_creates_then_returns_the_same_row(session):
-    a = models.get_or_create_stock(session, "AAPL", "Apple Inc.")
-    session.commit()
-    b = models.get_or_create_stock(session, "AAPL", None)
-    assert a.id == b.id  # same row, not a duplicate
-
-
-def test_get_or_create_fills_missing_name_but_never_clobbers(session):
-    models.get_or_create_stock(session, "AAPL", None)
-    assert models.get_or_create_stock(session, "AAPL", "Apple Inc.").name == "Apple Inc."
-    # a later nameless call must not erase the known name
-    assert models.get_or_create_stock(session, "AAPL", None).name == "Apple Inc."
 
 
 def test_estimates_by_symbol_and_stock_id(session):

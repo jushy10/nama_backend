@@ -125,7 +125,8 @@ only this one file changes.
 - `adapters/db_cached_estimates_adapter.py` — decorator on the `AnalystEstimatesProvider` port backed by a **persistent DB cache** (the `AnalystEstimatesRepository`) instead of an in-process map: shared across instances, survives restarts, serves a stale row if FMP is down. Fills lazily on a miss; refreshed out of band by the estimates cron endpoint (`app/stocks/endpoints/cron_estimates_endpoints.py`). This is what the stock endpoint wires for estimates (the in-memory `adapters/caching_estimates_adapter.py` is now unused). `adapters/fmp_estimates_adapter.py` is the live FMP source it wraps
 - `composite_company_profile_provider.py` — merges a name source (Finnhub) + a description source (FMP) behind the one `CompanyProfileProvider` port; same shape as the cache decorator
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
-- The estimates **persistence** is split into three layers in the sub-slice: `estimates/models.py` (the ORM models for the `stocks` anchor + `stock_analyst_estimates`, plus simple query functions), `estimates/db_repository.py` (the concrete `SqlAnalystEstimatesRepository` — maps rows⇄entity and calls the model queries), and `estimates/repository.py` (the abstract `AnalystEstimatesRepository` port the use case is injected with). Same DB-owns-the-schema idea as `constituents.py`, split across the port / concrete / model boundary
+- `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table) + `get_or_create_stock`. Owned by no single feature; per-feature tables hang off it and import it from here
+- The estimates **persistence** is split into three layers in the sub-slice: `estimates/models.py` (the ORM model for `stock_analyst_estimates` + simple query functions; it imports the shared `StockRecord` from `stocks/models.py`), `estimates/db_repository.py` (the concrete `SqlAnalystEstimatesRepository` — maps rows⇄entity and calls the model queries), and `estimates/repository.py` (the abstract `AnalystEstimatesRepository` port the use case is injected with). Same DB-owns-the-schema idea as `constituents.py`, split across the port / concrete / model boundary
 
 Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<concern>_adapter.py` for those under `app/stocks/adapters/`.
 
@@ -134,7 +135,7 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > - `ports.py` — the live-source port (`AnalystEstimatesProvider`).
 > - `repository.py` — the **abstract** persistence port (`AnalystEstimatesRepository`), injected into the use case.
 > - `db_repository.py` — its **concrete** SQLAlchemy implementation.
-> - `models.py` — the ORM models (`stocks` anchor + `stock_analyst_estimates`) + simple query functions the repository calls.
+> - `models.py` — the ORM model for `stock_analyst_estimates` + simple query functions (the shared `stocks` anchor is imported from `app/stocks/stocks/models.py`).
 > - `use_cases.py` → `SyncAnalystEstimates` — the out-of-band refresh.
 > - `router.py` → `get_estimates_provider` — the provider wiring the snapshot reads through.
 >
@@ -274,11 +275,13 @@ app/
     ├── exceptions.py       # ── domain errors
     ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/FMP/Logo.dev/SEC EDGAR)
     ├── adapters/           # ── vendor adapters as *_adapter.py (estimates: FMP + caches)
+    ├── stocks/             # ── shared `stocks` anchor slice:
+    │   └── models.py            #    StockRecord (the `stocks` table) + get_or_create_stock
     ├── estimates/          # ── analyst-estimates sub-slice:
     │   ├── ports.py             #    live-source port (AnalystEstimatesProvider)
     │   ├── repository.py        #    abstract persistence port (injected into the use case)
     │   ├── db_repository.py     #    concrete repo: maps row⇄entity, calls models
-    │   ├── models.py            #    ORM models (stocks anchor + estimates) + query fns
+    │   ├── models.py            #    stock_analyst_estimates ORM + query fns (anchor from stocks/)
     │   ├── use_cases.py         #    SyncAnalystEstimates (out-of-band refresh)
     │   └── router.py            #    provider wiring for the snapshot read path
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
@@ -287,7 +290,7 @@ app/
     ├── chart_window.py     # ── edge helper: range preset → time window
     ├── schemas.py          # ── HTTP response DTOs (pydantic)
     └── router.py           # ── endpoints + presenters + DI wiring (composition root)
-tests/                      # offline; fakes through the ports (mirrors app: tests/estimates, tests/adapters)
+tests/                      # offline; fakes through the ports (mirrors app: tests/stocks, tests/estimates, tests/adapters)
 alembic/                    # database migrations
 scripts/sync_constituents.py# ops-time sync (FMP → DB), not called while serving
 infra/                      # Terraform (modules + environments)
