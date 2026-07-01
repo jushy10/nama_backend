@@ -94,7 +94,8 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
         seen: set[tuple[int, int]] = set()
         quarters: list[QuarterlyEarnings] = []
 
-        # Past: the most recent reported quarters, newest first.
+        # Past: keep the most recent reported quarters — walk newest-first and cap at
+        # _PAST (the whole timeline is re-sorted chronologically before returning).
         for row in reported:
             if len(quarters) >= self._PAST:
                 break
@@ -116,6 +117,9 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
             seen.add(key)
             quarters.append(quarter)
 
+        # Emit the timeline chronologically: ascending by (fiscal_year, fiscal_quarter),
+        # so the oldest reported quarter leads through to the furthest upcoming one.
+        quarters.sort(key=lambda q: (q.fiscal_year, q.fiscal_quarter))
         return QuarterlyEarningsTimeline(symbol=symbol, quarters=tuple(quarters))
 
 

@@ -123,15 +123,32 @@ def _full_ticker(future=(("2026-05-01", 3.1, _NAN),)) -> FakeTicker:
     )
 
 
-def test_keeps_four_reported_quarters_newest_first():
+def test_keeps_the_four_most_recent_reported_quarters():
     tl = provider_with(_full_ticker()).get_quarterly_earnings("AAPL")
+    # Past runs oldest→newest; the 5th-oldest (fy2024 q4) is dropped, keeping four.
     assert [(q.fiscal_year, q.fiscal_quarter) for q in tl.past] == [
-        (2025, 4),
-        (2025, 3),
-        (2025, 2),
         (2025, 1),
+        (2025, 2),
+        (2025, 3),
+        (2025, 4),
     ]
     assert all(q.fiscal_year != 2024 for q in tl.quarters)  # oldest reported dropped
+
+
+def test_quarters_run_chronologically_past_then_upcoming():
+    # The whole timeline reads oldest→newest: the four reported quarters ascending, then
+    # the two upcoming ones — the single chronological order the read endpoint serves.
+    tl = provider_with(_full_ticker()).get_quarterly_earnings("AAPL")
+    assert [(q.fiscal_year, q.fiscal_quarter) for q in tl.quarters] == [
+        (2025, 1),
+        (2025, 2),
+        (2025, 3),
+        (2025, 4),
+        (2026, 1),
+        (2026, 2),
+    ]
+    # is_reported flips exactly once, at the past→upcoming boundary (no interleaving).
+    assert [q.is_reported for q in tl.quarters] == [True, True, True, True, False, False]
 
 
 def test_upcoming_is_the_two_forward_estimate_quarters():
@@ -204,7 +221,7 @@ def test_no_upcoming_when_estimates_are_empty():
 
 def test_computes_the_surprise_from_actual_and_estimate():
     tl = provider_with(_full_ticker()).get_quarterly_earnings("AAPL")
-    q4 = tl.past[0]  # fy2025 q4: estimate 3.0, actual 3.3
+    q4 = next(q for q in tl.past if q.fiscal_quarter == 4)  # fy2025 q4: est 3.0, actual 3.3
     assert q4.eps_actual == 3.3 and q4.eps_estimate == 3.0
     assert q4.eps_surprise == 0.3 and q4.eps_surprise_percent == 10.0
     assert q4.beat is True
