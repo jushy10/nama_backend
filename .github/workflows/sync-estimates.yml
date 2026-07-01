@@ -10,8 +10,8 @@ run-name: Sync analyst estimates
 # that ran scripts/sync_estimates.py.)
 #
 # Two operational notes:
-#  - The live source is yfinance (Yahoo), which needs no API key — so, unlike the old FMP
-#    path, the serving task carries no estimates credential. Yahoo does rate-limit /
+#  - The live source is yfinance (Yahoo), which needs no API key, so the serving task
+#    carries no estimates credential. Yahoo does rate-limit /
 #    block data-centre IPs, so a run may serve fewer rows than the limit; that's fine, the
 #    next run retries the stalest first.
 #  - The endpoint is unauthenticated, so it must not be reachable from the public

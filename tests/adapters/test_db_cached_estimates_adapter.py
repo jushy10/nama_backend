@@ -104,7 +104,7 @@ def test_stale_hit_refreshes_from_inner():
 
 
 def test_serves_stale_when_refresh_fails():
-    inner = FakeInner(error=StockDataUnavailable("AAPL", "FMP down"))
+    inner = FakeInner(error=StockDataUnavailable("AAPL", "Yahoo down"))
     repo = FakeRepo()
     repo.preload("AAPL", _est(8.0), _STALE)
     out = _decorator(inner, repo).get_estimates("AAPL")
@@ -113,7 +113,7 @@ def test_serves_stale_when_refresh_fails():
 
 
 def test_miss_with_failing_inner_propagates():
-    inner = FakeInner(error=StockDataUnavailable("AAPL", "FMP down"))
+    inner = FakeInner(error=StockDataUnavailable("AAPL", "Yahoo down"))
     repo = FakeRepo()
     try:
         _decorator(inner, repo).get_estimates("AAPL")

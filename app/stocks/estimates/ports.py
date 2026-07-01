@@ -1,9 +1,9 @@
 """Application port for the analyst-estimates live source.
 
 The abstraction the read path depends on for a *live* source of forward estimates —
-implemented by the FMP adapter and the cache decorators in ``app/stocks/adapters``.
-Dependency Inversion: the core reads through this interface, never FMP directly, so the
-vendor is swappable and the tests run offline against a hand-written fake. The
+implemented by the yfinance adapter and the DB-cache decorator in ``app/stocks/adapters``.
+Dependency Inversion: the core reads through this interface, never the vendor directly,
+so the vendor is swappable and the tests run offline against a hand-written fake. The
 *persistence* seam is separate — the repository port lives in ``repository.py``.
 """
 

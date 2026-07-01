@@ -1,19 +1,18 @@
 """Interface Adapter: forward analyst estimates from Yahoo Finance (via ``yfinance``).
 
-Why Yahoo, not FMP: FMP's free tier gates forward estimates to a small symbol
-allowlist — anything outside it returns a 402 ("this value set for 'symbol' is not
-available under your current subscription"), so Micron, SanDisk, and most mid-caps
-had no estimates at all. Yahoo's public consensus covers the broad US market with no
-API key, so the endpoint can show a forward P/E for the whole universe instead of a
-handful of names. It carries the current and next fiscal year's mean/low/high EPS,
-mean revenue, and the analyst counts — exactly the FY1/FY2 pair a forward P/E and a
+Why Yahoo: its public consensus covers the broad US market with no API key — paid
+vendors' free tiers gate forward estimates to a small symbol allowlist, leaving the
+likes of Micron, SanDisk, and most mid-caps with no estimates at all — so the
+endpoint can show a forward P/E for the whole universe instead of a handful of
+names. It carries the current and next fiscal year's mean/low/high EPS, mean
+revenue, and the analyst counts — exactly the FY1/FY2 pair a forward P/E and a
 one-year forward-growth figure need.
 
 Shape of the source: ``yfinance`` hands back pandas frames keyed by a *relative*
 period label — ``0y`` is the current (in-progress) fiscal year, ``+1y`` the one after
 — with no calendar date attached. The fiscal-year-end that labels FY1 comes separately
 from ``Ticker.info`` (``nextFiscalYearEnd``); FY2 is a year later. That lets a stored
-row be labelled by fiscal year the same way the FMP rows were.
+row be labelled by fiscal year.
 
 This is the only module that knows ``yfinance``/Yahoo exists; swap it and nothing else
 changes. It is deliberately defensive — Yahoo is an unofficial, best-effort feed that
@@ -43,7 +42,7 @@ _FY1 = "0y"  # the current, in-progress fiscal year
 _FY2 = "+1y"  # the fiscal year after it
 
 # An uncovered symbol (Yahoo has no forward estimate) yields this rather than an
-# error — best-effort, the same contract the FMP adapter had.
+# error — "no data" is not an error for best-effort enrichment.
 _EMPTY = AnalystEstimates(
     fiscal_year=None,
     period_end=None,
@@ -89,8 +88,7 @@ class YfinanceEstimatesProvider(AnalystEstimatesProvider):
 
         # The forward series backs the FY1→FY2 growth (and lets the DB cache persist
         # FY2 revenue, which the headline fields don't carry). A series row needs a
-        # period end, so it's built only when the fiscal year is known — mirroring how
-        # the FMP rows always carried one.
+        # period end, so it's built only when the fiscal year is known.
         forward_years: list[ForwardEstimate] = []
         if fy1_end is not None:
             forward_years.append(

@@ -7,8 +7,8 @@ endpoint runs the refresh synchronously and returns a small JSON summary.
 
 Wiring lives here, the composition-root way: build the live yfinance (Yahoo) adapter +
 the SQL repository and hand them to the use case. yfinance reads Yahoo's public data
-with no API key, so — unlike the old FMP path — there's no credential to gate on; the
-sync is always constructable.
+with no API key, so there's no credential to gate on; the sync is always
+constructable.
 
 Security: this endpoint is intentionally **unauthenticated**. It writes the database
 (and hits Yahoo), so it relies on network isolation — it must not be reachable from the

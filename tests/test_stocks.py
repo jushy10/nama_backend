@@ -1785,7 +1785,7 @@ def test_get_stock_includes_forward_estimates(make_client):
 
 def test_get_stock_includes_growth_block(make_client):
     # Both legs: trailing YoY rides on the Finnhub fundamentals, forward 1-yr growth
-    # (FY1→FY2) on the FMP estimates — combined into one `growth` block on the snapshot.
+    # (FY1→FY2) on the analyst estimates — combined into one `growth` block on the snapshot.
     client = make_client(
         FakeProvider(stock=a_stock()),
         fundamentals_provider=FakeFundamentalsProvider(a_fundamentals()),
@@ -1794,7 +1794,7 @@ def test_get_stock_includes_growth_block(make_client):
     g = client.get("/stocks/AAPL").json()["growth"]
     assert g["revenue_yoy"] == 8.0          # trailing (Finnhub TTM)
     assert g["eps_yoy"] == 12.0
-    assert g["forward_eps_growth"] == 15.0      # forward FY1→FY2 (FMP estimates)
+    assert g["forward_eps_growth"] == 15.0      # forward FY1→FY2 (analyst estimates)
     assert g["forward_revenue_growth"] == 8.33
 
 
@@ -2209,7 +2209,7 @@ def test_get_earnings_quarters_breakdown_null_without_provider(make_client):
 
 
 def test_get_earnings_response_has_no_upcoming_field(make_client):
-    # Forward analyst estimates (FMP) were dropped from the earnings endpoint.
+    # Forward analyst estimates were dropped from the earnings endpoint.
     client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
     assert "upcoming" not in client.get("/stocks/AAPL/earnings").json()
 

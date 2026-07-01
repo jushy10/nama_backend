@@ -3,7 +3,7 @@
 Offline: hand-written fakes for the provider and repository ports, so this exercises
 only the orchestration — which targets are refreshed and in what order, how per-symbol
 failures are counted without aborting the run, that the stored name is carried through
-to the upsert, and how the per-run limit is applied — independent of FMP or the DB.
+to the upsert, and how the per-run limit is applied — independent of the vendor or the DB.
 """
 
 from datetime import date
@@ -83,7 +83,7 @@ def test_counts_failures_and_keeps_going():
     repo = FakeRepo(
         [RefreshTarget("AAPL", None), RefreshTarget("BAD", None), RefreshTarget("MSFT", None)]
     )
-    provider = FakeProvider(errors={"BAD": StockDataUnavailable("BAD", "FMP down")})
+    provider = FakeProvider(errors={"BAD": StockDataUnavailable("BAD", "Yahoo down")})
 
     report = SyncAnalystEstimates(provider, repo).execute(limit=10)
 
