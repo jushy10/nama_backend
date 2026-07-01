@@ -12,10 +12,8 @@ app/
 tests/
 ├── test_stocks.py           # stock entity/use-case/API tests (offline)
 ├── test_stocks_provider.py  # Alpaca adapter tests (offline, faked SDK)
-├── test_constituents.py     # screener universe: DB repo + sync merge (offline)
+├── test_constituents.py     # screener universe: DB repo (offline)
 └── test_migrations.py       # alembic migration applies cleanly (offline sqlite)
-scripts/
-└── sync_constituents.py     # sync the screener's index universe (FMP -> DB)
 alembic/                     # database migrations (alembic upgrade head)
 └── versions/
 ```
@@ -85,10 +83,7 @@ In **prod, migrations run automatically**: the
 [Build & Deploy](.github/workflows/app-image.yml) workflow applies `alembic
 upgrade head` as a one-off ECS task on each deploy — inside the VPC, against the
 private RDS — before rolling the service. The commands above are for local dev
-(or an exceptional manual run). The data is filled separately by the
-[Sync constituents](.github/workflows/sync-constituents.yml) workflow (Actions →
-Run workflow), which runs [`scripts/sync_constituents.py`](scripts/sync_constituents.py)
-as a one-off ECS task against RDS. To change the schema, edit the model in
+(or an exceptional manual run). To change the schema, edit the model in
 [`app/stocks/constituents.py`](app/stocks/constituents.py), autogenerate a
 revision, review it, then upgrade:
 
@@ -123,7 +118,6 @@ Credentials come from the environment (like `DATABASE_URL`):
 export APCA_API_KEY_ID=...
 export APCA_API_SECRET_KEY=...
 export FINNHUB_API_KEY=...        # optional: enables market cap + dividend
-export FMP_API_KEY=...            # optional: constituents sync (scripts/sync_constituents.py)
 export LOGODEV_TOKEN=...          # required for /logo: publishable key from logo.dev
 curl localhost:8080/stocks/AAPL
 ```
@@ -220,18 +214,8 @@ universe.
 The universe — which symbols belong to each index, and each one's GICS sector —
 lives in the `index_constituents` **database table** (created by an Alembic
 migration — `alembic upgrade head`), since the live market-data feed (Alpaca) doesn't expose
-index membership. The table is populated by
-[`scripts/sync_constituents.py`](scripts/sync_constituents.py) from **Financial
-Modeling Prep**'s index-constituent endpoints — one call per index, each
-returning symbol + name + sector, normalized to GICS. It's an ops-time sync (the
-app never calls FMP while serving), so run it whenever the indices reconstitute
-(~quarterly); the screener returns an empty board until the first sync:
-
-```sh
-export FMP_API_KEY=...                          # free key from financialmodelingprep.com
-export DATABASE_URL=postgresql+psycopg://...     # omit for local sqlite:///./nama.db
-python scripts/sync_constituents.py
-```
+index membership. The table is populated out of band — the app only ever reads
+it while serving — and the screener returns an empty board until it's filled.
 
 The day's move for each name comes from a best-effort batch of Alpaca snapshots
 (the same IEX feed as `/stocks/{symbol}`), so it needs the Alpaca keys (`503`
@@ -257,21 +241,6 @@ into the ECS task as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`. The optional
 `FINNHUB_API_KEY` and the `LOGODEV_TOKEN` follow the same pattern (e.g.
 `/nama/dev/finnhub-api-key`, `/nama/dev/logodev-token`). Never commit keys to the
 repo.
-
-The screener's `FMP_API_KEY` is stored the same way (`/nama/dev/fmp-api-key`,
-via the [`ssm-secret`](infra/modules/ssm-secret) module) but is **ops-time
-only** — [`scripts/sync_constituents.py`](scripts/sync_constituents.py) reads it
-to populate the `index_constituents` table, so it is *not* injected into the
-running ECS task. Run the sync against the same database the app uses, fetching
-both from SSM:
-
-```sh
-export FMP_API_KEY=$(aws ssm get-parameter --name /nama/dev/fmp-api-key \
-  --with-decryption --query Parameter.Value --output text)
-export DATABASE_URL=$(aws ssm get-parameter --name /nama/dev/database-url \
-  --with-decryption --query Parameter.Value --output text)
-python scripts/sync_constituents.py
-```
 
 ## Contributing
 

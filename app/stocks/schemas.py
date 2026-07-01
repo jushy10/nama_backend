@@ -75,8 +75,8 @@ class GrowthMetricsResponse(BaseModel):
 
     ``*_yoy`` is the *trailing* one-year change from reported figures (Finnhub
     TTM); ``forward_*_growth`` is the analyst-*expected* one-year change next year
-    — FY1 → FY2 from the analyst estimates. All percent; any leg whose source is
-    unavailable is ``null``."""
+    — FY1 → FY2 from the analyst estimates (Yahoo consensus). All percent; any leg
+    whose source is unavailable is ``null``."""
 
     revenue_yoy: float | None = None  # trailing 1-yr revenue growth %
     eps_yoy: float | None = None  # trailing 1-yr EPS growth %

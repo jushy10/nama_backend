@@ -2,7 +2,7 @@
 
 The stock screener's universe table — S&P 500 / Nasdaq-100 membership + GICS
 sector per symbol. Mirrors app.stocks.constituents.ConstituentRecord. Populated
-out of band by scripts/sync_constituents.py (FMP -> DB), so it starts empty.
+out of band, so it starts empty.
 
 Revision ID: 0001_index_constituents
 Revises:

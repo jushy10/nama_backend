@@ -2200,7 +2200,7 @@ def test_get_earnings_quarters_breakdown_null_without_provider(make_client):
 
 
 def test_get_earnings_response_has_no_upcoming_field(make_client):
-    # Forward analyst estimates (FMP) were dropped from the earnings endpoint.
+    # Forward analyst estimates were dropped from the earnings endpoint.
     client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
     assert "upcoming" not in client.get("/stocks/AAPL/earnings").json()
 

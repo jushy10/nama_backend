@@ -33,7 +33,7 @@ the code wins — fix this file.
                                 │ implemented by
                        ┌────────┴─────────┐
                        │  adapter         │  the ONLY code that knows a vendor
-                       │ *_provider.py    │  (Alpaca / Finnhub / FMP / Logo.dev / SEC EDGAR / DB)
+                       │ *_provider.py    │  (Alpaca / Finnhub / Logo.dev / SEC EDGAR / Yahoo / DB)
                        └──────────────────┘
 ```
 
@@ -233,8 +233,8 @@ translates them.
 | missing required API key (in a `get_*` factory) | 503 |
 
 **Config & secrets** come from environment variables, read only in the router's
-wiring functions (`APCA_API_KEY_ID`, `FINNHUB_API_KEY`, `FMP_API_KEY`,
-`LOGODEV_TOKEN`, `DATABASE_URL`). Build providers lazily so the app boots without
+wiring functions (`APCA_API_KEY_ID`, `FINNHUB_API_KEY`, `LOGODEV_TOKEN`,
+`DATABASE_URL`). Build providers lazily so the app boots without
 every key. Never hardcode or commit secrets.
 
 **Input normalization** happens once, at the top of the use case
@@ -323,7 +323,7 @@ app/
     ├── ports.py            # ── abstract interfaces (ABCs)
     ├── use_cases.py        # ── orchestration (one class per action)
     ├── exceptions.py       # ── domain errors
-    ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/FMP/Logo.dev/SEC EDGAR)
+    ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/Logo.dev/SEC EDGAR)
     ├── adapters/           # ── vendor adapters as *_adapter.py (quarterly/annual earnings: yfinance + caches; estimates projection)
     ├── stocks/             # ── shared `stocks` anchor slice:
     │   └── models.py            #    StockRecord (the `stocks` table) + get_or_create_stock
@@ -354,7 +354,6 @@ app/
     └── router.py           # ── endpoints + presenters + DI wiring (composition root)
 tests/                      # offline; fakes through the ports (mirrors app: tests/stocks, tests/earnings, tests/adapters, tests/endpoints)
 alembic/                    # database migrations
-scripts/sync_constituents.py# ops-time sync (FMP → DB), not called while serving
 infra/                      # Terraform (modules + environments)
 ```
 
