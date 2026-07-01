@@ -6,7 +6,7 @@ whole-window replace on upsert (no duplicate rows, other stocks untouched), the 
 ``stocks`` row + name fill-but-don't-clobber, and a clean miss.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, func, select
@@ -164,3 +164,21 @@ def test_fills_a_missing_name_but_never_clobbers_a_known_one(session):
     assert session.execute(
         select(StockRecord.name).where(StockRecord.symbol == "AAPL")
     ).scalar_one() == "Apple Inc."
+
+
+def test_refresh_targets_orders_stalest_first_and_carries_the_name(session):
+    # refresh_targets wraps the stalest-first query the cron walks; a stock's rows share a
+    # fetch stamp, so an older upsert sorts ahead of a newer one, each paired with its name.
+    older = SqlQuarterlyEarningsRepository(session, now=lambda: _NOW - timedelta(days=10))
+    newer = SqlQuarterlyEarningsRepository(session, now=lambda: _NOW)
+    older.upsert(
+        "MSFT",
+        "Microsoft",
+        QuarterlyEarningsTimeline("MSFT", (_reported(2025, 4, 2.9, 2.7),)),
+    )
+    newer.upsert("AAPL", "Apple Inc.", _timeline())
+
+    targets = newer.refresh_targets(10)
+    assert [t.symbol for t in targets] == ["MSFT", "AAPL"]  # stalest first
+    assert targets[0] == ("MSFT", "Microsoft")  # RefreshTarget carries the stored name
+    assert newer.refresh_targets(1) == [("MSFT", "Microsoft")]  # limit respected
