@@ -122,6 +122,7 @@ only this one file changes.
 - `logodev_provider.py` — Logo.dev → logo image
 - `caching_company_profile_provider.py` / `caching_revenue_provider.py` / `caching_segment_revenue_provider.py` — decorator adapters (wrap another adapter to add an in-process TTL cache; same port in, same port out)
 - `adapters/db_cached_estimates_adapter.py` — decorator on the `AnalystEstimatesProvider` port backed by a **persistent DB cache** (the `AnalystEstimatesRepository`) instead of an in-process map: shared across instances, survives restarts, serves a stale row if the live source is down. Fills lazily on a miss; refreshed out of band by the estimates cron endpoint (`app/stocks/endpoints/cron_estimates_endpoints.py`). This is what the stock endpoint wires for estimates (the in-memory `adapters/caching_estimates_adapter.py` is now unused). `adapters/yfinance_estimates_adapter.py` is the live source it wraps — **Yahoo Finance via `yfinance`** (no API key; free), which replaced FMP because FMP's free tier gated forward estimates to a small symbol allowlist (a 402 for the likes of MU/SNDK). Yahoo is unofficial/best-effort and rate-limits data-centre IPs, so the DB cache in front is what keeps it usable
+- `adapters/yfinance_quarterly_earnings_adapter.py` — live source for the quarterly-earnings slice: **Yahoo via `yfinance`** (`earnings_dates` for reported/upcoming EPS + `revenue_estimate` for forward quarterly revenue), building the 4-recent + 4-upcoming quarter timeline (surprise computed from actual vs. estimate; fiscal labels derived from the announcement date). `adapters/db_cached_quarterly_earnings_adapter.py` — a **read-through** DB cache in front of it: serves stored rows if present, else fetches from Yahoo **once on a miss** and stores. Deliberately simpler than `db_cached_estimates_adapter.py` — **no TTL/staleness or serve-stale**; a populated symbol is always served straight from the DB, and keeping rows current is entirely the cron's job
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
 - `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table) + `get_or_create_stock`. Owned by no single feature; per-feature tables hang off it and import it from here
 - The estimates **persistence** is split into three layers in the sub-slice: `estimates/models.py` (the ORM model for `stock_analyst_estimates` + simple query functions; it imports the shared `StockRecord` from `stocks/models.py`), `estimates/db_repository.py` (the concrete `SqlAnalystEstimatesRepository` — maps rows⇄entity and calls the model queries), and `estimates/repository.py` (the abstract `AnalystEstimatesRepository` port the use case is injected with). Same DB-owns-the-schema idea as `constituents.py`, split across the port / concrete / model boundary
@@ -145,6 +146,30 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > the serving task carries no estimates credential and the cron endpoint has no key gate.
 > It is still **unauthenticated** and must not be publicly reachable (it writes the DB
 > and hits Yahoo).
+
+> **The quarterly-earnings sub-slice — `app/stocks/earnings/quarterly/`.** A fully
+> self-contained slice with its **own `entities.py`** (unlike estimates, which reuses the
+> shared `app/stocks/entities.py`): `QuarterlyEarnings` + `QuarterlyEarningsTimeline`, plus
+> `ports` / `repository` / `db_repository` / `models` / `use_cases` / `schemas` (both HTTP
+> endpoints live in `app/stocks/endpoints/`: the read `quarterly_earnings_endpoints.py` and
+> the `cron_quarterly_earnings_endpoints.py`, so the slice itself has no `router.py`).
+> It serves a stock's 4 most-recent reported quarters (reported EPS + a surprise *computed*
+> from actual vs. estimate) and up to 4 upcoming quarters (forward EPS, and forward revenue
+> for the nearest one or two — all Yahoo publishes that far out) at
+> `GET /stocks/{symbol}/earnings/quarterly`. Live source is **yfinance (Yahoo)** via
+> `earnings_dates` + `revenue_estimate` (`adapters/yfinance_quarterly_earnings_adapter.py`),
+> behind a persistent DB cache + out-of-band cron
+> (`POST /internal/earnings/quarterly/sync`, driven by the `sync-quarterly-earnings`
+> workflow). Three deliberate divergences from estimates: (1) the table
+> (`stock_quarterly_earnings`) is a **time series** (many rows per stock, unique on
+> `stock_id` + fiscal year + quarter), not one wide row; (2) the read cache is a plain
+> **read-through** (DB-first, fetch-on-miss only — **no TTL/staleness or serve-stale**), so
+> a populated symbol is always served from the DB and freshness is entirely the cron's job;
+> (3) the **sync** skips an **empty** live result rather than persisting it (its upsert
+> rewrites a stock's whole window via delete-then-insert, so an empty write would wipe good
+> history). Fiscal labels are a calendar best-effort — `earnings_dates` carries only the
+> announcement date, so the period end is the most recent calendar quarter-end before it
+> (exact for calendar fiscal years, a label offset for others).
 
 ### 5. DTOs — `app/stocks/schemas.py`
 Pydantic `BaseModel`s for HTTP responses. Pydantic is a serialization detail, so
@@ -274,7 +299,7 @@ app/
     ├── use_cases.py        # ── orchestration (one class per action)
     ├── exceptions.py       # ── domain errors
     ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/FMP/Logo.dev/SEC EDGAR)
-    ├── adapters/           # ── vendor adapters as *_adapter.py (estimates: yfinance + caches)
+    ├── adapters/           # ── vendor adapters as *_adapter.py (estimates + quarterly earnings: yfinance + caches)
     ├── stocks/             # ── shared `stocks` anchor slice:
     │   └── models.py            #    StockRecord (the `stocks` table) + get_or_create_stock
     ├── estimates/          # ── analyst-estimates sub-slice:
@@ -284,13 +309,23 @@ app/
     │   ├── models.py            #    stock_analyst_estimates ORM + query fns (anchor from stocks/)
     │   ├── use_cases.py         #    SyncAnalystEstimates (out-of-band refresh)
     │   └── router.py            #    provider wiring for the snapshot read path
+    ├── earnings/quarterly/ # ── quarterly-earnings sub-slice (its OWN entities.py):
+    │   ├── entities.py          #    QuarterlyEarnings + QuarterlyEarningsTimeline (slice-local)
+    │   ├── ports.py             #    live-source port (QuarterlyEarningsProvider)
+    │   ├── repository.py        #    abstract persistence port
+    │   ├── db_repository.py     #    concrete repo: maps rows⇄entities, calls models
+    │   ├── models.py            #    stock_quarterly_earnings ORM + query fns (anchor from stocks/)
+    │   ├── use_cases.py         #    GetQuarterlyEarnings + SyncQuarterlyEarnings
+    │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
-    │   └── cron_estimates_endpoints.py  #  POST /internal/estimates/sync (drives the sync)
+    │   ├── cron_estimates_endpoints.py           #  POST /internal/estimates/sync
+    │   ├── cron_quarterly_earnings_endpoints.py  #  POST /internal/earnings/quarterly/sync
+    │   └── quarterly_earnings_endpoints.py       #  GET /stocks/{symbol}/earnings/quarterly
     ├── constituents.py     # ── DB adapter: ORM model + SqlConstituentRepository
     ├── chart_window.py     # ── edge helper: range preset → time window
     ├── schemas.py          # ── HTTP response DTOs (pydantic)
     └── router.py           # ── endpoints + presenters + DI wiring (composition root)
-tests/                      # offline; fakes through the ports (mirrors app: tests/stocks, tests/estimates, tests/adapters)
+tests/                      # offline; fakes through the ports (mirrors app: tests/stocks, tests/estimates, tests/earnings, tests/adapters)
 alembic/                    # database migrations
 scripts/sync_constituents.py# ops-time sync (FMP → DB), not called while serving
 infra/                      # Terraform (modules + environments)

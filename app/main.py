@@ -9,6 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.stocks.endpoints.cron_estimates_endpoints import (
     router as estimates_cron_router,
 )
+from app.stocks.endpoints.cron_quarterly_earnings_endpoints import (
+    router as quarterly_earnings_cron_router,
+)
+from app.stocks.endpoints.quarterly_earnings_endpoints import (
+    router as quarterly_earnings_router,
+)
 from app.stocks.router import router as stocks_router
 
 # Browser origins allowed to call this API (cross-origin). Comma-separated env
@@ -38,10 +44,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(stocks_router)
+# The per-quarter earnings read endpoint (GET /stocks/{symbol}/earnings/quarterly):
+# recent reported quarters + upcoming ones, served from the DB cache over yfinance. See
+# app/stocks/endpoints/quarterly_earnings_endpoints.py.
+app.include_router(quarterly_earnings_router)
 # The analyst-estimates refresh cron endpoint (POST /internal/estimates/sync); it
 # drives the SyncAnalystEstimates use case out of band. See
 # app/stocks/endpoints/cron_estimates_endpoints.py.
 app.include_router(estimates_cron_router)
+# The quarterly-earnings refresh cron endpoint (POST /internal/earnings/quarterly/sync);
+# it drives the SyncQuarterlyEarnings use case out of band. See
+# app/stocks/endpoints/cron_quarterly_earnings_endpoints.py.
+app.include_router(quarterly_earnings_cron_router)
 
 
 @app.get("/healthz")
