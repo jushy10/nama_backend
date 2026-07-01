@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.stocks.estimates.estimates_ports import AnalystEstimatesProvider
+from app.stocks.estimates.ports import AnalystEstimatesProvider
 from app.stocks.estimates.repository import AnalystEstimatesRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 

@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.stocks.entities import AnalystEstimates
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.estimates.estimates_ports import AnalystEstimatesProvider
+from app.stocks.estimates.ports import AnalystEstimatesProvider
 from app.stocks.estimates.repository import AnalystEstimatesRepository
 
 logger = logging.getLogger(__name__)

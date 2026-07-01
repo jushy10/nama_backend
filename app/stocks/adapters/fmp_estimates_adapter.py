@@ -25,7 +25,7 @@ import httpx
 
 from app.stocks.entities import AnalystEstimates, ForwardEstimate
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.estimates.estimates_ports import AnalystEstimatesProvider
+from app.stocks.estimates.ports import AnalystEstimatesProvider
 
 # An uncovered symbol (or one with no forward year) yields this rather than an
 # error — best-effort, like the profile adapter returning an all-None profile.

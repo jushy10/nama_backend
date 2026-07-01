@@ -2,7 +2,7 @@
 
 Everything specific to a stock's forward analyst consensus lives here:
 
-- ``estimates_ports`` — the live-source port (``AnalystEstimatesProvider``).
+- ``ports`` — the live-source port (``AnalystEstimatesProvider``).
 - ``repository`` — the abstract persistence port (``AnalystEstimatesRepository``) the
   use case depends on, plus its value types.
 - ``db_repository`` — the concrete SQLAlchemy implementation of that port.

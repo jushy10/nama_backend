@@ -131,7 +131,7 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 
 > **The analyst-estimates sub-slice — `app/stocks/estimates/`.** Estimates are broken
 > out as a self-contained vertical slice rather than living flat in `app/stocks/`:
-> - `estimates_ports.py` — the live-source port (`AnalystEstimatesProvider`).
+> - `ports.py` — the live-source port (`AnalystEstimatesProvider`).
 > - `repository.py` — the **abstract** persistence port (`AnalystEstimatesRepository`), injected into the use case.
 > - `db_repository.py` — its **concrete** SQLAlchemy implementation.
 > - `models.py` — the ORM models (`stocks` anchor + `stock_analyst_estimates`) + simple query functions the repository calls.
@@ -275,7 +275,7 @@ app/
     ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/FMP/Logo.dev/SEC EDGAR)
     ├── adapters/           # ── vendor adapters as *_adapter.py (estimates: FMP + caches)
     ├── estimates/          # ── analyst-estimates sub-slice:
-    │   ├── estimates_ports.py   #    live-source port (AnalystEstimatesProvider)
+    │   ├── ports.py             #    live-source port (AnalystEstimatesProvider)
     │   ├── repository.py        #    abstract persistence port (injected into the use case)
     │   ├── db_repository.py     #    concrete repo: maps row⇄entity, calls models
     │   ├── models.py            #    ORM models (stocks anchor + estimates) + query fns

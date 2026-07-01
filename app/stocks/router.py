@@ -63,7 +63,7 @@ from app.stocks.sec_edgar_revenue_provider import SecEdgarRevenueProvider
 from app.stocks.sec_edgar_segment_revenue_provider import (
     SecEdgarSegmentRevenueProvider,
 )
-from app.stocks.estimates.estimates_ports import AnalystEstimatesProvider
+from app.stocks.estimates.ports import AnalystEstimatesProvider
 from app.stocks.estimates.router import get_estimates_provider
 from app.stocks.ports import (
     AllTimeHighProvider,

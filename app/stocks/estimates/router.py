@@ -22,7 +22,7 @@ from app.stocks.adapters.db_cached_estimates_adapter import (
     DbCachedAnalystEstimatesProvider,
 )
 from app.stocks.adapters.fmp_estimates_adapter import FmpEstimatesProvider
-from app.stocks.estimates.estimates_ports import AnalystEstimatesProvider
+from app.stocks.estimates.ports import AnalystEstimatesProvider
 from app.stocks.estimates.db_repository import SqlAnalystEstimatesRepository
 
 
