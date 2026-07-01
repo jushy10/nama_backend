@@ -44,11 +44,11 @@ class StockQuarterlyEarningsRecord(Base):
     """One fiscal quarter of one stock's earnings — reported or upcoming.
 
     ``eps_actual`` is ``NULL`` for a quarter that hasn't reported yet (an upcoming
-    quarter), set once it has. ``eps_surprise`` / ``eps_surprise_percent`` are only
-    meaningful for reported quarters; ``revenue_estimate`` only for the nearest upcoming
-    ones (the source publishes forward revenue just a quarter or two out). Everything
-    but the fiscal identity and ``fetched_at`` is nullable, since coverage tapers toward
-    the far future.
+    quarter), set once it has. ``eps_surprise`` / ``eps_surprise_percent`` and
+    ``revenue_actual`` are only meaningful for reported quarters; ``revenue_estimate``
+    only for the nearest upcoming ones (the source publishes forward revenue just a
+    quarter or two out). Everything but the fiscal identity and ``fetched_at`` is
+    nullable, since coverage tapers toward the far future.
     """
 
     __tablename__ = "stock_quarterly_earnings"
@@ -74,6 +74,7 @@ class StockQuarterlyEarningsRecord(Base):
     eps_surprise: Mapped[float | None] = mapped_column(Float, nullable=True)
     eps_surprise_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
     revenue_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    revenue_actual: Mapped[float | None] = mapped_column(Float, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

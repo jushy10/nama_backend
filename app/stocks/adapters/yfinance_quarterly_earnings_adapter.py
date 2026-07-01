@@ -15,6 +15,9 @@ from three yfinance surfaces:
   and it yields both even when ``earnings_dates`` lists only a single scheduled future date
   (which is common). A scheduled date from ``earnings_dates`` is attached as the report date
   when one lines up with the quarter.
+- ``Ticker.quarterly_income_stmt`` — the reported ``Total Revenue`` per quarter, matched to
+  the past quarters by calendar year+quarter to supply ``revenue_actual``. Best-effort
+  enrichment: a failure fetching it drops the reported revenue but never sinks the timeline.
 
 Fiscal alignment is best-effort: ``earnings_dates`` carries only the announcement date, not
 a fiscal label, so a quarter's ``period_end`` (and hence ``fiscal_year`` / ``fiscal_quarter``)
@@ -72,6 +75,14 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
                 symbol, f"yfinance quarterly earnings failed ({exc})"
             ) from exc
 
+        # Reported revenue is best-effort enrichment on the past quarters — a failure
+        # fetching the income statement must not sink the (primary) earnings timeline.
+        try:
+            income_stmt = ticker.quarterly_income_stmt
+        except Exception:  # noqa: BLE001 — enrichment: degrade to no revenue_actual
+            income_stmt = None
+        revenue_actuals = _revenue_actuals(income_stmt)
+
         rows = _parse_rows(dates)
         reported = sorted(
             (r for r in rows if r["eps_actual"] is not None),
@@ -87,7 +98,7 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
         for row in reported:
             if len(quarters) >= self._PAST:
                 break
-            quarter = _build_reported(row)
+            quarter = _build_reported(row, revenue_actuals)
             key = (quarter.fiscal_year, quarter.fiscal_quarter)
             if key in seen:  # a restated/duplicate announcement in the same quarter
                 continue
@@ -146,12 +157,16 @@ def _upcoming_quarters(
     return out
 
 
-def _build_reported(row: dict) -> QuarterlyEarnings:
+def _build_reported(
+    row: dict, revenue_actual_by_period: dict[tuple[int, int], float]
+) -> QuarterlyEarnings:
     """One reported quarter from an ``earnings_dates`` row: the reported EPS against the
-    estimate that preceded it, with the surprise computed here (not read from Yahoo's own
-    ``Surprise(%)`` column, sidestepping its scale)."""
+    estimate that preceded it (surprise computed here, not read from Yahoo's own
+    ``Surprise(%)`` column), plus the reported revenue matched from the income statement."""
     report_date: date = row["report_date"]
     period_end = _period_end_before(report_date)
+    fiscal_year = period_end.year
+    fiscal_quarter = _quarter_of(period_end)
     eps_actual = row["eps_actual"]
     eps_estimate = row["eps_estimate"]
 
@@ -165,8 +180,8 @@ def _build_reported(row: dict) -> QuarterlyEarnings:
             )
 
     return QuarterlyEarnings(
-        fiscal_year=period_end.year,
-        fiscal_quarter=_quarter_of(period_end),
+        fiscal_year=fiscal_year,
+        fiscal_quarter=fiscal_quarter,
         period_end=period_end,
         report_date=report_date,
         eps_actual=eps_actual,
@@ -174,6 +189,7 @@ def _build_reported(row: dict) -> QuarterlyEarnings:
         eps_surprise=surprise,
         eps_surprise_percent=surprise_percent,
         revenue_estimate=None,
+        revenue_actual=revenue_actual_by_period.get((fiscal_year, fiscal_quarter)),
     )
 
 
@@ -224,6 +240,29 @@ def _next_quarter_end(period_end: date) -> date:
         return date(period_end.year + 1, 3, 31)
     month, day = ends[quarter + 1]
     return date(period_end.year, month, day)
+
+
+def _revenue_actuals(frame) -> dict[tuple[int, int], float]:
+    """``quarterly_income_stmt`` → reported ``Total Revenue`` keyed by (year, calendar
+    quarter). Matching by calendar quarter rather than exact date keeps it robust to fiscal
+    period-ends that fall a few days off the calendar quarter-end (and consistent with the
+    calendar fiscal labels the reported quarters already carry)."""
+    out: dict[tuple[int, int], float] = {}
+    if frame is None or getattr(frame, "empty", True):
+        return out
+    try:
+        if "Total Revenue" not in frame.index:
+            return out
+        series = frame.loc["Total Revenue"]
+    except Exception:  # noqa: BLE001 — never let a frame quirk escape the adapter
+        return out
+    for period_end, value in series.items():
+        day = _to_date(period_end)
+        revenue = _num(value)
+        if day is None or revenue is None:
+            continue
+        out[(day.year, _quarter_of(day))] = revenue
+    return out
 
 
 def _parse_rows(frame) -> list[dict]:

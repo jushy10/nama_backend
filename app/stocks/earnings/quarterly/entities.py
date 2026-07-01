@@ -27,10 +27,11 @@ class QuarterlyEarnings:
 
     ``fiscal_year`` / ``fiscal_quarter`` are the quarter's identity (and the row's
     unique key). ``eps_actual`` is ``None`` until the quarter is reported, so it also
-    tells reported quarters apart from upcoming ones. ``revenue_estimate`` is the
-    forward consensus revenue, populated only for the nearest upcoming quarters (the
-    source publishes it just one or two quarters out); there's deliberately no reported
-    revenue *actual* here — that's sourced authoritatively from SEC EDGAR elsewhere.
+    tells reported quarters apart from upcoming ones. ``revenue_actual`` is the reported
+    revenue for a past quarter and ``revenue_estimate`` the forward consensus for an
+    upcoming one, so the two are naturally exclusive: a reported quarter carries the
+    actual, an upcoming one the estimate (populated only for the nearest quarters Yahoo
+    publishes). All revenue figures are raw (e.g. USD).
     """
 
     fiscal_year: int
@@ -42,6 +43,7 @@ class QuarterlyEarnings:
     eps_surprise: float | None  # actual - estimate (EPS); reported quarters only
     eps_surprise_percent: float | None  # surprise as a percent of the estimate
     revenue_estimate: float | None  # forward consensus revenue (raw), nearest quarters only
+    revenue_actual: float | None = None  # reported revenue (raw), reported quarters only
 
     @property
     def is_reported(self) -> bool:
