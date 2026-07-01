@@ -286,6 +286,12 @@ To change the DB schema: edit the model in `app/stocks/constituents.py`, then
 `alembic revision --autogenerate -m "…"`, review the generated migration, and
 `alembic upgrade head`.
 
+> **Keep the migration `revision` id ≤ 32 chars.** Alembic's `alembic_version.version_num`
+> column is `VARCHAR(32)`. SQLite ignores the length so an over-long id passes the local
+> tests, but Postgres (RDS) enforces it and the deploy's `alembic upgrade head` fails with
+> `value too long for type character varying(32)`. Follow the existing short ids
+> (`000N_<concern>`), not the verbose file name.
+
 ---
 
 ## Project layout
