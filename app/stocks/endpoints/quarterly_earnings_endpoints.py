@@ -1,15 +1,17 @@
-"""Controller + Presenter + dependency wiring for the quarterly-earnings endpoint.
+"""HTTP API for reading a stock's per-quarter earnings timeline.
 
-The composition root for this slice's read path: the controller adapts the HTTP request
-into the ``GetQuarterlyEarnings`` use case, the presenter maps the returned timeline into
-the HTTP DTO, and the ``get_*`` factories build the provider — the live yfinance adapter
-wrapped in the persistent DB cache, exactly where the estimates slice wires its own.
+``GET /stocks/{symbol}/earnings/quarterly`` — the read endpoint for the quarterly-earnings
+slice: a stock's recent reported quarters plus its upcoming ones, served from the DB cache
+over yfinance. Controller + presenter + wiring, the composition-root way, sitting in
+``app/stocks/endpoints/`` beside the cron entrypoint (``cron_quarterly_earnings_endpoints``)
+so all of the slice's HTTP lives in one place.
 
-Like the estimates wiring, the process-singleton live provider is memoized with
-``@lru_cache`` while the DB cache is built per request (it needs the request session).
-yfinance reads Yahoo's public data with no credential, so the endpoint is always wired —
-a cold cache on a host Yahoo blocks just yields an empty timeline (best-effort), it never
-fails the app boot. This router is included by ``app/main.py``.
+Wiring mirrors the estimates read path: the process-singleton live provider is memoized with
+``@lru_cache`` while the DB cache is built per request (it needs the request session). A
+persistent DB cache (filled lazily on a miss, refreshed out of band by the cron endpoint)
+sits in front of Yahoo so the endpoint rarely calls it — Yahoo rate-limits, so the fewer
+live hits the better. yfinance needs no credential, so the endpoint is always wired; a cold
+cache on a host Yahoo blocks just yields an empty timeline (best-effort).
 """
 
 from functools import lru_cache
@@ -50,10 +52,10 @@ def _yfinance_quarterly_earnings_provider() -> QuarterlyEarningsProvider:
 def get_quarterly_earnings_provider(
     db: Session = Depends(get_db),
 ) -> QuarterlyEarningsProvider:
-    # A persistent DB cache (refreshed out of band by the quarterly-earnings cron
-    # endpoint + lazily on a miss) sits in front of Yahoo so the endpoint rarely calls it
-    # — Yahoo rate-limits, so the fewer live hits the better — and it serves stored rows
-    # if a live refresh fails. yfinance needs no key, so this is always wired.
+    # A persistent DB cache (refreshed out of band by the quarterly-earnings cron endpoint
+    # + lazily on a miss) sits in front of Yahoo so the endpoint rarely calls it, and it
+    # serves stored rows without a live round-trip. yfinance needs no key, so this is
+    # always wired.
     return DbCachedQuarterlyEarningsProvider(
         _yfinance_quarterly_earnings_provider(), SqlQuarterlyEarningsRepository(db)
     )

@@ -150,7 +150,9 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > **The quarterly-earnings sub-slice — `app/stocks/earnings/quarterly/`.** A fully
 > self-contained slice with its **own `entities.py`** (unlike estimates, which reuses the
 > shared `app/stocks/entities.py`): `QuarterlyEarnings` + `QuarterlyEarningsTimeline`, plus
-> `ports` / `repository` / `db_repository` / `models` / `use_cases` / `schemas` / `router`.
+> `ports` / `repository` / `db_repository` / `models` / `use_cases` / `schemas` (both HTTP
+> endpoints live in `app/stocks/endpoints/`: the read `quarterly_earnings_endpoints.py` and
+> the `cron_quarterly_earnings_endpoints.py`, so the slice itself has no `router.py`).
 > It serves a stock's 4 most-recent reported quarters (reported EPS + a surprise *computed*
 > from actual vs. estimate) and up to 4 upcoming quarters (forward EPS, and forward revenue
 > for the nearest one or two — all Yahoo publishes that far out) at
@@ -314,11 +316,11 @@ app/
     │   ├── db_repository.py     #    concrete repo: maps rows⇄entities, calls models
     │   ├── models.py            #    stock_quarterly_earnings ORM + query fns (anchor from stocks/)
     │   ├── use_cases.py         #    GetQuarterlyEarnings + SyncQuarterlyEarnings
-    │   ├── schemas.py           #    HTTP response DTOs
-    │   └── router.py            #    GET /stocks/{symbol}/earnings/quarterly + wiring
+    │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
     │   ├── cron_estimates_endpoints.py           #  POST /internal/estimates/sync
-    │   └── cron_quarterly_earnings_endpoints.py  #  POST /internal/earnings/quarterly/sync
+    │   ├── cron_quarterly_earnings_endpoints.py  #  POST /internal/earnings/quarterly/sync
+    │   └── quarterly_earnings_endpoints.py       #  GET /stocks/{symbol}/earnings/quarterly
     ├── constituents.py     # ── DB adapter: ORM model + SqlConstituentRepository
     ├── chart_window.py     # ── edge helper: range preset → time window
     ├── schemas.py          # ── HTTP response DTOs (pydantic)
