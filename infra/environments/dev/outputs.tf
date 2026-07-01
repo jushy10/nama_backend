@@ -8,11 +8,6 @@ output "region" {
   value       = data.aws_region.current.name
 }
 
-output "hello_parameter_name" {
-  description = "Name of the demo SSM parameter."
-  value       = module.hello.name
-}
-
 output "database_endpoint" {
   description = "RDS endpoint (host:port). Private — reachable only inside the VPC."
   value       = module.database.endpoint
