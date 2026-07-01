@@ -6,7 +6,7 @@ over yfinance. Controller + presenter + wiring, the composition-root way, sittin
 ``app/stocks/endpoints/`` beside the cron entrypoint (``cron_quarterly_earnings_endpoints``)
 so all of the slice's HTTP lives in one place.
 
-Wiring mirrors the estimates read path: the process-singleton live provider is memoized with
+Wiring convention: the process-singleton live provider is memoized with
 ``@lru_cache`` while the DB cache is built per request (it needs the request session). A
 persistent DB cache (filled lazily on a miss, refreshed out of band by the cron endpoint)
 sits in front of Yahoo so the endpoint rarely calls it — Yahoo rate-limits, so the fewer

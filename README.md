@@ -105,11 +105,12 @@ The response also carries best-effort enrichment: a **performance** object of
 trailing price returns (`1w`, `1m`, `3m`, `6m`, `ytd`, `1y`) computed from
 Alpaca daily bars, **market cap** and **dividend** (`dividend_per_share`,
 `dividend_yield`) from [Finnhub](https://finnhub.io), and **forward analyst
-estimates** from Yahoo Finance (via `yfinance`, no API key) — a `forward_pe`
-and `forward_ps` (price / next-fiscal-year consensus EPS and revenue) plus the
-raw `analyst_estimates` block (FY1/FY2 consensus EPS, revenue, analyst counts).
-These never fail the request — if a source is down, unkeyed, or doesn't cover the
-symbol, that field comes back `null` and the price still returns.
+estimates** — a `forward_pe` and `forward_ps` (price / next-fiscal-year consensus
+EPS and revenue) plus the raw `analyst_estimates` block (FY1/FY2 consensus EPS and
+revenue), projected from the annual-earnings cache's stored forward years (Yahoo
+consensus; no extra fetch or key). These never fail the request — if a source is
+down, unkeyed, or doesn't cover the symbol, that field comes back `null` and the
+price still returns.
 
 Credentials come from the environment (like `DATABASE_URL`):
 

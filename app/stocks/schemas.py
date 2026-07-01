@@ -58,19 +58,14 @@ class AnalystEstimatesResponse(BaseModel):
     trailing): what analysts *expect*, not what the company has reported.
     ``fiscal_year`` is FY1 — the nearest full fiscal year still being estimated —
     and ``eps_avg`` / ``revenue_avg`` its consensus means (``eps_avg_fy2`` is the
-    year after, for a next-twelve-months blend). The ``num_analysts_*`` counts
-    report consensus breadth. EPS is per share; revenue is raw (e.g. USD). The
-    derived multiples ride on the stock response as ``forward_pe`` / ``forward_ps``.
-    Any field a vendor doesn't cover is ``null``."""
+    year after, for a next-twelve-months blend). EPS is per share; revenue is raw
+    (e.g. USD). The derived multiples ride on the stock response as ``forward_pe``
+    / ``forward_ps``. Any field the source doesn't cover is ``null``."""
 
     fiscal_year: int | None = None  # FY1: the nearest forward fiscal year
     period_end: date | None = None  # FY1 fiscal period-end date
     eps_avg: float | None = None  # FY1 consensus EPS (mean)
-    eps_low: float | None = None
-    eps_high: float | None = None
     revenue_avg: float | None = None  # FY1 consensus revenue (raw)
-    num_analysts_eps: int | None = None
-    num_analysts_revenue: int | None = None
     eps_avg_fy2: float | None = None  # FY2 consensus EPS (year after FY1)
     fiscal_year_fy2: int | None = None
 
@@ -80,8 +75,8 @@ class GrowthMetricsResponse(BaseModel):
 
     ``*_yoy`` is the *trailing* one-year change from reported figures (Finnhub
     TTM); ``forward_*_growth`` is the analyst-*expected* one-year change next year
-    — FY1 → FY2 (Yahoo consensus estimates). All percent; any leg whose source is unavailable
-    is ``null``."""
+    — FY1 → FY2 from the analyst estimates (Yahoo consensus). All percent; any leg
+    whose source is unavailable is ``null``."""
 
     revenue_yoy: float | None = None  # trailing 1-yr revenue growth %
     eps_yoy: float | None = None  # trailing 1-yr EPS growth %

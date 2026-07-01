@@ -20,7 +20,7 @@ one scale up:
   are the raising "primary" here.
 - ``Ticker.info['nextFiscalYearEnd']`` — the fiscal-year-end that labels ``0y`` (the estimate
   frames carry no dates); ``+1y`` is a year on. Falls back to one year past the latest
-  reported year when ``info`` is unavailable. Mirrors the estimates adapter's anchor.
+  reported year when ``info`` is unavailable.
 
 There is deliberately **no annual surprise/beat**: Yahoo's estimate-vs-actual history is
 per-quarter (``earnings_history``), so there is no historical annual estimate to compare a
@@ -197,10 +197,10 @@ def _upcoming_years(
 def _fiscal_year1_end(ticker, reported: list[AnnualEarnings]) -> date | None:
     """The fiscal-year-end that labels ``0y`` (the current, in-progress year).
 
-    Primary source is ``Ticker.info['nextFiscalYearEnd']`` (mirroring the estimates
-    adapter); falls back to one year past the latest reported year's end when ``info`` is
-    unavailable (e.g. ``income_stmt`` reachable but ``info`` not). ``None`` when neither is
-    available, in which case the forward years are omitted."""
+    Primary source is ``Ticker.info['nextFiscalYearEnd']``; falls back to one year past
+    the latest reported year's end when ``info`` is unavailable (e.g. ``income_stmt``
+    reachable but ``info`` not). ``None`` when neither is available, in which case the
+    forward years are omitted."""
     try:
         info = ticker.info or {}
         stamp = info.get("nextFiscalYearEnd")

@@ -10,7 +10,7 @@ dependencies = [
     "alpaca-py>=0.30",  # Alpaca market-data SDK (stocks feature)
     "httpx>=0.27",      # direct HTTP for the logo source (Financial Modeling Prep)
     "alembic>=1.13",    # database schema migrations (alembic upgrade head)
-    "yfinance>=0.2",    # Yahoo Finance — forward analyst estimates + quarterly earnings (no key; pulls pandas)
+    "yfinance>=0.2",    # Yahoo Finance — quarterly + annual earnings timelines (no key; pulls pandas)
     "lxml>=4.9",        # required by yfinance's Ticker.earnings_dates: pandas.read_html parses
                         # Yahoo's HTML with it. Not a hard yfinance dep, but the quarterly-earnings
                         # live path fails without it ("Import lxml failed"), so pin it explicitly.

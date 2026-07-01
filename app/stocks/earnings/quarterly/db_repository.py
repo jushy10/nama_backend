@@ -58,10 +58,10 @@ def _to_timeline(
 class SqlQuarterlyEarningsRepository(QuarterlyEarningsRepository):
     """Reads and writes the quarterly-earnings cache through a request-scoped session.
 
-    Holds the session the router injects via ``get_db`` (the same shape as
-    ``SqlAnalystEstimatesRepository``), maps rows to and from the ``QuarterlyEarnings``
-    entities, and delegates every query to ``models``. ``upsert`` commits its own write
-    so a successful cache fill is durable independent of the surrounding request.
+    Holds the session the router injects via ``get_db``, maps rows to and from the
+    ``QuarterlyEarnings`` entities, and delegates every query to ``models``. ``upsert``
+    commits its own write so a successful cache fill is durable independent of the
+    surrounding request.
     """
 
     def __init__(self, session: Session, *, now=None) -> None:

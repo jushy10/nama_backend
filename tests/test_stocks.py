@@ -25,7 +25,6 @@ from app.stocks.entities import (
     EarningsHistory,
     EarningsMetrics,
     EarningsSurprise,
-    ForwardEstimate,
     GrowthMetrics,
     InvestmentAnalysis,
     KeyMetrics,
@@ -45,9 +44,9 @@ from app.stocks.entities import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSignal
-from app.stocks.estimates.ports import AnalystEstimatesProvider
 from app.stocks.ports import (
     AllTimeHighProvider,
+    AnalystEstimatesProvider,
     CandleProvider,
     CompanyProfileProvider,
     ConstituentRepository,
@@ -443,15 +442,8 @@ def a_profile(name: str | None = None) -> CompanyProfile:
 def an_estimates(**overrides) -> AnalystEstimates:
     base = dict(
         fiscal_year=2026, period_end=date(2026, 9, 30),
-        eps_avg=8.0, eps_low=7.4, eps_high=8.6, revenue_avg=420_000_000_000.0,
-        num_analysts_eps=30, num_analysts_revenue=28,
-        eps_avg_fy2=9.2, fiscal_year_fy2=2027,
-        forward_years=(
-            ForwardEstimate(2026, date(2026, 9, 30), 8.0, 420_000_000_000.0),
-            ForwardEstimate(2027, date(2027, 9, 30), 9.2, 455_000_000_000.0),
-            ForwardEstimate(2028, date(2028, 9, 30), 10.0, 490_000_000_000.0),
-            ForwardEstimate(2029, date(2029, 9, 30), 11.0, 520_000_000_000.0),
-        ),
+        eps_avg=8.0, revenue_avg=420_000_000_000.0,
+        fiscal_year_fy2=2027, eps_avg_fy2=9.2, revenue_avg_fy2=455_000_000_000.0,
     )
     base.update(overrides)
     return AnalystEstimates(**base)
@@ -665,16 +657,15 @@ def test_stock_forward_pe_none_without_estimates():
 
 
 def test_analyst_estimates_forward_growth():
-    est = an_estimates()  # EPS 8.0→9.2→10.0→11.0, revenue 420→455→490→520 (B)
+    est = an_estimates()  # EPS 8.0→9.2, revenue 420→455 (B)
     assert est.forward_eps_growth() == 15.0       # 9.2/8.0 - 1, FY1→FY2
     assert est.forward_revenue_growth() == 8.33   # 455/420 - 1, FY1→FY2
 
 
-def test_analyst_estimates_forward_growth_none_without_series():
+def test_analyst_estimates_forward_growth_none_without_fy2():
     bare = AnalystEstimates(
-        fiscal_year=2026, period_end=date(2026, 9, 30), eps_avg=8.0, eps_low=None,
-        eps_high=None, revenue_avg=400e9, num_analysts_eps=None,
-        num_analysts_revenue=None,
+        fiscal_year=2026, period_end=date(2026, 9, 30), eps_avg=8.0,
+        revenue_avg=400e9,
     )
     assert bare.forward_eps_growth() is None      # only FY1, no FY2 to compare
 
@@ -683,7 +674,7 @@ def test_growth_metrics_build_combines_trailing_and_forward():
     g = GrowthMetrics.build(a_key_metrics(), an_estimates())
     assert g.revenue_yoy == 8.0     # trailing, from KeyMetrics (Finnhub TTM)
     assert g.eps_yoy == 12.0
-    assert g.forward_eps_growth == 15.0       # forward FY1→FY2, from estimates series
+    assert g.forward_eps_growth == 15.0       # forward FY1→FY2, from the estimates
     assert g.forward_revenue_growth == 8.33
 
 
@@ -829,9 +820,7 @@ def test_use_case_estimates_are_best_effort():
 def test_use_case_drops_empty_estimates_block():
     # An uncovered symbol comes back as an all-None estimates -> omitted, not attached.
     empty = AnalystEstimates(
-        fiscal_year=None, period_end=None, eps_avg=None, eps_low=None,
-        eps_high=None, revenue_avg=None, num_analysts_eps=None,
-        num_analysts_revenue=None,
+        fiscal_year=None, period_end=None, eps_avg=None, revenue_avg=None,
     )
     info = GetStockInfo(
         FakeProvider(stock=a_stock()),
@@ -1779,8 +1768,10 @@ def test_get_stock_includes_forward_estimates(make_client):
     # …and the raw consensus block carries FY1 + FY2.
     assert body["analyst_estimates"]["fiscal_year"] == 2026
     assert body["analyst_estimates"]["eps_avg"] == 8.0
-    assert body["analyst_estimates"]["num_analysts_eps"] == 30
     assert body["analyst_estimates"]["eps_avg_fy2"] == 9.2
+    # The consensus range and analyst counts were dropped with the estimates table.
+    for dropped in ("eps_low", "eps_high", "num_analysts_eps", "num_analysts_revenue"):
+        assert dropped not in body["analyst_estimates"], dropped
 
 
 def test_get_stock_includes_growth_block(make_client):
