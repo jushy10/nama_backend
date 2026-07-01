@@ -2,11 +2,19 @@ name: Build & Deploy App
 run-name: Build & deploy app · ${{ github.ref_name }}
 
 # Pull requests touching app/Dockerfile  -> build the image only (validate).
-# Merge (push) to main, or manual run     -> build, push to ECR, roll ECS.
+# Merge (push) to main, or manual run     -> build, migrate, then deploy — as three
+# sequential, gating jobs:
 #
-# The ECR repo + ECS service are created by the Infrastructure workflow. Deploy
-# auth uses the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var.
-# (The PR validate job needs no credentials.)
+#   build  ->  migrate  ->  deploy
+#
+# The image build has to come first: the migration runs as a one-off ECS task *inside
+# the VPC* (RDS is private, unreachable from the GitHub runner) on the image just pushed,
+# so the image must exist before it can run. `migrate` gates `deploy` via `needs`, so a
+# failed migration never rolls the service onto the new image.
+#
+# The ECR repo + ECS service are created by the Infrastructure workflow. Deploy auth uses
+# the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var. (The PR validate
+# job needs no credentials.)
 
 on:
   push:
@@ -54,9 +62,9 @@ jobs:
       - name: Build image (no push)
         run: docker build -t "$ECR_REPOSITORY:ci" .
 
-  # On merge to main (or a manual run): build, push to ECR, and roll the service.
-  deploy:
-    name: Build & deploy
+  # 1/3 — On merge to main (or a manual run): build the image and push it to ECR.
+  build:
+    name: Build & push image
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -101,10 +109,24 @@ jobs:
           docker push "$REGISTRY/$ECR_REPOSITORY:latest"
           docker push "$REGISTRY/$ECR_REPOSITORY:${{ github.sha }}"
 
-      # Apply database migrations before rolling the service, so the new code
-      # never serves against an out-of-date schema. Runs `alembic upgrade head`
-      # as a one-off ECS task on the image just pushed — inside the VPC, where it
-      # can reach the private RDS — reusing the service's own network config.
+  # 2/3 — Apply database migrations before rolling the service, so the new code never
+  # serves against an out-of-date schema. Runs `alembic upgrade head` as a one-off ECS
+  # task on the image just pushed — inside the VPC, where it can reach the private RDS —
+  # reusing the service's own network config. Gates `deploy`: if it fails, we never roll.
+  migrate:
+    name: Run database migrations
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Run database migrations
         run: |
           set -euo pipefail
@@ -142,8 +164,23 @@ jobs:
           fi
           echo "Migrations applied."
 
-      # Roll the service if it already exists. On a brand-new deploy it may not
-      # be up yet — that's fine, it will pull :latest when it starts.
+  # 3/3 — Roll the service onto the new image, only after migrations succeed. On a
+  # brand-new deploy the service may not be up yet — that's fine, it will pull :latest
+  # when it starts.
+  deploy:
+    name: Roll the ECS service
+    needs: migrate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Roll the ECS service onto the new image
         run: |
           status=$(aws ecs describe-services \
