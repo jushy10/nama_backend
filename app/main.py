@@ -6,6 +6,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.stocks.endpoints.annual_earnings_endpoints import (
+    router as annual_earnings_router,
+)
+from app.stocks.endpoints.cron_annual_earnings_endpoints import (
+    router as annual_earnings_cron_router,
+)
 from app.stocks.endpoints.cron_estimates_endpoints import (
     router as estimates_cron_router,
 )
@@ -48,6 +54,10 @@ app.include_router(stocks_router)
 # recent reported quarters + upcoming ones, served from the DB cache over yfinance. See
 # app/stocks/endpoints/quarterly_earnings_endpoints.py.
 app.include_router(quarterly_earnings_router)
+# The per-year (annual) earnings read endpoint (GET /stocks/{symbol}/earnings/annual):
+# recent reported fiscal years + upcoming estimated ones, served from the DB cache over
+# yfinance. See app/stocks/endpoints/annual_earnings_endpoints.py.
+app.include_router(annual_earnings_router)
 # The analyst-estimates refresh cron endpoint (POST /internal/estimates/sync); it
 # drives the SyncAnalystEstimates use case out of band. See
 # app/stocks/endpoints/cron_estimates_endpoints.py.
@@ -56,6 +66,10 @@ app.include_router(estimates_cron_router)
 # it drives the SyncQuarterlyEarnings use case out of band. See
 # app/stocks/endpoints/cron_quarterly_earnings_endpoints.py.
 app.include_router(quarterly_earnings_cron_router)
+# The annual-earnings refresh cron endpoint (POST /internal/earnings/annual/sync); it
+# drives the SyncAnnualEarnings use case out of band. See
+# app/stocks/endpoints/cron_annual_earnings_endpoints.py.
+app.include_router(annual_earnings_cron_router)
 
 
 @app.get("/healthz")
