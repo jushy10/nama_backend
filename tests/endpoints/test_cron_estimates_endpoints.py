@@ -54,10 +54,9 @@ def test_rejects_an_out_of_range_limit():
     assert fake.calls == []
 
 
-def test_sync_is_wired_without_any_api_key(monkeypatch):
+def test_sync_is_wired_without_any_api_key():
     # yfinance needs no credential, so the real DI builds the use case with no key in
-    # the environment (the old FMP path 503'd here). Resolve the dependency directly —
-    # actually POSTing would reach Yahoo — and assert it produced the use case.
-    monkeypatch.delenv("FMP_API_KEY", raising=False)
+    # the environment. Resolve the dependency directly — actually POSTing would reach
+    # Yahoo — and assert it produced the use case.
     use_case = cron.get_sync_estimates(db=None)
     assert isinstance(use_case, SyncAnalystEstimates)

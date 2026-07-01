@@ -3,7 +3,7 @@
 The screener's universe — which symbols belong to which index, and each one's
 GICS sector — lives in the ``index_constituents`` table rather than a bundled
 file, so it can be refreshed without redeploying the app. The table is populated
-by ``scripts/sync_constituents.py`` (FMP -> DB) and read at request time.
+out of band and only read at request time (the app never writes it while serving).
 
 This module owns both the ORM model (the storage shape) and the repository that
 maps rows onto the Constituent *entity*. The domain entity stays free of

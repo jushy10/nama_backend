@@ -1,10 +1,13 @@
 """Interface Adapter: a database cache in front of any AnalystEstimatesProvider.
 
-The persistent sibling of ``CachingAnalystEstimatesProvider`` (which is per-process,
-in-memory). Backed by an ``AnalystEstimatesRepository``, this cache is shared across
-every app instance and survives restarts, so the endpoint calls FMP only when a
-symbol is missing or its stored row has aged out — keeping well under FMP's
-~250-calls/day free quota. Out of band, a monthly job refreshes the stored rows.
+Persistent, unlike the in-process TTL cache decorators used elsewhere (company
+profile, revenue). Backed by an ``AnalystEstimatesRepository``, this cache is shared across
+every app instance and survives restarts, so the endpoint reaches Yahoo (via
+``yfinance``) only when a symbol is missing or its stored row has aged out. Yahoo
+needs no API key and has no hard quota, but it is an unofficial feed that rate-limits
+aggressively and blocks many data-centre IPs — keeping live calls rare is what makes
+it usable from a hosted box at all. Out of band, a monthly job refreshes the stored
+rows.
 
 Resilience is the point of going through the DB:
 
@@ -12,12 +15,13 @@ Resilience is the point of going through the DB:
   database problem never sinks the best-effort estimates — the request just falls
   through to the live source.
 - A cache *write* failure is swallowed too: the caller still gets the fresh estimate.
-- When the row is stale *and* the live refresh fails (FMP outage or a blown quota),
-  the stale row is served rather than nothing — better a week-old consensus than a
-  hole in the snapshot. Only a miss with no row to fall back on propagates the error.
+- When the row is stale *and* the live refresh fails (Yahoo rate-limiting or
+  blocking the host's IP), the stale row is served rather than nothing — better a
+  week-old consensus than a hole in the snapshot. Only a miss with no row to fall
+  back on propagates the error.
 
 It implements ``AnalystEstimatesProvider``, so it slots into the wiring exactly where
-the bare FMP provider used to, with the use case none the wiser.
+the bare live provider would, with the use case none the wiser.
 """
 
 import logging

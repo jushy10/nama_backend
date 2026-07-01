@@ -8,7 +8,8 @@ and queries in ``models.py``.
 
 A *Repository*, not a *Provider*: the rows are slow-moving reference data refreshed out
 of band (the cron endpoint) and lazily on a miss, not a live feed. Caching the vendor
-this way keeps the endpoint under FMP's ~250-calls/day free quota.
+this way keeps live Yahoo calls rare — an unofficial feed that rate-limits and IP-blocks
+heavy callers.
 """
 
 from abc import ABC, abstractmethod
@@ -45,7 +46,7 @@ class AnalystEstimatesRepository(ABC):
     """A persistent store for a stock's forward analyst estimates.
 
     The database-backed companion to the live ``AnalystEstimatesProvider``: the
-    provider hits the vendor (FMP), this caches the result so the endpoint rarely does.
+    provider hits the vendor (Yahoo), this caches the result so the endpoint rarely does.
     """
 
     @abstractmethod

@@ -4,7 +4,7 @@ The analyst-estimates cache: a thin ``stocks`` anchor (UUID id, unique symbol,
 optional name) plus a one-row-per-stock ``stock_analyst_estimates`` table holding the
 current forward consensus. Mirrors app.stocks.stocks.models (the `stocks` anchor) +
 app.stocks.estimates.models (`stock_analyst_estimates`). Filled lazily on a miss and
-refreshed by the estimates cron endpoint (FMP -> DB), so both start empty.
+refreshed by the estimates cron endpoint (Yahoo -> DB), so both start empty.
 
 Revision ID: 0002_stocks_analyst_estimates
 Revises: 0001_index_constituents

@@ -34,7 +34,8 @@ def _to_entity(row: StockAnalystEstimatesRecord) -> AnalystEstimates:
     """Rebuild the ``AnalystEstimates`` entity from a stored row.
 
     The two-row forward series is reconstructed from the FY1/FY2 columns so the
-    entity's forward-growth methods work as if it came straight from FMP. The series
+    entity's forward-growth methods work as if it came straight from the live
+    provider. The series
     rows need a ``period_end``; FY1's is stored, FY2's is synthesized from its fiscal
     year (the value is never surfaced — only the EPS/revenue are read by the growth
     math).

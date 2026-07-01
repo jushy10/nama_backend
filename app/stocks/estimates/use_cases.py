@@ -5,14 +5,17 @@ estimates lazily the first time it's viewed (the DB-cache adapter); this walks t
 already-stored rows stalest-first and renews them from the live provider, so users
 see current consensus without a request ever waiting on a vendor round-trip.
 
-FMP's free tier allows only ~250 calls/day — far fewer than the ~600 index
-constituents — so a full-universe sweep isn't possible in one run. Instead each run
-refreshes only rows already stored, oldest-fetched first, up to a cap. Combined with
-lazy-fill, the symbols people actually look at stay current while staying under quota.
+The live source is Yahoo (via ``yfinance``) — keyless and without a hard daily
+quota, but an unofficial feed that rate-limits bursts and blocks many data-centre
+IPs, so hammering the full ~600-constituent universe in one run is exactly the
+traffic pattern that gets a host cut off. Instead each run refreshes only rows
+already stored, oldest-fetched first, up to a cap. Combined with lazy-fill, the
+symbols people actually look at stay current while each run stays a burst Yahoo
+tolerates.
 
 Pure orchestration over the ports — the live ``AnalystEstimatesProvider`` to fetch
 and the ``AnalystEstimatesRepository`` to pick targets and store results — so it runs
-offline in tests against hand-written fakes and knows nothing of FMP, HTTP, or
+offline in tests against hand-written fakes and knows nothing of Yahoo, HTTP, or
 SQLAlchemy. This replaces the old ``scripts/sync_estimates.py``; the cron endpoint
 (``cron_estimates_endpoints``) is what invokes it in production.
 """
@@ -39,8 +42,9 @@ class EstimatesSyncReport:
 class SyncAnalystEstimates:
     """Renew stored forward estimates from the live source, stalest rows first."""
 
-    # Default rows per run. Held below FMP's ~250-calls/day free quota; the caller
-    # (the cron endpoint) can override per invocation.
+    # Default rows per run. Yahoo publishes no hard quota, but it rate-limits and
+    # IP-blocks heavy callers, so the cap keeps a run to a burst it tolerates; the
+    # caller (the cron endpoint) can override per invocation.
     DEFAULT_LIMIT = 200
 
     def __init__(
@@ -62,7 +66,7 @@ class SyncAnalystEstimates:
             try:
                 estimates = self._provider.get_estimates(target.symbol)
             except (StockNotFound, StockDataUnavailable):
-                # A symbol the vendor can't serve this run (outage, blown quota, or
+                # A symbol the vendor can't serve this run (outage, rate-limiting, or
                 # dropped coverage) is left as-is and counted; the next run retries it.
                 failed += 1
                 continue

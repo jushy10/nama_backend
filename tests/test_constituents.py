@@ -1,8 +1,7 @@
 """Tests for the database-backed ConstituentRepository.
 
 Offline: an in-memory SQLite database stands in for the real table. Verifies the
-ORM row -> Constituent entity mapping (membership flags -> the indices set), plus
-the pure merge the sync script uses to fold FMP's two index feeds together.
+ORM row -> Constituent entity mapping (membership flags -> the indices set).
 """
 
 import pytest
@@ -12,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.db import Base
 from app.stocks.constituents import ConstituentRecord, SqlConstituentRepository
 from app.stocks.entities import Constituent, StockIndex
-from scripts.sync_constituents import build_universe
 
 
 @pytest.fixture
@@ -66,31 +64,3 @@ def test_nullable_name_and_sector(session):
 
 def test_empty_table_returns_empty_tuple(session):
     assert SqlConstituentRepository(session).all() == ()
-
-
-# --------------------------- sync merge (FMP rows -> records) ---------------------------
-
-def test_build_universe_merges_membership_and_normalizes_sector():
-    universe = build_universe(
-        {
-            "sp500": [
-                {"symbol": "AAPL", "name": "Apple Inc.", "sector": "Technology"},
-                {"symbol": "XOM", "name": "Exxon", "sector": "Energy"},
-            ],
-            "nasdaq100": [
-                {"symbol": "AAPL", "name": "Apple Inc.", "sector": "Technology"},
-                {"symbol": "ARM", "name": "Arm Holdings", "sector": "Technology"},
-            ],
-        }
-    )
-    # AAPL is in both indices; FMP "Technology" -> GICS "Information Technology".
-    assert universe["AAPL"]["in_sp500"] and universe["AAPL"]["in_nasdaq100"]
-    assert universe["AAPL"]["sector"] == "Information Technology"
-    assert universe["XOM"]["in_sp500"] and not universe["XOM"]["in_nasdaq100"]
-    assert universe["ARM"]["in_nasdaq100"] and not universe["ARM"]["in_sp500"]
-    assert universe["XOM"]["sector"] == "Energy"  # already GICS, unchanged
-
-
-def test_build_universe_skips_rows_without_a_symbol():
-    universe = build_universe({"sp500": [{"name": "No Symbol"}, {"symbol": "  "}]})
-    assert universe == {}
