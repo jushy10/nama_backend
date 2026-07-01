@@ -1,12 +1,12 @@
-"""Tests for the DB-cache decorator on QuarterlyEarningsProvider.
+"""Tests for the read-through DB cache on QuarterlyEarningsProvider.
 
 Offline and DB-free: a hand-written fake repository (a dict) and fake inner provider stand
-in for the real ones, so this exercises only the decorator's policy — when it serves the
-cache, when it refreshes, how it stays resilient to a cache or vendor failure, and that a
-transient *empty* live result never overwrites stored history — independent of SQLAlchemy.
+in for the real ones, so this exercises only the decorator's policy — serve stored rows,
+fetch-and-store on a miss, don't cache an empty result, and stay resilient to a cache read
+or write failure — independent of SQLAlchemy.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 
 from app.stocks.adapters.db_cached_quarterly_earnings_adapter import (
     DbCachedQuarterlyEarningsProvider,
@@ -16,15 +16,8 @@ from app.stocks.earnings.quarterly.entities import (
     QuarterlyEarningsTimeline,
 )
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
-from app.stocks.earnings.quarterly.repository import (
-    CachedQuarterlyEarnings,
-    QuarterlyEarningsRepository,
-)
+from app.stocks.earnings.quarterly.repository import QuarterlyEarningsRepository
 from app.stocks.exceptions import StockDataUnavailable
-
-_NOW = datetime(2026, 7, 1, tzinfo=timezone.utc)
-_FRESH = _NOW - timedelta(days=1)
-_STALE = _NOW - timedelta(days=10)  # past the 7-day default max age
 
 
 def _tl(symbol: str, eps_actual: float) -> QuarterlyEarningsTimeline:
@@ -52,16 +45,16 @@ def _empty(symbol: str) -> QuarterlyEarningsTimeline:
 
 class FakeRepo(QuarterlyEarningsRepository):
     def __init__(self) -> None:
-        self.rows: dict[str, CachedQuarterlyEarnings] = {}
+        self.rows: dict[str, QuarterlyEarningsTimeline] = {}
         self.get_calls = 0
         self.upsert_calls = 0
         self.fail_get = False
         self.fail_upsert = False
 
-    def preload(self, symbol, timeline, fetched_at) -> None:
-        self.rows[symbol] = CachedQuarterlyEarnings(timeline, fetched_at)
+    def preload(self, symbol: str, timeline: QuarterlyEarningsTimeline) -> None:
+        self.rows[symbol] = timeline
 
-    def get(self, symbol: str) -> CachedQuarterlyEarnings | None:
+    def get(self, symbol: str) -> QuarterlyEarningsTimeline | None:
         self.get_calls += 1
         if self.fail_get:
             raise RuntimeError("db read down")
@@ -71,7 +64,7 @@ class FakeRepo(QuarterlyEarningsRepository):
         self.upsert_calls += 1
         if self.fail_upsert:
             raise RuntimeError("db write down")
-        self.rows[symbol] = CachedQuarterlyEarnings(timeline, _NOW)
+        self.rows[symbol] = timeline
 
     def refresh_targets(self, limit: int):
         return []  # unused by the read-path decorator under test
@@ -91,7 +84,16 @@ class FakeInner(QuarterlyEarningsProvider):
 
 
 def _decorator(inner: FakeInner, repo: FakeRepo) -> DbCachedQuarterlyEarningsProvider:
-    return DbCachedQuarterlyEarningsProvider(inner, repo, now=lambda: _NOW)
+    return DbCachedQuarterlyEarningsProvider(inner, repo)
+
+
+def test_stored_symbol_is_served_from_the_db_without_calling_inner():
+    inner = FakeInner(result=_tl("AAPL", 9.9))  # would differ if it were called
+    repo = FakeRepo()
+    repo.preload("AAPL", _tl("AAPL", 3.3))
+    out = _decorator(inner, repo).get_quarterly_earnings("AAPL")
+    assert out.quarters[0].eps_actual == 3.3  # the stored value, regardless of age
+    assert inner.calls == 0 and repo.upsert_calls == 0
 
 
 def test_miss_fetches_from_inner_and_stores():
@@ -100,35 +102,15 @@ def test_miss_fetches_from_inner_and_stores():
     out = _decorator(inner, repo).get_quarterly_earnings("AAPL")
     assert out.quarters[0].eps_actual == 3.3
     assert inner.calls == 1 and repo.upsert_calls == 1
-    assert "AAPL" in repo.rows
+    assert "AAPL" in repo.rows  # now cached for next time
 
 
-def test_fresh_hit_serves_cache_without_calling_inner():
-    inner = FakeInner(result=_tl("AAPL", 9.9))  # would differ if it were called
+def test_empty_live_result_is_returned_but_not_stored():
+    inner = FakeInner(result=_empty("ZZZZ"))
     repo = FakeRepo()
-    repo.preload("AAPL", _tl("AAPL", 3.3), _FRESH)
-    out = _decorator(inner, repo).get_quarterly_earnings("AAPL")
-    assert out.quarters[0].eps_actual == 3.3  # the cached value
-    assert inner.calls == 0
-
-
-def test_stale_hit_refreshes_from_inner():
-    inner = FakeInner(result=_tl("AAPL", 4.0))
-    repo = FakeRepo()
-    repo.preload("AAPL", _tl("AAPL", 3.3), _STALE)
-    out = _decorator(inner, repo).get_quarterly_earnings("AAPL")
-    assert out.quarters[0].eps_actual == 4.0  # refreshed
-    assert inner.calls == 1
-    assert repo.rows["AAPL"].timeline.quarters[0].eps_actual == 4.0
-
-
-def test_serves_stale_when_refresh_fails():
-    inner = FakeInner(error=StockDataUnavailable("AAPL", "yahoo down"))
-    repo = FakeRepo()
-    repo.preload("AAPL", _tl("AAPL", 3.3), _STALE)
-    out = _decorator(inner, repo).get_quarterly_earnings("AAPL")
-    assert out.quarters[0].eps_actual == 3.3  # the stale rows, rather than an error
-    assert inner.calls == 1
+    out = _decorator(inner, repo).get_quarterly_earnings("ZZZZ")
+    assert out.is_empty
+    assert repo.upsert_calls == 0  # nothing worth caching, so re-checked next view
 
 
 def test_miss_with_failing_inner_propagates():
@@ -140,23 +122,6 @@ def test_miss_with_failing_inner_propagates():
         pass
     else:  # pragma: no cover
         raise AssertionError("expected StockDataUnavailable to propagate")
-
-
-def test_empty_live_result_does_not_overwrite_cached_history():
-    inner = FakeInner(result=_empty("AAPL"))  # transient empty from Yahoo
-    repo = FakeRepo()
-    repo.preload("AAPL", _tl("AAPL", 3.3), _STALE)
-    out = _decorator(inner, repo).get_quarterly_earnings("AAPL")
-    assert not out.is_empty and out.quarters[0].eps_actual == 3.3  # kept the cached rows
-    assert repo.upsert_calls == 0  # the empty was never written
-
-
-def test_empty_live_result_with_no_cache_returns_empty_unstored():
-    inner = FakeInner(result=_empty("ZZZZ"))
-    repo = FakeRepo()
-    out = _decorator(inner, repo).get_quarterly_earnings("ZZZZ")
-    assert out.is_empty
-    assert repo.upsert_calls == 0
 
 
 def test_cache_read_failure_falls_through_to_inner():

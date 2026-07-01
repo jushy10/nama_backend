@@ -21,7 +21,6 @@ from app.stocks.earnings.quarterly.entities import (
 )
 from app.stocks.earnings.quarterly.models import StockQuarterlyEarningsRecord
 from app.stocks.earnings.quarterly.repository import (
-    CachedQuarterlyEarnings,
     QuarterlyEarningsRepository,
     RefreshTarget,
 )
@@ -73,14 +72,11 @@ class SqlQuarterlyEarningsRepository(QuarterlyEarningsRepository):
         # Injectable clock keeps the fetch stamp deterministic in tests.
         self._now = now or (lambda: datetime.now(timezone.utc))
 
-    def get(self, symbol: str) -> CachedQuarterlyEarnings | None:
+    def get(self, symbol: str) -> QuarterlyEarningsTimeline | None:
         rows = models.quarters_by_symbol(self._session, symbol)
         if not rows:
             return None
-        # Every row of a stock is written in one refresh, so they share a stamp; take
-        # the newest defensively in case a partial write ever left them mixed.
-        fetched_at = max(row.fetched_at for row in rows)
-        return CachedQuarterlyEarnings(_to_timeline(symbol, rows), fetched_at)
+        return _to_timeline(symbol, rows)
 
     def upsert(
         self, symbol: str, name: str | None, timeline: QuarterlyEarningsTimeline

@@ -22,7 +22,6 @@ from app.stocks.earnings.quarterly.models import (
     StockQuarterlyEarningsRecord,
     StockRecord,
 )
-from app.stocks.earnings.quarterly.repository import CachedQuarterlyEarnings
 
 _NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -83,16 +82,12 @@ def test_get_on_empty_table_is_a_miss(session):
     assert repo(session).get("AAPL") is None
 
 
-def test_roundtrips_the_timeline_and_stamps_the_fetch_time(session):
+def test_roundtrips_the_timeline(session):
     r = repo(session)
     r.upsert("AAPL", "Apple Inc.", _timeline())
 
-    cached = r.get("AAPL")
-    assert isinstance(cached, CachedQuarterlyEarnings)
-    # SQLite hands the timestamp back naive (Postgres keeps the zone); normalize to UTC.
-    assert cached.fetched_at.replace(tzinfo=timezone.utc) == _NOW
-
-    tl = cached.timeline
+    tl = r.get("AAPL")
+    assert isinstance(tl, QuarterlyEarningsTimeline)
     # Canonical order: reported newest-first, then upcoming soonest-first — regardless
     # of the insert order.
     assert [(q.fiscal_year, q.fiscal_quarter) for q in tl.quarters] == [
@@ -111,6 +106,17 @@ def test_roundtrips_the_timeline_and_stamps_the_fetch_time(session):
     assert upcoming.is_reported is False
 
 
+def test_upsert_stamps_the_fetch_time(session):
+    # fetched_at isn't part of the read shape any more, but it's still written — the cron's
+    # stalest-first refresh orders by it — so verify the stamp lands on the rows. SQLite
+    # hands the timestamp back naive (Postgres keeps the zone); normalize to UTC.
+    repo(session).upsert("AAPL", "Apple Inc.", _timeline())
+    stamp = (
+        session.execute(select(StockQuarterlyEarningsRecord.fetched_at)).scalars().first()
+    )
+    assert stamp.replace(tzinfo=timezone.utc) == _NOW
+
+
 def test_upsert_replaces_the_whole_window(session):
     r = repo(session)
     r.upsert("AAPL", "Apple Inc.", _timeline())  # 4 quarters
@@ -120,7 +126,7 @@ def test_upsert_replaces_the_whole_window(session):
         QuarterlyEarningsTimeline("AAPL", (_reported(2026, 1, 4.0, 3.9),)),
     )  # now just 1
 
-    tl = r.get("AAPL").timeline
+    tl = r.get("AAPL")
     assert [(q.fiscal_year, q.fiscal_quarter) for q in tl.quarters] == [(2026, 1)]
     rows = session.execute(
         select(func.count()).select_from(StockQuarterlyEarningsRecord)
@@ -135,7 +141,7 @@ def test_upsert_leaves_other_stocks_untouched(session):
 
     r.upsert("AAPL", "Apple Inc.", QuarterlyEarningsTimeline("AAPL", (_reported(2026, 1, 4.0, 3.9),)))
 
-    assert len(r.get("MSFT").timeline.quarters) == 1  # MSFT survived AAPL's rewrite
+    assert len(r.get("MSFT").quarters) == 1  # MSFT survived AAPL's rewrite
 
 
 def test_creates_the_parent_stock_row(session):

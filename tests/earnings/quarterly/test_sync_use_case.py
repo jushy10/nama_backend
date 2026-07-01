@@ -15,7 +15,6 @@ from app.stocks.earnings.quarterly.entities import (
 )
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.earnings.quarterly.repository import (
-    CachedQuarterlyEarnings,
     QuarterlyEarningsRepository,
     RefreshTarget,
 )
@@ -53,7 +52,7 @@ class FakeRepo(QuarterlyEarningsRepository):
         self.upserts: list[tuple[str, str | None]] = []
         self.refresh_limit: int | None = None
 
-    def get(self, symbol: str) -> CachedQuarterlyEarnings | None:  # unused here
+    def get(self, symbol: str) -> QuarterlyEarningsTimeline | None:  # unused here
         return None
 
     def upsert(self, symbol, name, timeline) -> None:

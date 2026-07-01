@@ -12,21 +12,9 @@ way keeps the endpoint off Yahoo, which rate-limits data-centre IPs.
 """
 
 from abc import ABC, abstractmethod
-from datetime import datetime
 from typing import NamedTuple
 
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
-
-
-class CachedQuarterlyEarnings(NamedTuple):
-    """A stored timeline plus when it was last fetched.
-
-    The repository's read shape: the entity the use case wants, paired with the fetch
-    timestamp so the cache decorator can judge staleness in one query rather than two.
-    """
-
-    timeline: QuarterlyEarningsTimeline
-    fetched_at: datetime
 
 
 class RefreshTarget(NamedTuple):
@@ -50,10 +38,11 @@ class QuarterlyEarningsRepository(ABC):
     """
 
     @abstractmethod
-    def get(self, symbol: str) -> CachedQuarterlyEarnings | None:
+    def get(self, symbol: str) -> QuarterlyEarningsTimeline | None:
         """Return the stored timeline for the (already-normalized) symbol, or ``None``
-        when nothing is stored yet. A miss is not an error — it's the gap the cache
-        decorator fills from the live source."""
+        when nothing is stored yet. A miss is not an error — it's the gap the read-through
+        cache fills from the live source. A stored symbol always has at least one quarter
+        row, so ``None`` unambiguously means "never cached", never "cached but empty"."""
         raise NotImplementedError
 
     @abstractmethod
