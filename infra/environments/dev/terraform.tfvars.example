@@ -1,4 +1,3 @@
 # Optional overrides — the defaults work out of the box. Copy to terraform.tfvars.
 # region      = "us-east-1"
 # environment = "dev"
-# greeting    = "hello from terraform"

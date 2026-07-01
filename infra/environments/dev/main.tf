@@ -6,15 +6,6 @@ data "aws_caller_identity" "current" {}
 
 data "aws_region" "current" {}
 
-# Connectivity smoke test: a free SSM parameter, created via the shared module.
-module "hello" {
-  source = "../../modules/ssm-parameter"
-
-  name        = "/nama/hello"
-  value       = var.greeting
-  description = "Created by Terraform as a connectivity smoke test."
-}
-
 # Default VPC + its subnets — so we don't have to build networking by hand.
 data "aws_vpc" "default" {
   default = true

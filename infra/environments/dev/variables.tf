@@ -10,12 +10,6 @@ variable "environment" {
   default     = "dev"
 }
 
-variable "greeting" {
-  description = "Demo value stored in SSM Parameter Store."
-  type        = string
-  default     = "hello from terraform"
-}
-
 variable "domain_name" {
   description = "Public hostname for the app."
   type        = string
