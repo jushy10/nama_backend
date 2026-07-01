@@ -1,16 +1,22 @@
 name: Sync analyst estimates
 run-name: Sync analyst estimates
 
-# Monthly (and on-demand). Forward analyst estimates revise only a handful of times
-# a quarter, and the stock endpoint fills new symbols lazily, so this just keeps the
-# already-stored rows fresh. It runs scripts/sync_estimates.py as a one-off ECS task
-# — inside the VPC, where it can reach the private RDS — on the latest deployed image.
-# The script refreshes the stalest rows up to SYNC_ESTIMATES_LIMIT, staying under
-# FMP's ~250-calls/day free quota.
+# Monthly (and on-demand). Forward analyst estimates revise only a handful of times a
+# quarter, and the stock endpoint fills new symbols lazily, so this just keeps the
+# already-stored rows fresh. It POSTs the deployed app's estimates cron endpoint
+# (app/stocks/estimates/cron_estimates_endpoints.py), which runs the SyncAnalystEstimates
+# use case and refreshes the stalest rows up to SYNC_ESTIMATES_LIMIT, staying under FMP's
+# ~250-calls/day free quota. (Replaces the old one-off ECS task that ran
+# scripts/sync_estimates.py.)
 #
-# The app task injects DATABASE_URL but NOT the FMP key (that's build/ops-time only,
-# deliberately kept out of the runtime task), so this workflow reads the key from SSM
-# and passes it to the task as an environment override.
+# Two operational notes:
+#  - The endpoint reads FMP_API_KEY from the *serving* task's environment, so unlike the
+#    old approach the running app must carry the FMP key.
+#  - The endpoint is unauthenticated, so it must not be reachable from the public
+#    internet. This workflow just triggers it; it relies on network isolation for safety.
+#
+# Requires the repo/environment variable API_BASE_URL — the deployed app's base URL,
+# reachable from the GitHub runner.
 
 on:
   workflow_dispatch: {}
@@ -26,12 +32,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-  # Match module "app" { name = "nama-dev" } in environments/dev.
-  ECS_CLUSTER: nama-dev
-  ECS_SERVICE: nama-dev
-  FMP_SSM_PARAM: /nama/dev/fmp-api-key
-  # Rows to refresh per run; keeps FMP calls under the ~250/day free quota.
+  # Max stored rows to refresh per run; keeps FMP calls under the ~250/day free quota.
   SYNC_ESTIMATES_LIMIT: "200"
 
 jobs:
@@ -41,68 +42,33 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Run the estimates sync as a one-off ECS task
+      - name: Trigger the estimates refresh
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
         run: |
           set -euo pipefail
 
-          status=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
-            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
-          if [ "$status" != "ACTIVE" ]; then
-            echo "::error::ECS service '$ECS_SERVICE' is not ACTIVE ($status) — deploy the app first."
+          if [ -z "${API_BASE_URL:-}" ]; then
+            echo "::error::API_BASE_URL is not set — add it as a repo/environment variable pointing at the deployed app."
             exit 1
           fi
 
-          fmp_key=$(aws ssm get-parameter --name "$FMP_SSM_PARAM" --with-decryption \
-            --query 'Parameter.Value' --output text)
-          echo "::add-mask::$fmp_key"
-          if [ -z "$fmp_key" ] || [ "$fmp_key" = "REPLACE_ME_VIA_PUT_PARAMETER" ]; then
-            echo "::error::$FMP_SSM_PARAM is unset or still the placeholder — put the real FMP key in SSM first."
-            exit 1
-          fi
+          url="${API_BASE_URL%/}/internal/estimates/sync?limit=${SYNC_ESTIMATES_LIMIT}"
+          echo "POST $url"
 
-          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
-            --query 'services[0].networkConfiguration' --output json)
+          # Capture the body and status separately. The refresh runs synchronously and
+          # can make a few hundred sequential FMP calls, so allow a generous timeout.
+          http_code=$(curl -sS -X POST "$url" \
+            --max-time 900 \
+            -o /tmp/sync_estimates_response.json \
+            -w '%{http_code}')
 
-          # Build the override with jq so the key is injected safely (no shell
-          # interpolation into the JSON).
-          overrides=$(jq -nc --arg key "$fmp_key" --arg limit "$SYNC_ESTIMATES_LIMIT" '{
-            containerOverrides: [{
-              name: "app",
-              command: ["python", "scripts/sync_estimates.py"],
-              environment: [
-                { name: "FMP_API_KEY", value: $key },
-                { name: "SYNC_ESTIMATES_LIMIT", value: $limit }
-              ]
-            }]
-          }')
+          echo "HTTP $http_code"
+          cat /tmp/sync_estimates_response.json 2>/dev/null || true
+          echo
 
-          echo "Starting estimates sync task…"
-          task_arn=$(aws ecs run-task \
-            --cluster "$ECS_CLUSTER" \
-            --task-definition "$ECS_SERVICE" \
-            --launch-type FARGATE \
-            --network-configuration "$netcfg" \
-            --started-by "gha-sync-est-${GITHUB_SHA::7}" \
-            --overrides "$overrides" \
-            --query 'tasks[0].taskArn' --output text)
-          echo "Task: $task_arn"
-
-          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$task_arn"
-
-          exit_code=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task_arn" \
-            --query 'tasks[0].containers[0].exitCode' --output text)
-          reason=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task_arn" \
-            --query 'tasks[0].stoppedReason' --output text)
-          echo "Sync task stopped (exitCode=$exit_code, reason=$reason)"
-          if [ "$exit_code" != "0" ]; then
-            echo "::error::Estimates sync failed — check the task's CloudWatch logs."
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Estimates sync failed (HTTP $http_code) — check the app logs."
             exit 1
           fi
           echo "Analyst estimates synced."

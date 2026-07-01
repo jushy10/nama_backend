@@ -8,10 +8,12 @@ failure — independent of SQLAlchemy.
 
 from datetime import date, datetime, timedelta, timezone
 
-from app.stocks.db_cached_estimates_provider import DbCachedAnalystEstimatesProvider
+from app.stocks.adapters.db_cached_estimates_adapter import (
+    DbCachedAnalystEstimatesProvider,
+)
 from app.stocks.entities import AnalystEstimates
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ports import (
+from app.stocks.estimates.estimates_ports import (
     AnalystEstimatesProvider,
     AnalystEstimatesRepository,
     CachedEstimates,
@@ -51,6 +53,11 @@ class FakeRepo(AnalystEstimatesRepository):
         if self.fail_upsert:
             raise RuntimeError("db write down")
         self.rows[symbol] = CachedEstimates(est, _NOW)
+
+    def refresh_targets(self, limit: int):
+        # Unused by the read-path decorator under test; present only to satisfy the
+        # port (the sync use case's own tests cover refresh_targets).
+        return []
 
 
 class FakeInner(AnalystEstimatesProvider):

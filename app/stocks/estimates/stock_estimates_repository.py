@@ -2,9 +2,9 @@
 
 Forward analyst estimates move slowly (a handful of revisions a quarter) but FMP's
 free tier caps at ~250 calls/day, so rather than hit FMP on every snapshot we cache
-the consensus in the database — populated lazily on a miss and refreshed monthly out
-of band by ``scripts/sync_estimates.py``. The live endpoint reads it through the
-``DbCachedAnalystEstimatesProvider`` decorator.
+the consensus in the database — populated lazily on a miss and refreshed out of band
+by the estimates cron endpoint (``SyncAnalystEstimates``). The live endpoint reads it
+through the ``DbCachedAnalystEstimatesProvider`` decorator.
 
 Two tables, both owned here:
 
@@ -31,7 +31,11 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.db import Base
 from app.stocks.entities import AnalystEstimates, ForwardEstimate
-from app.stocks.ports import AnalystEstimatesRepository, CachedEstimates
+from app.stocks.estimates.estimates_ports import (
+    AnalystEstimatesRepository,
+    CachedEstimates,
+    RefreshTarget,
+)
 
 
 class StockRecord(Base):
@@ -191,3 +195,18 @@ class SqlAnalystEstimatesRepository(AnalystEstimatesRepository):
         row.revenue_avg_fy2 = _fy2_revenue(estimates)
         row.fetched_at = self._now()
         self._session.commit()
+
+    def refresh_targets(self, limit: int) -> list[RefreshTarget]:
+        # Oldest-fetched first, so each capped run renews the stalest rows; symbols
+        # never viewed (hence never stored) aren't returned — the endpoint fills those
+        # lazily on first access. Joined to ``stocks`` to carry the display name along.
+        rows = self._session.execute(
+            select(StockRecord.symbol, StockRecord.name)
+            .join(
+                StockAnalystEstimatesRecord,
+                StockAnalystEstimatesRecord.stock_id == StockRecord.id,
+            )
+            .order_by(StockAnalystEstimatesRecord.fetched_at.asc())
+            .limit(limit)
+        ).all()
+        return [RefreshTarget(symbol, name) for symbol, name in rows]

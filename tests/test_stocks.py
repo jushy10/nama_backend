@@ -45,9 +45,9 @@ from app.stocks.entities import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSignal
+from app.stocks.estimates.estimates_ports import AnalystEstimatesProvider
 from app.stocks.ports import (
     AllTimeHighProvider,
-    AnalystEstimatesProvider,
     CandleProvider,
     CompanyProfileProvider,
     ConstituentRepository,

@@ -14,7 +14,7 @@ import pytest
 
 from app.stocks.entities import AnalystEstimates
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.fmp_estimates_provider import FmpEstimatesProvider
+from app.stocks.adapters.fmp_estimates_adapter import FmpEstimatesProvider
 
 _STABLE = "/stable/analyst-estimates"
 _LEGACY = "/api/v3/analyst-estimates/AAPL"

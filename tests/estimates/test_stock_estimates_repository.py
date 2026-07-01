@@ -14,8 +14,8 @@ from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.stocks.entities import AnalystEstimates, ForwardEstimate
-from app.stocks.ports import CachedEstimates
-from app.stocks.stock_estimates_repository import (
+from app.stocks.estimates.estimates_ports import CachedEstimates
+from app.stocks.estimates.stock_estimates_repository import (
     SqlAnalystEstimatesRepository,
     StockAnalystEstimatesRecord,
     StockRecord,
