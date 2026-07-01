@@ -87,10 +87,10 @@ class SyncQuarterlyEarnings:
                 # coverage) is left as-is and counted; the next run retries it.
                 failed += 1
                 continue
-            # An empty live result must not wipe the stored window — unlike the estimates
-            # sync (one row it can safely blank), an empty upsert here would delete every
-            # quarter. Skip it and count a failure so the next run retries; the stored
-            # rows keep serving in the meantime.
+            # An empty live result must not wipe the stored window — the upsert rewrites
+            # a stock's rows wholesale (delete-then-insert), so an empty write would
+            # delete every quarter. Skip it and count a failure so the next run retries;
+            # the stored rows keep serving in the meantime.
             if timeline.is_empty:
                 failed += 1
                 continue

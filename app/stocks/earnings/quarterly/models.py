@@ -8,10 +8,9 @@ here. The concrete repository (``db_repository.py``) is the only caller; it maps
 rows to and from the ``QuarterlyEarnings`` entity. Nothing here knows the domain entity
 — this layer deals only in rows and columns, so it stays a thin data-access layer.
 
-Unlike ``stock_analyst_estimates`` (one wide row per stock), this is a time series: many
-rows per stock, one per fiscal quarter, keyed unique on ``(stock_id, fiscal_year,
-fiscal_quarter)``. A refresh rewrites a stock's whole window at once (delete-then-insert),
-so every row for a stock shares one ``fetched_at``.
+A time series: many rows per stock, one per fiscal quarter, keyed unique on
+``(stock_id, fiscal_year, fiscal_quarter)``. A refresh rewrites a stock's whole window
+at once (delete-then-insert), so every row for a stock shares one ``fetched_at``.
 """
 
 from __future__ import annotations

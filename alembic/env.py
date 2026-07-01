@@ -19,7 +19,6 @@ from app.db import Base
 # `alembic revision --autogenerate`). Imported for the side effect only.
 from app.stocks import constituents  # noqa: F401
 from app.stocks.stocks import models as stocks_models  # noqa: F401
-from app.stocks.estimates import models as estimates_models  # noqa: F401
 from app.stocks.earnings.quarterly import models as quarterly_earnings_models  # noqa: F401
 from app.stocks.earnings.annual import models as annual_earnings_models  # noqa: F401
 

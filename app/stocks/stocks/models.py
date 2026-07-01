@@ -1,11 +1,11 @@
 """Database model + queries for the shared ``stocks`` anchor.
 
-The ``stocks`` table is the single row every per-feature table (analyst estimates, …)
-points at, so the same stock is one thing everyone references rather than a symbol
-string copied around. It's owned by no single feature, so it gets its own slice here.
-Feature slices import ``StockRecord`` + ``get_or_create_stock`` and add their own child
-tables beside it. The schema is created by the analyst-estimates migration (the first
-feature to need the anchor).
+The ``stocks`` table is the single row every per-feature table (the earnings
+timelines, …) points at, so the same stock is one thing everyone references rather than
+a symbol string copied around. It's owned by no single feature, so it gets its own slice
+here. Feature slices import ``StockRecord`` + ``get_or_create_stock`` and add their own
+child tables beside it. The schema is created by migration 0002 (the since-removed
+analyst-estimates feature was the first to need the anchor).
 """
 
 from __future__ import annotations

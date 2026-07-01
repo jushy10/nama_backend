@@ -71,7 +71,7 @@ class QuarterlyEarningsTimeline:
     upcoming one. The ``past`` / ``future`` views split it on ``is_reported`` while
     preserving that order (past = oldest→newest reported, future = soonest→furthest
     upcoming). Best-effort: an uncovered symbol yields an empty (``is_empty``) timeline
-    rather than an error, the same contract the estimates slice uses.
+    rather than an error, the same contract the annual slice uses.
     """
 
     symbol: str

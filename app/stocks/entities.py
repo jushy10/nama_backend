@@ -110,32 +110,16 @@ class KeyMetrics:
         return round(self.pe / self.eps_growth_yoy, 2)
 
 
-@dataclass(frozen=True)
-class ForwardEstimate:
-    """One fiscal year's slice of the forward consensus series.
-
-    The per-year row behind ``AnalystEstimates.forward_years`` — just the mean EPS
-    and revenue for a single future fiscal year, used to compute the one-year
-    forward growth rate (FY1→FY2). (FY1's low/high/analyst-count detail lives on
-    ``AnalystEstimates`` itself.)"""
-
-    fiscal_year: int
-    period_end: date
-    eps_avg: float | None
-    revenue_avg: float | None
-
-
-def _forward_one_year_growth(values: list) -> float | None:
-    """One-year forward growth (percent): the FY1 → FY2 change over a soonest-first
-    forward series — what next year's consensus implies versus this year's.
+def _forward_one_year_growth(fy1: float | None, fy2: float | None) -> float | None:
+    """One-year forward growth (percent): the FY1 → FY2 change — what next year's
+    consensus implies versus this year's.
 
     A plain point-to-point percentage gain/loss, not a compounded multi-year rate.
-    ``None`` unless the first two forward years are both present and positive (growth
-    off a non-positive base is meaningless)."""
-    series = [v for v in values if isinstance(v, (int, float)) and v > 0]
-    if len(series) < 2:
+    ``None`` unless both years are present and positive (growth off a non-positive
+    base is meaningless)."""
+    if fy1 is None or fy2 is None or fy1 <= 0 or fy2 <= 0:
         return None
-    return round((series[1] / series[0] - 1) * 100, 2)
+    return round((fy2 / fy1 - 1) * 100, 2)
 
 
 @dataclass(frozen=True)
@@ -144,16 +128,15 @@ class AnalystEstimates:
 
     The forward-looking complement to the (trailing) ``KeyMetrics``: where those
     say what the business *has* done, these say what analysts *expect* it to do.
-    Sourced from an estimates vendor — not the price feed or company filings (which
-    carry only reported actuals) — so each figure is a consensus mean across however
-    many analysts contributed, and the ``num_analysts_*`` counts report that breadth.
+    Sourced from the annual-earnings slice's stored forward years (the same
+    consensus the earnings timeline serves) — not the price feed or company
+    filings, which carry only reported actuals.
 
     ``fiscal_year`` / ``period_end`` identify **FY1**, the nearest full fiscal year
-    still being estimated; ``eps_avg_fy2`` / ``fiscal_year_fy2`` carry the year after,
-    kept so a next-twelve-months blend can be derived later. EPS figures are per
-    share; ``revenue_avg`` is raw (e.g. USD). Best-effort enrichment: every field is
-    optional and the whole block is ``is_empty`` when the vendor covers no forward
-    year for the symbol.
+    still being estimated; the ``*_fy2`` fields carry the year after, backing the
+    one-year forward growth (FY1→FY2). EPS figures are per share; revenue is raw
+    (e.g. USD). Best-effort enrichment: every field is optional and the whole block
+    is ``is_empty`` when no forward year is known for the symbol.
 
     The valuation calcs that need a live price (``forward_pe``) or market cap
     (``forward_ps``) take it as an argument rather than storing it — the estimate is
@@ -164,16 +147,10 @@ class AnalystEstimates:
     fiscal_year: int | None  # FY1: the nearest forward fiscal year
     period_end: date | None  # FY1 fiscal period-end date
     eps_avg: float | None  # FY1 consensus EPS (mean estimate)
-    eps_low: float | None  # FY1 low estimate
-    eps_high: float | None  # FY1 high estimate
     revenue_avg: float | None  # FY1 consensus revenue (raw, e.g. USD)
-    num_analysts_eps: int | None  # analysts behind the EPS consensus
-    num_analysts_revenue: int | None  # analysts behind the revenue consensus
-    eps_avg_fy2: float | None = None  # FY2 consensus EPS (the year after FY1)
-    fiscal_year_fy2: int | None = None
-    # Full forward series (soonest-first), one row per estimated fiscal year —
-    # backs the multi-year expected-growth CAGRs below.
-    forward_years: tuple[ForwardEstimate, ...] = ()
+    fiscal_year_fy2: int | None = None  # FY2: the fiscal year after FY1
+    eps_avg_fy2: float | None = None  # FY2 consensus EPS
+    revenue_avg_fy2: float | None = None  # FY2 consensus revenue (raw)
 
     @property
     def is_empty(self) -> bool:
@@ -204,11 +181,11 @@ class AnalystEstimates:
 
     def forward_eps_growth(self) -> float | None:
         """Analyst-expected EPS growth next year (FY1 → FY2), percent."""
-        return _forward_one_year_growth([y.eps_avg for y in self.forward_years])
+        return _forward_one_year_growth(self.eps_avg, self.eps_avg_fy2)
 
     def forward_revenue_growth(self) -> float | None:
         """Analyst-expected revenue growth next year (FY1 → FY2), percent."""
-        return _forward_one_year_growth([y.revenue_avg for y in self.forward_years])
+        return _forward_one_year_growth(self.revenue_avg, self.revenue_avg_fy2)
 
 
 @dataclass(frozen=True)

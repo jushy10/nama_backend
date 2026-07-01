@@ -59,10 +59,13 @@ from app.stocks.sec_edgar_revenue_provider import SecEdgarRevenueProvider
 from app.stocks.sec_edgar_segment_revenue_provider import (
     SecEdgarSegmentRevenueProvider,
 )
-from app.stocks.estimates.ports import AnalystEstimatesProvider
-from app.stocks.estimates.router import get_estimates_provider
+from app.stocks.adapters.annual_earnings_estimates_adapter import (
+    AnnualEarningsEstimatesProvider,
+)
+from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
 from app.stocks.ports import (
     AllTimeHighProvider,
+    AnalystEstimatesProvider,
     CompanyProfileProvider,
     EarningsCalendarProvider,
     EarningsHistoryProvider,
@@ -147,6 +150,17 @@ def get_profile_provider() -> CompanyProfileProvider | None:
     if not finnhub_key:
         return None
     return CachingCompanyProfileProvider(FinnhubCompanyProfileProvider(finnhub_key))
+
+
+def get_estimates_provider(
+    db: Session = Depends(get_db),
+) -> AnalystEstimatesProvider:
+    # Forward analyst estimates back the snapshot's forward P/E — best-effort
+    # enrichment. They're projected from the annual-earnings slice's stored forward
+    # years (the same Yahoo consensus that timeline serves), DB-only: a symbol whose
+    # timeline isn't cached yet just omits the forward metrics until the annual
+    # read path or its cron fills the rows. No second table, fetch, or cron.
+    return AnnualEarningsEstimatesProvider(SqlAnnualEarningsRepository(db))
 
 
 def get_stock_info(
@@ -435,11 +449,7 @@ def _present_estimates(
         fiscal_year=estimates.fiscal_year,
         period_end=estimates.period_end,
         eps_avg=estimates.eps_avg,
-        eps_low=estimates.eps_low,
-        eps_high=estimates.eps_high,
         revenue_avg=estimates.revenue_avg,
-        num_analysts_eps=estimates.num_analysts_eps,
-        num_analysts_revenue=estimates.num_analysts_revenue,
         eps_avg_fy2=estimates.eps_avg_fy2,
         fiscal_year_fy2=estimates.fiscal_year_fy2,
     )
@@ -447,7 +457,7 @@ def _present_estimates(
 
 def _present_growth(growth: GrowthMetrics | None) -> GrowthMetricsResponse | None:
     # Trailing YoY (from the Finnhub metrics) + forward 1-yr growth (FY1→FY2, from
-    # the FMP estimates) — both already on the stock, combined into one block.
+    # the analyst estimates) — both already on the stock, combined into one block.
     if growth is None:
         return None
     return GrowthMetricsResponse(
