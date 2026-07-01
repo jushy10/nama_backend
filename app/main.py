@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.stocks.estimates.cron_estimates_endpoints import (
+from app.stocks.endpoints.cron_estimates_endpoints import (
     router as estimates_cron_router,
 )
 from app.stocks.router import router as stocks_router
@@ -40,7 +40,7 @@ app.add_middleware(
 app.include_router(stocks_router)
 # The analyst-estimates refresh cron endpoint (POST /internal/estimates/sync); it
 # drives the SyncAnalystEstimates use case out of band. See
-# app/stocks/estimates/cron_estimates_endpoints.py.
+# app/stocks/endpoints/cron_estimates_endpoints.py.
 app.include_router(estimates_cron_router)
 
 

@@ -13,11 +13,8 @@ from app.stocks.adapters.db_cached_estimates_adapter import (
 )
 from app.stocks.entities import AnalystEstimates
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.estimates.estimates_ports import (
-    AnalystEstimatesProvider,
-    AnalystEstimatesRepository,
-    CachedEstimates,
-)
+from app.stocks.estimates.estimates_ports import AnalystEstimatesProvider
+from app.stocks.estimates.repository import AnalystEstimatesRepository, CachedEstimates
 
 _NOW = datetime(2026, 6, 30, tzinfo=timezone.utc)
 _FRESH = _NOW - timedelta(days=1)

@@ -122,24 +122,28 @@ only this one file changes.
 - `sec_edgar_segment_revenue_provider.py` — SEC EDGAR **inline XBRL** (the raw 10-Q/10-K documents; the flat API drops the dimensional contexts) → per-quarter revenue split by operating segment and product/service; parses several recent filings and keeps standalone-quarter, member-qualified facts
 - `logodev_provider.py` — Logo.dev → logo image
 - `caching_company_profile_provider.py` / `caching_revenue_provider.py` / `caching_segment_revenue_provider.py` — decorator adapters (wrap another adapter to add an in-process TTL cache; same port in, same port out)
-- `adapters/db_cached_estimates_adapter.py` — decorator on the `AnalystEstimatesProvider` port backed by a **persistent DB cache** (the `AnalystEstimatesRepository`) instead of an in-process map: shared across instances, survives restarts, serves a stale row if FMP is down. Fills lazily on a miss; refreshed out of band by the estimates cron endpoint (`app/stocks/estimates/cron_estimates_endpoints.py`). This is what the stock endpoint wires for estimates (the in-memory `adapters/caching_estimates_adapter.py` is now unused). `adapters/fmp_estimates_adapter.py` is the live FMP source it wraps
+- `adapters/db_cached_estimates_adapter.py` — decorator on the `AnalystEstimatesProvider` port backed by a **persistent DB cache** (the `AnalystEstimatesRepository`) instead of an in-process map: shared across instances, survives restarts, serves a stale row if FMP is down. Fills lazily on a miss; refreshed out of band by the estimates cron endpoint (`app/stocks/endpoints/cron_estimates_endpoints.py`). This is what the stock endpoint wires for estimates (the in-memory `adapters/caching_estimates_adapter.py` is now unused). `adapters/fmp_estimates_adapter.py` is the live FMP source it wraps
 - `composite_company_profile_provider.py` — merges a name source (Finnhub) + a description source (FMP) behind the one `CompanyProfileProvider` port; same shape as the cache decorator
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
-- `estimates/stock_estimates_repository.py` — owns the `stocks` anchor model (UUID id, unique `symbol`, optional `name`) + the `stock_analyst_estimates` model **and** `SqlAnalystEstimatesRepository` (the `AnalystEstimatesRepository` port); same pattern as `constituents.py`. Lives in the estimates sub-slice (`app/stocks/estimates/`, see below)
+- The estimates **persistence** is split into three layers in the sub-slice: `estimates/models.py` (the ORM models for the `stocks` anchor + `stock_analyst_estimates`, plus simple query functions), `estimates/db_repository.py` (the concrete `SqlAnalystEstimatesRepository` — maps rows⇄entity and calls the model queries), and `estimates/repository.py` (the abstract `AnalystEstimatesRepository` port the use case is injected with). Same DB-owns-the-schema idea as `constituents.py`, split across the port / concrete / model boundary
 
 Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<concern>_adapter.py` for those under `app/stocks/adapters/`.
 
 > **The analyst-estimates sub-slice — `app/stocks/estimates/`.** Estimates are broken
-> out as a self-contained vertical slice rather than living flat in `app/stocks/`: its
-> ports (`estimates_ports.py`), DB repository (`stock_estimates_repository.py`), the
-> out-of-band refresh use case (`use_cases.py` → `SyncAnalystEstimates`), the provider
-> wiring the snapshot reads through (`router.py` → `get_estimates_provider`), and the
-> HTTP cron entrypoint (`cron_estimates_endpoints.py`, `POST /internal/estimates/sync`)
-> all live together. The vendor adapters it uses sit in `app/stocks/adapters/`. The
-> refresh is invoked over HTTP by the `sync-estimates` workflow — there is no
-> `scripts/sync_estimates.py` any more. The cron endpoint is **unauthenticated** and
-> must not be publicly reachable (it spends FMP quota + writes the DB), and it reads
-> `FMP_API_KEY` from the serving task's env.
+> out as a self-contained vertical slice rather than living flat in `app/stocks/`:
+> - `estimates_ports.py` — the live-source port (`AnalystEstimatesProvider`).
+> - `repository.py` — the **abstract** persistence port (`AnalystEstimatesRepository`), injected into the use case.
+> - `db_repository.py` — its **concrete** SQLAlchemy implementation.
+> - `models.py` — the ORM models (`stocks` anchor + `stock_analyst_estimates`) + simple query functions the repository calls.
+> - `use_cases.py` → `SyncAnalystEstimates` — the out-of-band refresh.
+> - `router.py` → `get_estimates_provider` — the provider wiring the snapshot reads through.
+>
+> The vendor adapters it uses sit in `app/stocks/adapters/`; the HTTP cron entrypoint
+> (`app/stocks/endpoints/cron_estimates_endpoints.py`, `POST /internal/estimates/sync`)
+> lives in `app/stocks/endpoints/`. The refresh is invoked over HTTP by the
+> `sync-estimates` workflow — there is no `scripts/sync_estimates.py` any more. The cron
+> endpoint is **unauthenticated** and must not be publicly reachable (it spends FMP quota
+> + writes the DB), and it reads `FMP_API_KEY` from the serving task's env.
 
 ### 5. DTOs — `app/stocks/schemas.py`
 Pydantic `BaseModel`s for HTTP responses. Pydantic is a serialization detail, so
@@ -271,11 +275,14 @@ app/
     ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/FMP/Logo.dev/SEC EDGAR)
     ├── adapters/           # ── vendor adapters as *_adapter.py (estimates: FMP + caches)
     ├── estimates/          # ── analyst-estimates sub-slice:
-    │   ├── estimates_ports.py            #    the slice's ports (ABCs)
-    │   ├── stock_estimates_repository.py #    DB adapter: stocks anchor + estimates cache
-    │   ├── use_cases.py                  #    SyncAnalystEstimates (out-of-band refresh)
-    │   ├── router.py                     #    provider wiring for the snapshot read path
-    │   └── cron_estimates_endpoints.py   #    POST /internal/estimates/sync (drives the sync)
+    │   ├── estimates_ports.py   #    live-source port (AnalystEstimatesProvider)
+    │   ├── repository.py        #    abstract persistence port (injected into the use case)
+    │   ├── db_repository.py     #    concrete repo: maps row⇄entity, calls models
+    │   ├── models.py            #    ORM models (stocks anchor + estimates) + query fns
+    │   ├── use_cases.py         #    SyncAnalystEstimates (out-of-band refresh)
+    │   └── router.py            #    provider wiring for the snapshot read path
+    ├── endpoints/          # ── HTTP endpoints outside a read slice:
+    │   └── cron_estimates_endpoints.py  #  POST /internal/estimates/sync (drives the sync)
     ├── constituents.py     # ── DB adapter: ORM model + SqlConstituentRepository
     ├── chart_window.py     # ── edge helper: range preset → time window
     ├── schemas.py          # ── HTTP response DTOs (pydantic)

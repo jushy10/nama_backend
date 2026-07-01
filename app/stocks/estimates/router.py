@@ -23,9 +23,7 @@ from app.stocks.adapters.db_cached_estimates_adapter import (
 )
 from app.stocks.adapters.fmp_estimates_adapter import FmpEstimatesProvider
 from app.stocks.estimates.estimates_ports import AnalystEstimatesProvider
-from app.stocks.estimates.stock_estimates_repository import (
-    SqlAnalystEstimatesRepository,
-)
+from app.stocks.estimates.db_repository import SqlAnalystEstimatesRepository
 
 
 @lru_cache(maxsize=1)

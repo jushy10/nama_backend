@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.db import get_db
-from app.stocks.estimates import cron_estimates_endpoints as cron
+from app.stocks.endpoints import cron_estimates_endpoints as cron
 from app.stocks.estimates.use_cases import EstimatesSyncReport, SyncAnalystEstimates
 
 

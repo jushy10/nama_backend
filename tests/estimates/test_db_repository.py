@@ -14,12 +14,9 @@ from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.stocks.entities import AnalystEstimates, ForwardEstimate
-from app.stocks.estimates.estimates_ports import CachedEstimates
-from app.stocks.estimates.stock_estimates_repository import (
-    SqlAnalystEstimatesRepository,
-    StockAnalystEstimatesRecord,
-    StockRecord,
-)
+from app.stocks.estimates.db_repository import SqlAnalystEstimatesRepository
+from app.stocks.estimates.models import StockAnalystEstimatesRecord, StockRecord
+from app.stocks.estimates.repository import CachedEstimates
 
 _NOW = datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc)
 

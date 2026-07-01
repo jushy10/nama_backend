@@ -9,8 +9,8 @@ to the upsert, and how the per-run limit is applied — independent of FMP or th
 from datetime import date
 
 from app.stocks.entities import AnalystEstimates
-from app.stocks.estimates.estimates_ports import (
-    AnalystEstimatesProvider,
+from app.stocks.estimates.estimates_ports import AnalystEstimatesProvider
+from app.stocks.estimates.repository import (
     AnalystEstimatesRepository,
     CachedEstimates,
     RefreshTarget,

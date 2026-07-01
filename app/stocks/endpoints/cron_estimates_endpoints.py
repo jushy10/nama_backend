@@ -25,9 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.stocks.adapters.fmp_estimates_adapter import FmpEstimatesProvider
-from app.stocks.estimates.stock_estimates_repository import (
-    SqlAnalystEstimatesRepository,
-)
+from app.stocks.estimates.db_repository import SqlAnalystEstimatesRepository
 from app.stocks.estimates.use_cases import EstimatesSyncReport, SyncAnalystEstimates
 
 router = APIRouter(tags=["estimates-cron"])
