@@ -100,3 +100,9 @@ class SqlAnnualEarningsRepository(AnnualEarningsRepository):
             RefreshTarget(symbol, name)
             for symbol, name in models.stalest_symbols(self._session, limit)
         ]
+
+    def missing_from(self, symbols: list[str]) -> list[str]:
+        # One query instead of the port default's per-symbol probes — a seed list
+        # is a whole index's constituents.
+        stored = models.stored_symbols_among(self._session, symbols)
+        return [s for s in symbols if s not in stored]

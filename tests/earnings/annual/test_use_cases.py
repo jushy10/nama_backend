@@ -257,6 +257,60 @@ def test_sync_reported_year_never_downgrades_to_upcoming():
     assert year_2025.is_reported and year_2025.eps_actual == 7.3
 
 
+# ───────────────────────────── seeding ─────────────────────────────
+
+
+def test_sync_seeds_never_stored_symbols_first():
+    # AAPL has nothing stored (maximally stale), so it's fetched before the
+    # staleness queue; MSFT is already stored, so its seed entry defers to that
+    # queue rather than being fetched twice.
+    repo = _FakeRepo(
+        [RefreshTarget("MSFT", "Microsoft")],
+        stored={"MSFT": _a_timeline("MSFT")},
+    )
+    provider = _FakeSyncProvider()
+
+    report = SyncAnnualEarnings(provider, repo).execute(
+        limit=10,
+        seeds=[RefreshTarget("AAPL", "Apple Inc."), RefreshTarget("MSFT", "Microsoft")],
+    )
+
+    assert provider.calls == ["AAPL", "MSFT"]  # seed first, then the stale queue
+    assert (report.refreshed, report.seeded) == (2, 1)  # only AAPL was first-time
+    assert repo.upserts == [("AAPL", "Apple Inc."), ("MSFT", "Microsoft")]
+
+
+def test_sync_seed_slots_come_out_of_the_per_run_cap():
+    # Two missing seeds fill a cap of two outright — the staleness queue isn't
+    # even consulted, so the run stays as gentle on Yahoo as the cap promises.
+    repo = _FakeRepo([RefreshTarget("MSFT", None)])
+    provider = _FakeSyncProvider()
+
+    report = SyncAnnualEarnings(provider, repo).execute(
+        limit=2, seeds=[RefreshTarget("AAPL", None), RefreshTarget("NVDA", None)]
+    )
+
+    assert provider.calls == ["AAPL", "NVDA"]
+    assert repo.refresh_limit is None  # never asked for stored targets
+    assert (report.refreshed, report.seeded, report.limit) == (2, 2, 2)
+
+
+def test_sync_failed_or_empty_seed_is_counted_not_stored():
+    # A seed the vendor can't serve (or returns empty for) stays missing — counted
+    # as a failure, retried as a seed on the next run, never persisted empty.
+    repo = _FakeRepo([])
+    provider = _FakeSyncProvider(
+        empty={"GONE"}, errors={"BAD": StockDataUnavailable("BAD", "yahoo down")}
+    )
+
+    report = SyncAnnualEarnings(provider, repo).execute(
+        limit=10, seeds=[RefreshTarget("BAD", None), RefreshTarget("GONE", None)]
+    )
+
+    assert (report.refreshed, report.failed, report.seeded) == (0, 2, 0)
+    assert repo.upserts == []
+
+
 def test_sync_default_limit_is_applied_when_unspecified():
     repo = _FakeRepo([])
     SyncAnnualEarnings(_FakeSyncProvider(), repo).execute()

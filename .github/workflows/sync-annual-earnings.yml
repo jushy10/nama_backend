@@ -2,10 +2,12 @@ name: Sync annual earnings
 run-name: Sync annual earnings
 
 # Weekly (and on-demand). Reported fiscal years and forward-year estimates change through the
-# year, and the read endpoint fills new symbols lazily, so this just keeps the already-stored
-# rows fresh. It POSTs the deployed app's annual-earnings cron endpoint
-# (app/stocks/endpoints/cron_annual_earnings_endpoints.py), which runs the SyncAnnualEarnings
-# use case, refreshing the stalest stocks first.
+# year, so this keeps the stored rows fresh — and fills coverage: the endpoint seeds by
+# default, fetching index constituents with nothing stored yet (the growth screener reads
+# only what's stored) ahead of the staleness queue. It POSTs the deployed app's
+# annual-earnings cron endpoint (app/stocks/endpoints/cron_annual_earnings_endpoints.py),
+# which runs the SyncAnnualEarnings use case: never-stored constituents first, then the
+# stalest stored stocks.
 #
 # The refresh runs in SMALL BATCHES rather than one big call: the endpoint is synchronous and
 # the ALB in front of the app has a ~60s idle timeout, so a hundreds-of-symbols request would

@@ -335,6 +335,50 @@ class MoversResponse(BaseModel):
     losers: list[ScreenedStockResponse]
 
 
+class GrowthScreenedStockResponse(BaseModel):
+    """One growth-screener row: expected next-fiscal-year growth plus its legs.
+
+    ``expected_*_growth`` is the analyst consensus for the upcoming fiscal year
+    (``fiscal_year``) versus the latest reported one (``prior_fiscal_year``),
+    percent. The estimate/actual legs ride along so a client can show the raw
+    figures behind the percentage. Any leg the source didn't cover is ``null``."""
+
+    symbol: str
+    name: str | None = None
+    sector: str | None = None
+    fiscal_year: int | None = None  # the upcoming (FY1) fiscal year
+    prior_fiscal_year: int | None = None  # the reported base year
+    expected_eps_growth: float | None = None  # percent
+    expected_revenue_growth: float | None = None  # percent
+    eps_estimate: float | None = None  # FY1 consensus EPS
+    eps_actual: float | None = None  # base year's reported EPS
+    revenue_estimate: float | None = None  # FY1 consensus revenue (raw)
+    revenue_actual: float | None = None  # base year's reported revenue (raw)
+
+
+class GrowthScreenerResponse(BaseModel):
+    """Stocks ranked by expected next-fiscal-year growth across a filtered universe.
+
+    ``index``/``sector``/``sort``/``min_*`` echo the applied filters (``null`` =
+    not filtered). ``universe_count`` is how many constituents matched the
+    index/sector filter; ``covered_count`` how many of those had stored forward
+    consensus to screen on — low coverage means the annual-earnings cache hasn't
+    been filled for that universe yet, not that nothing is growing. ``stocks``
+    lead with the strongest expected growth on the chosen line, capped at
+    ``limit``."""
+
+    index: str | None = None
+    sector: str | None = None
+    sort: str  # "eps" | "revenue"
+    min_revenue_growth: float | None = None  # percent
+    min_eps_growth: float | None = None  # percent
+    limit: int
+    universe_count: int
+    covered_count: int
+    count: int  # rows returned after thresholds + limit
+    stocks: list[GrowthScreenedStockResponse]
+
+
 class InvestmentAnalysisResponse(BaseModel):
     """An AI-generated, balanced buy/hold/sell read on a stock.
 
