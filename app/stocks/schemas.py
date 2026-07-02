@@ -28,14 +28,14 @@ class StockPerformanceResponse(BaseModel):
 
 
 class KeyMetricsResponse(BaseModel):
-    """Trailing valuation, financial-health and market indicators.
+    """Trailing valuation, financial-health, profitability and market indicators.
 
-    The valuation ratios, returns and risk/range figures for the price snapshot.
-    The earnings-flavored metrics (EPS, growth, margins) live on the earnings
-    endpoint instead — see ``EarningsMetricsResponse``. All trailing (no forward
-    estimates); the ratios are plain multiples, ``roe`` is a percent, and
-    ``fcf_per_share`` is in the quote currency. Any field a vendor doesn't cover
-    is ``null``.
+    The valuation ratios, returns, margins and risk/range figures for the price
+    snapshot. The remaining earnings-flavored metrics (EPS, growth) live on the
+    earnings endpoint instead — see ``EarningsMetricsResponse``. All trailing (no
+    forward estimates); the ratios are plain multiples, ``roe`` and the margins
+    are percent, and ``fcf_per_share`` is in the quote currency. Any field a
+    vendor doesn't cover is ``null``.
     """
 
     pe: float | None = None  # price / trailing EPS
@@ -44,6 +44,11 @@ class KeyMetricsResponse(BaseModel):
     ps: float | None = None  # price / sales
     fcf_per_share: float | None = None  # trailing free cash flow per share
     roe: float | None = None  # return on equity (percent)
+    # Profitability margins (percent) — on the snapshot so the stock page keeps
+    # them once the legacy /earnings endpoint is phased out.
+    gross_margin: float | None = None
+    operating_margin: float | None = None
+    net_margin: float | None = None
     current_ratio: float | None = None
     debt_to_equity: float | None = None
     beta: float | None = None

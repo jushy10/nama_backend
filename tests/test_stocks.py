@@ -1736,8 +1736,8 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
     assert body["performance"] == {
         "1w": 1.2, "1m": -0.4, "3m": 5.1, "6m": 8.7, "ytd": 12.3, "1y": 21.0,
     }
-    # nested key metrics ride along on the same fundamentals payload — only the
-    # valuation/health/market slice; earnings-flavored metrics moved to /earnings
+    # nested key metrics ride along on the same fundamentals payload — the
+    # valuation/health/profitability/market slice; EPS + growth stay on /earnings
     assert body["metrics"]["pe"] == 28.5
     assert body["metrics"]["beta"] == 1.2
     assert body["metrics"]["week_52_high"] == 320.0
@@ -1745,7 +1745,12 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
     assert body["metrics"]["debt_to_equity"] == 1.5
     assert body["metrics"]["fcf_per_share"] == 6.43  # trailing free cash flow per share
     assert body["metrics"]["roe"] == 147.4  # return on equity (percent)
-    for moved in ("eps", "net_margin", "eps_growth_yoy"):
+    # the margin stack is served here so the stock page keeps it once the
+    # legacy /earnings endpoint is phased out
+    assert body["metrics"]["gross_margin"] == 44.0
+    assert body["metrics"]["operating_margin"] == 30.0
+    assert body["metrics"]["net_margin"] == 25.0
+    for moved in ("eps", "eps_growth_yoy"):
         assert moved not in body["metrics"], moved
 
 
@@ -2133,8 +2138,10 @@ def test_get_earnings_includes_valuation_block_from_fundamentals(make_client):
     assert valuation["beta"] == 1.2
     assert valuation["week_52_high"] == 320.0
     assert valuation["week_52_low"] == 210.0
-    # earnings-flavored metrics live in `metrics`, not the valuation block
-    for absent in ("eps", "net_margin", "eps_growth_yoy", "revenue_growth_yoy"):
+    # the margins ride along (same KeyMetrics block the snapshot serves); the
+    # remaining earnings-flavored metrics live in `metrics`, not here
+    assert valuation["net_margin"] == 25.0
+    for absent in ("eps", "eps_growth_yoy", "revenue_growth_yoy"):
         assert absent not in valuation, absent
 
 
