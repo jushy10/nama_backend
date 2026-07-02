@@ -1,11 +1,13 @@
 name: Build & Deploy App
 run-name: Build & deploy app · ${{ github.ref_name }}
 
-# Pull requests touching app/Dockerfile  -> build the image only (validate).
-# Merge (push) to main, or manual run     -> build, migrate, then deploy — as three
+# Merge (push) to main, or manual run -> build, migrate, then deploy — as three
 # sequential, gating jobs:
 #
 #   build  ->  migrate  ->  deploy
+#
+# (Pull requests are validated by the separate Validate App Build workflow, so the
+# validate check never appears on main commits.)
 #
 # The image build has to come first: the migration runs as a one-off ECS task *inside
 # the VPC* (RDS is private, unreachable from the GitHub runner) on the image just pushed,
@@ -13,19 +15,11 @@ run-name: Build & deploy app · ${{ github.ref_name }}
 # failed migration never rolls the service onto the new image.
 #
 # The ECR repo + ECS service are created by the Infrastructure workflow. Deploy auth uses
-# the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var. (The PR validate
-# job needs no credentials.)
+# the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var.
 
 on:
   push:
     branches: [main]
-    paths:
-      - "app/**"
-      - "alembic/**"
-      - "pyproject.toml"
-      - "Dockerfile"
-      - ".github/workflows/app-image.yml"
-  pull_request:
     paths:
       - "app/**"
       - "alembic/**"
@@ -46,24 +40,9 @@ env:
   ECS_SERVICE: nama-dev
 
 jobs:
-  # On pull requests: just prove the image builds. No AWS credentials, no push.
-  validate:
-    name: Validate build
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
-
-      - name: Build image (no push)
-        run: docker build -t "$ECR_REPOSITORY:ci" .
-
   # 1/3 — On merge to main (or a manual run): build the image and push it to ECR.
   build:
     name: Build & push image
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
