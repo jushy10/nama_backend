@@ -21,6 +21,17 @@ one scale up:
 - ``Ticker.info['nextFiscalYearEnd']`` — the fiscal-year-end that labels ``0y`` (the estimate
   frames carry no dates); ``+1y`` is a year on. Falls back to one year past the latest
   reported year when ``info`` is unavailable.
+- ``Ticker.get_earnings_dates`` — the announcement history, fetched deeper than the quarterly
+  adapter needs it (several years back). A reported year's ``eps_actual_consensus`` is the sum
+  of its four quarterly *Reported EPS* values — the analyst-consensus (adjusted) basis, the
+  same basis the forward ``eps_estimate`` is quoted on, unlike the GAAP-diluted ``eps_actual``
+  from the income statement. Quarters are assigned to a fiscal year by their derived calendar
+  quarter-end (the most recent quarter-end before the announcement, the quarterly adapter's
+  convention) falling within the year ending at the fiscal-year-end; any 1-year window holds
+  exactly four calendar quarter-ends, so a year is summed only when all four slots carry a
+  reported EPS — anything else (thin history, semi-annual reporters, restatement noise) yields
+  ``None`` rather than a wrong sum. Best-effort enrichment: a failure fetching the history
+  drops the consensus actuals but never sinks the timeline.
 
 There is deliberately **no annual surprise/beat**: Yahoo's estimate-vs-actual history is
 per-quarter (``earnings_history``), so there is no historical annual estimate to compare a
@@ -44,6 +55,7 @@ call just serves the stored rows.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import date, datetime, timezone
 
 import pandas as pd
@@ -56,6 +68,11 @@ from app.stocks.exceptions import StockDataUnavailable
 # yfinance's relative period labels on the annual estimate frames.
 _FY1 = "0y"  # the current, in-progress fiscal year
 _FY2 = "+1y"  # the fiscal year after it
+
+# Announcement-history rows to request from ``get_earnings_dates``: ~4 scheduled future rows
+# plus ~24 past ones (~6 years of quarters), enough to sum a consensus-basis annual EPS for
+# each of the _PAST reported years (the oldest needs announcements ~5 years back).
+_EARNINGS_DATES_LIMIT = 28
 
 
 class YfinanceAnnualEarningsProvider(AnnualEarningsProvider):
@@ -89,6 +106,17 @@ class YfinanceAnnualEarningsProvider(AnnualEarningsProvider):
 
         reported = _reported_years(income_stmt)  # newest first, uncapped
 
+        # The consensus-basis annual actuals (the sum of each fiscal year's four quarterly
+        # "Reported EPS" values) need the announcement history. Best-effort enrichment on the
+        # reported years: a failure fetching it drops the consensus figures, nothing else.
+        earnings_dates = None
+        if reported:
+            try:
+                earnings_dates = ticker.get_earnings_dates(limit=_EARNINGS_DATES_LIMIT)
+            except Exception:  # noqa: BLE001 — enrichment: degrade to no consensus actuals
+                earnings_dates = None
+        consensus = _consensus_eps_actuals(earnings_dates, reported)
+
         seen: set[int] = set()
         years: list[AnnualEarnings] = []
 
@@ -100,7 +128,9 @@ class YfinanceAnnualEarningsProvider(AnnualEarningsProvider):
             if year.fiscal_year in seen:  # a restated/duplicate fiscal-year column
                 continue
             seen.add(year.fiscal_year)
-            years.append(year)
+            years.append(
+                replace(year, eps_actual_consensus=consensus.get(year.period_end))
+            )
 
         # Upcoming: the 0y/+1y forward estimates (at most two).
         for year in _upcoming_years(ticker, reported, eps_estimate, revenue_estimate):
@@ -214,6 +244,82 @@ def _fiscal_year1_end(ticker, reported: list[AnnualEarnings]) -> date | None:
     return None
 
 
+def _consensus_eps_actuals(
+    dates_frame, reported: list[AnnualEarnings]
+) -> dict[date, float]:
+    """Fiscal-year-end → the year's actual EPS on the analyst-consensus basis.
+
+    The sum of the four quarterly "Reported EPS" values (``earnings_dates``) belonging to
+    the fiscal year — the adjusted basis analysts estimate against, so it's comparable with
+    the forward ``eps_estimate`` in a way the GAAP-diluted ``eps_actual`` isn't. A quarter
+    belongs to the year when its derived calendar quarter-end falls in the year ending at
+    the (true, income-statement) fiscal-year-end; any 1-year window holds exactly four
+    calendar quarter-ends, so a year is emitted only when all four slots carry a reported
+    EPS. Fewer means the history ran out (or a non-quarterly reporter) — better no figure
+    than a wrong one."""
+    quarters = _quarterly_reported_eps(dates_frame)
+    out: dict[date, float] = {}
+    for year in reported:
+        fy_end = year.period_end
+        if fy_end is None:
+            continue
+        window_start = _minus_one_year(fy_end)
+        eps_in_year = [
+            eps for quarter_end, eps in quarters.items()
+            if window_start < quarter_end <= fy_end
+        ]
+        if len(eps_in_year) == 4:
+            out[fy_end] = round(sum(eps_in_year), 4)
+    return out
+
+
+def _quarterly_reported_eps(frame) -> dict[date, float]:
+    """``earnings_dates`` → one reported (consensus-basis) EPS per derived calendar
+    quarter-end, the most recent announcement winning a duplicate (a restatement).
+
+    The derivation mirrors the quarterly adapter: earnings are announced weeks after the
+    quarter closes, so the quarter being reported is the calendar quarter that most recently
+    ended before the announcement. Rows without a reported EPS (scheduled future
+    announcements) are dropped."""
+    if frame is None or getattr(frame, "empty", True):
+        return {}
+    try:
+        pairs = list(frame.iterrows())
+    except Exception:  # noqa: BLE001 — never let a frame quirk escape the adapter
+        return {}
+    rows: list[tuple[date, float]] = []
+    for index, series in pairs:
+        report_date = _to_date(index)
+        if report_date is None:
+            continue
+        try:
+            eps = _num(series.get("Reported EPS"))
+        except Exception:  # noqa: BLE001 — a frame quirk must not escape the adapter
+            eps = None
+        if eps is None:
+            continue
+        rows.append((report_date, eps))
+    rows.sort(reverse=True)  # newest announcement first, so it wins its quarter below
+    out: dict[date, float] = {}
+    for report_date, eps in rows:
+        out.setdefault(_period_end_before(report_date), eps)
+    return out
+
+
+def _period_end_before(report: date) -> date:
+    """The most recent calendar quarter-end strictly before an announcement date (the
+    quarterly adapter's fiscal-alignment convention, mirrored here — adapters don't import
+    each other)."""
+    ends = [
+        date(report.year, 3, 31),
+        date(report.year, 6, 30),
+        date(report.year, 9, 30),
+        date(report.year, 12, 31),
+        date(report.year - 1, 12, 31),
+    ]
+    return max(end for end in ends if end < report)
+
+
 def _row(frame, name: str):
     """One labelled row of the income statement as a Series, or ``None`` (missing)."""
     try:
@@ -294,3 +400,11 @@ def _add_one_year(day: date) -> date:
         return day.replace(year=day.year + 1)
     except ValueError:
         return day.replace(year=day.year + 1, day=28)
+
+
+def _minus_one_year(day: date) -> date:
+    """One year back from a fiscal-year-end date; a Feb-29 end clamps to Feb-28."""
+    try:
+        return day.replace(year=day.year - 1)
+    except ValueError:
+        return day.replace(year=day.year - 1, day=28)

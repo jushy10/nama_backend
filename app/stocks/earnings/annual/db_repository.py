@@ -35,6 +35,7 @@ def _to_entity(row: StockAnnualEarningsRecord) -> AnnualEarnings:
         revenue_actual=row.revenue_actual,
         revenue_estimate=row.revenue_estimate,
         net_income=row.net_income,
+        eps_actual_consensus=row.eps_actual_consensus,
     )
 
 
@@ -88,6 +89,7 @@ class SqlAnnualEarningsRepository(AnnualEarningsRepository):
                     revenue_actual=year.revenue_actual,
                     revenue_estimate=year.revenue_estimate,
                     net_income=year.net_income,
+                    eps_actual_consensus=year.eps_actual_consensus,
                     fetched_at=now,
                 )
             )

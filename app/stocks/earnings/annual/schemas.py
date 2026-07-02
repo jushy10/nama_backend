@@ -23,6 +23,9 @@ class AnnualEarningsYearResponse(BaseModel):
     revenue_actual: float | None
     revenue_estimate: float | None
     net_income: float | None
+    # The reported year's actual EPS on the analyst-consensus (adjusted) basis — comparable
+    # with eps_estimate, unlike the GAAP-diluted eps_actual. Best-effort; reported years only.
+    eps_actual_consensus: float | None
     is_reported: bool
 
 
