@@ -14,9 +14,6 @@ from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     Constituent,
-    GrowthScreenBoard,
-    GrowthScreenedStock,
-    GrowthSortKey,
     InvestmentAnalysis,
     Logo,
     MoversBoard,
@@ -39,7 +36,6 @@ from app.stocks.ports import (
     CandleProvider,
     CompanyProfileProvider,
     ConstituentRepository,
-    ForwardGrowthProvider,
     InvestmentAnalysisProvider,
     LogoProvider,
     QuoteBatchProvider,
@@ -330,7 +326,7 @@ class ScreenStocks:
         if limit < 1:
             raise ValueError("'limit' must be at least 1.")
 
-        universe = _filter_universe(self._repository.all(), index, sector)
+        universe = self._filter(self._repository.all(), index, sector)
         symbols = [c.symbol for c in universe]
         quotes = self._quotes.get_quotes(symbols) if symbols else {}
         # A non-empty universe that returns no quotes at all means the upstream
@@ -375,102 +371,21 @@ class ScreenStocks:
             losers=losers,
         )
 
-
-def _filter_universe(
-    constituents: tuple[Constituent, ...],
-    index: StockIndex | None,
-    sector: str | None,
-) -> list[Constituent]:
-    """Narrow a screener universe by index membership and/or GICS sector.
-
-    Shared by both screeners so "the universe" means the same thing whichever
-    line a caller ranks on. Sector matching is case-insensitive; ``None`` for
-    either filter means "don't narrow on it".
-    """
-    sector_key = sector.strip().casefold() if sector else None
-    return [
-        c
-        for c in constituents
-        if (index is None or c.in_index(index))
-        and (sector_key is None or (c.sector or "").casefold() == sector_key)
-    ]
-
-
-class ScreenGrowthStocks:
-    """Use case: rank a universe of stocks by their expected next-fiscal-year growth.
-
-    The forward-looking screener — where ``ScreenStocks`` ranks the day's price
-    move, this ranks the analyst consensus for the upcoming fiscal year (FY1
-    estimate versus the latest reported actual, as stored by the annual-earnings
-    slice) over the constituents of an index, optionally narrowed to one GICS
-    sector. Callers pick the line to rank on (EPS or revenue) and may set minimum
-    growth thresholds on either; a stock missing a thresholded figure — or the
-    sort figure — can't demonstrate it qualifies, so it's simply left out.
-    Coverage is whatever the annual-earnings cache holds; the board reports it so
-    an unseeded universe reads as "no data yet", not "no growth anywhere".
-    """
-
-    def __init__(
-        self, repository: ConstituentRepository, growth: ForwardGrowthProvider
-    ) -> None:
-        self._repository = repository
-        self._growth = growth
-
-    def execute(
-        self,
-        *,
-        index: StockIndex | None = None,
-        sector: str | None = None,
-        sort: GrowthSortKey = GrowthSortKey.EPS,
-        min_revenue_growth: float | None = None,
-        min_eps_growth: float | None = None,
-        limit: int = 20,
-    ) -> GrowthScreenBoard:
-        if limit < 1:
-            raise ValueError("'limit' must be at least 1.")
-
-        universe = _filter_universe(self._repository.all(), index, sector)
-        symbols = [c.symbol for c in universe]
-        growth = self._growth.get_forward_growth(symbols) if symbols else {}
-
-        screened = [
-            GrowthScreenedStock(name=c.name, sector=c.sector, growth=growth[c.symbol])
-            for c in universe
-            if c.symbol in growth
-        ]
-        qualified = [
-            s
-            for s in screened
-            if self._sort_key(s, sort) is not None
-            and _passes(s.expected_revenue_growth, min_revenue_growth)
-            and _passes(s.expected_eps_growth, min_eps_growth)
-        ]
-        # The sort figure is never None past the filter above.
-        ranked = sorted(qualified, key=lambda s: self._sort_key(s, sort), reverse=True)
-
-        return GrowthScreenBoard(
-            index=index,
-            sector=sector,
-            sort=sort,
-            min_revenue_growth=min_revenue_growth,
-            min_eps_growth=min_eps_growth,
-            limit=limit,
-            universe_count=len(universe),
-            covered_count=len(screened),
-            stocks=tuple(ranked[:limit]),
-        )
-
     @staticmethod
-    def _sort_key(stock: GrowthScreenedStock, sort: GrowthSortKey) -> float | None:
-        if sort is GrowthSortKey.REVENUE:
-            return stock.expected_revenue_growth
-        return stock.expected_eps_growth
+    def _filter(
+        constituents: tuple[Constituent, ...],
+        index: StockIndex | None,
+        sector: str | None,
+    ) -> list[Constituent]:
+        """Narrow the universe by index membership and/or GICS sector.
 
-
-def _passes(value: float | None, minimum: float | None) -> bool:
-    """Whether a growth figure clears a minimum threshold. No threshold passes
-    everything; a thresholded-but-missing figure fails — the stock can't
-    demonstrate it qualifies."""
-    if minimum is None:
-        return True
-    return value is not None and value >= minimum
+        Sector matching is case-insensitive; ``None`` for either filter means
+        "don't narrow on it".
+        """
+        sector_key = sector.strip().casefold() if sector else None
+        return [
+            c
+            for c in constituents
+            if (index is None or c.in_index(index))
+            and (sector_key is None or (c.sector or "").casefold() == sector_key)
+        ]

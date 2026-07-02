@@ -24,9 +24,6 @@ from app.stocks.entities import (
     AllTimeHigh,
     CandleSeries,
     GrowthMetrics,
-    GrowthScreenBoard,
-    GrowthScreenedStock,
-    GrowthSortKey,
     InvestmentAnalysis,
     KeyMetrics,
     MoversBoard,
@@ -46,9 +43,6 @@ from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
 from app.stocks.adapters.annual_earnings_estimates_adapter import (
     AnnualEarningsEstimatesProvider,
-)
-from app.stocks.adapters.annual_earnings_forward_growth_adapter import (
-    AnnualEarningsForwardGrowthProvider,
 )
 from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
@@ -70,8 +64,6 @@ from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
     GrowthMetricsResponse,
-    GrowthScreenedStockResponse,
-    GrowthScreenerResponse,
     InvestmentAnalysisResponse,
     KeyMetricsResponse,
     MoversResponse,
@@ -92,7 +84,6 @@ from app.stocks.use_cases import (
     GetStockLogo,
     GetStockQuote,
     GetStockRsi,
-    ScreenGrowthStocks,
     ScreenStocks,
 )
 
@@ -510,103 +501,6 @@ def get_screener_endpoint(
     # collapses onto one upstream sweep.
     response.headers["Cache-Control"] = "public, max-age=15"
     return _present_movers(board)
-
-
-def get_growth_screener(db: Session = Depends(get_db)) -> ScreenGrowthStocks:
-    # Universe from the constituents table; the forward-growth legs from the
-    # annual-earnings cache (DB-only — the sync cron keeps it current and
-    # seeds constituents, so this endpoint never touches Yahoo).
-    return ScreenGrowthStocks(
-        SqlConstituentRepository(db), AnnualEarningsForwardGrowthProvider(db)
-    )
-
-
-def _present_growth_screened(stock: GrowthScreenedStock) -> GrowthScreenedStockResponse:
-    """Presenter: one growth-screened entity -> HTTP response DTO."""
-    return GrowthScreenedStockResponse(
-        symbol=stock.symbol,
-        name=stock.name,
-        sector=stock.sector,
-        fiscal_year=stock.growth.fiscal_year,
-        prior_fiscal_year=stock.growth.prior_fiscal_year,
-        expected_eps_growth=stock.expected_eps_growth,
-        expected_revenue_growth=stock.expected_revenue_growth,
-        eps_estimate=stock.growth.eps_estimate,
-        eps_actual=stock.growth.eps_actual,
-        revenue_estimate=stock.growth.revenue_estimate,
-        revenue_actual=stock.growth.revenue_actual,
-    )
-
-
-def _present_growth_board(board: GrowthScreenBoard) -> GrowthScreenerResponse:
-    """Presenter: growth screen board entity -> HTTP response DTO."""
-    return GrowthScreenerResponse(
-        index=board.index.value if board.index else None,
-        sector=board.sector,
-        sort=board.sort.value,
-        min_revenue_growth=board.min_revenue_growth,
-        min_eps_growth=board.min_eps_growth,
-        limit=board.limit,
-        universe_count=board.universe_count,
-        covered_count=board.covered_count,
-        count=len(board.stocks),
-        stocks=[_present_growth_screened(s) for s in board.stocks],
-    )
-
-
-# Like "/stocks/screener", declared before "/stocks/{symbol}" so the literal
-# path wins the match.
-@router.get("/stocks/screener/growth", response_model=GrowthScreenerResponse)
-def get_growth_screener_endpoint(
-    response: Response,
-    index: StockIndex | None = Query(
-        None, description="Limit the universe to an index. Omit for all known names."
-    ),
-    sector: str | None = Query(
-        None,
-        description=(
-            "Limit to one GICS sector, e.g. 'Information Technology', "
-            "'Health Care', 'Financials' (case-insensitive). Omit for all sectors."
-        ),
-    ),
-    sort: GrowthSortKey = Query(
-        GrowthSortKey.EPS,
-        description="Which expected-growth line to rank on: 'eps' or 'revenue'.",
-    ),
-    min_revenue_growth: float | None = Query(
-        None,
-        description=(
-            "Only stocks whose expected next-fiscal-year revenue growth is at "
-            "least this (percent, e.g. 10 = +10%)."
-        ),
-    ),
-    min_eps_growth: float | None = Query(
-        None,
-        description=(
-            "Only stocks whose expected next-fiscal-year EPS growth is at "
-            "least this (percent, e.g. 10 = +10%)."
-        ),
-    ),
-    limit: int = Query(20, ge=1, le=100, description="How many stocks to return."),
-    use_case: ScreenGrowthStocks = Depends(get_growth_screener),
-) -> GrowthScreenerResponse:
-    try:
-        board = use_case.execute(
-            index=index,
-            sector=sector,
-            sort=sort,
-            min_revenue_growth=min_revenue_growth,
-            min_eps_growth=min_eps_growth,
-            limit=limit,
-        )
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except StockDataUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
-    # Consensus estimates move at cron cadence, not tick by tick — cache for a
-    # few minutes so bursts collapse onto one DB sweep.
-    response.headers["Cache-Control"] = "public, max-age=300"
-    return _present_growth_board(board)
 
 
 @router.get("/stocks/{symbol}", response_model=StockResponse)
