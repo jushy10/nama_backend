@@ -8,9 +8,10 @@ Wiring lives here, the composition-root way: build the live yfinance adapter + t
 repository and hand them to the use case. yfinance reads Yahoo's public data with no API key,
 so there's no credential to gate on; the sync is always constructable.
 
-Security: this endpoint is intentionally **unauthenticated**. It writes the database (and
-hits Yahoo), so it relies on network isolation — it must not be reachable from the public
-internet. Put a guard (auth token / private networking) in front before exposing it.
+Security: this endpoint is currently **unauthenticated** — it writes the database (and
+hits Yahoo) and is triggered over the public internet by the sync workflow, so an auth
+token (planned: a shared ``CRON_SYNC_TOKEN`` bearer guard) should be added before the
+endpoints are considered hardened.
 """
 
 from fastapi import APIRouter, Depends, Query

@@ -46,7 +46,6 @@ from app.stocks.ports import (
     QuoteBatchProvider,
     RevenueHistoryProvider,
     SectorPerformanceProvider,
-    SegmentRevenueProvider,
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
@@ -243,20 +242,20 @@ class GetStockRsi:
         return rsi_series(series, period)
 
 
-# The EPS feed (Finnhub) and SEC EDGAR date the same quarter differently: EDGAR
-# records the true fiscal period end, while Finnhub snaps the quarter to a nearby
-# calendar quarter-end. For an off-calendar filer those two dates can sit up to
-# ~two months apart (NVDA's quarter ends ~Apr 26, Ciena's ~May 2, each labelled a
+# The EPS feed (Finnhub) and the revenue source date the same quarter differently:
+# one may carry the true fiscal period end while the other snaps the quarter to a
+# nearby calendar quarter-end. For an off-calendar filer those two dates can sit up
+# to ~two months apart (NVDA's quarter ends ~Apr 26, Ciena's ~May 2, each labelled a
 # calendar quarter away) — far enough that the snapped label can land closer to an
 # *adjacent* fiscal quarter than to its own, so pairing by closest date misaligns.
 #
 # Instead we align the two series by order: both list the same consecutive quarters
 # newest-first, so we walk them in lockstep and pair them off, using the dates only
 # to notice when one side runs a quarter ahead of the other (e.g. the EPS is
-# announced before the 10-Q is filed, so EDGAR hasn't got that quarter yet). Two
-# dates this close are taken to be the same quarter — comfortably above the worst
-# label gap (~65 days) yet well below the ~91-day spacing between quarters, so
-# neighbouring quarters never collide.
+# announced before the revenue source has recorded that quarter). Two dates this
+# close are taken to be the same quarter — comfortably above the worst label gap
+# (~65 days) yet well below the ~91-day spacing between quarters, so neighbouring
+# quarters never collide.
 _SAME_QUARTER_DAYS = 75
 
 _T = TypeVar("_T")
@@ -265,14 +264,13 @@ _T = TypeVar("_T")
 def _align_to_quarters(
     quarters: tuple[EarningsSurprise, ...], by_period_end: dict[date, _T]
 ) -> dict[int, _T]:
-    """Map each EPS quarter (by its index) to the EDGAR value for that quarter.
+    """Map each EPS quarter (by its index) to the revenue value for that quarter.
 
-    Walks the EPS quarters and the EDGAR period ends together, newest-first, and
-    pairs them up by fiscal period end. Used for both overlays that key off the
-    same filings — the per-quarter revenue actuals and the segment/product
-    breakdowns — so they align identically. A quarter newer than anything EDGAR
-    has filed (or one with no period) is left unmatched, as is an EDGAR period
-    belonging to a quarter newer than any in the EPS history.
+    Walks the EPS quarters and the revenue source's period ends together,
+    newest-first, and pairs them up by fiscal period end. A quarter newer than
+    anything the revenue source carries (or one with no period) is left
+    unmatched, as is a revenue period belonging to a quarter newer than any in
+    the EPS history.
     """
     dated = sorted(
         ((i, q.period) for i, q in enumerate(quarters) if q.period is not None),
@@ -287,9 +285,9 @@ def _align_to_quarters(
         end = ends[j]
         gap = (period - end).days
         if gap > _SAME_QUARTER_DAYS:
-            i += 1  # this EPS quarter is newer than any EDGAR period — skip it
+            i += 1  # this EPS quarter is newer than any revenue period — skip it
         elif gap < -_SAME_QUARTER_DAYS:
-            j += 1  # this EDGAR period is newer than the EPS quarter — skip it
+            j += 1  # this revenue period is newer than the EPS quarter — skip it
         else:
             matched[index] = by_period_end[end]
             i += 1
@@ -311,10 +309,9 @@ class GetStockEarnings:
     top of the (primary) beat history, none of which can sink it: the trailing
     earnings ``metrics`` and the ``valuation`` ratios (both from the same
     fundamentals call), the ``next_report`` forecast (from the earnings
-    calendar), per-quarter ``revenue_actual`` (reported revenue from SEC EDGAR),
-    and per-quarter ``revenue_breakdown`` (that revenue split by segment and
-    product/service, parsed from the filing itself). The two revenue layers are
-    aligned onto each quarter by fiscal period end.
+    calendar), and per-quarter ``revenue_actual`` (reported revenue, overlaid
+    from the quarterly-earnings slice and aligned onto each quarter by fiscal
+    period end).
     """
 
     def __init__(
@@ -323,13 +320,11 @@ class GetStockEarnings:
         fundamentals_provider: StockFundamentalsProvider | None = None,
         calendar_provider: EarningsCalendarProvider | None = None,
         revenue_provider: RevenueHistoryProvider | None = None,
-        segment_revenue_provider: SegmentRevenueProvider | None = None,
     ) -> None:
         self._provider = provider
         self._fundamentals_provider = fundamentals_provider
         self._calendar_provider = calendar_provider
         self._revenue_provider = revenue_provider
-        self._segment_revenue_provider = segment_revenue_provider
 
     def execute(self, symbol: str) -> EarningsHistory:
         normalized = _normalize_symbol(symbol)
@@ -337,7 +332,6 @@ class GetStockEarnings:
             normalized, limit=_EARNINGS_QUARTERS
         )
         quarters = self._with_revenue(normalized, history.quarters)
-        quarters = self._with_breakdown(normalized, quarters)
         fundamentals = self._fundamentals(normalized)
         # One fundamentals call feeds two blocks: the trailing earnings metrics
         # and the valuation/health/market ratios (the same KeyMetrics the stock
@@ -365,9 +359,10 @@ class GetStockEarnings:
     def _with_revenue(
         self, symbol: str, quarters: tuple[EarningsSurprise, ...]
     ) -> tuple[EarningsSurprise, ...]:
-        # Overlay reported revenue actuals (SEC EDGAR) onto the EPS quarters,
-        # aligned quarter-by-quarter; best-effort. Returning the same tuple
-        # identity signals "nothing merged" so execute can short-circuit.
+        # Overlay reported revenue actuals (the quarterly-earnings slice's stored
+        # rows) onto the EPS quarters, aligned quarter-by-quarter; best-effort.
+        # Returning the same tuple identity signals "nothing merged" so execute
+        # can short-circuit.
         if self._revenue_provider is None:
             return quarters
         try:
@@ -381,30 +376,6 @@ class GetStockEarnings:
             return quarters
         return tuple(
             replace(q, revenue_actual=matched[i]) if i in matched else q
-            for i, q in enumerate(quarters)
-        )
-
-    def _with_breakdown(
-        self, symbol: str, quarters: tuple[EarningsSurprise, ...]
-    ) -> tuple[EarningsSurprise, ...]:
-        # Overlay each quarter's segment/product revenue breakdown (parsed from
-        # the SEC EDGAR filings), aligned by period end like the revenue actuals;
-        # best-effort, and same identity-preserving short-circuit as _with_revenue.
-        if self._segment_revenue_provider is None:
-            return quarters
-        try:
-            breakdowns = self._segment_revenue_provider.get_quarterly_segment_revenue(
-                symbol
-            )
-        except (StockNotFound, StockDataUnavailable):
-            return quarters
-        if not breakdowns:
-            return quarters
-        matched = _align_to_quarters(quarters, breakdowns)
-        if not matched:
-            return quarters
-        return tuple(
-            replace(q, revenue_breakdown=matched[i]) if i in matched else q
             for i, q in enumerate(quarters)
         )
 
