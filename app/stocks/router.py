@@ -22,7 +22,6 @@ from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.constituents import SqlConstituentRepository
 from app.stocks.entities import (
     AllTimeHigh,
-    AnalystEstimates,
     CandleSeries,
     GrowthMetrics,
     GrowthScreenBoard,
@@ -68,7 +67,6 @@ from app.stocks.ports import (
 )
 from app.stocks.schemas import (
     AllTimeHighResponse,
-    AnalystEstimatesResponse,
     CandleResponse,
     CandleSeriesResponse,
     GrowthMetricsResponse,
@@ -265,9 +263,7 @@ def _present(stock: Stock) -> StockResponse:
         dividend_yield=stock.dividend_yield,
         performance=_present_performance(stock.performance),
         metrics=_present_metrics(stock.metrics),
-        analyst_estimates=_present_estimates(stock.analyst_estimates),
         forward_pe=stock.forward_pe,
-        forward_ps=stock.forward_ps,
         growth=_present_growth(stock.growth),
         all_time_high=_present_all_time_high(stock.all_time_high),
         drawdown_from_high=stock.drawdown_from_high,
@@ -321,7 +317,6 @@ def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
         pe=metrics.pe,
         peg=metrics.peg,
         pb=metrics.pb,
-        ps=metrics.ps,
         fcf_per_share=metrics.fcf_per_share,
         roe=metrics.roe,
         gross_margin=metrics.gross_margin,
@@ -329,26 +324,8 @@ def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
         net_margin=metrics.net_margin,
         current_ratio=metrics.current_ratio,
         debt_to_equity=metrics.debt_to_equity,
-        beta=metrics.beta,
         week_52_high=metrics.week_52_high,
         week_52_low=metrics.week_52_low,
-    )
-
-
-def _present_estimates(
-    estimates: AnalystEstimates | None,
-) -> AnalystEstimatesResponse | None:
-    # Forward consensus (FY1/FY2) on the stock snapshot; the derived forward_pe /
-    # forward_ps are presented as their own top-level fields (they need the price).
-    if estimates is None:
-        return None
-    return AnalystEstimatesResponse(
-        fiscal_year=estimates.fiscal_year,
-        period_end=estimates.period_end,
-        eps_avg=estimates.eps_avg,
-        revenue_avg=estimates.revenue_avg,
-        eps_avg_fy2=estimates.eps_avg_fy2,
-        fiscal_year_fy2=estimates.fiscal_year_fy2,
     )
 
 

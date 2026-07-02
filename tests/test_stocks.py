@@ -1221,9 +1221,7 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
     # nested key metrics ride along on the same fundamentals payload — the
     # valuation/health/profitability/market slice; EPS + growth stay on /earnings
     assert body["metrics"]["pe"] == 28.5
-    assert body["metrics"]["beta"] == 1.2
     assert body["metrics"]["week_52_high"] == 320.0
-    assert body["metrics"]["ps"] == 7.1
     assert body["metrics"]["debt_to_equity"] == 1.5
     assert body["metrics"]["fcf_per_share"] == 6.43  # trailing free cash flow per share
     assert body["metrics"]["roe"] == 147.4  # return on equity (percent)
@@ -1234,13 +1232,15 @@ def test_get_stock_includes_enrichment_with_alias_keys(make_client):
     assert body["metrics"]["net_margin"] == 25.0
     for moved in ("eps", "eps_growth_yoy"):
         assert moved not in body["metrics"], moved
+    # P/S and beta stay on the KeyMetrics entity (they feed the AI analysis
+    # context) but are no longer serialized on the snapshot.
+    for trimmed in ("ps", "beta"):
+        assert trimmed not in body["metrics"], trimmed
 
 
 def test_get_stock_includes_forward_estimates(make_client):
     client = make_client(
         FakeProvider(stock=a_stock(price=280.0)),
-        # market_cap is enrichment from the fundamentals feed, so forward P/S needs
-        # it supplied here (forward P/E only needs the live price).
         fundamentals_provider=FakeFundamentalsProvider(
             a_fundamentals(market_cap=2_000_000_000_000.0)
         ),
@@ -1249,16 +1249,12 @@ def test_get_stock_includes_forward_estimates(make_client):
         ),
     )
     body = client.get("/stocks/AAPL").json()
-    # Derived forward multiples ride at the top level (they need the live price)…
+    # The derived forward P/E rides at the top level (it needs the live price)…
     assert body["forward_pe"] == 35.0          # 280 / 8.0
-    assert body["forward_ps"] == 5.0           # 2.0T / 400B
-    # …and the raw consensus block carries FY1 + FY2.
-    assert body["analyst_estimates"]["fiscal_year"] == 2026
-    assert body["analyst_estimates"]["eps_avg"] == 8.0
-    assert body["analyst_estimates"]["eps_avg_fy2"] == 9.2
-    # The consensus range and analyst counts were dropped with the estimates table.
-    for dropped in ("eps_low", "eps_high", "num_analysts_eps", "num_analysts_revenue"):
-        assert dropped not in body["analyst_estimates"], dropped
+    # …but the raw consensus block and forward P/S were trimmed off the response
+    # (the estimates entity still feeds forward_pe and the growth block).
+    for trimmed in ("forward_ps", "analyst_estimates"):
+        assert trimmed not in body, trimmed
 
 
 def test_get_stock_includes_growth_block(make_client):
