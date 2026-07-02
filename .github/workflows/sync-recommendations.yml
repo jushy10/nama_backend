@@ -1,0 +1,122 @@
+name: Sync recommendations
+run-name: Sync recommendations
+
+# Daily (and on-demand). Analyst recommendation trends are monthly snapshots, but the
+# *current* month's counts drift as analysts issue upgrades/downgrades — and the read
+# cache serves stored rows at any age (no TTL), so freshness rides entirely on this run.
+# Daily keeps the current month at most a day stale, and it's cheap: one Yahoo call per
+# stock. It POSTs the deployed app's recommendations cron endpoint
+# (app/stocks/endpoints/cron_recommendations_endpoints.py), which runs the
+# SyncRecommendations use case, refreshing the stalest stocks first.
+#
+# The refresh runs in SMALL BATCHES rather than one big call: the endpoint is synchronous
+# and the ALB in front of the app has a ~60s idle timeout, so a hundreds-of-symbols
+# request would 504 at the load balancer while the app kept working. Each batch refreshes
+# a couple dozen stocks (one Yahoo call each — well under the timeout); refreshed stocks
+# get a new fetch stamp, so consecutive stalest-first batches naturally walk the whole
+# stored set. The loop stops early when a batch refreshes nothing (Yahoo blocking the
+# runs) or comes back smaller than requested (stored set exhausted).
+#
+# Operational notes:
+#  - The live source is yfinance (Yahoo), which needs no API key. Yahoo rate-limits /
+#    blocks data-centre IPs intermittently, so a run may refresh fewer stocks than the
+#    limit; the next run retries the stalest first. An empty result from Yahoo is never
+#    stored, so a transient block leaves the cached months intact.
+#  - The endpoint is guarded by a bearer token once CRON_SYNC_TOKEN is configured (set the
+#    same value in the app's environment and as this repo's CRON_SYNC_TOKEN Actions
+#    secret); until then it is open, so configure it promptly.
+#
+# Requires the repo/environment variable API_BASE_URL — the deployed app's base URL,
+# reachable from the GitHub runner.
+
+on:
+  workflow_dispatch: {}
+  # Daily, 07:30 UTC — before the market opens, and staggered off the weekly earnings
+  # syncs (Mondays 08:00/09:00) so the app isn't hammering Yahoo from the same host at
+  # once. Exact timing doesn't matter, so GitHub delaying scheduled runs under load is
+  # fine. Caveats: scheduled workflows run only from the default branch, and GitHub
+  # auto-disables the schedule after 60 days with no repo activity.
+  schedule:
+    - cron: "30 7 * * *"
+
+concurrency:
+  group: sync-recommendations
+  cancel-in-progress: false
+
+env:
+  # Max stored stocks to refresh per run, and how many per HTTP call. Each batch must
+  # finish inside the ALB's ~60s idle timeout (a stock is a single Yahoo call here, so
+  # the batch can be larger than the earnings syncs'); the loop covers the rest.
+  SYNC_RECOMMENDATIONS_LIMIT: "200"
+  SYNC_RECOMMENDATIONS_BATCH: "25"
+
+jobs:
+  sync:
+    name: Sync recommendations
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Trigger the recommendations refresh (batched)
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+          CRON_SYNC_TOKEN: ${{ secrets.CRON_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${API_BASE_URL:-}" ]; then
+            echo "::error::API_BASE_URL is not set — add it as a repo/environment variable pointing at the deployed app."
+            exit 1
+          fi
+
+          auth=()
+          if [ -n "${CRON_SYNC_TOKEN:-}" ]; then
+            auth=(-H "Authorization: Bearer ${CRON_SYNC_TOKEN}")
+          else
+            echo "::warning::CRON_SYNC_TOKEN is not set — calling the sync endpoint unauthenticated."
+          fi
+
+          total="${SYNC_RECOMMENDATIONS_LIMIT}"
+          batch="${SYNC_RECOMMENDATIONS_BATCH}"
+          url="${API_BASE_URL%/}/internal/recommendations/sync?limit=${batch}"
+          refreshed_total=0
+          failed_total=0
+          done_count=0
+
+          while [ "$done_count" -lt "$total" ]; do
+            http_code=$(curl -sS -X POST "$url" "${auth[@]}" \
+              --max-time 120 \
+              -o /tmp/sync_response.json \
+              -w '%{http_code}')
+            body=$(cat /tmp/sync_response.json 2>/dev/null || echo '{}')
+            echo "POST limit=${batch} -> HTTP ${http_code}: ${body}"
+
+            if [ "$http_code" != "200" ]; then
+              echo "::error::Recommendations sync batch failed (HTTP $http_code) — check the app logs."
+              exit 1
+            fi
+
+            refreshed=$(echo "$body" | jq -r '.refreshed // 0')
+            failed=$(echo "$body" | jq -r '.failed // 0')
+            refreshed_total=$((refreshed_total + refreshed))
+            failed_total=$((failed_total + failed))
+            done_count=$((done_count + refreshed + failed))
+
+            # Nothing refreshed: either no stored stocks or Yahoo is blocking every fetch —
+            # more batches won't help this run.
+            if [ "$refreshed" -eq 0 ]; then
+              echo "No stocks refreshed in this batch — stopping early."
+              break
+            fi
+            # A short batch means the stored set is smaller than the request — done.
+            if [ $((refreshed + failed)) -lt "$batch" ]; then
+              echo "Stored set exhausted — stopping."
+              break
+            fi
+          done
+
+          echo "Recommendations synced: refreshed=${refreshed_total} failed=${failed_total}."
+          if [ "$refreshed_total" -eq 0 ] && [ "$failed_total" -gt 0 ]; then
+            echo "::error::Every attempted stock failed this run (Yahoo blocked?) — stored rows keep serving; the next run retries."
+            exit 1
+          fi

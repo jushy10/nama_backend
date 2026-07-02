@@ -28,14 +28,14 @@ class StockPerformanceResponse(BaseModel):
 
 
 class KeyMetricsResponse(BaseModel):
-    """Trailing valuation, financial-health and market indicators.
+    """Trailing valuation, financial-health, profitability and market indicators.
 
-    The valuation ratios, returns and risk/range figures for the price snapshot.
-    The earnings-flavored metrics (EPS, growth, margins) live on the earnings
-    endpoint instead — see ``EarningsMetricsResponse``. All trailing (no forward
-    estimates); the ratios are plain multiples, ``roe`` is a percent, and
-    ``fcf_per_share`` is in the quote currency. Any field a vendor doesn't cover
-    is ``null``.
+    The valuation ratios, returns, margins and risk/range figures for the price
+    snapshot. The remaining earnings-flavored metrics (EPS, growth) live on the
+    earnings endpoint instead — see ``EarningsMetricsResponse``. All trailing (no
+    forward estimates); the ratios are plain multiples, ``roe`` and the margins
+    are percent, and ``fcf_per_share`` is in the quote currency. Any field a
+    vendor doesn't cover is ``null``.
     """
 
     pe: float | None = None  # price / trailing EPS
@@ -44,6 +44,11 @@ class KeyMetricsResponse(BaseModel):
     ps: float | None = None  # price / sales
     fcf_per_share: float | None = None  # trailing free cash flow per share
     roe: float | None = None  # return on equity (percent)
+    # Profitability margins (percent) — on the snapshot so the stock page keeps
+    # them once the legacy /earnings endpoint is phased out.
+    gross_margin: float | None = None
+    operating_margin: float | None = None
+    net_margin: float | None = None
     current_ratio: float | None = None
     debt_to_equity: float | None = None
     beta: float | None = None
@@ -269,41 +274,6 @@ class EarningsHistoryResponse(BaseModel):
     metrics: EarningsMetricsResponse | None = None
     valuation: KeyMetricsResponse | None = None
     next_report: NextEarningsResponse | None = None
-
-
-class RecommendationTrendResponse(BaseModel):
-    """Analysts' buy/hold/sell split for one monthly snapshot.
-
-    The five buckets are the analyst counts for each stance; ``total`` sums them,
-    ``score`` is the consensus mean on the 1 (Strong Buy) … 5 (Strong Sell) scale
-    (``null`` with no coverage), and ``consensus`` that mean as a five-step
-    label (``Strong Buy`` … ``Strong Sell``)."""
-
-    period: date  # first day of the month the snapshot covers
-    strong_buy: int
-    buy: int
-    hold: int
-    sell: int
-    strong_sell: int
-    total: int
-    score: float | None = None
-    consensus: str | None = None
-
-
-class RecommendationsResponse(BaseModel):
-    """Analyst recommendation trends for a symbol, newest snapshot first.
-
-    The forward "what does the street think?" read for the stock page.
-    ``latest`` is the current month's split and ``direction`` how the consensus
-    shifted from the prior month ("upgraded" / "downgraded" / "unchanged" /
-    ``null``) — the predictive part. ``count`` is how many monthly snapshots are
-    returned; an empty ``trends`` means no analyst covers the symbol."""
-
-    symbol: str
-    count: int
-    direction: str | None = None
-    latest: RecommendationTrendResponse | None = None
-    trends: list[RecommendationTrendResponse]
 
 
 class SectorPerformanceResponse(BaseModel):

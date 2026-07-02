@@ -11,7 +11,6 @@ from datetime import date, datetime
 from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
-    AnalystRecommendations,
     CandleSeries,
     CompanyProfile,
     Constituent,
@@ -196,29 +195,6 @@ class EarningsCalendarProvider(ABC):
         ``None`` when none is scheduled.
 
         Raises:
-            StockDataUnavailable: the upstream source failed.
-        """
-        raise NotImplementedError
-
-
-class RecommendationProvider(ABC):
-    """A gateway for a stock's analyst recommendation trends.
-
-    The sell-side buy/hold/sell split, by month — the "what does the street
-    think?" forward view, from a ratings vendor rather than the price feed. Backs
-    a dedicated endpoint (its own card on the stock page), so it's primary data
-    for that endpoint and failures surface as errors. "No analyst coverage" is
-    not a failure, though: it returns an empty ``AnalystRecommendations`` rather
-    than raising.
-    """
-
-    @abstractmethod
-    def get_recommendations(self, symbol: str) -> AnalystRecommendations:
-        """Return recommendation trends for the (already-normalized) symbol,
-        newest snapshot first (empty when no analyst covers it).
-
-        Raises:
-            StockNotFound: the symbol does not exist / isn't covered.
             StockDataUnavailable: the upstream source failed.
         """
         raise NotImplementedError

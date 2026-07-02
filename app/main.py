@@ -15,8 +15,14 @@ from app.stocks.endpoints.cron_annual_earnings_endpoints import (
 from app.stocks.endpoints.cron_quarterly_earnings_endpoints import (
     router as quarterly_earnings_cron_router,
 )
+from app.stocks.endpoints.cron_recommendations_endpoints import (
+    router as recommendations_cron_router,
+)
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     router as quarterly_earnings_router,
+)
+from app.stocks.endpoints.recommendations_endpoints import (
+    router as recommendations_router,
 )
 from app.stocks.router import router as stocks_router
 
@@ -55,6 +61,10 @@ app.include_router(quarterly_earnings_router)
 # recent reported fiscal years + upcoming estimated ones, served from the DB cache over
 # yfinance. See app/stocks/endpoints/annual_earnings_endpoints.py.
 app.include_router(annual_earnings_router)
+# The analyst-recommendations read endpoint (GET /stocks/{symbol}/recommendations): the
+# sell-side buy/hold/sell split by month, served from the DB cache over yfinance. See
+# app/stocks/endpoints/recommendations_endpoints.py.
+app.include_router(recommendations_router)
 # The quarterly-earnings refresh cron endpoint (POST /internal/earnings/quarterly/sync);
 # it drives the SyncQuarterlyEarnings use case out of band. See
 # app/stocks/endpoints/cron_quarterly_earnings_endpoints.py.
@@ -63,6 +73,10 @@ app.include_router(quarterly_earnings_cron_router)
 # drives the SyncAnnualEarnings use case out of band. See
 # app/stocks/endpoints/cron_annual_earnings_endpoints.py.
 app.include_router(annual_earnings_cron_router)
+# The recommendations refresh cron endpoint (POST /internal/recommendations/sync); it
+# drives the SyncRecommendations use case out of band. See
+# app/stocks/endpoints/cron_recommendations_endpoints.py.
+app.include_router(recommendations_cron_router)
 
 
 @app.get("/healthz")
