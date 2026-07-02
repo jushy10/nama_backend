@@ -24,8 +24,6 @@ from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
     CandleSeries,
-    EarningsHistory,
-    EarningsMetrics,
     GrowthMetrics,
     GrowthScreenBoard,
     GrowthScreenedStock,
@@ -33,7 +31,6 @@ from app.stocks.entities import (
     InvestmentAnalysis,
     KeyMetrics,
     MoversBoard,
-    NextEarnings,
     Quote,
     ScreenedStock,
     SectorPerformance,
@@ -45,10 +42,6 @@ from app.stocks.entities import (
 from app.stocks.caching_company_profile_provider import CachingCompanyProfileProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.finnhub_company_profile_provider import FinnhubCompanyProfileProvider
-from app.stocks.finnhub_earnings_calendar_provider import (
-    FinnhubEarningsCalendarProvider,
-)
-from app.stocks.finnhub_earnings_provider import FinnhubEarningsProvider
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
 from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
@@ -57,9 +50,6 @@ from app.stocks.adapters.annual_earnings_estimates_adapter import (
 )
 from app.stocks.adapters.annual_earnings_forward_growth_adapter import (
     AnnualEarningsForwardGrowthProvider,
-)
-from app.stocks.adapters.quarterly_earnings_revenue_adapter import (
-    QuarterlyEarningsRevenueProvider,
 )
 from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
@@ -70,11 +60,8 @@ from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
     CompanyProfileProvider,
-    EarningsCalendarProvider,
-    EarningsHistoryProvider,
     InvestmentAnalysisProvider,
     LogoProvider,
-    RevenueHistoryProvider,
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
@@ -84,16 +71,12 @@ from app.stocks.schemas import (
     AnalystEstimatesResponse,
     CandleResponse,
     CandleSeriesResponse,
-    EarningsHistoryResponse,
-    EarningsMetricsResponse,
-    EarningsSurpriseResponse,
     GrowthMetricsResponse,
     GrowthScreenedStockResponse,
     GrowthScreenerResponse,
     InvestmentAnalysisResponse,
     KeyMetricsResponse,
     MoversResponse,
-    NextEarningsResponse,
     QuoteResponse,
     RsiPointResponse,
     RsiResponse,
@@ -107,7 +90,6 @@ from app.stocks.use_cases import (
     GetSectorPerformance,
     GetStockAnalysis,
     GetStockCandles,
-    GetStockEarnings,
     GetStockInfo,
     GetStockLogo,
     GetStockQuote,
@@ -211,50 +193,6 @@ def get_sector_performance(
 
 
 @lru_cache(maxsize=1)
-def get_earnings_provider() -> EarningsHistoryProvider:
-    # Earnings beat history is this endpoint's primary data (not best-effort
-    # enrichment like market cap), so a missing key is a hard 503 — same shape
-    # as the price provider — rather than a silently empty response.
-    key = os.environ.get("FINNHUB_API_KEY")
-    if not key:
-        raise HTTPException(503, "Earnings data is not configured (FINNHUB_API_KEY).")
-    return FinnhubEarningsProvider(key)
-
-
-@lru_cache(maxsize=1)
-def get_earnings_calendar_provider() -> EarningsCalendarProvider | None:
-    # The next-report forecast is best-effort enrichment on the earnings
-    # endpoint (reuses the same Finnhub key the beat history needs); omitted
-    # when unconfigured rather than failing the response.
-    key = os.environ.get("FINNHUB_API_KEY")
-    return FinnhubEarningsCalendarProvider(key) if key else None
-
-
-def get_revenue_provider(
-    quarterly: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
-) -> RevenueHistoryProvider:
-    # Reported quarterly revenue for the earnings endpoint now rides on the
-    # quarterly-earnings slice's stored rows (Yahoo via the persistent DB cache,
-    # kept current by the merge-preserving cron) instead of a second vendor — one
-    # source of truth. A symbol never cached fills lazily on first view exactly
-    # like the quarterly endpoint itself; best-effort, so a miss just omits the
-    # revenue overlay.
-    return QuarterlyEarningsRevenueProvider(quarterly)
-
-
-def get_stock_earnings(
-    provider: EarningsHistoryProvider = Depends(get_earnings_provider),
-    # Trailing metrics, the next-report forecast, and per-quarter revenue are
-    # best-effort enrichment on top of the beat history — a miss leaves the
-    # (primary) response intact rather than failing it.
-    fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
-    calendar: EarningsCalendarProvider | None = Depends(get_earnings_calendar_provider),
-    revenue: RevenueHistoryProvider = Depends(get_revenue_provider),
-) -> GetStockEarnings:
-    return GetStockEarnings(provider, fundamentals, calendar, revenue)
-
-
-@lru_cache(maxsize=1)
 def get_analysis_provider() -> InvestmentAnalysisProvider:
     # AI analysis is this endpoint's primary data, so it's required — but unlike
     # the API-key vendors there's no secret to gate on: Bedrock authenticates
@@ -274,22 +212,16 @@ def get_analysis_provider() -> InvestmentAnalysisProvider:
         ) from exc
 
 
-@lru_cache(maxsize=1)
-def get_analysis_earnings_provider() -> EarningsHistoryProvider | None:
-    # The beat history is best-effort *context* for the analysis, not its primary
-    # data — so unlike the earnings endpoint a missing Finnhub key just omits it
-    # rather than 503-ing. Reuses the same key when present.
-    key = os.environ.get("FINNHUB_API_KEY")
-    return FinnhubEarningsProvider(key) if key else None
-
-
 def get_stock_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
     analyzer: InvestmentAnalysisProvider = Depends(get_analysis_provider),
-    earnings: EarningsHistoryProvider | None = Depends(get_analysis_earnings_provider),
+    # The quarterly timeline is best-effort *context* for the analysis — the same
+    # DB-cached provider the quarterly endpoint reads through, so it costs no
+    # extra vendor call for a cached symbol and needs no API key.
+    earnings: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
 ) -> GetStockAnalysis:
     # Reuses the stock snapshot wiring wholesale (price + enrichment), then layers
-    # the analyzer and the best-effort beat history on top.
+    # the analyzer and the best-effort earnings context on top.
     return GetStockAnalysis(stock_info, analyzer, earnings)
 
 
@@ -430,66 +362,6 @@ def _present_growth(growth: GrowthMetrics | None) -> GrowthMetricsResponse | Non
         eps_yoy=growth.eps_yoy,
         forward_revenue_growth=growth.forward_revenue_growth,
         forward_eps_growth=growth.forward_eps_growth,
-    )
-
-
-def _present_earnings_metrics(
-    metrics: EarningsMetrics | None,
-) -> EarningsMetricsResponse | None:
-    if metrics is None:
-        return None
-    return EarningsMetricsResponse(
-        eps=metrics.eps,
-        eps_growth_yoy=metrics.eps_growth_yoy,
-        revenue_growth_yoy=metrics.revenue_growth_yoy,
-        gross_margin=metrics.gross_margin,
-        operating_margin=metrics.operating_margin,
-        net_margin=metrics.net_margin,
-    )
-
-
-def _present_next_earnings(
-    next_report: NextEarnings | None,
-) -> NextEarningsResponse | None:
-    if next_report is None:
-        return None
-    return NextEarningsResponse(
-        report_date=next_report.report_date,
-        fiscal_year=next_report.fiscal_year,
-        fiscal_quarter=next_report.fiscal_quarter,
-        eps_estimate=next_report.eps_estimate,
-        revenue_estimate=next_report.revenue_estimate,
-        session=next_report.session,
-    )
-
-
-def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
-    """Presenter: earnings-history entity -> HTTP response DTO."""
-    return EarningsHistoryResponse(
-        symbol=history.symbol,
-        count=len(history.quarters),
-        beats=history.beats,
-        scored=history.scored,
-        beat_rate=history.beat_rate,
-        quarters=[
-            EarningsSurpriseResponse(
-                period=q.period,
-                fiscal_year=q.fiscal_year,
-                fiscal_quarter=q.fiscal_quarter,
-                actual=q.actual,
-                estimate=q.estimate,
-                surprise=q.surprise,
-                surprise_percent=q.surprise_percent,
-                beat=q.beat,
-                revenue_actual=q.revenue_actual,
-            )
-            for q in history.quarters
-        ],
-        metrics=_present_earnings_metrics(history.metrics),
-        # The valuation block is the same KeyMetrics slice the stock endpoint
-        # serves, so it reuses that presenter.
-        valuation=_present_metrics(history.valuation),
-        next_report=_present_next_earnings(history.next_report),
     )
 
 
@@ -889,22 +761,6 @@ def get_stock_rsi_endpoint(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present_rsi(series)
-
-
-@router.get("/stocks/{symbol}/earnings", response_model=EarningsHistoryResponse)
-def get_stock_earnings_endpoint(
-    symbol: str,
-    use_case: GetStockEarnings = Depends(get_stock_earnings),
-) -> EarningsHistoryResponse:
-    try:
-        history = use_case.execute(symbol)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except StockNotFound as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except StockDataUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
-    return _present_earnings(history)
 
 
 @router.get("/stocks/{symbol}/analysis", response_model=InvestmentAnalysisResponse)

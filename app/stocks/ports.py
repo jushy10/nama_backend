@@ -8,17 +8,16 @@ implementation. The core never imports Alpaca; Alpaca imports the core.
 from abc import ABC, abstractmethod
 from datetime import date, datetime
 
+from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
     CandleSeries,
     CompanyProfile,
     Constituent,
-    EarningsHistory,
     ForwardGrowth,
     InvestmentAnalysis,
     Logo,
-    NextEarnings,
     Quote,
     SectorPerformance,
     Stock,
@@ -161,71 +160,6 @@ class AnalystEstimatesProvider(ABC):
         raise NotImplementedError
 
 
-class EarningsHistoryProvider(ABC):
-    """A gateway for a stock's recent quarterly earnings surprises.
-
-    Actual-vs-estimate EPS comes from a fundamentals/estimates vendor, not the
-    price feed. This backs a dedicated endpoint (not best-effort enrichment),
-    so failures surface as errors rather than being swallowed.
-    """
-
-    @abstractmethod
-    def get_earnings_history(self, symbol: str, *, limit: int) -> EarningsHistory:
-        """Return up to ``limit`` recent quarters for the (normalized) symbol,
-        newest first.
-
-        Raises:
-            StockNotFound: the symbol has no earnings data.
-            StockDataUnavailable: the upstream source failed.
-        """
-        raise NotImplementedError
-
-
-class EarningsCalendarProvider(ABC):
-    """A gateway for a stock's next scheduled earnings report.
-
-    The forward view — expected report date plus the consensus EPS/revenue
-    going in — from an earnings-calendar vendor. Best-effort enrichment on the
-    earnings endpoint: ``None`` (not an error) when nothing is scheduled, so a
-    name between reporting cycles simply has no forward bar.
-    """
-
-    @abstractmethod
-    def get_next_earnings(self, symbol: str) -> NextEarnings | None:
-        """Return the next scheduled report for the (normalized) symbol, or
-        ``None`` when none is scheduled.
-
-        Raises:
-            StockDataUnavailable: the upstream source failed.
-        """
-        raise NotImplementedError
-
-
-class RevenueHistoryProvider(ABC):
-    """A gateway for a stock's recently-reported quarterly revenue (actuals).
-
-    Reported figures, not the price feed or an estimates vendor — so it carries
-    only what the company actually reported, never a consensus estimate.
-    Best-effort enrichment on the earnings endpoint: the use case aligns these
-    figures onto the EPS beat history by fiscal period end.
-    """
-
-    @abstractmethod
-    def get_quarterly_revenue(self, symbol: str) -> dict[date, float]:
-        """Return recently-reported quarterly revenue keyed by fiscal period end.
-
-        Each key is a quarter's period-end date and each value the revenue
-        reported for that quarter (raw, e.g. USD). Quarters that can't be derived
-        are simply absent; an empty map means no revenue was available
-        (best-effort, never an error for "no data").
-
-        Raises:
-            StockNotFound: the symbol isn't covered by the source.
-            StockDataUnavailable: the upstream source failed.
-        """
-        raise NotImplementedError
-
-
 class LogoProvider(ABC):
     """A gateway for retrieving a company's logo image.
 
@@ -351,25 +285,25 @@ class InvestmentAnalysisProvider(ABC):
 
     Unlike the other ports this one isn't handed a symbol to look up — the use
     case has already assembled the enriched ``Stock`` (price, performance,
-    valuation/health metrics) and, when available, the recent
-    ``EarningsHistory``. The adapter only reasons over what it's given and never
-    fetches outside data. This backs a dedicated endpoint (its own reason to
-    exist, not best-effort enrichment), so a failure surfaces as an error rather
-    than being swallowed.
+    valuation/health metrics) and, when available, the recent quarterly earnings
+    timeline. The adapter only reasons over what it's given and never fetches
+    outside data. This backs a dedicated endpoint (its own reason to exist, not
+    best-effort enrichment), so a failure surfaces as an error rather than being
+    swallowed.
     """
 
     @abstractmethod
     def analyze(
-        self, stock: Stock, earnings: EarningsHistory | None = None
+        self, stock: Stock, earnings: QuarterlyEarningsTimeline | None = None
     ) -> InvestmentAnalysis:
         """Return a buy/hold/sell analysis built from the supplied data.
 
         Args:
             stock: the enriched snapshot to reason over (price, performance,
                 valuation/health metrics).
-            earnings: recent quarterly beat history when available, else
-                ``None`` (the earnings source isn't configured, or doesn't cover
-                the symbol) — the analysis can stand without it.
+            earnings: the recent quarterly earnings timeline when available,
+                else ``None`` (nothing cached and Yahoo unreachable, or the
+                symbol isn't covered) — the analysis can stand without it.
 
         Raises:
             StockDataUnavailable: the model call failed or returned no usable

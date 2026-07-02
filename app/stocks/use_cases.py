@@ -6,8 +6,7 @@ framework or a concrete provider.
 """
 
 from dataclasses import replace
-from datetime import date, datetime
-from typing import TypeVar
+from datetime import datetime
 
 from app.stocks.entities import (
     AllTimeHigh,
@@ -15,16 +14,12 @@ from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     Constituent,
-    EarningsHistory,
-    EarningsMetrics,
-    EarningsSurprise,
     GrowthScreenBoard,
     GrowthScreenedStock,
     GrowthSortKey,
     InvestmentAnalysis,
     Logo,
     MoversBoard,
-    NextEarnings,
     Quote,
     ScreenedStock,
     SectorPerformance,
@@ -34,6 +29,8 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
+from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
+from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSeries, rsi_series
 from app.stocks.ports import (
@@ -42,13 +39,10 @@ from app.stocks.ports import (
     CandleProvider,
     CompanyProfileProvider,
     ConstituentRepository,
-    EarningsCalendarProvider,
-    EarningsHistoryProvider,
     ForwardGrowthProvider,
     InvestmentAnalysisProvider,
     LogoProvider,
     QuoteBatchProvider,
-    RevenueHistoryProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockFundamentalsProvider,
@@ -246,184 +240,24 @@ class GetStockRsi:
         return rsi_series(series, period)
 
 
-# The EPS feed (Finnhub) and the revenue source date the same quarter differently:
-# one may carry the true fiscal period end while the other snaps the quarter to a
-# nearby calendar quarter-end. For an off-calendar filer those two dates can sit up
-# to ~two months apart (NVDA's quarter ends ~Apr 26, Ciena's ~May 2, each labelled a
-# calendar quarter away) — far enough that the snapped label can land closer to an
-# *adjacent* fiscal quarter than to its own, so pairing by closest date misaligns.
-#
-# Instead we align the two series by order: both list the same consecutive quarters
-# newest-first, so we walk them in lockstep and pair them off, using the dates only
-# to notice when one side runs a quarter ahead of the other (e.g. the EPS is
-# announced before the revenue source has recorded that quarter). Two dates this
-# close are taken to be the same quarter — comfortably above the worst label gap
-# (~65 days) yet well below the ~91-day spacing between quarters, so neighbouring
-# quarters never collide.
-_SAME_QUARTER_DAYS = 75
-
-_T = TypeVar("_T")
-
-
-def _align_to_quarters(
-    quarters: tuple[EarningsSurprise, ...], by_period_end: dict[date, _T]
-) -> dict[int, _T]:
-    """Map each EPS quarter (by its index) to the revenue value for that quarter.
-
-    Walks the EPS quarters and the revenue source's period ends together,
-    newest-first, and pairs them up by fiscal period end. A quarter newer than
-    anything the revenue source carries (or one with no period) is left
-    unmatched, as is a revenue period belonging to a quarter newer than any in
-    the EPS history.
-    """
-    dated = sorted(
-        ((i, q.period) for i, q in enumerate(quarters) if q.period is not None),
-        key=lambda pair: pair[1],
-        reverse=True,
-    )
-    ends = sorted(by_period_end, reverse=True)
-    matched: dict[int, _T] = {}
-    i = j = 0
-    while i < len(dated) and j < len(ends):
-        index, period = dated[i]
-        end = ends[j]
-        gap = (period - end).days
-        if gap > _SAME_QUARTER_DAYS:
-            i += 1  # this EPS quarter is newer than any revenue period — skip it
-        elif gap < -_SAME_QUARTER_DAYS:
-            j += 1  # this revenue period is newer than the EPS quarter — skip it
-        else:
-            matched[index] = by_period_end[end]
-            i += 1
-            j += 1
-    return matched
-
-
-# Finnhub's free `/stock/earnings` returns only the last four quarters and
-# ignores a larger `limit`, so the count is fixed here rather than a caller knob.
-_EARNINGS_QUARTERS = 4
-
-
-class GetStockEarnings:
-    """Use case: retrieve a stock's recent quarterly earnings surprises.
-
-    A dedicated dataset (actual vs estimate per quarter), not snapshot
-    enrichment — so errors propagate to the caller rather than being swallowed,
-    mirroring the candles and RSI endpoints. Several best-effort layers ride on
-    top of the (primary) beat history, none of which can sink it: the trailing
-    earnings ``metrics`` and the ``valuation`` ratios (both from the same
-    fundamentals call), the ``next_report`` forecast (from the earnings
-    calendar), and per-quarter ``revenue_actual`` (reported revenue, overlaid
-    from the quarterly-earnings slice and aligned onto each quarter by fiscal
-    period end).
-    """
-
-    def __init__(
-        self,
-        provider: EarningsHistoryProvider,
-        fundamentals_provider: StockFundamentalsProvider | None = None,
-        calendar_provider: EarningsCalendarProvider | None = None,
-        revenue_provider: RevenueHistoryProvider | None = None,
-    ) -> None:
-        self._provider = provider
-        self._fundamentals_provider = fundamentals_provider
-        self._calendar_provider = calendar_provider
-        self._revenue_provider = revenue_provider
-
-    def execute(self, symbol: str) -> EarningsHistory:
-        normalized = _normalize_symbol(symbol)
-        history = self._provider.get_earnings_history(
-            normalized, limit=_EARNINGS_QUARTERS
-        )
-        quarters = self._with_revenue(normalized, history.quarters)
-        fundamentals = self._fundamentals(normalized)
-        # One fundamentals call feeds two blocks: the trailing earnings metrics
-        # and the valuation/health/market ratios (the same KeyMetrics the stock
-        # snapshot carries).
-        metrics = EarningsMetrics.from_key_metrics(
-            fundamentals.metrics if fundamentals else None
-        )
-        valuation = fundamentals.metrics if fundamentals else None
-        next_report = self._next_report(normalized)
-        if (
-            quarters is history.quarters
-            and metrics is None
-            and valuation is None
-            and next_report is None
-        ):
-            return history
-        return replace(
-            history,
-            quarters=quarters,
-            metrics=metrics,
-            valuation=valuation,
-            next_report=next_report,
-        )
-
-    def _with_revenue(
-        self, symbol: str, quarters: tuple[EarningsSurprise, ...]
-    ) -> tuple[EarningsSurprise, ...]:
-        # Overlay reported revenue actuals (the quarterly-earnings slice's stored
-        # rows) onto the EPS quarters, aligned quarter-by-quarter; best-effort.
-        # Returning the same tuple identity signals "nothing merged" so execute
-        # can short-circuit.
-        if self._revenue_provider is None:
-            return quarters
-        try:
-            revenue = self._revenue_provider.get_quarterly_revenue(symbol)
-        except (StockNotFound, StockDataUnavailable):
-            return quarters
-        if not revenue:
-            return quarters
-        matched = _align_to_quarters(quarters, revenue)
-        if not matched:
-            return quarters
-        return tuple(
-            replace(q, revenue_actual=matched[i]) if i in matched else q
-            for i, q in enumerate(quarters)
-        )
-
-    def _fundamentals(self, symbol: str) -> StockFundamentals | None:
-        # The trailing earnings metrics and the valuation ratios both ride on the
-        # same Finnhub fundamentals the stock snapshot uses; fetched once here and
-        # best-effort, so a miss leaves the beat history intact rather than
-        # failing the request.
-        if self._fundamentals_provider is None:
-            return None
-        try:
-            return self._fundamentals_provider.get_fundamentals(symbol)
-        except (StockNotFound, StockDataUnavailable):
-            return None
-
-    def _next_report(self, symbol: str) -> NextEarnings | None:
-        # The next scheduled report + consensus, from the earnings calendar;
-        # best-effort, like the metrics block above.
-        if self._calendar_provider is None:
-            return None
-        try:
-            return self._calendar_provider.get_next_earnings(symbol)
-        except (StockNotFound, StockDataUnavailable):
-            return None
-
-
 class GetStockAnalysis:
     """Use case: an AI-generated buy/hold/sell read on a single stock.
 
     Reuses ``GetStockInfo`` to assemble the enriched snapshot (price plus the
     best-effort performance/fundamentals/valuation enrichment), best-effort adds
-    the recent earnings beat history as extra context, then asks the injected
-    analyzer to weigh it all. The snapshot and the analysis are the primary data
-    — a bad/unknown symbol or a model failure propagates — while the earnings
-    context is best-effort, so a miss there leaves the analysis intact rather
-    than failing it. The analyzer reasons only over what it's handed; it fetches
-    nothing itself.
+    the recent quarterly earnings timeline as extra context, then asks the
+    injected analyzer to weigh it all. The snapshot and the analysis are the
+    primary data — a bad/unknown symbol or a model failure propagates — while the
+    earnings context is best-effort, so a miss there leaves the analysis intact
+    rather than failing it. The analyzer reasons only over what it's handed; it
+    fetches nothing itself.
     """
 
     def __init__(
         self,
         stock_info: GetStockInfo,
         analyzer: InvestmentAnalysisProvider,
-        earnings_provider: EarningsHistoryProvider | None = None,
+        earnings_provider: QuarterlyEarningsProvider | None = None,
     ) -> None:
         self._stock_info = stock_info
         self._analyzer = analyzer
@@ -438,17 +272,17 @@ class GetStockAnalysis:
         earnings = self._earnings(normalized)
         return self._analyzer.analyze(stock, earnings)
 
-    def _earnings(self, symbol: str) -> EarningsHistory | None:
+    def _earnings(self, symbol: str) -> QuarterlyEarningsTimeline | None:
         # Best-effort context: the beat history sharpens the analysis but isn't
-        # required, so a missing provider or an upstream miss simply omits it.
+        # required, so a missing provider, an upstream miss, or an uncovered
+        # symbol (empty timeline) simply omits it.
         if self._earnings_provider is None:
             return None
         try:
-            return self._earnings_provider.get_earnings_history(
-                symbol, limit=_EARNINGS_QUARTERS
-            )
+            timeline = self._earnings_provider.get_quarterly_earnings(symbol)
         except (StockNotFound, StockDataUnavailable):
             return None
+        return None if timeline.is_empty else timeline
 
 
 class GetSectorPerformance:
