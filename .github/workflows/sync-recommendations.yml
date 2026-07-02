@@ -22,9 +22,8 @@ run-name: Sync recommendations
 #    blocks data-centre IPs intermittently, so a run may refresh fewer stocks than the
 #    limit; the next run retries the stalest first. An empty result from Yahoo is never
 #    stored, so a transient block leaves the cached months intact.
-#  - The endpoint is guarded by a bearer token once CRON_SYNC_TOKEN is configured (set the
-#    same value in the app's environment and as this repo's CRON_SYNC_TOKEN Actions
-#    secret); until then it is open, so configure it promptly.
+#  - The endpoint is currently unauthenticated (an auth-token guard is planned); this
+#    workflow just triggers it.
 #
 # Requires the repo/environment variable API_BASE_URL — the deployed app's base URL,
 # reachable from the GitHub runner.
@@ -60,20 +59,12 @@ jobs:
       - name: Trigger the recommendations refresh (batched)
         env:
           API_BASE_URL: ${{ vars.API_BASE_URL }}
-          CRON_SYNC_TOKEN: ${{ secrets.CRON_SYNC_TOKEN }}
         run: |
           set -euo pipefail
 
           if [ -z "${API_BASE_URL:-}" ]; then
             echo "::error::API_BASE_URL is not set — add it as a repo/environment variable pointing at the deployed app."
             exit 1
-          fi
-
-          auth=()
-          if [ -n "${CRON_SYNC_TOKEN:-}" ]; then
-            auth=(-H "Authorization: Bearer ${CRON_SYNC_TOKEN}")
-          else
-            echo "::warning::CRON_SYNC_TOKEN is not set — calling the sync endpoint unauthenticated."
           fi
 
           total="${SYNC_RECOMMENDATIONS_LIMIT}"
@@ -84,7 +75,7 @@ jobs:
           done_count=0
 
           while [ "$done_count" -lt "$total" ]; do
-            http_code=$(curl -sS -X POST "$url" "${auth[@]}" \
+            http_code=$(curl -sS -X POST "$url" \
               --max-time 120 \
               -o /tmp/sync_response.json \
               -w '%{http_code}')

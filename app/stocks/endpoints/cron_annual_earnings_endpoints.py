@@ -8,10 +8,10 @@ Wiring lives here, the composition-root way: build the live yfinance adapter + t
 repository and hand them to the use case. yfinance reads Yahoo's public data with no API key,
 so there's no credential to gate on; the sync is always constructable.
 
-Security: the endpoint writes the database (and hits Yahoo) and is triggered over the
-public internet by the sync workflow, so it's guarded by the shared bearer-token
-dependency (``cron_auth.require_cron_token``) — enforced once ``CRON_SYNC_TOKEN`` is set
-in the app's environment, open until then.
+Security: this endpoint is currently **unauthenticated** — it writes the database (and
+hits Yahoo) and is triggered over the public internet by the sync workflow, so an auth
+token (planned: a shared ``CRON_SYNC_TOKEN`` bearer guard) should be added before the
+endpoints are considered hardened.
 """
 
 from fastapi import APIRouter, Depends, Query
@@ -27,9 +27,8 @@ from app.stocks.earnings.annual.use_cases import (
     AnnualEarningsSyncReport,
     SyncAnnualEarnings,
 )
-from app.stocks.endpoints.cron_auth import require_cron_token
 
-router = APIRouter(tags=["annual-earnings-cron"], dependencies=[Depends(require_cron_token)])
+router = APIRouter(tags=["annual-earnings-cron"])
 
 
 class AnnualEarningsSyncResponse(BaseModel):

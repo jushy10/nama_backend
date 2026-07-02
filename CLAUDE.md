@@ -266,10 +266,10 @@ translates them.
 
 **Config & secrets** come from environment variables, read only in the router's
 wiring functions (`APCA_API_KEY_ID`, `FINNHUB_API_KEY`, `LOGODEV_TOKEN`,
-`DATABASE_URL`; `CRON_SYNC_TOKEN` gates the `/internal/*/sync` cron endpoints —
-opt-in, open until set, and the GitHub sync workflows send it from the Actions
-secret of the same name). Build providers lazily so the app boots without
-every key. Never hardcode or commit secrets.
+`DATABASE_URL`). The `/internal/*/sync` cron endpoints are currently
+**unauthenticated** (an auth-token guard is planned, deferred for now). Build
+providers lazily so the app boots without every key. Never hardcode or commit
+secrets.
 
 **Input normalization** happens once, at the top of the use case
 (`_normalize_symbol`), so every layer below sees clean input.
@@ -386,7 +386,6 @@ app/
     │   ├── use_cases.py         #    GetStockRecommendations + SyncRecommendations
     │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
-    │   ├── cron_auth.py                          #  shared bearer-token guard (CRON_SYNC_TOKEN)
     │   ├── cron_quarterly_earnings_endpoints.py  #  POST /internal/earnings/quarterly/sync
     │   ├── quarterly_earnings_endpoints.py       #  GET /stocks/{symbol}/earnings/quarterly
     │   ├── cron_annual_earnings_endpoints.py     #  POST /internal/earnings/annual/sync
