@@ -1,31 +1,8 @@
-"""Stocks feature — a clean-architecture vertical slice over the Alpaca SDK.
+"""Stocks feature — a clean-architecture vertical slice.
 
-Layers (dependencies point inward only):
-    entities.py                    🟡 Enterprise Business Rules (Stock, Logo,
-                                      StockPerformance, StockFundamentals,
-                                      EarningsSurprise, EarningsHistory,
-                                      Candle, CandleSeries, Timeframe)
-    indicators.py                  🟡 Enterprise Business Rules (RSI: pure
-                                      technical indicator over close prices)
-    exceptions.py                  🟡 domain errors
-    ports.py                       🔴 Application ports (StockDataProvider,
-                                      StockPerformanceProvider,
-                                      StockFundamentalsProvider,
-                                      EarningsHistoryProvider, LogoProvider,
-                                      CandleProvider)
-    use_cases.py                   🔴 Application Business Rules (GetStockInfo,
-                                      GetStockLogo, GetStockCandles, GetStockRsi,
-                                      GetStockEarnings)
-    alpaca_provider.py             🟢 Interface Adapter (price snapshot,
-                                      performance windows + OHLC candles via
-                                      alpaca-py)
-    finnhub_fundamentals_provider.py 🟢 Interface Adapter (market cap + dividend
-                                      via Finnhub)
-    finnhub_earnings_provider.py   🟢 Interface Adapter (quarterly earnings
-                                      surprises via Finnhub)
-    logodev_provider.py            🟢 Interface Adapter (logos via Logo.dev —
-                                      ticker-keyed, tracks rebrands)
-    chart_window.py                🔵 transport helper (chart range -> window)
-    schemas.py                     🔵 HTTP DTOs (Pydantic)
-    router.py                      🟢/🔵 controller + presenter + DI wiring
+Layers depend inward only: entities ← ports ← use cases, with the vendor
+adapters (Alpaca, Finnhub, Yahoo via yfinance, Logo.dev, the DB) implementing
+the ports and the router acting as composition root. See CLAUDE.md at the repo
+root for the full layer map and conventions — kept there, and not duplicated
+here, so it can't drift out of date in two places.
 """

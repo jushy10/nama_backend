@@ -31,11 +31,10 @@ class KeyMetricsResponse(BaseModel):
     """Trailing valuation, financial-health, profitability and market indicators.
 
     The valuation ratios, returns, margins and risk/range figures for the price
-    snapshot. The remaining earnings-flavored metrics (EPS, growth) live on the
-    earnings endpoint instead — see ``EarningsMetricsResponse``. All trailing (no
-    forward estimates); the ratios are plain multiples, ``roe`` and the margins
-    are percent, and ``fcf_per_share`` is in the quote currency. Any field a
-    vendor doesn't cover is ``null``.
+    snapshot; the trailing YoY growth legs ride separately on the stock's
+    ``growth`` block. All trailing (no forward estimates); the ratios are plain
+    multiples, ``roe`` and the margins are percent, and ``fcf_per_share`` is in
+    the quote currency. Any field a vendor doesn't cover is ``null``.
     """
 
     pe: float | None = None  # price / trailing EPS
@@ -200,80 +199,6 @@ class RsiResponse(BaseModel):
     overbought: float
     oversold: float
     points: list[RsiPointResponse]
-
-
-class EarningsSurpriseResponse(BaseModel):
-    """One quarter's reported EPS versus the consensus estimate going in.
-
-    ``beat`` is the met-or-beat flag (``actual >= estimate``); ``null`` when
-    either side is missing. ``surprise`` is the EPS gap and ``surprise_percent``
-    that gap as a percent of the estimate."""
-
-    period: date | None = None  # fiscal period end date
-    fiscal_year: int | None = None
-    fiscal_quarter: int | None = None
-    actual: float | None = None  # reported EPS
-    estimate: float | None = None  # consensus EPS estimate
-    surprise: float | None = None  # actual - estimate (EPS)
-    surprise_percent: float | None = None  # percent of estimate
-    beat: bool | None = None  # met or beat the estimate
-    revenue_actual: float | None = None  # reported revenue for the quarter (raw)
-
-
-class EarningsMetricsResponse(BaseModel):
-    """Trailing earnings / profitability snapshot served with the beat history.
-
-    The income-statement-flavored metrics — trailing EPS, EPS/revenue growth and
-    the margin stack. All percentages except ``eps``; any field a vendor doesn't
-    cover is ``null``. (Valuation and market metrics live on the stock endpoint
-    — see ``KeyMetricsResponse``.)
-    """
-
-    eps: float | None = None  # trailing earnings per share
-    eps_growth_yoy: float | None = None  # percent
-    revenue_growth_yoy: float | None = None  # percent
-    gross_margin: float | None = None  # percent
-    operating_margin: float | None = None  # percent
-    net_margin: float | None = None  # percent
-
-
-class NextEarningsResponse(BaseModel):
-    """The next scheduled earnings report and the consensus going into it.
-
-    The forward complement to the past-only beat history: the expected report
-    date and where analysts expect EPS/revenue to land. ``session`` is when in
-    the trading day it's expected — "bmo" (before open), "amc" (after close),
-    "dmh" (during hours), or ``null``. Estimates are ``null`` when no consensus
-    is published yet."""
-
-    report_date: date | None = None  # expected announcement date
-    fiscal_year: int | None = None
-    fiscal_quarter: int | None = None
-    eps_estimate: float | None = None  # consensus EPS going in
-    revenue_estimate: float | None = None  # consensus revenue going in (raw)
-    session: str | None = None  # "bmo" | "amc" | "dmh" | null
-
-
-class EarningsHistoryResponse(BaseModel):
-    """Recent quarterly earnings surprises (newest first) plus a beat summary.
-
-    ``beat_rate`` is the percent of *scored* quarters (those with both an actual
-    and an estimate) that met or beat — the "beats consistently?" read.
-    ``count`` is how many quarters are returned. ``metrics`` is an optional
-    trailing earnings snapshot, ``valuation`` the point-in-time valuation/health/
-    market ratios (P/E, PEG, P/B, P/S, beta, the 52-week range — the same block
-    the stock endpoint serves), and ``next_report`` the next scheduled report's
-    consensus (all best-effort; ``null`` when unavailable)."""
-
-    symbol: str
-    count: int
-    beats: int  # quarters that met or beat
-    scored: int  # quarters with enough data to judge a beat
-    beat_rate: float | None = None  # percent of scored quarters that beat
-    quarters: list[EarningsSurpriseResponse]
-    metrics: EarningsMetricsResponse | None = None
-    valuation: KeyMetricsResponse | None = None
-    next_report: NextEarningsResponse | None = None
 
 
 class SectorPerformanceResponse(BaseModel):

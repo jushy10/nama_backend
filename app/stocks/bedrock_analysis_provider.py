@@ -34,11 +34,11 @@ from datetime import datetime, timezone
 
 from app.stocks.entities import (
     Confidence,
-    EarningsHistory,
     InvestmentAnalysis,
     Recommendation,
     Stock,
 )
+from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.ports import InvestmentAnalysisProvider
 
@@ -133,7 +133,7 @@ class BedrockAnalysisProvider(InvestmentAnalysisProvider):
         self._client = AnthropicBedrock(aws_region=region)
 
     def analyze(
-        self, stock: Stock, earnings: EarningsHistory | None = None
+        self, stock: Stock, earnings: QuarterlyEarningsTimeline | None = None
     ) -> InvestmentAnalysis:
         prompt = _render_prompt(stock, earnings)
         try:
@@ -204,7 +204,7 @@ def _string_tuple(value) -> tuple[str, ...]:
     return tuple(text for item in value if (text := str(item).strip()))
 
 
-def _render_prompt(stock: Stock, earnings: EarningsHistory | None) -> str:
+def _render_prompt(stock: Stock, earnings: QuarterlyEarningsTimeline | None) -> str:
     """Render the gathered data into a compact, labelled block for the model.
 
     Only fields that are present are included, so the model is never handed a
@@ -262,28 +262,33 @@ def _render_prompt(stock: Stock, earnings: EarningsHistory | None) -> str:
     return "\n".join(lines)
 
 
-def _render_earnings(earnings: EarningsHistory | None) -> str:
-    """Render the recent beat history as a short labelled block (or '' if none)."""
-    if earnings is None or not earnings.quarters:
+def _render_earnings(earnings: QuarterlyEarningsTimeline | None) -> str:
+    """Render the reported half of the quarterly timeline as a short labelled
+    block (or '' if none) — newest quarter first, the order the read scans in."""
+    if earnings is None or not earnings.past:
         return ""
+    reported = list(reversed(earnings.past))  # the timeline is oldest-first
+    scoreable = [q for q in reported if q.beat is not None]
+    beats = sum(1 for q in scoreable if q.beat)
     lines = ["Recent earnings (newest quarter first):"]
-    if earnings.beat_rate is not None:
+    if scoreable:
+        rate = round(beats / len(scoreable) * 100, 1)
         lines.append(
-            f"- Beat rate: {earnings.beat_rate}% "
-            f"({earnings.beats}/{earnings.scored} quarters met or beat estimate)"
+            f"- Beat rate: {rate}% "
+            f"({beats}/{len(scoreable)} quarters met or beat estimate)"
         )
-    for q in earnings.quarters:
+    for q in reported:
         parts: list[str] = []
-        if q.period is not None:
-            parts.append(str(q.period))
-        elif q.fiscal_year is not None and q.fiscal_quarter is not None:
+        if q.period_end is not None:
+            parts.append(str(q.period_end))
+        else:
             parts.append(f"FY{q.fiscal_year} Q{q.fiscal_quarter}")
-        if q.actual is not None:
-            parts.append(f"EPS actual {q.actual}")
-        if q.estimate is not None:
-            parts.append(f"est {q.estimate}")
-        if q.surprise_percent is not None:
-            parts.append(f"surprise {q.surprise_percent}%")
+        if q.eps_actual is not None:
+            parts.append(f"EPS actual {q.eps_actual}")
+        if q.eps_estimate is not None:
+            parts.append(f"est {q.eps_estimate}")
+        if q.eps_surprise_percent is not None:
+            parts.append(f"surprise {q.eps_surprise_percent}%")
         if q.revenue_actual is not None:
             parts.append(f"revenue {q.revenue_actual:,.0f}")
         if parts:

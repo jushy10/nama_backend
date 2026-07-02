@@ -44,7 +44,10 @@ Tables are created by migrations, not on boot — run `alembic upgrade head` fir
 | GET    | `/stocks/{symbol}` | Stock info from Alpaca (e.g. `AAPL`) |
 | GET    | `/stocks/{symbol}/logo` | Company logo image |
 | GET    | `/stocks/{symbol}/candles` | OHLC candlestick chart data |
-| GET    | `/stocks/{symbol}/earnings` | Quarterly earnings surprises (beat history) |
+| GET    | `/stocks/{symbol}/earnings/quarterly` | Per-quarter earnings timeline (reported + upcoming) |
+| GET    | `/stocks/{symbol}/earnings/annual` | Per-year earnings timeline (reported + upcoming) |
+| GET    | `/stocks/{symbol}/recommendations` | Analyst buy/hold/sell trends by month |
+| GET    | `/stocks/{symbol}/analysis` | AI-generated buy/hold/sell read (Bedrock) |
 | GET    | `/stocks/screener` | Day's biggest gainers & losers, filter by index + sector |
 
 ## Test
@@ -176,25 +179,6 @@ of serving a monogram placeholder).
 ```sh
 export LOGODEV_TOKEN=pk_...
 curl localhost:8080/stocks/AAPL/logo --output aapl.png
-```
-
-### Earnings beat history
-
-`GET /stocks/{symbol}/earnings` returns the four most recent **quarterly earnings
-surprises** — the reported EPS against the consensus estimate going into each
-quarter, newest first — answering "does the company beat estimates consistently?". Each quarter
-carries a `beat` flag (`actual >= estimate`, met counts as beat) and a
-`surprise_percent`; the top level summarises with `beats`, `scored` (quarters
-with both an actual and an estimate) and `beat_rate` (percent of scored quarters
-that beat). Sourced from [Finnhub](https://finnhub.io)'s free `/stock/earnings`.
-
-Unlike market cap and dividend (best-effort enrichment on `/stocks/{symbol}`),
-this is the endpoint's primary data, so it needs `FINNHUB_API_KEY`: without it
-the endpoint returns `503`, an unknown symbol returns `404`.
-
-```sh
-# The four most recent reported quarters
-curl localhost:8080/stocks/AAPL/earnings
 ```
 
 ### Stock screener

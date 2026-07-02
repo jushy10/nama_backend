@@ -5,7 +5,7 @@ framework, or Alpaca. It only knows the concept of a "stock" and the
 calculations intrinsic to it.
 """
 
-from dataclasses import astuple, dataclass
+from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
 
@@ -141,7 +141,7 @@ class AnalystEstimates:
     The valuation calcs that need a live price (``forward_pe``) or market cap
     (``forward_ps``) take it as an argument rather than storing it — the estimate is
     a fact about the company, the multiple a fact about the company *at today's
-    price*, the same split that keeps the trailing P/E off the bare ``EarningsHistory``.
+    price*.
     """
 
     fiscal_year: int | None  # FY1: the nearest forward fiscal year
@@ -255,142 +255,6 @@ class StockFundamentals:
     dividend_per_share: float | None
     dividend_yield: float | None
     metrics: KeyMetrics | None = None
-
-
-@dataclass(frozen=True)
-class EarningsSurprise:
-    """One quarter's reported EPS against the consensus estimate going in.
-
-    The gap between ``actual`` and ``estimate`` is the "earnings surprise" —
-    whether the company beat, met, or missed expectations that quarter.
-    ``surprise_percent`` expresses that gap as a percent of the estimate. Any
-    field can be ``None`` when the vendor didn't cover the quarter fully.
-    """
-
-    period: date | None  # fiscal period end date
-    fiscal_year: int | None
-    fiscal_quarter: int | None
-    actual: float | None  # reported EPS
-    estimate: float | None  # consensus EPS estimate going in
-    surprise: float | None  # actual - estimate (EPS)
-    surprise_percent: float | None  # surprise as a percent of the estimate
-    # Revenue actually reported for the quarter (raw, e.g. USD) — best-effort,
-    # overlaid from the quarterly-earnings slice's stored rows. ``None`` when no
-    # stored quarter aligns to this one.
-    revenue_actual: float | None = None
-
-    @property
-    def beat(self) -> bool | None:
-        """Whether the quarter met or beat its estimate (``actual >= estimate``).
-
-        Meeting counts as a beat. ``None`` when either side is missing, so an
-        unknowable quarter stays distinct from a genuine miss.
-        """
-        if self.actual is None or self.estimate is None:
-            return None
-        return self.actual >= self.estimate
-
-
-@dataclass(frozen=True)
-class EarningsMetrics:
-    """Trailing earnings / profitability metrics for one stock.
-
-    The income-statement-flavored slice of the broader fundamentals: trailing
-    EPS, the year-over-year growth in EPS and revenue, and the margin stack. A
-    projection of ``KeyMetrics`` that rides alongside the quarterly beat history,
-    so the earnings view answers "how profitable, and growing how fast?" without a
-    second call. The valuation/market indicators (P/E, P/B, beta, …) stay with
-    the price snapshot. Every field is optional and all are percentages except
-    ``eps``.
-    """
-
-    eps: float | None = None  # trailing earnings per share
-    eps_growth_yoy: float | None = None  # percent, year over year
-    revenue_growth_yoy: float | None = None  # percent, year over year
-    gross_margin: float | None = None  # percent
-    operating_margin: float | None = None  # percent
-    net_margin: float | None = None  # percent
-
-    @classmethod
-    def from_key_metrics(cls, metrics: "KeyMetrics | None") -> "EarningsMetrics | None":
-        """Project the earnings-flavored fields out of a ``KeyMetrics``.
-
-        ``None`` when there's nothing to carry — no metrics at all, or none of
-        the earnings fields are populated — so an uncovered symbol yields no
-        metrics block rather than an all-null one (mirroring how the provider
-        builds ``KeyMetrics`` itself).
-        """
-        if metrics is None:
-            return None
-        projected = cls(
-            eps=metrics.eps,
-            eps_growth_yoy=metrics.eps_growth_yoy,
-            revenue_growth_yoy=metrics.revenue_growth_yoy,
-            gross_margin=metrics.gross_margin,
-            operating_margin=metrics.operating_margin,
-            net_margin=metrics.net_margin,
-        )
-        if all(value is None for value in astuple(projected)):
-            return None
-        return projected
-
-
-@dataclass(frozen=True)
-class NextEarnings:
-    """The next scheduled earnings report and the consensus going into it.
-
-    The forward complement to the (past-only) beat history: when the company is
-    expected to report next, and where analysts expect EPS/revenue to land.
-    ``session`` is when in the trading day it's expected — "bmo" (before market
-    open), "amc" (after market close), "dmh" (during market hours), or ``None``.
-    The estimates are ``None`` when no consensus has been published yet, and the
-    whole block is best-effort: absent when nothing is scheduled.
-    """
-
-    report_date: date | None  # expected announcement date
-    fiscal_year: int | None
-    fiscal_quarter: int | None
-    eps_estimate: float | None  # consensus EPS going in
-    revenue_estimate: float | None  # consensus revenue going in (raw)
-    session: str | None  # "bmo" | "amc" | "dmh" | None
-
-
-@dataclass(frozen=True)
-class EarningsHistory:
-    """A run of recent quarterly earnings surprises for one symbol.
-
-    Ordered newest quarter first — the order a "last N quarters" view reads in.
-    The summary properties answer the checklist's "beats consistently?" question:
-    of the quarters with both an actual and an estimate, how many met or beat.
-    ``metrics`` is an optional trailing earnings snapshot, ``valuation`` the
-    point-in-time valuation/health/market ratios (P/E, PEG, P/B, beta, the
-    52-week range — the same ``KeyMetrics`` the stock snapshot carries), and
-    ``next_report`` the next scheduled report's consensus — all best-effort
-    enrichment riding along with the per-quarter history.
-    """
-
-    symbol: str
-    quarters: tuple[EarningsSurprise, ...]
-    metrics: EarningsMetrics | None = None
-    valuation: KeyMetrics | None = None
-    next_report: NextEarnings | None = None
-
-    @property
-    def scored(self) -> int:
-        """Quarters with enough data to judge a beat (actual and estimate)."""
-        return sum(1 for q in self.quarters if q.beat is not None)
-
-    @property
-    def beats(self) -> int:
-        """Count of quarters that met or beat their estimate."""
-        return sum(1 for q in self.quarters if q.beat)
-
-    @property
-    def beat_rate(self) -> float | None:
-        """Percent of scoreable quarters that met or beat; ``None`` if none are."""
-        if self.scored == 0:
-            return None
-        return round(self.beats / self.scored * 100, 1)
 
 
 @dataclass(frozen=True)
