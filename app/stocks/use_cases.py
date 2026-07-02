@@ -12,7 +12,6 @@ from typing import TypeVar
 from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
-    AnalystRecommendations,
     CandleSeries,
     CompanyProfile,
     Constituent,
@@ -45,7 +44,6 @@ from app.stocks.ports import (
     InvestmentAnalysisProvider,
     LogoProvider,
     QuoteBatchProvider,
-    RecommendationProvider,
     RevenueHistoryProvider,
     SectorPerformanceProvider,
     SegmentRevenueProvider,
@@ -476,23 +474,6 @@ class GetStockAnalysis:
             )
         except (StockNotFound, StockDataUnavailable):
             return None
-
-
-class GetStockRecommendations:
-    """Use case: retrieve a stock's analyst recommendation trends.
-
-    A dedicated dataset (the analyst buy/hold/sell split over recent months), not
-    snapshot enrichment — so errors propagate to the caller rather than being
-    swallowed, mirroring the earnings and RSI endpoints. The consensus read and
-    its month-over-month trend are intrinsic to the entity; this use case just
-    normalizes the symbol and delegates to the provider.
-    """
-
-    def __init__(self, provider: RecommendationProvider) -> None:
-        self._provider = provider
-
-    def execute(self, symbol: str) -> AnalystRecommendations:
-        return self._provider.get_recommendations(_normalize_symbol(symbol))
 
 
 class GetSectorPerformance:
