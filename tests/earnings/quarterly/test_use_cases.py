@@ -88,18 +88,25 @@ def test_get_rejects_obviously_invalid_symbols():
 
 
 class _FakeRepo(QuarterlyEarningsRepository):
-    """Serves a fixed target list and records what got upserted."""
+    """Serves a fixed target list (and optional stored timelines) and records upserts."""
 
-    def __init__(self, targets: list[RefreshTarget]) -> None:
+    def __init__(
+        self,
+        targets: list[RefreshTarget],
+        stored: dict[str, QuarterlyEarningsTimeline] | None = None,
+    ) -> None:
         self._targets = list(targets)
+        self._stored = stored or {}
         self.upserts: list[tuple[str, str | None]] = []
+        self.saved: dict[str, QuarterlyEarningsTimeline] = {}
         self.refresh_limit: int | None = None
 
-    def get(self, symbol: str) -> QuarterlyEarningsTimeline | None:  # unused here
-        return None
+    def get(self, symbol: str) -> QuarterlyEarningsTimeline | None:
+        return self._stored.get(symbol)
 
     def upsert(self, symbol, name, timeline) -> None:
         self.upserts.append((symbol, name))
+        self.saved[symbol] = timeline
 
     def refresh_targets(self, limit: int) -> list[RefreshTarget]:
         self.refresh_limit = limit
@@ -173,6 +180,95 @@ def test_sync_empty_live_result_is_skipped_not_stored():
 
     assert (report.refreshed, report.failed) == (1, 1)
     assert repo.upserts == [("AAPL", "Apple Inc.")]  # GONE never upserted
+
+
+
+def _reported_q(
+    year: int, quarter: int, eps: float, revenue: float | None
+) -> QuarterlyEarnings:
+    return QuarterlyEarnings(
+        fiscal_year=year, fiscal_quarter=quarter,
+        period_end=date(year, quarter * 3, 28), report_date=None,
+        eps_actual=eps, eps_estimate=eps - 0.1, eps_surprise=0.1,
+        eps_surprise_percent=5.0, revenue_estimate=None, revenue_actual=revenue,
+    )
+
+
+def _upcoming_q(year: int, quarter: int, eps: float) -> QuarterlyEarnings:
+    return QuarterlyEarnings(
+        fiscal_year=year, fiscal_quarter=quarter,
+        period_end=date(year, quarter * 3, 28), report_date=None,
+        eps_actual=None, eps_estimate=eps, eps_surprise=None,
+        eps_surprise_percent=None, revenue_estimate=90e9, revenue_actual=None,
+    )
+
+
+class _TimelineSyncProvider(QuarterlyEarningsProvider):
+    """Returns one canned timeline regardless of symbol."""
+
+    def __init__(self, timeline: QuarterlyEarningsTimeline) -> None:
+        self._timeline = timeline
+
+    def get_quarterly_earnings(self, symbol: str) -> QuarterlyEarningsTimeline:
+        return self._timeline
+
+
+def test_sync_fills_missing_revenue_from_the_stored_rows():
+    # Yahoo IP-gates the income-statement (revenue) endpoint hardest: a refresh may
+    # come back with EPS but no revenue. The stored revenue must survive the rewrite.
+    stored = QuarterlyEarningsTimeline(
+        "AAPL", (_reported_q(2026, 1, 2.0, revenue=100e9),)
+    )
+    fresh = QuarterlyEarningsTimeline(
+        "AAPL",
+        (_reported_q(2026, 1, 2.0, revenue=None), _upcoming_q(2026, 2, 2.1)),
+    )
+    repo = _FakeRepo([RefreshTarget("AAPL", None)], stored={"AAPL": stored})
+
+    SyncQuarterlyEarnings(_TimelineSyncProvider(fresh), repo).execute()
+
+    saved = repo.saved["AAPL"]
+    assert saved.past[0].revenue_actual == 100e9  # carried forward, not nulled
+    assert [q.fiscal_quarter for q in saved.future] == [2]  # fresh forward kept
+
+
+def test_sync_degraded_fetch_keeps_stored_reported_quarters():
+    stored = QuarterlyEarningsTimeline(
+        "AAPL",
+        (_reported_q(2025, 4, 1.8, 95e9), _reported_q(2026, 1, 2.0, 100e9)),
+    )
+    fresh = QuarterlyEarningsTimeline("AAPL", (_upcoming_q(2026, 2, 2.1),))
+    repo = _FakeRepo([RefreshTarget("AAPL", None)], stored={"AAPL": stored})
+
+    SyncQuarterlyEarnings(_TimelineSyncProvider(fresh), repo).execute()
+
+    saved = repo.saved["AAPL"]
+    assert [(q.fiscal_year, q.fiscal_quarter) for q in saved.past] == [
+        (2025, 4),
+        (2026, 1),
+    ]
+
+
+def test_sync_normal_roll_does_not_grow_the_reported_window():
+    stored = QuarterlyEarningsTimeline(
+        "AAPL", tuple(_reported_q(2025, q, 1.5, 90e9) for q in (1, 2, 3, 4))
+    )
+    fresh = QuarterlyEarningsTimeline(
+        "AAPL",
+        tuple(_reported_q(2025, q, 1.6, 92e9) for q in (2, 3, 4))
+        + (_reported_q(2026, 1, 2.0, 100e9),),
+    )
+    repo = _FakeRepo([RefreshTarget("AAPL", None)], stored={"AAPL": stored})
+
+    SyncQuarterlyEarnings(_TimelineSyncProvider(fresh), repo).execute()
+
+    saved = repo.saved["AAPL"]
+    assert [(q.fiscal_year, q.fiscal_quarter) for q in saved.past] == [
+        (2025, 2),
+        (2025, 3),
+        (2025, 4),
+        (2026, 1),
+    ]  # (2025, 1) rolled off; the window stayed four reported quarters
 
 
 def test_sync_default_limit_is_applied_when_unspecified():

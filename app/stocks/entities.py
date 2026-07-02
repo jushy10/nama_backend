@@ -258,45 +258,6 @@ class StockFundamentals:
 
 
 @dataclass(frozen=True)
-class RevenueComponent:
-    """One labeled slice of a quarter's revenue and the amount reported for it.
-
-    A single line of a revenue disaggregation — one operating segment ("AWS") or
-    one product/service line ("DRAM", "Online stores") — paired with the revenue
-    the company reported for it that quarter (raw, e.g. USD). The ``label`` reads
-    as the company names it in its filing: filers mint their own taxonomy
-    members, so two companies' labels needn't line up (and a single-segment filer
-    may not break out segments at all).
-    """
-
-    label: str
-    amount: float  # revenue for this component (raw, e.g. USD)
-
-
-@dataclass(frozen=True)
-class RevenueBreakdown:
-    """How one quarter's revenue splits across the cuts the company disclosed.
-
-    Filers disaggregate the same quarter's revenue more than one way (ASC 606):
-    by reportable operating segment (``by_segment`` — business units like AWS, or
-    Micron's CMBU/CDBU) and by product/service line (``by_product`` — DRAM vs
-    NAND, online stores vs advertising). The two are *alternate* views of the
-    same money, so each list sums to roughly the quarter's total — they are not
-    additive to each other. A cut the filing doesn't disclose is an empty list
-    (a single-segment filer simply has no ``by_segment`` split), so the whole
-    block is best-effort like the figures it carries.
-    """
-
-    by_segment: tuple[RevenueComponent, ...] = ()
-    by_product: tuple[RevenueComponent, ...] = ()
-
-    @property
-    def is_empty(self) -> bool:
-        """True when neither cut was disclosed — nothing worth attaching."""
-        return not self.by_segment and not self.by_product
-
-
-@dataclass(frozen=True)
 class EarningsSurprise:
     """One quarter's reported EPS against the consensus estimate going in.
 
@@ -313,16 +274,10 @@ class EarningsSurprise:
     estimate: float | None  # consensus EPS estimate going in
     surprise: float | None  # actual - estimate (EPS)
     surprise_percent: float | None  # surprise as a percent of the estimate
-    # Revenue actually reported for the quarter (raw, e.g. USD), best-effort from
-    # SEC EDGAR's XBRL filings. ``None`` when the company isn't an EDGAR filer or
-    # the filing can't be aligned to this quarter. There's deliberately no
-    # consensus *estimate* here — that's licensed analyst data we don't source.
+    # Revenue actually reported for the quarter (raw, e.g. USD) — best-effort,
+    # overlaid from the quarterly-earnings slice's stored rows. ``None`` when no
+    # stored quarter aligns to this one.
     revenue_actual: float | None = None
-    # The same quarter's revenue broken out by segment and product/service (raw,
-    # from the SEC EDGAR filing itself), best-effort. ``None`` when the filing
-    # discloses no breakdown that aligns to this quarter (e.g. a fiscal Q4, which
-    # only the annual 10-K reports, or a non-filer).
-    revenue_breakdown: RevenueBreakdown | None = None
 
     @property
     def beat(self) -> bool | None:

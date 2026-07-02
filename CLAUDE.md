@@ -33,7 +33,7 @@ the code wins — fix this file.
                                 │ implemented by
                        ┌────────┴─────────┐
                        │  adapter         │  the ONLY code that knows a vendor
-                       │ *_provider.py    │  (Alpaca / Finnhub / Logo.dev / SEC EDGAR / Yahoo / DB)
+                       │ *_provider.py    │  (Alpaca / Finnhub / Logo.dev / Yahoo / DB)
                        └──────────────────┘
 ```
 
@@ -117,13 +117,12 @@ only this one file changes.
 
 - `alpaca_provider.py` — Alpaca SDK → price/quote/candles/performance/sectors
 - `finnhub_*_provider.py` — Finnhub → fundamentals / earnings / calendar / company name (`/stock/profile2`)
-- `sec_edgar_revenue_provider.py` — SEC EDGAR XBRL **flat API** (`httpx`, free/keyless) → reported quarterly revenue *totals*; resolves ticker→CIK and derives Q4 from the 10-K
-- `sec_edgar_segment_revenue_provider.py` — SEC EDGAR **inline XBRL** (the raw 10-Q/10-K documents; the flat API drops the dimensional contexts) → per-quarter revenue split by operating segment and product/service; parses several recent filings and keeps standalone-quarter, member-qualified facts
 - `logodev_provider.py` — Logo.dev → logo image
-- `caching_company_profile_provider.py` / `caching_revenue_provider.py` / `caching_segment_revenue_provider.py` — decorator adapters (wrap another adapter to add an in-process TTL cache; same port in, same port out)
+- `caching_company_profile_provider.py` — decorator adapter (wraps another adapter to add an in-process TTL cache; same port in, same port out)
 - `adapters/yfinance_quarterly_earnings_adapter.py` — live source for the quarterly-earnings slice: **Yahoo via `yfinance`**, building the 4-recent + up-to-2-upcoming quarter timeline. **Past** quarters come from `earnings_dates` (reported EPS vs the estimate that preceded it; surprise computed here, not from Yahoo's `Surprise(%)`). **Upcoming** quarters come from the `0q`/`+1q` rows of `earnings_estimate` + `revenue_estimate` — the reliable source of *two* forward quarters (EPS + revenue), so a stock surfaces both even when `earnings_dates` lists only one scheduled future date; a scheduled date is attached when it lines up. **Reported revenue** (`revenue_actual`) is matched onto the past quarters from `quarterly_income_stmt` (Total Revenue, whose columns carry the *true* fiscal period-end dates: each quarter takes the column most recently preceding its announcement date — never the calendar-derived label, which for off-calendar filers like MU names a different fiscal quarter than the EPS) — best-effort enrichment, so a failure fetching it drops the actual without sinking the timeline. Fiscal labels are derived from the announcement date (calendar best-effort; the offset is cosmetic — a row's EPS and revenue always belong to the same fiscal quarter). `adapters/db_cached_quarterly_earnings_adapter.py` — a **read-through** DB cache in front of it: serves stored rows if present, else fetches from Yahoo **once on a miss** and stores. **No TTL/staleness or serve-stale**; a populated symbol is always served straight from the DB, and keeping rows current is entirely the cron's job
-- `adapters/yfinance_annual_earnings_adapter.py` — live source for the annual-earnings slice: **Yahoo via `yfinance`**, building the 4-recent + up-to-2-upcoming *fiscal-year* timeline (the yearly analogue of the quarterly adapter). **Past** years come from `income_stmt` (annual) — `Diluted EPS` (falling back to `Basic EPS`) as the actual, plus `Total Revenue` and `Net Income`. **Upcoming** years come from the `0y`/`+1y` rows of `earnings_estimate` + `revenue_estimate` (EPS + revenue) — Yahoo's forward ceiling (so ≤2). Forward years are labelled by `info['nextFiscalYearEnd']` (0y), falling back to one year past the latest reported year. **No annual surprise/beat** — Yahoo's estimate-vs-actual history is per-quarter, so a reported year carries an actual with no estimate. Key caveat: `income_stmt` is the **fundamentals endpoint Yahoo IP-gates hardest from data-centre IPs**, so it's fetched best-effort (a failure drops the reported years but leaves the forward ones) — meaning **on ECS the reported half may be empty** while forward serves (the same `revenue_actual`-in-prod limitation, one scale up; fixable later by sourcing reported years from SEC EDGAR). `adapters/db_cached_annual_earnings_adapter.py` — the same **read-through** DB cache as quarterly (DB-first, fetch-on-miss, no TTL/serve-stale)
+- `adapters/yfinance_annual_earnings_adapter.py` — live source for the annual-earnings slice: **Yahoo via `yfinance`**, building the 4-recent + up-to-2-upcoming *fiscal-year* timeline (the yearly analogue of the quarterly adapter). **Past** years come from `income_stmt` (annual) — `Diluted EPS` (falling back to `Basic EPS`) as the actual, plus `Total Revenue` and `Net Income`. **Upcoming** years come from the `0y`/`+1y` rows of `earnings_estimate` + `revenue_estimate` (EPS + revenue) — Yahoo's forward ceiling (so ≤2). Forward years are labelled by `info['nextFiscalYearEnd']` (0y), falling back to one year past the latest reported year. **No annual surprise/beat** — Yahoo's estimate-vs-actual history is per-quarter, so a reported year carries an actual with no estimate. Key caveat: `income_stmt` is the **fundamentals endpoint Yahoo IP-gates hardest from data-centre IPs** (intermittently — prod has fetched it successfully), so it's fetched best-effort: a blocked fetch drops the reported years but leaves the forward ones, and the **merge-preserving sync** keeps the stored reported rows when that happens. `adapters/db_cached_annual_earnings_adapter.py` — the same **read-through** DB cache as quarterly (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `adapters/annual_earnings_estimates_adapter.py` — implements the `AnalystEstimatesProvider` port for the stock snapshot by **projecting the annual-earnings slice's stored forward years** into an `AnalystEstimates` block (first upcoming year → FY1, next → FY2). **DB-only, no live fall-through**: estimates are best-effort enrichment, so an uncached symbol just omits the forward metrics until the annual read path (lazy fill) or its cron populates the rows. This replaced the dedicated `stock_analyst_estimates` table + its own Yahoo fetch and cron — the annual slice stores the *same* `earnings_estimate`/`revenue_estimate` consensus, so the snapshot's `forward_pe`/`forward_ps`/forward growth now have one source of truth (the FY1 low/high range and analyst counts were dropped with the table)
+- `adapters/quarterly_earnings_revenue_adapter.py` — implements the `RevenueHistoryProvider` port for the legacy earnings endpoint by projecting the quarterly-earnings slice's stored rows into the per-quarter revenue map (period end → reported revenue). This replaced the SEC EDGAR revenue + segment providers — the quarterly slice stores the same reported revenue (Yahoo), so `/stocks/{symbol}/earnings` reads one source of truth; the segment/product `revenue_breakdown` was dropped with EDGAR (nothing consumed it). Reads through the quarterly DB cache, so an uncached symbol fills lazily on first view
 - `adapters/yfinance_recommendations_adapter.py` — live source for the recommendations slice: **Yahoo via `yfinance`** (`Ticker.recommendations`), the sell-side buy/hold/sell split as monthly snapshots (the same recommendation-trend data Finnhub serves, but keyless — this replaced `finnhub_recommendation_provider.py` and the `FINNHUB_API_KEY` gate on the endpoint). Yahoo labels the rows *relatively* (`0m` = this month, `-1m`, …), so the adapter anchors them on today's month into first-of-month `period` dates — the identity the DB cache keys on. `adapters/db_cached_recommendations_adapter.py` — the same **read-through** DB cache as the earnings slices (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
 - `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table) + `get_or_create_stock`. Owned by no single feature; per-feature tables hang off it and import it from here
@@ -161,9 +160,13 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > `stock_id` + fiscal year + quarter), not one wide row; (2) the read cache is a plain
 > **read-through** (DB-first, fetch-on-miss only — **no TTL/staleness or serve-stale**), so
 > a populated symbol is always served from the DB and freshness is entirely the cron's job;
-> (3) the **sync** skips an **empty** live result rather than persisting it (its upsert
-> rewrites a stock's whole window via delete-then-insert, so an empty write would wipe good
-> history). Fiscal labels are a calendar best-effort — `earnings_dates` carries only the
+> (3) the **sync is merge-preserving** — an **empty** live result is skipped outright, and a
+> *degraded* one is filled from the stored rows before the upsert (`filled_from` on the
+> timeline entity: field-level carry-forward per fiscal key, stored reported rows retained
+> when the fresh window drops them, reported never downgraded, window capped so it doesn't
+> grow) — because the upsert rewrites a stock's whole window via delete-then-insert, and a
+> Yahoo-blocked fetch must not wipe good history (revenue actuals especially).
+> Fiscal labels are a calendar best-effort — `earnings_dates` carries only the
 > announcement date, so the period end is the most recent calendar quarter-end before it
 > (exact for calendar fiscal years, a label offset for others).
 
@@ -185,10 +188,11 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > (1) **no surprise/beat** — Yahoo publishes no historical *annual* estimate, so a reported
 > year carries an actual with no estimate; (2) the reported half is sourced from Yahoo's
 > **fundamentals endpoint (`income_stmt`), which it IP-gates hardest**, so it's best-effort
-> and **may be empty on ECS** while the (non-gated) forward years serve — the known
-> `revenue_actual`-in-prod limitation, one scale up. This was the pure-yfinance choice to
-> mirror quarterly; sourcing reported years from **SEC EDGAR** (keyless, not IP-gated) is the
-> fix-later. Fiscal-year labels are more exact than quarterly's — `income_stmt` reports the
+> and the gating is **intermittent** — a blocked fetch yields a forward-only timeline. The
+> **merge-preserving sync** (the same `filled_from` guard the quarterly slice uses) is what
+> makes that survivable: stored reported years are retained when a refresh comes back
+> without them, so a bad Yahoo day delays new data but never erases existing rows.
+> Fiscal-year labels are more exact than quarterly's — `income_stmt` reports the
 > true fiscal-year-end date, so the label is that date's calendar year.
 
 > **The recommendations sub-slice — `app/stocks/recommendations/`.** Analyst
@@ -262,7 +266,9 @@ translates them.
 
 **Config & secrets** come from environment variables, read only in the router's
 wiring functions (`APCA_API_KEY_ID`, `FINNHUB_API_KEY`, `LOGODEV_TOKEN`,
-`DATABASE_URL`). Build providers lazily so the app boots without
+`DATABASE_URL`; `CRON_SYNC_TOKEN` gates the `/internal/*/sync` cron endpoints —
+opt-in, open until set, and the GitHub sync workflows send it from the Actions
+secret of the same name). Build providers lazily so the app boots without
 every key. Never hardcode or commit secrets.
 
 **Input normalization** happens once, at the top of the use case
@@ -351,7 +357,7 @@ app/
     ├── ports.py            # ── abstract interfaces (ABCs)
     ├── use_cases.py        # ── orchestration (one class per action)
     ├── exceptions.py       # ── domain errors
-    ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/Logo.dev/SEC EDGAR)
+    ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/Logo.dev)
     ├── adapters/           # ── vendor adapters as *_adapter.py (quarterly/annual earnings: yfinance + caches; estimates projection)
     ├── stocks/             # ── shared `stocks` anchor slice:
     │   └── models.py            #    StockRecord (the `stocks` table) + get_or_create_stock
@@ -380,6 +386,7 @@ app/
     │   ├── use_cases.py         #    GetStockRecommendations + SyncRecommendations
     │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
+    │   ├── cron_auth.py                          #  shared bearer-token guard (CRON_SYNC_TOKEN)
     │   ├── cron_quarterly_earnings_endpoints.py  #  POST /internal/earnings/quarterly/sync
     │   ├── quarterly_earnings_endpoints.py       #  GET /stocks/{symbol}/earnings/quarterly
     │   ├── cron_annual_earnings_endpoints.py     #  POST /internal/earnings/annual/sync

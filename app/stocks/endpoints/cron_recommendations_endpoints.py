@@ -8,9 +8,10 @@ Wiring lives here, the composition-root way: build the live yfinance adapter + t
 repository and hand them to the use case. yfinance reads Yahoo's public data with no API
 key, so there's no credential to gate on; the sync is always constructable.
 
-Security: this endpoint is intentionally **unauthenticated**. It writes the database (and
-hits Yahoo), so it relies on network isolation — it must not be reachable from the public
-internet. Put a guard (auth token / private networking) in front before exposing it.
+Security: the endpoint writes the database (and hits Yahoo) and is triggered over the
+public internet by the sync workflow, so it's guarded by the shared bearer-token
+dependency (``cron_auth.require_cron_token``) — enforced once ``CRON_SYNC_TOKEN`` is set
+in the app's environment, open until then.
 """
 
 from fastapi import APIRouter, Depends, Query
@@ -21,13 +22,16 @@ from app.db import get_db
 from app.stocks.adapters.yfinance_recommendations_adapter import (
     YfinanceRecommendationProvider,
 )
+from app.stocks.endpoints.cron_auth import require_cron_token
 from app.stocks.recommendations.db_repository import SqlRecommendationsRepository
 from app.stocks.recommendations.use_cases import (
     RecommendationsSyncReport,
     SyncRecommendations,
 )
 
-router = APIRouter(tags=["recommendations-cron"])
+router = APIRouter(
+    tags=["recommendations-cron"], dependencies=[Depends(require_cron_token)]
+)
 
 
 class RecommendationsSyncResponse(BaseModel):

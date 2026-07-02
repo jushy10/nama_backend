@@ -32,7 +32,6 @@ from app.stocks.entities import (
     MoversBoard,
     NextEarnings,
     Quote,
-    RevenueBreakdown,
     ScreenedStock,
     SectorPerformance,
     Stock,
@@ -41,8 +40,6 @@ from app.stocks.entities import (
     Timeframe,
 )
 from app.stocks.caching_company_profile_provider import CachingCompanyProfileProvider
-from app.stocks.caching_revenue_provider import CachingRevenueHistoryProvider
-from app.stocks.caching_segment_revenue_provider import CachingSegmentRevenueProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.finnhub_company_profile_provider import FinnhubCompanyProfileProvider
 from app.stocks.finnhub_earnings_calendar_provider import (
@@ -52,14 +49,17 @@ from app.stocks.finnhub_earnings_provider import FinnhubEarningsProvider
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
 from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
-from app.stocks.sec_edgar_revenue_provider import SecEdgarRevenueProvider
-from app.stocks.sec_edgar_segment_revenue_provider import (
-    SecEdgarSegmentRevenueProvider,
-)
 from app.stocks.adapters.annual_earnings_estimates_adapter import (
     AnnualEarningsEstimatesProvider,
 )
+from app.stocks.adapters.quarterly_earnings_revenue_adapter import (
+    QuarterlyEarningsRevenueProvider,
+)
 from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
+from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.endpoints.quarterly_earnings_endpoints import (
+    get_quarterly_earnings_provider,
+)
 from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
@@ -69,7 +69,6 @@ from app.stocks.ports import (
     InvestmentAnalysisProvider,
     LogoProvider,
     RevenueHistoryProvider,
-    SegmentRevenueProvider,
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
@@ -88,8 +87,6 @@ from app.stocks.schemas import (
     MoversResponse,
     NextEarningsResponse,
     QuoteResponse,
-    RevenueBreakdownResponse,
-    RevenueComponentResponse,
     RsiPointResponse,
     RsiResponse,
     ScreenedStockResponse,
@@ -224,45 +221,28 @@ def get_earnings_calendar_provider() -> EarningsCalendarProvider | None:
     return FinnhubEarningsCalendarProvider(key) if key else None
 
 
-@lru_cache(maxsize=1)
-def get_revenue_provider() -> RevenueHistoryProvider:
-    # Reported quarterly revenue from SEC EDGAR — free and keyless, so it needs no
-    # env gate and is always available. Wrapped in a TTL cache (a singleton, so it
-    # persists across requests) to stay well under EDGAR's ~10 req/s limit.
-    # SEC_EDGAR_USER_AGENT lets ops set a real contact; EDGAR rejects generic agents.
-    user_agent = os.environ.get("SEC_EDGAR_USER_AGENT")
-    inner = (
-        SecEdgarRevenueProvider(user_agent) if user_agent else SecEdgarRevenueProvider()
-    )
-    return CachingRevenueHistoryProvider(inner)
-
-
-@lru_cache(maxsize=1)
-def get_segment_revenue_provider() -> SegmentRevenueProvider:
-    # Per-quarter segment/product revenue, parsed from the SEC EDGAR filings —
-    # free and keyless like the revenue total, so no env gate. The TTL cache
-    # matters most here: each miss fetches and parses several full filings, so a
-    # singleton cache keeps repeat views off EDGAR. Shares SEC_EDGAR_USER_AGENT.
-    user_agent = os.environ.get("SEC_EDGAR_USER_AGENT")
-    inner = (
-        SecEdgarSegmentRevenueProvider(user_agent)
-        if user_agent
-        else SecEdgarSegmentRevenueProvider()
-    )
-    return CachingSegmentRevenueProvider(inner)
+def get_revenue_provider(
+    quarterly: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
+) -> RevenueHistoryProvider:
+    # Reported quarterly revenue for the earnings endpoint now rides on the
+    # quarterly-earnings slice's stored rows (Yahoo via the persistent DB cache,
+    # kept current by the merge-preserving cron) instead of a second vendor — one
+    # source of truth. A symbol never cached fills lazily on first view exactly
+    # like the quarterly endpoint itself; best-effort, so a miss just omits the
+    # revenue overlay.
+    return QuarterlyEarningsRevenueProvider(quarterly)
 
 
 def get_stock_earnings(
     provider: EarningsHistoryProvider = Depends(get_earnings_provider),
-    # Trailing metrics, the next-report forecast, per-quarter revenue, and the
-    # segment/product breakdown are best-effort enrichment on top of the beat
-    # history — a miss leaves the (primary) response intact rather than failing it.
+    # Trailing metrics, the next-report forecast, and per-quarter revenue are
+    # best-effort enrichment on top of the beat history — a miss leaves the
+    # (primary) response intact rather than failing it.
     fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
     calendar: EarningsCalendarProvider | None = Depends(get_earnings_calendar_provider),
     revenue: RevenueHistoryProvider = Depends(get_revenue_provider),
-    segment_revenue: SegmentRevenueProvider = Depends(get_segment_revenue_provider),
 ) -> GetStockEarnings:
-    return GetStockEarnings(provider, fundamentals, calendar, revenue, segment_revenue)
+    return GetStockEarnings(provider, fundamentals, calendar, revenue)
 
 
 @lru_cache(maxsize=1)
@@ -474,23 +454,6 @@ def _present_next_earnings(
     )
 
 
-def _present_breakdown(
-    breakdown: RevenueBreakdown | None,
-) -> RevenueBreakdownResponse | None:
-    if breakdown is None:
-        return None
-    return RevenueBreakdownResponse(
-        by_segment=[
-            RevenueComponentResponse(label=c.label, amount=c.amount)
-            for c in breakdown.by_segment
-        ],
-        by_product=[
-            RevenueComponentResponse(label=c.label, amount=c.amount)
-            for c in breakdown.by_product
-        ],
-    )
-
-
 def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
     """Presenter: earnings-history entity -> HTTP response DTO."""
     return EarningsHistoryResponse(
@@ -510,7 +473,6 @@ def _present_earnings(history: EarningsHistory) -> EarningsHistoryResponse:
                 surprise_percent=q.surprise_percent,
                 beat=q.beat,
                 revenue_actual=q.revenue_actual,
-                revenue_breakdown=_present_breakdown(q.revenue_breakdown),
             )
             for q in history.quarters
         ],

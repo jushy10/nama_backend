@@ -91,3 +91,112 @@ class QuarterlyEarningsTimeline:
     def future(self) -> tuple[QuarterlyEarnings, ...]:
         """The upcoming (not-yet-reported) quarters, soonest first."""
         return tuple(q for q in self.quarters if not q.is_reported)
+
+    def filled_from(
+        self, stored: "QuarterlyEarningsTimeline | None"
+    ) -> "QuarterlyEarningsTimeline":
+        """This (freshly fetched) timeline with its holes filled from a stored one.
+
+        The refresh guard: Yahoo intermittently blocks parts of a fetch from
+        data-centre IPs (the income-statement revenue hardest), and a refresh
+        rewrites a stock's whole window — so without this, a degraded fetch would
+        overwrite good stored figures with ``None``. Reported figures never change
+        once published, so carrying the stored value forward is always correct:
+
+        - a fresh quarter's missing figures are taken from the stored quarter with
+          the same fiscal key (a reported quarter's estimate fields excluded —
+          ``revenue_estimate`` stays an upcoming-quarter concept);
+        - a stored *reported* quarter is never downgraded — it wins outright over a
+          fresh not-yet-reported row for the same key;
+        - stored *reported* quarters absent from the fresh window are retained,
+          capped to the newest ``max(fresh, stored)`` reported counts so outage
+          protection never grows the served window run over run (stored *upcoming*
+          quarters are not retained — consensus legitimately rolls off).
+        """
+        if stored is None or stored.is_empty:
+            return self
+        stored_by_key = {(q.fiscal_year, q.fiscal_quarter): q for q in stored.quarters}
+        fresh_keys = {(q.fiscal_year, q.fiscal_quarter) for q in self.quarters}
+        merged = [
+            _merged_quarter(q, stored_by_key.get((q.fiscal_year, q.fiscal_quarter)))
+            for q in self.quarters
+        ]
+        retained = [
+            q
+            for q in stored.past
+            if (q.fiscal_year, q.fiscal_quarter) not in fresh_keys
+        ]
+        combined = merged + retained
+        reported = sorted(
+            (q for q in combined if q.is_reported),
+            key=lambda q: (q.fiscal_year, q.fiscal_quarter),
+        )
+        cap = max(len(self.past), len(stored.past))
+        reported = reported[-cap:] if cap else []
+        upcoming = [q for q in combined if not q.is_reported]
+        quarters = sorted(
+            reported + upcoming, key=lambda q: (q.fiscal_year, q.fiscal_quarter)
+        )
+        return QuarterlyEarningsTimeline(symbol=self.symbol, quarters=tuple(quarters))
+
+
+def _merged_quarter(
+    fresh: QuarterlyEarnings, stored: QuarterlyEarnings | None
+) -> QuarterlyEarnings:
+    """One fiscal quarter merged for a refresh: fresh values win, stored values fill
+    the holes. A stored reported quarter beats a fresh not-yet-reported one outright
+    (a published actual never un-reports)."""
+    if stored is None:
+        return fresh
+    if stored.is_reported and not fresh.is_reported:
+        return stored
+    if fresh.is_reported:
+        return QuarterlyEarnings(
+            fiscal_year=fresh.fiscal_year,
+            fiscal_quarter=fresh.fiscal_quarter,
+            period_end=fresh.period_end or stored.period_end,
+            report_date=fresh.report_date or stored.report_date,
+            eps_actual=fresh.eps_actual,
+            eps_estimate=(
+                fresh.eps_estimate
+                if fresh.eps_estimate is not None
+                else stored.eps_estimate
+            ),
+            eps_surprise=(
+                fresh.eps_surprise
+                if fresh.eps_surprise is not None
+                else stored.eps_surprise
+            ),
+            eps_surprise_percent=(
+                fresh.eps_surprise_percent
+                if fresh.eps_surprise_percent is not None
+                else stored.eps_surprise_percent
+            ),
+            revenue_estimate=fresh.revenue_estimate,
+            revenue_actual=(
+                fresh.revenue_actual
+                if fresh.revenue_actual is not None
+                else stored.revenue_actual
+            ),
+        )
+    # Both upcoming: fill the consensus holes.
+    return QuarterlyEarnings(
+        fiscal_year=fresh.fiscal_year,
+        fiscal_quarter=fresh.fiscal_quarter,
+        period_end=fresh.period_end or stored.period_end,
+        report_date=fresh.report_date or stored.report_date,
+        eps_actual=None,
+        eps_estimate=(
+            fresh.eps_estimate
+            if fresh.eps_estimate is not None
+            else stored.eps_estimate
+        ),
+        eps_surprise=None,
+        eps_surprise_percent=None,
+        revenue_estimate=(
+            fresh.revenue_estimate
+            if fresh.revenue_estimate is not None
+            else stored.revenue_estimate
+        ),
+        revenue_actual=None,
+    )
