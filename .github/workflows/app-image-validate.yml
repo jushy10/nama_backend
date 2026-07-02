@@ -1,0 +1,33 @@
+name: Validate App Build
+run-name: Validate app build · ${{ github.ref_name }}
+
+# Pull requests touching the app -> prove the Docker image builds. No AWS
+# credentials, no push. This lives in its own workflow (not app-image.yml) so
+# the "Validate build" check only ever appears on pull requests — pushes to
+# main run only the build/migrate/deploy pipeline in app-image.yml.
+
+on:
+  pull_request:
+    paths:
+      - "app/**"
+      - "alembic/**"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - ".github/workflows/app-image-validate.yml"
+
+concurrency:
+  group: app-image-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Build image (no push)
+        run: docker build -t "nama-dev:ci" .
