@@ -93,6 +93,11 @@ class SyncAnnualEarnings:
             if timeline.is_empty:
                 failed += 1
                 continue
+            # A *degraded* fetch must not wipe stored figures either: the upsert rewrites
+            # the whole window, so fill the fresh timeline's holes from the stored rows
+            # (reported years Yahoo dropped this run, missing revenue/net income) before
+            # persisting. Reported figures never change, so the stored values stay true.
+            timeline = timeline.filled_from(self._repository.get(target.symbol))
             # Carry the stored name so a nameless refresh doesn't drop a known one.
             self._repository.upsert(target.symbol, target.name, timeline)
             refreshed += 1

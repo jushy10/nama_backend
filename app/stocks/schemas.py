@@ -197,28 +197,6 @@ class RsiResponse(BaseModel):
     points: list[RsiPointResponse]
 
 
-class RevenueComponentResponse(BaseModel):
-    """One labeled slice of a quarter's revenue and the amount reported for it.
-
-    ``label`` reads as the company names the line in its filing (e.g. "AWS",
-    "DRAM", "Online stores"); ``amount`` is the revenue for it (raw, e.g. USD)."""
-
-    label: str
-    amount: float
-
-
-class RevenueBreakdownResponse(BaseModel):
-    """A quarter's revenue split by the cuts the filing disclosed.
-
-    ``by_segment`` is the reportable operating segments / business units;
-    ``by_product`` the product/service lines. The two are alternate views of the
-    same quarter, so each list sums to roughly the quarter's total — they aren't
-    additive to each other. A cut the filing doesn't disclose is an empty list."""
-
-    by_segment: list[RevenueComponentResponse] = []
-    by_product: list[RevenueComponentResponse] = []
-
-
 class EarningsSurpriseResponse(BaseModel):
     """One quarter's reported EPS versus the consensus estimate going in.
 
@@ -235,9 +213,6 @@ class EarningsSurpriseResponse(BaseModel):
     surprise_percent: float | None = None  # percent of estimate
     beat: bool | None = None  # met or beat the estimate
     revenue_actual: float | None = None  # reported revenue for the quarter (raw)
-    # That revenue split by segment and product/service; null when the filing
-    # discloses no breakdown that aligns to the quarter (e.g. a fiscal Q4).
-    revenue_breakdown: RevenueBreakdownResponse | None = None
 
 
 class EarningsMetricsResponse(BaseModel):

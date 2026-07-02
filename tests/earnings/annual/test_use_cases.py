@@ -86,18 +86,25 @@ def test_get_rejects_obviously_invalid_symbols():
 
 
 class _FakeRepo(AnnualEarningsRepository):
-    """Serves a fixed target list and records what got upserted."""
+    """Serves a fixed target list (and optional stored timelines) and records upserts."""
 
-    def __init__(self, targets: list[RefreshTarget]) -> None:
+    def __init__(
+        self,
+        targets: list[RefreshTarget],
+        stored: dict[str, AnnualEarningsTimeline] | None = None,
+    ) -> None:
         self._targets = list(targets)
+        self._stored = stored or {}
         self.upserts: list[tuple[str, str | None]] = []
+        self.saved: dict[str, AnnualEarningsTimeline] = {}
         self.refresh_limit: int | None = None
 
-    def get(self, symbol: str) -> AnnualEarningsTimeline | None:  # unused here
-        return None
+    def get(self, symbol: str) -> AnnualEarningsTimeline | None:
+        return self._stored.get(symbol)
 
     def upsert(self, symbol, name, timeline) -> None:
         self.upserts.append((symbol, name))
+        self.saved[symbol] = timeline
 
     def refresh_targets(self, limit: int) -> list[RefreshTarget]:
         self.refresh_limit = limit
@@ -171,6 +178,83 @@ def test_sync_empty_live_result_is_skipped_not_stored():
 
     assert (report.refreshed, report.failed) == (1, 1)
     assert repo.upserts == [("AAPL", "Apple Inc.")]  # GONE never upserted
+
+
+def _reported(year: int, eps: float, revenue: float | None = 400e9) -> AnnualEarnings:
+    return AnnualEarnings(
+        fiscal_year=year, period_end=date(year, 12, 31), eps_actual=eps,
+        eps_estimate=None, revenue_actual=revenue, revenue_estimate=None,
+        net_income=100e9,
+    )
+
+
+def _upcoming(year: int, eps: float) -> AnnualEarnings:
+    return AnnualEarnings(
+        fiscal_year=year, period_end=date(year, 12, 31), eps_actual=None,
+        eps_estimate=eps, revenue_actual=None, revenue_estimate=500e9,
+    )
+
+
+class _TimelineSyncProvider(AnnualEarningsProvider):
+    """Returns one canned timeline regardless of symbol."""
+
+    def __init__(self, timeline: AnnualEarningsTimeline) -> None:
+        self._timeline = timeline
+
+    def get_annual_earnings(self, symbol: str) -> AnnualEarningsTimeline:
+        return self._timeline
+
+
+def test_sync_degraded_fetch_keeps_stored_reported_years():
+    # Yahoo IP-gates the income-statement endpoint: a blocked fetch yields a
+    # forward-only timeline. The refresh must merge it with the stored rows rather
+    # than overwrite the reported history with nothing.
+    stored = AnnualEarningsTimeline(
+        "AAPL", (_reported(2024, 6.0), _reported(2025, 7.3), _upcoming(2026, 8.0))
+    )
+    fresh = AnnualEarningsTimeline("AAPL", (_upcoming(2026, 8.1), _upcoming(2027, 9.2)))
+    repo = _FakeRepo([RefreshTarget("AAPL", None)], stored={"AAPL": stored})
+
+    SyncAnnualEarnings(_TimelineSyncProvider(fresh), repo).execute()
+
+    saved = repo.saved["AAPL"]
+    assert [y.fiscal_year for y in saved.past] == [2024, 2025]  # history retained
+    assert [y.fiscal_year for y in saved.future] == [2026, 2027]
+    assert saved.future[0].eps_estimate == 8.1  # fresh consensus still wins
+
+
+def test_sync_normal_roll_does_not_grow_the_reported_window():
+    # A new reported year rolls the oldest one off — retention protects against
+    # outages without accumulating history run over run.
+    stored = AnnualEarningsTimeline(
+        "AAPL",
+        tuple(_reported(y, 5.0) for y in (2021, 2022, 2023, 2024)),
+    )
+    fresh = AnnualEarningsTimeline(
+        "AAPL",
+        tuple(_reported(y, 6.0) for y in (2022, 2023, 2024, 2025)),
+    )
+    repo = _FakeRepo([RefreshTarget("AAPL", None)], stored={"AAPL": stored})
+
+    SyncAnnualEarnings(_TimelineSyncProvider(fresh), repo).execute()
+
+    saved = repo.saved["AAPL"]
+    assert [y.fiscal_year for y in saved.past] == [2022, 2023, 2024, 2025]
+    assert saved.past[0].eps_actual == 6.0  # the fresh figures, not the stored ones
+
+
+def test_sync_reported_year_never_downgrades_to_upcoming():
+    # Yahoo's estimate frames lag a fresh report: the fetch may still list a year
+    # as upcoming that the store already holds as reported. The published actual wins.
+    stored = AnnualEarningsTimeline("AAPL", (_reported(2025, 7.3),))
+    fresh = AnnualEarningsTimeline("AAPL", (_upcoming(2025, 7.1), _upcoming(2026, 8.0)))
+    repo = _FakeRepo([RefreshTarget("AAPL", None)], stored={"AAPL": stored})
+
+    SyncAnnualEarnings(_TimelineSyncProvider(fresh), repo).execute()
+
+    saved = repo.saved["AAPL"]
+    year_2025 = next(y for y in saved.years if y.fiscal_year == 2025)
+    assert year_2025.is_reported and year_2025.eps_actual == 7.3
 
 
 def test_sync_default_limit_is_applied_when_unspecified():

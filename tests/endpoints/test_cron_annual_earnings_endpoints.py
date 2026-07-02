@@ -59,6 +59,37 @@ def test_rejects_an_out_of_range_limit():
     assert fake.calls == []
 
 
+def test_requires_the_cron_token_once_configured(monkeypatch):
+    # The guard is opt-in: with CRON_SYNC_TOKEN set, a request without (or with the
+    # wrong) bearer token is rejected before the use case runs; the right one passes.
+    monkeypatch.setenv("CRON_SYNC_TOKEN", "s3cret")
+    fake = _FakeSync(AnnualEarningsSyncReport(refreshed=1, failed=0, limit=10))
+    client = _client(fake)
+
+    assert client.post("/internal/earnings/annual/sync").status_code == 401
+    assert (
+        client.post(
+            "/internal/earnings/annual/sync",
+            headers={"Authorization": "Bearer wrong"},
+        ).status_code
+        == 401
+    )
+    assert fake.calls == []  # rejected before the sync ran
+
+    ok = client.post(
+        "/internal/earnings/annual/sync?limit=10",
+        headers={"Authorization": "Bearer s3cret"},
+    )
+    assert ok.status_code == 200
+    assert fake.calls == [10]
+
+
+def test_stays_open_while_no_token_is_configured(monkeypatch):
+    monkeypatch.delenv("CRON_SYNC_TOKEN", raising=False)
+    fake = _FakeSync(AnnualEarningsSyncReport(refreshed=1, failed=0, limit=10))
+    assert _client(fake).post("/internal/earnings/annual/sync").status_code == 200
+
+
 def test_sync_is_wired_without_any_api_key():
     # yfinance needs no credential, so the real DI builds the use case with no key set.
     use_case = cron.get_sync_annual_earnings(db=None)
