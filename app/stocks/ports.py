@@ -15,6 +15,7 @@ from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     Constituent,
+    ForwardGrowth,
     InvestmentAnalysis,
     Logo,
     Quote,
@@ -238,6 +239,28 @@ class QuoteBatchProvider(ABC):
         Best-effort and total: symbols the source can't price are left out, and
         a transport failure yields a (partial or empty) map rather than raising
         — the screener decides what an empty result means.
+        """
+        raise NotImplementedError
+
+
+class ForwardGrowthProvider(ABC):
+    """A gateway for many symbols' expected next-fiscal-year growth in one call.
+
+    Backs the growth screener, which ranks a whole universe — per-symbol lookups
+    would be far too many round-trips, so this is a batch port like
+    ``QuoteBatchProvider``. Coverage is best-effort: a symbol with no stored
+    forward consensus is simply omitted, so callers must tolerate a partial map.
+    """
+
+    @abstractmethod
+    def get_forward_growth(self, symbols: list[str]) -> dict[str, ForwardGrowth]:
+        """Return the forward-growth legs for each covered symbol, keyed by symbol.
+
+        Symbols without a stored forward consensus are left out — an unfilled
+        cache is "no data yet", not an error.
+
+        Raises:
+            StockDataUnavailable: the backing store failed.
         """
         raise NotImplementedError
 

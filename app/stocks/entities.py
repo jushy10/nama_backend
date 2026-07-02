@@ -111,8 +111,9 @@ class KeyMetrics:
 
 
 def _forward_one_year_growth(fy1: float | None, fy2: float | None) -> float | None:
-    """One-year forward growth (percent): the FY1 → FY2 change — what next year's
-    consensus implies versus this year's.
+    """One-year forward growth (percent): the change from one fiscal year's figure
+    to the next — e.g. FY1 → FY2 consensus, or the latest reported actual → the
+    FY1 consensus.
 
     A plain point-to-point percentage gain/loss, not a compounded multi-year rate.
     ``None`` unless both years are present and positive (growth off a non-positive
@@ -549,6 +550,98 @@ class MoversBoard:
     as_of: datetime | None
     gainers: tuple[ScreenedStock, ...]
     losers: tuple[ScreenedStock, ...]
+
+
+class GrowthSortKey(str, Enum):
+    """Which forward-growth line the growth screener ranks on.
+
+    The string values double as the API's accepted query values, the same
+    convention as Timeframe and StockIndex.
+    """
+
+    EPS = "eps"
+    REVENUE = "revenue"
+
+
+@dataclass(frozen=True)
+class ForwardGrowth:
+    """A stock's expected growth over its next fiscal year.
+
+    Both legs of each line: the consensus estimate for the first upcoming fiscal
+    year (FY1) against the latest *reported* year's actual — "what analysts expect
+    the year being reported next to do versus the last one on the books". Distinct
+    from ``AnalystEstimates``' FY1 → FY2 growth (two forward years), which Yahoo
+    covers for far fewer names. The growth properties share the same guard: ``None``
+    unless both legs are present and positive (growth off a non-positive base is
+    meaningless — e.g. an expected swing from a loss to a profit has no percent).
+    """
+
+    symbol: str
+    fiscal_year: int | None  # the upcoming (FY1) fiscal year the estimates target
+    prior_fiscal_year: int | None  # the latest reported fiscal year (the base)
+    eps_estimate: float | None  # FY1 consensus EPS
+    eps_actual: float | None  # latest reported year's EPS (the base)
+    revenue_estimate: float | None  # FY1 consensus revenue (raw)
+    revenue_actual: float | None  # latest reported year's revenue (raw)
+
+    @property
+    def expected_eps_growth(self) -> float | None:
+        """Expected EPS growth over the next fiscal year (percent)."""
+        return _forward_one_year_growth(self.eps_actual, self.eps_estimate)
+
+    @property
+    def expected_revenue_growth(self) -> float | None:
+        """Expected revenue growth over the next fiscal year (percent)."""
+        return _forward_one_year_growth(self.revenue_actual, self.revenue_estimate)
+
+
+@dataclass(frozen=True)
+class GrowthScreenedStock:
+    """A universe member paired with its forward growth — one growth-screener row.
+
+    Wraps a ``ForwardGrowth`` so the growth figures follow one rule everywhere,
+    and adds the universe metadata the screener filters and labels on — the
+    growth analogue of ``ScreenedStock`` wrapping a ``Quote``.
+    """
+
+    name: str | None
+    sector: str | None
+    growth: ForwardGrowth
+
+    @property
+    def symbol(self) -> str:
+        return self.growth.symbol
+
+    @property
+    def expected_eps_growth(self) -> float | None:
+        return self.growth.expected_eps_growth
+
+    @property
+    def expected_revenue_growth(self) -> float | None:
+        return self.growth.expected_revenue_growth
+
+
+@dataclass(frozen=True)
+class GrowthScreenBoard:
+    """Stocks ranked by expected next-fiscal-year growth across a (filtered) universe.
+
+    ``index``/``sector``/``sort``/``min_*`` echo the filters that produced the
+    board. ``universe_count`` is how many constituents matched the index/sector
+    filter; ``covered_count`` how many of those had stored forward consensus to
+    screen on — coverage grows as the annual-earnings cache fills, so a low count
+    means "not seeded yet", not "no growth out there". ``stocks`` lead with the
+    strongest expected growth on the chosen line, capped at ``limit``.
+    """
+
+    index: StockIndex | None
+    sector: str | None
+    sort: GrowthSortKey
+    min_revenue_growth: float | None
+    min_eps_growth: float | None
+    limit: int
+    universe_count: int
+    covered_count: int
+    stocks: tuple[GrowthScreenedStock, ...]
 
 
 class Recommendation(str, Enum):

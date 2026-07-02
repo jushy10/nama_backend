@@ -86,6 +86,25 @@ def years_by_symbol(session: Session, symbol: str) -> list[StockAnnualEarningsRe
     )
 
 
+def years_by_symbols(
+    session: Session, symbols: list[str]
+) -> list[tuple[str, StockAnnualEarningsRecord]]:
+    """All stored year rows for the given symbols in one query, as ``(symbol, row)``
+    pairs ordered by symbol then ascending fiscal year. Symbols with nothing stored
+    simply contribute no pairs. The batch companion to ``years_by_symbol`` — the
+    growth screener reads a whole universe, so per-symbol queries would be far too
+    many round-trips."""
+    if not symbols:
+        return []
+    rows = session.execute(
+        select(StockRecord.symbol, StockAnnualEarningsRecord)
+        .join(StockRecord, StockAnnualEarningsRecord.stock_id == StockRecord.id)
+        .where(StockRecord.symbol.in_(symbols))
+        .order_by(StockRecord.symbol.asc(), StockAnnualEarningsRecord.fiscal_year.asc())
+    ).all()
+    return [(row.symbol, row[1]) for row in rows]
+
+
 def delete_years_for_stock(session: Session, stock_id: uuid.UUID) -> None:
     """Remove every stored year for a stock, so a refresh can rewrite the window wholesale
     (delete-then-insert) rather than diffing rows."""
@@ -94,6 +113,23 @@ def delete_years_for_stock(session: Session, stock_id: uuid.UUID) -> None:
             StockAnnualEarningsRecord.stock_id == stock_id
         )
     )
+
+
+def stored_symbols_among(session: Session, symbols: list[str]) -> set[str]:
+    """The subset of ``symbols`` that already has at least one stored year row. One
+    query, so the sync can split a whole constituent list into seeds vs. stored."""
+    if not symbols:
+        return set()
+    rows = session.execute(
+        select(StockRecord.symbol)
+        .join(
+            StockAnnualEarningsRecord,
+            StockAnnualEarningsRecord.stock_id == StockRecord.id,
+        )
+        .where(StockRecord.symbol.in_(symbols))
+        .distinct()
+    ).all()
+    return {row.symbol for row in rows}
 
 
 def stalest_symbols(session: Session, limit: int) -> list[tuple[str, str | None]]:

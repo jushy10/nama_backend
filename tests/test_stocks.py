@@ -21,7 +21,9 @@ from app.stocks.entities import (
     CompanyProfile,
     Confidence,
     Constituent,
+    ForwardGrowth,
     GrowthMetrics,
+    GrowthSortKey,
     InvestmentAnalysis,
     KeyMetrics,
     Logo,
@@ -47,6 +49,7 @@ from app.stocks.ports import (
     CandleProvider,
     CompanyProfileProvider,
     ConstituentRepository,
+    ForwardGrowthProvider,
     InvestmentAnalysisProvider,
     LogoProvider,
     QuoteBatchProvider,
@@ -57,6 +60,7 @@ from app.stocks.ports import (
     StockQuoteProvider,
 )
 from app.stocks.router import (
+    get_growth_screener,
     get_screener,
     get_sector_performance,
     get_stock_analysis,
@@ -74,6 +78,7 @@ from app.stocks.use_cases import (
     GetStockLogo,
     GetStockQuote,
     GetStockRsi,
+    ScreenGrowthStocks,
     ScreenStocks,
 )
 
@@ -1852,6 +1857,218 @@ def test_get_screener_upstream_failure_502(make_screener_client):
     # Real universe, but the quote feed yields nothing -> 502.
     client = make_screener_client(a_screener(quotes={}))
     assert client.get("/stocks/screener").status_code == 502
+
+
+# --------------------------- growth screener: fakes + builders ---------------------------
+
+class FakeForwardGrowthProvider(ForwardGrowthProvider):
+    """Returns the configured growth legs for whichever symbols are asked for.
+
+    Mirrors the real best-effort contract: a requested symbol with nothing
+    configured is simply omitted. Records the symbols it was asked for.
+    """
+
+    def __init__(self, growth=None, raises: Exception | None = None):
+        self._growth = dict(growth or {})
+        self._raises = raises
+        self.received: list[str] = []
+
+    def get_forward_growth(self, symbols: list[str]) -> dict[str, ForwardGrowth]:
+        self.received = list(symbols)
+        if self._raises is not None:
+            raise self._raises
+        return {s: self._growth[s] for s in symbols if s in self._growth}
+
+
+def grown(symbol: str, eps_pct: float | None, rev_pct: float | None) -> ForwardGrowth:
+    """Legs engineered so the expected growth comes out to the given percents
+    (``None`` = that line's estimate is missing)."""
+    return ForwardGrowth(
+        symbol=symbol,
+        fiscal_year=2026,
+        prior_fiscal_year=2025,
+        eps_actual=10.0,
+        eps_estimate=None if eps_pct is None else 10.0 * (1 + eps_pct / 100),
+        revenue_actual=100e9,
+        revenue_estimate=None if rev_pct is None else 100e9 * (1 + rev_pct / 100),
+    )
+
+
+def growth_for(**percents) -> dict[str, ForwardGrowth]:
+    """Build symbol->ForwardGrowth from keyword {symbol: (eps_pct, rev_pct)} pairs."""
+    return {s: grown(s, eps, rev) for s, (eps, rev) in percents.items()}
+
+
+# --------------------------- growth screener use case ---------------------------
+
+def test_growth_screen_ranks_by_expected_eps_growth_by_default():
+    repo = FakeConstituentRepository(a_universe())
+    growth = FakeForwardGrowthProvider(
+        growth_for(AAA=(15.0, 5.0), BBB=(30.0, 2.0), CCC=(5.0, 40.0))
+    )
+    board = ScreenGrowthStocks(repo, growth).execute()
+    assert [s.symbol for s in board.stocks] == ["BBB", "AAA", "CCC"]
+    assert board.stocks[0].expected_eps_growth == 30.0  # entity math via the legs
+    assert (board.universe_count, board.covered_count) == (3, 3)
+
+
+def test_growth_screen_can_rank_on_the_revenue_line():
+    repo = FakeConstituentRepository(a_universe())
+    growth = FakeForwardGrowthProvider(
+        growth_for(AAA=(15.0, 5.0), BBB=(30.0, 2.0), CCC=(5.0, 40.0))
+    )
+    board = ScreenGrowthStocks(repo, growth).execute(sort=GrowthSortKey.REVENUE)
+    assert [s.symbol for s in board.stocks] == ["CCC", "AAA", "BBB"]
+
+
+def test_growth_screen_min_thresholds_filter_on_both_lines():
+    repo = FakeConstituentRepository(a_universe())
+    growth = FakeForwardGrowthProvider(
+        growth_for(AAA=(15.0, 12.0), BBB=(30.0, 2.0), CCC=(5.0, 40.0))
+    )
+    board = ScreenGrowthStocks(repo, growth).execute(
+        min_eps_growth=10.0, min_revenue_growth=10.0
+    )
+    # BBB fails the revenue floor, CCC the EPS floor — "good growth" means both.
+    assert [s.symbol for s in board.stocks] == ["AAA"]
+    assert board.covered_count == 3  # coverage counts data, not qualification
+
+
+def test_growth_screen_thresholded_missing_figure_is_excluded():
+    # AAA has no revenue estimate: it can't demonstrate it clears a revenue
+    # floor, so a revenue threshold excludes it rather than waving it through.
+    repo = FakeConstituentRepository(a_universe())
+    growth = FakeForwardGrowthProvider(growth_for(AAA=(15.0, None), BBB=(12.0, 20.0)))
+    board = ScreenGrowthStocks(repo, growth).execute(min_revenue_growth=10.0)
+    assert [s.symbol for s in board.stocks] == ["BBB"]
+
+
+def test_growth_screen_missing_sort_figure_is_unrankable():
+    # Without an EPS growth figure AAA can't be placed in an EPS ranking at all —
+    # but flipping the sort to revenue brings it back.
+    repo = FakeConstituentRepository(a_universe())
+    growth = FakeForwardGrowthProvider(growth_for(AAA=(None, 25.0), BBB=(12.0, 20.0)))
+    eps_board = ScreenGrowthStocks(repo, growth).execute()
+    assert [s.symbol for s in eps_board.stocks] == ["BBB"]
+    rev_board = ScreenGrowthStocks(repo, growth).execute(sort=GrowthSortKey.REVENUE)
+    assert [s.symbol for s in rev_board.stocks] == ["AAA", "BBB"]
+
+
+def test_growth_screen_uncovered_symbols_are_left_out():
+    repo = FakeConstituentRepository(a_universe())
+    growth = FakeForwardGrowthProvider(growth_for(AAA=(15.0, 5.0)))  # BBB/CCC unseeded
+    board = ScreenGrowthStocks(repo, growth).execute()
+    assert [s.symbol for s in board.stocks] == ["AAA"]
+    assert (board.universe_count, board.covered_count) == (3, 1)
+
+
+def test_growth_screen_filters_by_index_and_sector():
+    repo = FakeConstituentRepository(a_universe())
+    growth = FakeForwardGrowthProvider(
+        growth_for(AAA=(15.0, 5.0), BBB=(30.0, 2.0), CCC=(5.0, 40.0))
+    )
+    board = ScreenGrowthStocks(repo, growth).execute(index=StockIndex.NASDAQ100)
+    assert growth.received == ["BBB"]  # only the Nasdaq-100 name is looked up
+    assert board.universe_count == 1
+    board = ScreenGrowthStocks(repo, growth).execute(sector="energy")
+    assert growth.received == ["CCC"]  # case-insensitive, same rule as the movers
+
+
+def test_growth_screen_limit_caps_the_board():
+    repo = FakeConstituentRepository(a_universe())
+    growth = FakeForwardGrowthProvider(
+        growth_for(AAA=(15.0, 5.0), BBB=(30.0, 2.0), CCC=(5.0, 40.0))
+    )
+    board = ScreenGrowthStocks(repo, growth).execute(limit=1)
+    assert [s.symbol for s in board.stocks] == ["BBB"]  # still the best, just capped
+    assert board.covered_count == 3
+
+
+def test_growth_screen_rejects_non_positive_limit():
+    repo = FakeConstituentRepository(a_universe())
+    with pytest.raises(ValueError):
+        ScreenGrowthStocks(repo, FakeForwardGrowthProvider()).execute(limit=0)
+
+
+def test_growth_screen_empty_universe_skips_the_provider():
+    repo = FakeConstituentRepository(a_universe())
+    growth = FakeForwardGrowthProvider()
+    board = ScreenGrowthStocks(repo, growth).execute(sector="Nonexistent Sector")
+    assert board.stocks == () and board.universe_count == 0
+    assert growth.received == []  # nothing to look up
+
+
+# --------------------------- growth screener endpoint ---------------------------
+
+@pytest.fixture
+def make_growth_client():
+    def _make(use_case: ScreenGrowthStocks) -> TestClient:
+        app.dependency_overrides[get_growth_screener] = lambda: use_case
+        return TestClient(app)
+
+    yield _make
+    app.dependency_overrides.clear()
+
+
+def a_growth_screener(growth=None, constituents=None) -> ScreenGrowthStocks:
+    default = growth_for(AAA=(15.0, 5.0), BBB=(30.0, 2.0), CCC=(5.0, 40.0))
+    return ScreenGrowthStocks(
+        FakeConstituentRepository(constituents or a_universe()),
+        FakeForwardGrowthProvider(default if growth is None else growth),
+    )
+
+
+def test_get_growth_screener_returns_200_ranked(make_growth_client):
+    client = make_growth_client(a_growth_screener())
+    r = client.get("/stocks/screener/growth")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [s["symbol"] for s in body["stocks"]] == ["BBB", "AAA", "CCC"]
+    top = body["stocks"][0]
+    assert top["expected_eps_growth"] == 30.0
+    assert top["fiscal_year"] == 2026 and top["prior_fiscal_year"] == 2025
+    assert top["eps_actual"] == 10.0 and top["eps_estimate"] == 13.0  # the legs ride along
+    assert body["sort"] == "eps" and body["count"] == 3
+    assert (body["universe_count"], body["covered_count"]) == (3, 3)
+
+
+def test_get_growth_screener_honors_filters_and_sort(make_growth_client):
+    client = make_growth_client(a_growth_screener())
+    body = client.get(
+        "/stocks/screener/growth",
+        params={"sort": "revenue", "min_revenue_growth": 4.0, "limit": 2},
+    ).json()
+    assert [s["symbol"] for s in body["stocks"]] == ["CCC", "AAA"]  # BBB under the floor
+    assert body["min_revenue_growth"] == 4.0 and body["limit"] == 2
+
+
+def test_get_growth_screener_sets_cache_header(make_growth_client):
+    client = make_growth_client(a_growth_screener())
+    r = client.get("/stocks/screener/growth")
+    assert r.headers["cache-control"] == "public, max-age=300"
+
+
+@pytest.mark.parametrize("bad", [{"limit": 0}, {"limit": 101}, {"sort": "peg"}])
+def test_get_growth_screener_invalid_params_422(make_growth_client, bad):
+    client = make_growth_client(a_growth_screener())
+    assert client.get("/stocks/screener/growth", params=bad).status_code == 422
+
+
+def test_get_growth_screener_storage_failure_502(make_growth_client):
+    broken = ScreenGrowthStocks(
+        FakeConstituentRepository(a_universe()),
+        FakeForwardGrowthProvider(raises=StockDataUnavailable("screener", "db down")),
+    )
+    assert make_growth_client(broken).get("/stocks/screener/growth").status_code == 502
+
+
+def test_get_growth_screener_unseeded_universe_is_empty_not_an_error(make_growth_client):
+    # Constituents exist but nothing is cached yet: a valid empty board (the cron
+    # fills coverage), unlike the movers where an empty quote sweep means "feed down".
+    client = make_growth_client(a_growth_screener(growth={}))
+    body = client.get("/stocks/screener/growth").json()
+    assert body["stocks"] == []
+    assert (body["universe_count"], body["covered_count"]) == (3, 0)
 
 
 # The recommendations endpoint moved to its own slice (app/stocks/recommendations/);

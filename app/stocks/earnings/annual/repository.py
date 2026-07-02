@@ -18,11 +18,12 @@ from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 
 
 class RefreshTarget(NamedTuple):
-    """A stored symbol due for a refresh, paired with the name to carry through.
+    """A symbol for the sync to fetch, paired with the display name to carry through.
 
-    What ``refresh_targets`` hands the sync use case: the symbol to re-fetch and the
-    display name already on its ``stocks`` row, so a nameless refresh doesn't drop a known
-    company name when it re-stores the rows.
+    What ``refresh_targets`` hands the sync use case (the symbol to re-fetch and the
+    name already on its ``stocks`` row, so a nameless refresh doesn't drop a known
+    company name) — and the shape callers use to pass *seed* candidates (constituents
+    that may not be stored yet) into the sync.
     """
 
     symbol: str
@@ -63,6 +64,15 @@ class AnnualEarningsRepository(ABC):
         first, each paired with the name on its ``stocks`` row.
 
         The out-of-band sync walks these to renew the rows users actually view while staying
-        gentle on the vendor; symbols never stored (hence never viewed) aren't returned —
-        those are filled lazily on first access instead."""
+        gentle on the vendor; symbols never stored aren't returned — those reach the sync as
+        *seeds* (see ``missing_from``) or are filled lazily on first access."""
         raise NotImplementedError
+
+    def missing_from(self, symbols: list[str]) -> list[str]:
+        """Return the subset of ``symbols`` with nothing stored yet, in the given order.
+
+        How the sync tells seed candidates (fetch first — they have no rows at all) apart
+        from stored symbols (already covered by ``refresh_targets``). Non-abstract: this
+        default just probes ``get`` per symbol so in-memory fakes work unchanged; the SQL
+        implementation overrides it with a single query."""
+        return [s for s in symbols if self.get(s) is None]

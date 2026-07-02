@@ -14,10 +14,14 @@ hand-written fakes and know nothing of yfinance, HTTP, or SQLAlchemy:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Sequence
 
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.annual.ports import AnnualEarningsProvider
-from app.stocks.earnings.annual.repository import AnnualEarningsRepository
+from app.stocks.earnings.annual.repository import (
+    AnnualEarningsRepository,
+    RefreshTarget,
+)
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 
 
@@ -50,15 +54,17 @@ class GetAnnualEarnings:
 @dataclass(frozen=True)
 class AnnualEarningsSyncReport:
     """The outcome of one refresh run: how many stocks were renewed, how many the provider
-    couldn't serve this run (or returned empty for), and the per-run cap."""
+    couldn't serve this run (or returned empty for), how many of the renewals were
+    first-time seeds (previously unstored), and the per-run cap."""
 
     refreshed: int
     failed: int
     limit: int
+    seeded: int = 0
 
 
 class SyncAnnualEarnings:
-    """Renew stored annual earnings from the live source, stalest stocks first."""
+    """Renew stored annual earnings from the live source — seeds first, then stalest."""
 
     # Default stocks per run; the caller (the cron endpoint) can override per invocation.
     # Kept modest so the sequential Yahoo calls stay gentle on its rate limits.
@@ -72,14 +78,35 @@ class SyncAnnualEarnings:
         self._provider = provider
         self._repository = repository
 
-    def execute(self, *, limit: int | None = None) -> AnnualEarningsSyncReport:
-        """Refresh up to ``limit`` stalest stocks (default ``DEFAULT_LIMIT``), returning a
-        summary. Never raises for a single symbol's failure — the run continues and the
-        failure is counted, so one bad symbol doesn't abort the whole sweep."""
+    def execute(
+        self,
+        *,
+        limit: int | None = None,
+        seeds: Sequence[RefreshTarget] = (),
+    ) -> AnnualEarningsSyncReport:
+        """Refresh up to ``limit`` stocks (default ``DEFAULT_LIMIT``), returning a summary.
+
+        ``seeds`` are candidate symbols that may not be stored yet (e.g. an index's
+        constituents): the never-stored ones are fetched *first* — they have nothing at
+        all, so they're the stalest a symbol can be — with whatever remains of the cap
+        going to the stored rows, stalest-fetched first. Seeds already stored are left to
+        the regular staleness queue, so passing the same list every run is idempotent and
+        just tops up coverage as new names appear. Never raises for a single symbol's
+        failure — the run continues and the failure is counted, so one bad symbol doesn't
+        abort the whole sweep."""
         capped = self.DEFAULT_LIMIT if limit is None else max(1, limit)
+        new_symbols = (
+            set(self._repository.missing_from([s.symbol for s in seeds]))
+            if seeds
+            else set()
+        )
+        seed_targets = [s for s in seeds if s.symbol in new_symbols][:capped]
+        remaining = capped - len(seed_targets)
+        stored_targets = self._repository.refresh_targets(remaining) if remaining else []
         refreshed = 0
         failed = 0
-        for target in self._repository.refresh_targets(capped):
+        seeded = 0
+        for target in seed_targets + stored_targets:
             try:
                 timeline = self._provider.get_annual_earnings(target.symbol)
             except (StockNotFound, StockDataUnavailable):
@@ -101,4 +128,8 @@ class SyncAnnualEarnings:
             # Carry the stored name so a nameless refresh doesn't drop a known one.
             self._repository.upsert(target.symbol, target.name, timeline)
             refreshed += 1
-        return AnnualEarningsSyncReport(refreshed=refreshed, failed=failed, limit=capped)
+            if target.symbol in new_symbols:
+                seeded += 1
+        return AnnualEarningsSyncReport(
+            refreshed=refreshed, failed=failed, limit=capped, seeded=seeded
+        )
