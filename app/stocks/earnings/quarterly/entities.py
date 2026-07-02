@@ -9,10 +9,9 @@ import stdlib only and model both halves of the timeline in one shape:
 - **Upcoming** quarters carry the forward consensus (``eps_actual`` is ``None`` — not yet
   reported) and, for the nearest quarters, a forward revenue estimate.
 
-``eps_actual is None`` is the single discriminator between the two, mirroring how the
-stocks slice's ``EarningsSurprise`` already unions an actual with the estimate that
-preceded it. Any field beyond the fiscal identity may be ``None`` when the source didn't
-cover it.
+``eps_actual is None`` is the single discriminator between the two — one shape unions
+an actual with the estimate that preceded it. Any field beyond the fiscal identity may
+be ``None`` when the source didn't cover it.
 """
 
 from __future__ import annotations

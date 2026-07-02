@@ -21,14 +21,10 @@ from app.stocks.entities import (
     CompanyProfile,
     Confidence,
     Constituent,
-    EarningsHistory,
-    EarningsMetrics,
-    EarningsSurprise,
     GrowthMetrics,
     InvestmentAnalysis,
     KeyMetrics,
     Logo,
-    NextEarnings,
     Quote,
     Recommendation,
     SectorPerformance,
@@ -38,6 +34,11 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
+from app.stocks.earnings.quarterly.entities import (
+    QuarterlyEarnings,
+    QuarterlyEarningsTimeline,
+)
+from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import RsiSignal
 from app.stocks.ports import (
@@ -46,12 +47,9 @@ from app.stocks.ports import (
     CandleProvider,
     CompanyProfileProvider,
     ConstituentRepository,
-    EarningsCalendarProvider,
-    EarningsHistoryProvider,
     InvestmentAnalysisProvider,
     LogoProvider,
     QuoteBatchProvider,
-    RevenueHistoryProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockFundamentalsProvider,
@@ -63,7 +61,6 @@ from app.stocks.router import (
     get_sector_performance,
     get_stock_analysis,
     get_stock_candles,
-    get_stock_earnings,
     get_stock_info,
     get_stock_logo,
     get_stock_quote,
@@ -73,7 +70,6 @@ from app.stocks.use_cases import (
     GetSectorPerformance,
     GetStockAnalysis,
     GetStockCandles,
-    GetStockEarnings,
     GetStockInfo,
     GetStockLogo,
     GetStockQuote,
@@ -244,46 +240,18 @@ class FakeSectorProvider(SectorPerformanceProvider):
         return self._sectors
 
 
-class FakeEarningsProvider(EarningsHistoryProvider):
-    """Returns/raises whatever the test configured; records the call args."""
+class FakeQuarterlyEarningsProvider(QuarterlyEarningsProvider):
+    """Returns/raises whatever the test configured for the quarterly timeline."""
 
-    def __init__(self, history=None, raises: Exception | None = None):
-        self._history = history
-        self._raises = raises
-        self.received: list[tuple] = []
-
-    def get_earnings_history(self, symbol: str, *, limit: int) -> EarningsHistory:
-        self.received.append((symbol, limit))
-        if self._raises is not None:
-            raise self._raises
-        assert self._history is not None
-        return self._history
-
-
-class FakeCalendarProvider(EarningsCalendarProvider):
-    """Returns/raises whatever the test configured for the calendar lookup."""
-
-    def __init__(self, next_earnings=None, raises: Exception | None = None):
-        self._next = next_earnings
+    def __init__(self, timeline=None, raises: Exception | None = None):
+        self._timeline = timeline
         self._raises = raises
 
-    def get_next_earnings(self, symbol: str) -> NextEarnings | None:
+    def get_quarterly_earnings(self, symbol: str) -> QuarterlyEarningsTimeline:
         if self._raises is not None:
             raise self._raises
-        return self._next
-
-
-class FakeRevenueProvider(RevenueHistoryProvider):
-    """Returns/raises whatever the test configured for quarterly revenue."""
-
-    def __init__(self, revenue=None, raises: Exception | None = None):
-        self._revenue = revenue or {}
-        self._raises = raises
-
-    def get_quarterly_revenue(self, symbol: str) -> dict:
-        if self._raises is not None:
-            raise self._raises
-        return self._revenue
+        assert self._timeline is not None
+        return self._timeline
 
 
 class FakeAnalysisProvider(InvestmentAnalysisProvider):
@@ -437,28 +405,21 @@ def a_sector(**overrides) -> SectorPerformance:
     return SectorPerformance(**base)
 
 
-def a_surprise(**overrides) -> EarningsSurprise:
+def a_quarter(**overrides) -> QuarterlyEarnings:
     base = dict(
-        period=date(2026, 3, 31), fiscal_year=2026, fiscal_quarter=1,
-        actual=2.18, estimate=2.10, surprise=0.08, surprise_percent=3.81,
+        fiscal_year=2026, fiscal_quarter=1, period_end=date(2026, 3, 31),
+        report_date=date(2026, 5, 1), eps_actual=2.18, eps_estimate=2.10,
+        eps_surprise=0.08, eps_surprise_percent=3.81, revenue_estimate=None,
+        revenue_actual=95_000_000_000.0,
     )
     base.update(overrides)
-    return EarningsSurprise(**base)
+    return QuarterlyEarnings(**base)
 
 
-def a_history(quarters=None, symbol: str = "AAPL") -> EarningsHistory:
+def a_quarterly_timeline(quarters=None, symbol: str = "AAPL") -> QuarterlyEarningsTimeline:
     if quarters is None:
-        quarters = (a_surprise(),)
-    return EarningsHistory(symbol=symbol, quarters=tuple(quarters))
-
-
-def a_next_earnings(**overrides) -> NextEarnings:
-    base = dict(
-        report_date=date(2026, 7, 30), fiscal_year=2026, fiscal_quarter=3,
-        eps_estimate=1.42, revenue_estimate=89_000_000_000.0, session="amc",
-    )
-    base.update(overrides)
-    return NextEarnings(**base)
+        quarters = (a_quarter(),)
+    return QuarterlyEarningsTimeline(symbol=symbol, quarters=tuple(quarters))
 
 
 # --------------------------- entity rules (pure) ---------------------------
@@ -531,55 +492,6 @@ def test_key_metrics_peg_divides_pe_by_growth():
 )
 def test_key_metrics_peg_none_when_inputs_missing_or_nonpositive(pe, growth):
     assert KeyMetrics(pe=pe, eps_growth_yoy=growth).peg is None
-
-
-def test_earnings_surprise_beat_flag():
-    assert a_surprise(actual=2.0, estimate=1.5).beat is True   # beat
-    assert a_surprise(actual=1.5, estimate=1.5).beat is True   # met counts as beat
-    assert a_surprise(actual=1.0, estimate=1.5).beat is False  # miss
-    assert a_surprise(actual=None, estimate=1.5).beat is None  # unknowable
-    assert a_surprise(actual=2.0, estimate=None).beat is None
-
-
-def test_earnings_history_beat_rate_ignores_unscored_quarters():
-    history = a_history((
-        a_surprise(actual=2.0, estimate=1.5),   # beat
-        a_surprise(actual=1.0, estimate=1.5),   # miss
-        a_surprise(actual=2.0, estimate=1.5),   # beat
-        a_surprise(actual=None, estimate=None), # unscored -> excluded
-    ))
-    assert history.scored == 3
-    assert history.beats == 2
-    assert history.beat_rate == 66.7  # 2/3, one decimal
-
-
-def test_earnings_history_beat_rate_none_when_nothing_scoreable():
-    history = a_history((a_surprise(actual=None, estimate=None),))
-    assert history.scored == 0
-    assert history.beats == 0
-    assert history.beat_rate is None
-
-
-def test_earnings_metrics_projects_earnings_fields_from_key_metrics():
-    em = EarningsMetrics.from_key_metrics(a_key_metrics())
-    # carries the earnings-flavored slice...
-    assert em.eps == 6.1
-    assert em.net_margin == 25.0
-    assert em.eps_growth_yoy == 12.0
-    assert em.revenue_growth_yoy == 8.0
-    # ...and nothing valuation-flavored leaks across (it has no such fields),
-    # nor the removed profitability/payout fields
-    assert not hasattr(em, "pe")
-    assert not hasattr(em, "beta")
-    assert not hasattr(em, "roe")
-    assert not hasattr(em, "roic")
-    assert not hasattr(em, "payout_ratio")
-
-
-def test_earnings_metrics_none_without_earnings_fields():
-    # KeyMetrics present but only valuation fields set -> nothing to carry
-    assert EarningsMetrics.from_key_metrics(KeyMetrics(pe=20.0, beta=1.1)) is None
-    assert EarningsMetrics.from_key_metrics(None) is None
 
 
 def test_candle_is_bullish():
@@ -985,251 +897,6 @@ def test_sector_use_case_propagates_not_found():
         GetSectorPerformance(fake).execute()
 
 
-def test_earnings_use_case_normalizes_symbol():
-    fake = FakeEarningsProvider(a_history())
-    GetStockEarnings(fake).execute("  aapl ")
-    assert fake.received == [("AAPL", 4)]
-
-
-def test_earnings_use_case_defaults_to_four_quarters():
-    fake = FakeEarningsProvider(a_history())
-    GetStockEarnings(fake).execute("AAPL")
-    assert fake.received == [("AAPL", 4)]
-
-
-@pytest.mark.parametrize("bad", ["", "   ", "123", "AA1", "TOOLONG"])
-def test_earnings_use_case_rejects_invalid_symbols(bad):
-    fake = FakeEarningsProvider(a_history())
-    with pytest.raises(ValueError):
-        GetStockEarnings(fake).execute(bad)
-    assert fake.received == []  # provider untouched on invalid input
-
-
-def test_earnings_use_case_propagates_not_found():
-    fake = FakeEarningsProvider(raises=StockNotFound("ZZZZ"))
-    with pytest.raises(StockNotFound):
-        GetStockEarnings(fake).execute("ZZZZ")
-
-
-def test_earnings_use_case_attaches_metrics_from_fundamentals():
-    history = GetStockEarnings(
-        FakeEarningsProvider(a_history()),
-        FakeFundamentalsProvider(a_fundamentals()),
-    ).execute("AAPL")
-    assert history.metrics is not None
-    assert history.metrics.eps == 6.1
-    assert history.metrics.net_margin == 25.0
-
-
-def test_earnings_use_case_metrics_none_without_fundamentals_provider():
-    history = GetStockEarnings(FakeEarningsProvider(a_history())).execute("AAPL")
-    assert history.metrics is None
-
-
-def test_earnings_use_case_metrics_best_effort_when_fundamentals_fail():
-    # Fundamentals are enrichment: a failure leaves the beat history intact.
-    fake = FakeEarningsProvider(a_history())
-    history = GetStockEarnings(
-        fake, FakeFundamentalsProvider(raises=StockDataUnavailable("AAPL", "boom"))
-    ).execute("AAPL")
-    assert history.metrics is None
-    assert history.quarters  # primary data survived
-
-
-def test_earnings_use_case_attaches_valuation_from_fundamentals():
-    # The valuation block carries the valuation/health/market slice of the same
-    # KeyMetrics the stock snapshot uses, derived property (PEG) included.
-    history = GetStockEarnings(
-        FakeEarningsProvider(a_history()),
-        FakeFundamentalsProvider(a_fundamentals()),
-    ).execute("AAPL")
-    assert history.valuation is not None
-    assert history.valuation.pe == 28.5
-    assert history.valuation.beta == 1.2
-    assert history.valuation.peg == a_key_metrics().peg  # 28.5 / 12.0, rounded
-
-
-def test_earnings_use_case_attaches_metrics_and_valuation_in_one_call():
-    # Both blocks come from a single fundamentals fetch — assert the provider
-    # isn't hit twice now that they share the call.
-    fundamentals = FakeFundamentalsProvider(a_fundamentals())
-    history = GetStockEarnings(
-        FakeEarningsProvider(a_history()), fundamentals
-    ).execute("AAPL")
-    assert history.metrics is not None and history.valuation is not None
-    assert fundamentals.received == ["AAPL"]  # fetched exactly once
-
-
-def test_earnings_use_case_valuation_none_without_fundamentals_provider():
-    history = GetStockEarnings(FakeEarningsProvider(a_history())).execute("AAPL")
-    assert history.valuation is None
-
-
-def test_earnings_use_case_valuation_best_effort_when_fundamentals_fail():
-    history = GetStockEarnings(
-        FakeEarningsProvider(a_history()),
-        FakeFundamentalsProvider(raises=StockDataUnavailable("AAPL", "boom")),
-    ).execute("AAPL")
-    assert history.valuation is None
-    assert history.quarters  # primary data survived
-
-
-def test_earnings_use_case_attaches_next_report_from_calendar():
-    history = GetStockEarnings(
-        FakeEarningsProvider(a_history()),
-        calendar_provider=FakeCalendarProvider(a_next_earnings()),
-    ).execute("AAPL")
-    assert history.next_report is not None
-    assert history.next_report.report_date == date(2026, 7, 30)
-    assert history.next_report.eps_estimate == 1.42
-
-
-def test_earnings_use_case_next_report_best_effort_when_calendar_fails():
-    history = GetStockEarnings(
-        FakeEarningsProvider(a_history()),
-        calendar_provider=FakeCalendarProvider(
-            raises=StockDataUnavailable("AAPL", "boom")
-        ),
-    ).execute("AAPL")
-    assert history.next_report is None
-    assert history.quarters  # primary data survived
-
-
-def test_earnings_use_case_merges_revenue_into_quarters():
-    history = a_history((
-        a_surprise(fiscal_year=2026, fiscal_quarter=1, period=date(2026, 3, 31)),
-        a_surprise(fiscal_year=2025, fiscal_quarter=4, period=date(2025, 12, 31)),
-    ))
-    revenue = {date(2026, 3, 31): 97.0e9, date(2025, 12, 31): 88.0e9}
-    result = GetStockEarnings(
-        FakeEarningsProvider(history),
-        revenue_provider=FakeRevenueProvider(revenue),
-    ).execute("AAPL")
-    q0, q1 = result.quarters
-    assert q0.revenue_actual == 97.0e9
-    assert q1.revenue_actual == 88.0e9
-
-
-def test_earnings_use_case_matches_revenue_by_nearest_period_end():
-    # The revenue source's fiscal end can differ from the EPS feed's calendar quarter-end by a
-    # few days (Apple's late-September year-end vs a Sep-30 label); the nearest end
-    # within the window matches.
-    history = a_history((a_surprise(period=date(2025, 9, 30)),))
-    revenue = {date(2025, 9, 27): 94.0e9}  # 3 days off
-    result = GetStockEarnings(
-        FakeEarningsProvider(history),
-        revenue_provider=FakeRevenueProvider(revenue),
-    ).execute("AAPL")
-    assert result.quarters[0].revenue_actual == 94.0e9
-
-
-def test_earnings_use_case_matches_offset_fiscal_calendar():
-    # Micron's fiscal quarters end ~5 weeks before the calendar quarter-end the EPS
-    # feed labels them with (Aug-28 fiscal end vs a Sep-30 label) — too far for a
-    # tight window, but within ~6 weeks, so the nearest match still lands.
-    history = a_history((a_surprise(period=date(2025, 9, 30)),))
-    revenue = {date(2025, 8, 28): 11.31e9}
-    result = GetStockEarnings(
-        FakeEarningsProvider(history),
-        revenue_provider=FakeRevenueProvider(revenue),
-    ).execute("MU")
-    assert result.quarters[0].revenue_actual == 11.31e9
-
-
-def test_earnings_use_case_matches_across_a_calendar_quarter_boundary():
-    # Seagate's fiscal quarters end a few days INTO the next calendar quarter (Oct 3
-    # for the quarter the EPS feed labels Sep 30), so the two dates sit in different
-    # calendar quarters yet are only days apart — proximity must still match them.
-    history = a_history((a_surprise(period=date(2025, 9, 30)),))
-    revenue = {date(2025, 10, 3): 2.63e9}
-    result = GetStockEarnings(
-        FakeEarningsProvider(history),
-        revenue_provider=FakeRevenueProvider(revenue),
-    ).execute("STX")
-    assert result.quarters[0].revenue_actual == 2.63e9
-
-
-def test_earnings_use_case_ignores_revenue_a_full_quarter_away():
-    # An end a full quarter (~13 weeks) from the period is a different quarter and
-    # must not be matched onto this one.
-    history = a_history((a_surprise(period=date(2026, 3, 31)),))
-    revenue = {date(2025, 12, 31): 88.0e9}
-    result = GetStockEarnings(
-        FakeEarningsProvider(history),
-        revenue_provider=FakeRevenueProvider(revenue),
-    ).execute("AAPL")
-    assert result.quarters[0].revenue_actual is None
-
-
-def test_earnings_use_case_aligns_offset_labels_to_their_own_quarter():
-    # NVDA/Ciena-style: the EPS feed snaps each quarter to a calendar quarter-end
-    # ~2 months *after* the true fiscal period end the revenue source records. Pairing by closest
-    # date would pull every label onto the next quarter's revenue (Mar-31 is nearer
-    # Apr-26 than its own Jan-25); aligning the two newest-first keeps each quarter
-    # on its own revenue, and matches the latest quarter the old window missed.
-    history = a_history((
-        a_surprise(fiscal_year=2027, fiscal_quarter=1, period=date(2026, 6, 30)),
-        a_surprise(fiscal_year=2026, fiscal_quarter=4, period=date(2026, 3, 31)),
-        a_surprise(fiscal_year=2026, fiscal_quarter=3, period=date(2025, 12, 31)),
-    ))
-    revenue = {
-        date(2026, 4, 26): 81.6e9,   # true end of the Jun-30-labelled quarter
-        date(2026, 1, 25): 68.1e9,   # true end of the Mar-31-labelled quarter
-        date(2025, 10, 26): 57.0e9,  # true end of the Dec-31-labelled quarter
-    }
-    result = GetStockEarnings(
-        FakeEarningsProvider(history),
-        revenue_provider=FakeRevenueProvider(revenue),
-    ).execute("NVDA")
-    q0, q1, q2 = result.quarters
-    assert q0.revenue_actual == 81.6e9
-    assert q1.revenue_actual == 68.1e9
-    assert q2.revenue_actual == 57.0e9
-
-
-def test_earnings_use_case_leaves_latest_quarter_empty_when_revenue_not_filed():
-    # The EPS announcement (Finnhub) can precede the revenue source's record by a few
-    # days, so the newest quarter has no revenue on file yet. It stays empty while
-    # the older quarter still lines up — the alignment must not shift onto it.
-    history = a_history((
-        a_surprise(fiscal_year=2026, fiscal_quarter=2, period=date(2026, 6, 30)),
-        a_surprise(fiscal_year=2026, fiscal_quarter=1, period=date(2026, 3, 31)),
-    ))
-    revenue = {date(2026, 3, 29): 90.0e9}  # only the older quarter is filed
-    result = GetStockEarnings(
-        FakeEarningsProvider(history),
-        revenue_provider=FakeRevenueProvider(revenue),
-    ).execute("AAPL")
-    q0, q1 = result.quarters
-    assert q0.revenue_actual is None
-    assert q1.revenue_actual == 90.0e9
-
-
-def test_earnings_use_case_revenue_best_effort_when_provider_fails():
-    result = GetStockEarnings(
-        FakeEarningsProvider(a_history()),
-        revenue_provider=FakeRevenueProvider(
-            raises=StockDataUnavailable("AAPL", "boom")
-        ),
-    ).execute("AAPL")
-    assert result.quarters[0].revenue_actual is None  # untouched, history intact
-
-
-def test_earnings_use_case_revenue_best_effort_when_symbol_not_filed():
-    # An uncovered symbol (StockNotFound) is swallowed like other enrichment misses.
-    result = GetStockEarnings(
-        FakeEarningsProvider(a_history()),
-        revenue_provider=FakeRevenueProvider(raises=StockNotFound("ZZZZ")),
-    ).execute("AAPL")
-    assert result.quarters[0].revenue_actual is None
-    assert result.quarters  # primary data survived
-
-
-def test_earnings_use_case_revenue_none_without_provider():
-    result = GetStockEarnings(FakeEarningsProvider(a_history())).execute("AAPL")
-    assert result.quarters[0].revenue_actual is None
-
-
 # --------------------------- API ---------------------------
 
 @pytest.fixture
@@ -1245,9 +912,7 @@ def make_client():
         candle_provider: CandleProvider | None = None,
         rsi_provider: CandleProvider | None = None,
         sector_provider: SectorPerformanceProvider | None = None,
-        earnings_provider: EarningsHistoryProvider | None = None,
-        calendar_provider: EarningsCalendarProvider | None = None,
-        revenue_provider: RevenueHistoryProvider | None = None,
+        earnings_provider: QuarterlyEarningsProvider | None = None,
         quote_provider: StockQuoteProvider | None = None,
         analysis_provider: InvestmentAnalysisProvider | None = None,
     ) -> TestClient:
@@ -1275,13 +940,6 @@ def make_client():
         if sector_provider is not None:
             app.dependency_overrides[get_sector_performance] = (
                 lambda: GetSectorPerformance(sector_provider)
-            )
-        if earnings_provider is not None:
-            app.dependency_overrides[get_stock_earnings] = lambda: GetStockEarnings(
-                earnings_provider,
-                fundamentals_provider,
-                calendar_provider,
-                revenue_provider,
             )
         if analysis_provider is not None:
             app.dependency_overrides[get_stock_analysis] = lambda: GetStockAnalysis(
@@ -1377,7 +1035,9 @@ def _tool_message(**input_overrides) -> _StubMessage:
 def test_analysis_use_case_passes_stock_and_earnings():
     analyzer = FakeAnalysisProvider(an_analysis())
     info = GetStockInfo(FakeProvider(stock=a_stock()))
-    use_case = GetStockAnalysis(info, analyzer, FakeEarningsProvider(a_history()))
+    use_case = GetStockAnalysis(
+        info, analyzer, FakeQuarterlyEarningsProvider(a_quarterly_timeline())
+    )
     analysis = use_case.execute("aapl")
     assert analysis.recommendation is Recommendation.HOLD
     assert analyzer.received == [("AAPL", True)]  # normalized symbol, earnings supplied
@@ -1387,11 +1047,25 @@ def test_analysis_use_case_earnings_is_best_effort():
     analyzer = FakeAnalysisProvider(an_analysis())
     info = GetStockInfo(FakeProvider(stock=a_stock()))
     use_case = GetStockAnalysis(
-        info, analyzer, FakeEarningsProvider(raises=StockDataUnavailable("AAPL", "boom"))
+        info,
+        analyzer,
+        FakeQuarterlyEarningsProvider(raises=StockDataUnavailable("AAPL", "boom")),
     )
     analysis = use_case.execute("AAPL")  # earnings failure must not sink the analysis
     assert analysis.recommendation is Recommendation.HOLD
     assert analyzer.received == [("AAPL", False)]  # earnings omitted
+
+
+def test_analysis_use_case_omits_an_empty_timeline():
+    # An uncovered symbol yields an empty timeline, not an error — the analyzer
+    # should see "no earnings context", not an empty shell.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info, analyzer, FakeQuarterlyEarningsProvider(a_quarterly_timeline(quarters=()))
+    )
+    use_case.execute("AAPL")
+    assert analyzer.received == [("AAPL", False)]
 
 
 def test_analysis_use_case_propagates_stock_not_found():
@@ -1412,7 +1086,9 @@ def test_analysis_use_case_propagates_model_failure():
 def test_bedrock_adapter_parses_tool_call_into_entity():
     client = _StubClient(_tool_message())
     provider = BedrockAnalysisProvider(client=client, model_id="test-model")
-    analysis = provider.analyze(a_stock(metrics=a_key_metrics()), a_history())
+    analysis = provider.analyze(
+        a_stock(metrics=a_key_metrics()), a_quarterly_timeline()
+    )
     assert analysis.symbol == "AAPL"
     assert analysis.recommendation is Recommendation.HOLD
     assert analysis.confidence is Confidence.MEDIUM
@@ -1427,7 +1103,7 @@ def test_bedrock_adapter_parses_tool_call_into_entity():
 def test_bedrock_adapter_renders_figures_into_prompt():
     client = _StubClient(_tool_message())
     BedrockAnalysisProvider(client=client).analyze(
-        a_stock(metrics=a_key_metrics()), a_history()
+        a_stock(metrics=a_key_metrics()), a_quarterly_timeline()
     )
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Stock: AAPL" in prompt
@@ -1475,7 +1151,7 @@ def test_get_analysis_normalizes_and_supplies_earnings(make_client):
     client = make_client(
         provider=FakeProvider(stock=a_stock()),
         analysis_provider=analyzer,
-        earnings_provider=FakeEarningsProvider(a_history()),
+        earnings_provider=FakeQuarterlyEarningsProvider(a_quarterly_timeline()),
     )
     assert client.get("/stocks/aapl/analysis").status_code == 200
     assert analyzer.received == [("AAPL", True)]
@@ -1874,156 +1550,6 @@ def test_get_rsi_upstream_failure_502(make_client):
     fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
     client = make_client(rsi_provider=fake)
     assert client.get("/stocks/AAPL/rsi").status_code == 502
-
-
-# --------------------------- earnings endpoint ---------------------------
-
-def test_get_earnings_returns_200_with_beat_summary(make_client):
-    history = a_history((
-        a_surprise(actual=2.18, estimate=2.10, period=date(2026, 3, 31)),   # beat
-        a_surprise(actual=1.40, estimate=1.50, period=date(2025, 12, 31)),  # miss
-    ))
-    client = make_client(earnings_provider=FakeEarningsProvider(history))
-    r = client.get("/stocks/AAPL/earnings")
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["symbol"] == "AAPL"
-    assert body["count"] == 2
-    assert body["scored"] == 2
-    assert body["beats"] == 1
-    assert body["beat_rate"] == 50.0
-    first = body["quarters"][0]
-    assert first["period"] == "2026-03-31"   # date serialized ISO
-    assert first["actual"] == 2.18
-    assert first["beat"] is True
-    assert body["quarters"][1]["beat"] is False
-
-
-def test_get_earnings_includes_metrics_block_from_fundamentals(make_client):
-    client = make_client(
-        earnings_provider=FakeEarningsProvider(a_history()),
-        fundamentals_provider=FakeFundamentalsProvider(a_fundamentals()),
-    )
-    body = client.get("/stocks/AAPL/earnings").json()
-    metrics = body["metrics"]
-    assert metrics["eps"] == 6.1
-    assert metrics["net_margin"] == 25.0
-    assert metrics["revenue_growth_yoy"] == 8.0
-    assert metrics["gross_margin"] == 44.0
-    # valuation/market metrics belong to the stock endpoint, not here; ROE/ROIC
-    # and payout were removed entirely
-    for absent in ("pe", "pb", "beta", "week_52_high", "roe", "roic", "payout_ratio"):
-        assert absent not in metrics, absent
-
-
-def test_get_earnings_metrics_null_without_fundamentals(make_client):
-    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
-    assert client.get("/stocks/AAPL/earnings").json()["metrics"] is None
-
-
-def test_get_earnings_includes_valuation_block_from_fundamentals(make_client):
-    client = make_client(
-        earnings_provider=FakeEarningsProvider(a_history()),
-        fundamentals_provider=FakeFundamentalsProvider(a_fundamentals()),
-    )
-    valuation = client.get("/stocks/AAPL/earnings").json()["valuation"]
-    assert valuation["pe"] == 28.5
-    assert valuation["peg"] == a_key_metrics().peg  # derived from P/E and EPS growth
-    assert valuation["pb"] == 45.2
-    assert valuation["ps"] == 7.1
-    # the same KeyMetrics block as the stock endpoint, so ROE and FCF/share ride along
-    assert valuation["fcf_per_share"] == 6.43
-    assert valuation["roe"] == 147.4
-    assert valuation["current_ratio"] == 0.9
-    assert valuation["debt_to_equity"] == 1.5
-    assert valuation["beta"] == 1.2
-    assert valuation["week_52_high"] == 320.0
-    assert valuation["week_52_low"] == 210.0
-    # the margins ride along (same KeyMetrics block the snapshot serves); the
-    # remaining earnings-flavored metrics live in `metrics`, not here
-    assert valuation["net_margin"] == 25.0
-    for absent in ("eps", "eps_growth_yoy", "revenue_growth_yoy"):
-        assert absent not in valuation, absent
-
-
-def test_get_earnings_valuation_null_without_fundamentals(make_client):
-    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
-    assert client.get("/stocks/AAPL/earnings").json()["valuation"] is None
-
-
-def test_get_earnings_includes_next_report_from_calendar(make_client):
-    client = make_client(
-        earnings_provider=FakeEarningsProvider(a_history()),
-        calendar_provider=FakeCalendarProvider(a_next_earnings()),
-    )
-    nxt = client.get("/stocks/AAPL/earnings").json()["next_report"]
-    assert nxt["report_date"] == "2026-07-30"  # date serialized ISO
-    assert nxt["eps_estimate"] == 1.42
-    assert nxt["fiscal_quarter"] == 3
-    assert nxt["session"] == "amc"
-
-
-def test_get_earnings_next_report_null_without_calendar(make_client):
-    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
-    assert client.get("/stocks/AAPL/earnings").json()["next_report"] is None
-
-
-def test_get_earnings_quarters_carry_revenue_actual(make_client):
-    history = a_history((a_surprise(period=date(2026, 3, 31)),))
-    client = make_client(
-        earnings_provider=FakeEarningsProvider(history),
-        revenue_provider=FakeRevenueProvider({date(2026, 3, 31): 97.0e9}),
-    )
-    q = client.get("/stocks/AAPL/earnings").json()["quarters"][0]
-    assert q["revenue_actual"] == 97.0e9
-    assert "revenue_estimate" not in q  # the estimate field was removed
-
-
-def test_get_earnings_quarters_revenue_null_without_revenue_provider(make_client):
-    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
-    q = client.get("/stocks/AAPL/earnings").json()["quarters"][0]
-    assert q["revenue_actual"] is None
-
-
-def test_get_earnings_response_has_no_dropped_fields(make_client):
-    # Forward analyst estimates and the segment/product revenue breakdown were
-    # dropped from the earnings endpoint (the breakdown left with SEC EDGAR).
-    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
-    body = client.get("/stocks/AAPL/earnings").json()
-    assert "upcoming" not in body
-    assert "revenue_breakdown" not in body["quarters"][0]
-
-
-def test_get_earnings_ignores_limit_query_param(make_client):
-    # `limit` was removed (Finnhub's free tier ignored it); a stray value is
-    # harmless and the endpoint still returns the fixed four quarters.
-    fake = FakeEarningsProvider(a_history())
-    client = make_client(earnings_provider=fake)
-    assert client.get("/stocks/AAPL/earnings", params={"limit": 12}).status_code == 200
-    assert fake.received == [("AAPL", 4)]
-
-
-def test_get_earnings_defaults_to_four_quarters(make_client):
-    fake = FakeEarningsProvider(a_history())
-    client = make_client(earnings_provider=fake)
-    client.get("/stocks/AAPL/earnings")
-    assert fake.received == [("AAPL", 4)]
-
-
-def test_get_earnings_invalid_symbol_400(make_client):
-    client = make_client(earnings_provider=FakeEarningsProvider(a_history()))
-    assert client.get("/stocks/123/earnings").status_code == 400
-
-
-def test_get_earnings_unknown_symbol_404(make_client):
-    client = make_client(earnings_provider=FakeEarningsProvider(raises=StockNotFound("ZZZZ")))
-    assert client.get("/stocks/ZZZZ/earnings").status_code == 404
-
-
-def test_get_earnings_upstream_failure_502(make_client):
-    fake = FakeEarningsProvider(raises=StockDataUnavailable("AAPL", "boom"))
-    client = make_client(earnings_provider=fake)
-    assert client.get("/stocks/AAPL/earnings").status_code == 502
 
 
 # --------------------------- sectors endpoint ---------------------------
