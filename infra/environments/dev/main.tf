@@ -63,7 +63,13 @@ module "database" {
 # It opens no inbound ports and has no SSH key — you tunnel through it with
 # Session Manager port forwarding (see infra/README.md → "Connecting the app").
 # It carries the database's app SG, so it is allowed to reach Postgres on 5432.
+#
+# Off by default (count = 0): it costs ~$7/mo running 24/7 but is only needed
+# for the minutes a tunnel is open, and it's fully stateless — destroying and
+# recreating it loses nothing. It is NOT in the app's serving path, so toggling
+# it never affects the API. Flip var.bastion_enabled to true when you need it.
 module "bastion" {
+  count  = var.bastion_enabled ? 1 : 0
   source = "../../modules/bastion-ssm"
 
   name      = "nama-dev-bastion"

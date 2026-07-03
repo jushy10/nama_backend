@@ -95,6 +95,14 @@ The app reads `DATABASE_URL` (see [`app/db.py`](../app/db.py)). Because the DB i
   becomes publicly reachable. One-time local setup: install the AWS CLI's
   [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html).
 
+  The bastion is **off by default** (`bastion_enabled = false` in
+  `environments/dev/variables.tf`) because it costs ~$7/mo idle and is only
+  needed while a tunnel is open — it is not part of the app's serving path, so
+  this never affects the API. To use it: flip the default to `true` in a
+  one-line PR, let the Infrastructure workflow apply (~2 min for the instance
+  to boot and register with SSM), tunnel, and flip it back when done (it's
+  stateless — nothing is lost on destroy).
+
   ```sh
   # IDs/host come from `terraform output` (bastion_instance_id, database_address).
   BASTION=$(terraform -chdir=environments/dev output -raw bastion_instance_id)
@@ -119,9 +127,12 @@ running. It bills whether or not you use it — `terraform destroy` (or remove t
 `module "database"` block and apply) when you're done experimenting.
 `deletion_protection` is off and `skip_final_snapshot` is on for easy teardown.
 
-The `module "bastion"` jump host is a `t4g.nano` + 8 GB gp3 — roughly **$4/mo**
-if left on. It only needs to be running while you're tunnelling, so stop it when
-idle and start it before a session (SSM works as soon as it boots):
+The `module "bastion"` jump host is a `t4g.nano` + its public IPv4 + 8 GB gp3 —
+roughly **$7/mo** if left on, which is why it defaults to **off**
+(`bastion_enabled = false`; see "Local access" above for the flip-on/flip-off
+flow). If you'd rather keep it enabled long-term, you can still pause the
+compute + IP charges between sessions without a Terraform change (only the
+~$0.64/mo disk keeps billing while stopped):
 
 ```sh
 aws ec2 stop-instances  --instance-ids "$(terraform -chdir=environments/dev output -raw bastion_instance_id)"

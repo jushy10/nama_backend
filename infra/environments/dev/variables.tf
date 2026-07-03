@@ -28,6 +28,12 @@ variable "create_hosted_zone" {
   default     = false
 }
 
+variable "bastion_enabled" {
+  description = "Run the SSM bastion (the laptop->database tunnel host, ~$7/mo). Off by default — it's not part of the app's serving path, so this never affects the API. Flip to true (one-line PR; CI applies) when you need a database session, flip back after."
+  type        = bool
+  default     = false
+}
+
 variable "frontend_domain_name" {
   description = "Apex hostname the frontend SPA is served at."
   type        = string
