@@ -225,6 +225,42 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > near a month boundary can label a snapshot one month off; cosmetic, same spirit as the
 > earnings slices' calendar-derived fiscal labels.
 
+> **The ticker sub-slice — `app/stocks/ticker/`.** A stock's **ticker card** at
+> `GET /stocks/ticker/{ticker}`. Always served: the live quote
+> (`price`/`change`/`change_percent`, same rules as every other price view), `name` (the
+> Finnhub profile's clean display name), and `market_cap` (Finnhub fundamentals) — the
+> latter two best-effort. **Opt-in blocks** via `?include=` (repeated or comma-separated;
+> unknown values are a 400; unrequested blocks are `null` and — pay-per-use — cost no
+> provider call): `dividend` (`yield_percentage` + `per_share`; rides the fundamentals
+> call the market cap needs anyway, so the include only gates presentation),
+> `performance` (trailing windows from Alpaca), and `metrics` with `forward_peg` — the
+> **forward PEG**, the one valuation figure no other endpoint serves: forward P/E (live
+> price ÷ FY1 consensus EPS) divided by expected FY1→FY2 EPS growth (a `@property` on the
+> slice-local `TickerValuation` entity, with the same positive-legs guard as the trailing
+> `KeyMetrics.peg` — it exists because a trailing PEG divides by *already-reported*
+> growth, which a cyclical rebound can inflate into the hundreds of percent and pin the
+> ratio near zero). The PEG's *legs* deliberately stay snapshot-only (`forward_pe`,
+> `growth.forward_eps_growth` on `GET /stocks/{symbol}`) so the same numbers don't get two
+> homes that could disagree; the entity's `symbol` is renamed `ticker` at the DTO. Built
+> on the same skeleton as the other sub-slices (own `entities.py` / `use_cases.py` /
+> `schemas.py`, endpoint in `app/stocks/endpoints/ticker_endpoints.py`) but deliberately
+> **thinner: no table, repository, cron, or vendor adapter** — the card is built around
+> the live quote, so nothing slice-owned is worth persisting. The use case pulls
+> everything through *existing* ports — `StockQuoteProvider` + `StockPerformanceProvider`
+> (the Alpaca singleton, whose missing-keys 503 gate it inherits — the quote is primary),
+> `StockFundamentalsProvider` + `CompanyProfileProvider` (Finnhub, `None` without a key),
+> and `AnalystEstimatesProvider` (the annual-earnings projection, DB-only) — wired by reusing
+> the composition root's factories from `router.py`; the composite result (`TickerCard`)
+> is a dataclass beside the use case, not a slice entity, since it just bundles shared
+> entities around the slice's one domain rule (it also carries the `include` set so the
+> presenter can tell "not requested" from "requested but unavailable"). The quote — and
+> the consensus read *when `metrics` is requested* — are primary (errors propagate);
+> name/fundamentals/performance are enrichment and never sink the card. Consensus
+> freshness rides entirely on the annual slice (lazy fill + `sync-annual-earnings` cron);
+> an uncached symbol is a **200 with a null `metrics.forward_peg`**, not a 404 — no data ≠
+> error. Caveat: the growth denominator is a single FY1→FY2 leg (Yahoo's forward ceiling),
+> not the classic five-year rate, so one boom-year estimate can still flatter the ratio.
+
 ### 5. DTOs — `app/stocks/schemas.py`
 Pydantic `BaseModel`s for HTTP responses. Pydantic is a serialization detail, so
 DTOs live at the edge, deliberately **separate from entities** — that's what
@@ -388,18 +424,24 @@ app/
     │   ├── models.py            #    stock_recommendation_trends ORM + query fns (anchor from stocks/)
     │   ├── use_cases.py         #    GetStockRecommendations + SyncRecommendations
     │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
+    ├── ticker/             # ── ticker-card sub-slice (its OWN entities.py; no DB/cron —
+    │   │                   #    computed per request from live quote + stored consensus):
+    │   ├── entities.py          #    TickerValuation (forward P/E + growth legs, forward_peg property)
+    │   ├── use_cases.py         #    GetTickerCard + TickerCard composite (quote/estimates/fundamentals/performance ports)
+    │   └── schemas.py           #    HTTP response DTO (quote + enrichment + metrics.forward_peg; endpoint in endpoints/)
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
     │   ├── cron_quarterly_earnings_endpoints.py  #  POST /internal/earnings/quarterly/sync
     │   ├── quarterly_earnings_endpoints.py       #  GET /stocks/{symbol}/earnings/quarterly
     │   ├── cron_annual_earnings_endpoints.py     #  POST /internal/earnings/annual/sync
     │   ├── annual_earnings_endpoints.py          #  GET /stocks/{symbol}/earnings/annual
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
-    │   └── recommendations_endpoints.py          #  GET /stocks/{symbol}/recommendations
+    │   ├── recommendations_endpoints.py          #  GET /stocks/{symbol}/recommendations
+    │   └── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol}
     ├── constituents.py     # ── DB adapter: ORM model + SqlConstituentRepository
     ├── chart_window.py     # ── edge helper: range preset → time window
     ├── schemas.py          # ── HTTP response DTOs (pydantic)
     └── router.py           # ── endpoints + presenters + DI wiring (composition root)
-tests/                      # offline; fakes through the ports (mirrors app: tests/stocks, tests/earnings, tests/recommendations, tests/adapters, tests/endpoints)
+tests/                      # offline; fakes through the ports (mirrors app: tests/stocks, tests/earnings, tests/recommendations, tests/ticker, tests/adapters, tests/endpoints)
 alembic/                    # database migrations
 infra/                      # Terraform (modules + environments)
 ```
