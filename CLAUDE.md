@@ -241,9 +241,18 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > provider call): `dividend` (`yield_percentage` + `per_share`, rounded to 2 decimals;
 > rides the fundamentals call the market cap needs anyway, so the include only gates
 > presentation), `performance` (trailing windows from Alpaca), `options_metrics` (the
-> **options-market read**, below), and `metrics` — the
-> trailing `pe` + `peg` + `gross_margin`/`operating_margin`/`net_margin` (off that same
-> fundamentals call) beside `forward_peg`, the **forward PEG**, the one valuation figure
+> **options-market read**, below), and `metrics` — the trailing `pe` on the
+> **analyst-consensus (adjusted) EPS basis**: live price ÷ the quarterly-earnings slice's
+> `ttm_eps` (a timeline `@property` — the sum of the 4 newest reported quarters'
+> consensus-basis `eps_actual`; `null` until 4 quarters are cached, or when the trailing
+> year is a loss). Deliberately *not* Finnhub's GAAP-ish `peTTM`, so the trailing and
+> forward multiples sit on **one EPS basis** (the same reason the annual slice carries
+> `eps_actual_consensus`); the TTM read reuses the quarterly slice's read-through DB cache
+> through its `QuarterlyEarningsProvider` port (lazy fill on a cold miss) and is
+> best-effort even when requested — a Yahoo-blocked fetch nulls the multiple, never the
+> card. Beside it: `peg` + `gross_margin`/`operating_margin`/`net_margin` (off that same
+> fundamentals call — the `peg` stays Finnhub's internally-consistent trailing read) and
+> `forward_peg`, the **forward PEG**, the one valuation figure
 > no other endpoint serves: forward P/E (live
 > price ÷ FY1 consensus EPS) divided by expected FY1→FY2 EPS growth (a `@property` on the
 > slice-local `TickerValuation` entity, with the same positive-legs guard as the trailing
@@ -456,12 +465,12 @@ app/
     │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
     ├── ticker/             # ── ticker-card sub-slice (its OWN entities.py; no table/cron —
     │   │                   #    computed per request from live quote + stored consensus + live chain):
-    │   ├── entities.py          #    TickerValuation (forward_peg property); OptionContract +
+    │   ├── entities.py          #    TickerValuation (trailing_pe + forward_peg properties); OptionContract +
     │   │                        #    TickerOptionsMetrics.from_chains (the options-market read)
     │   ├── ports.py             #    OptionChainProvider (expirations + one expiry's chain)
     │   ├── repository.py        #    abstract persistence port (exchange on the stocks anchor)
     │   ├── db_repository.py     #    concrete repo: anchor-level exchange read/fill
-    │   ├── use_cases.py         #    GetTickerCard + TickerCard composite (quote/estimates/fundamentals/performance/options ports)
+    │   ├── use_cases.py         #    GetTickerCard + TickerCard composite (quote/estimates/fundamentals/performance/options/quarterly-earnings ports)
     │   └── schemas.py           #    HTTP response DTO (quote + enrichment + opt-in dividend/performance/metrics/options_metrics; endpoint in endpoints/)
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
     │   ├── cron_quarterly_earnings_endpoints.py  #  POST /internal/earnings/quarterly/sync

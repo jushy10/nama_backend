@@ -11,8 +11,10 @@ HTTP:
   filled **once** from its vendor into the ``stocks`` row), and fetches the
   *opt-in* blocks only when asked: ``dividend`` (already carried by the
   fundamentals call), ``performance`` (the trailing windows), ``metrics``
-  (the trailing ratios off the fundamentals call plus the stored forward
-  consensus, for the forward PEG), and ``options_metrics`` (the options-market
+  (the trailing P/E off the quarterly-earnings slice's stored TTM — consensus
+  basis, so it pairs with the forward legs — the margins/PEG off the
+  fundamentals call, and the stored forward consensus for the forward PEG),
+  and ``options_metrics`` (the options-market
   read: ATM implied volatility, the priced-in expected move, the cost of a
   protective put, and the day's put/call lean). Pay-per-use: a block that isn't
   requested costs no provider call. Returns the assembled ``TickerCard``.
@@ -32,6 +34,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Callable, Sequence
 
+from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.entities import (
     CompanyProfile,
     Quote,
@@ -129,10 +132,11 @@ class GetTickerCard:
     *absent* forward coverage is not a failure: an ``is_empty`` estimates block
     (symbol not cached by the annual slice yet, or no analyst coverage) yields a
     null PEG, the same "no data ≠ error" stance the other slices take. The name,
-    exchange, fundamentals, performance and options metrics are best-effort
-    enrichment, mirroring the stock snapshot: unconfigured or failing providers
-    just leave their blocks ``None``. The options read stays best-effort *even
-    when requested* — unlike the DB-backed consensus, it's a live Yahoo call, and
+    exchange, fundamentals, performance, options metrics and the trailing TTM
+    read are best-effort enrichment, mirroring the stock snapshot: unconfigured
+    or failing providers just leave their blocks ``None``. The options and TTM
+    reads stay best-effort *even when requested* — unlike the DB-backed
+    consensus, both can go live to Yahoo (the TTM on a cold cache miss), and
     Yahoo intermittently blocks data-centre IPs; a colored insight going missing
     must not take the quote down with it. Opt-in blocks that aren't requested
     cost no provider call at all ('dividend' rides the fundamentals call the
@@ -149,6 +153,7 @@ class GetTickerCard:
         stocks: StockDataProvider | None = None,
         repository: TickerRepository | None = None,
         options: OptionChainProvider | None = None,
+        earnings: QuarterlyEarningsProvider | None = None,
         today: Callable[[], date] | None = None,
     ) -> None:
         self._quotes = quotes
@@ -159,6 +164,7 @@ class GetTickerCard:
         self._stocks = stocks
         self._repository = repository
         self._options = options
+        self._earnings = earnings
         # Injectable clock: the expiry windows are anchored on "today", and the
         # tests pin it the way the yfinance adapters pin theirs.
         self._today = today or date.today
@@ -207,7 +213,21 @@ class GetTickerCard:
             price=quote.price,
             forward_pe=estimates.forward_pe(quote.price),
             forward_eps_growth=estimates.forward_eps_growth(),
+            ttm_eps=self._get_ttm_eps(symbol),
         )
+
+    def _get_ttm_eps(self, symbol: str) -> float | None:
+        # The trailing leg of the metrics block, on the consensus basis: the
+        # quarterly slice's timeline owns the TTM rule (sum of the 4 newest
+        # reported quarters). Best-effort, unlike the consensus read above — the
+        # read-through cache goes live to Yahoo on a cold symbol, and a blocked
+        # fetch must degrade to a null multiple, not sink the card.
+        if self._earnings is None:
+            return None
+        try:
+            return self._earnings.get_quarterly_earnings(symbol).ttm_eps
+        except (StockNotFound, StockDataUnavailable):
+            return None
 
     def _get_name(self, symbol: str, stored: str | None) -> str | None:
         # DB-first, filled once: the clean display name ("Micron Technology") is

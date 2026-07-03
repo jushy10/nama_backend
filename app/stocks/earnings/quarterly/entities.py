@@ -91,6 +91,22 @@ class QuarterlyEarningsTimeline:
         """The upcoming (not-yet-reported) quarters, soonest first."""
         return tuple(q for q in self.quarters if not q.is_reported)
 
+    @property
+    def ttm_eps(self) -> float | None:
+        """Trailing-twelve-month EPS: the sum of the 4 newest reported quarters'
+        ``eps_actual``.
+
+        On the analyst-consensus (adjusted) basis, since that's the basis
+        ``eps_actual`` is quoted on — which makes it the trailing anchor
+        comparable with the forward consensus estimates. ``None`` with fewer
+        than 4 reported quarters: a partial sum understates the year and would
+        poison any multiple built on it.
+        """
+        reported = self.past
+        if len(reported) < 4:
+            return None
+        return sum(q.eps_actual for q in reported[-4:])
+
     def filled_from(
         self, stored: "QuarterlyEarningsTimeline | None"
     ) -> "QuarterlyEarningsTimeline":
