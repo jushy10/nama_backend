@@ -23,8 +23,10 @@ class StockRecord(Base):
 
     ``id`` is a surrogate UUID so child rows have a stable foreign key; ``symbol`` is
     the ticker everything is looked up by (unique); ``name`` is the company display
-    name, nullable so a lazily-stored symbol (which arrives with only its ticker)
-    still gets a row until a sync fills the name in.
+    name and ``exchange`` the listing venue (e.g. "NASDAQ") — both nullable so a
+    lazily-stored symbol (which arrives with only its ticker) still gets a row until
+    whichever feature first learns them fills them in (migration 0009 added
+    ``exchange``).
     """
 
     __tablename__ = "stocks"
@@ -32,6 +34,7 @@ class StockRecord(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     symbol: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    exchange: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 def get_or_create_stock(
@@ -54,3 +57,22 @@ def get_or_create_stock(
     elif name and not stock.name:
         stock.name = name
     return stock
+
+
+def exchange_by_symbol(session: Session, symbol: str) -> str | None:
+    """The stored listing exchange for ``symbol``, or ``None`` when the row doesn't
+    exist yet or hasn't learned it — the miss a lazy fill answers."""
+    return session.execute(
+        select(StockRecord.exchange).where(StockRecord.symbol == symbol)
+    ).scalar_one_or_none()
+
+
+def fill_exchange(session: Session, symbol: str, exchange: str) -> None:
+    """Record ``symbol``'s listing exchange, creating the anchor row if absent.
+
+    Same semantics as the name on ``get_or_create_stock``: fill when missing, never
+    clobber a known value — an exchange effectively never changes, so the first
+    feature to learn it settles it."""
+    stock = get_or_create_stock(session, symbol, None)
+    if not stock.exchange:
+        stock.exchange = exchange

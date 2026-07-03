@@ -6,18 +6,20 @@ HTTP:
 
 - ``GetTickerCard`` — the read path. Normalizes the ticker and the requested
   includes, takes the live quote through the ``StockQuoteProvider``, layers the
-  always-on enrichment (the clean display name; fundamentals for the market cap),
+  always-on enrichment (the clean display name; fundamentals for the market cap;
+  the listing exchange, DB-first with a one-time lazy fill from the price feed),
   and fetches the *opt-in* blocks only when asked: ``dividend`` (already carried
   by the fundamentals call), ``performance`` (the trailing windows), and
-  ``metrics`` (the stored forward consensus, for the forward PEG). Pay-per-use:
-  a block that isn't requested costs no provider call. Returns the assembled
-  ``TickerCard``.
+  ``metrics`` (the trailing ratios off the fundamentals call plus the stored
+  forward consensus, for the forward PEG). Pay-per-use: a block that isn't
+  requested costs no provider call. Returns the assembled ``TickerCard``.
 
-Unlike the earnings/recommendations slices there is no sync counterpart and no
-repository: the card is built around the *live* quote, so nothing slice-owned is
-worth persisting — the slow-moving half (the FY1/FY2 consensus) is already stored
-and refreshed by the annual-earnings slice, and the fast-moving half (the quote)
-must be fetched fresh anyway.
+Unlike the earnings/recommendations slices there is no sync counterpart, and the
+only persistence is one anchor-level fact (the exchange on the ``stocks`` row,
+through ``TickerRepository``): the card is built around the *live* quote, so
+nothing else slice-owned is worth persisting — the slow-moving half (the FY1/FY2
+consensus) is already stored and refreshed by the annual-earnings slice, and the
+fast-moving half (the quote) must be fetched fresh anyway.
 """
 
 from __future__ import annotations
@@ -35,11 +37,13 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AnalystEstimatesProvider,
     CompanyProfileProvider,
+    StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
     StockQuoteProvider,
 )
 from app.stocks.ticker.entities import TickerValuation
+from app.stocks.ticker.repository import TickerRepository
 
 # The blocks a caller may opt into. Everything else on the card (ticker, name,
 # price + day move, market cap) is always served.
@@ -97,8 +101,9 @@ class TickerCard:
     include: frozenset[str]  # the opt-in blocks this card was asked to carry
     valuation: TickerValuation | None  # the forward-PEG read; only with 'metrics'
     profile: CompanyProfile | None  # clean company display name (best-effort)
-    fundamentals: StockFundamentals | None  # market cap + dividend (best-effort)
+    fundamentals: StockFundamentals | None  # market cap + dividend + trailing metrics (best-effort)
     performance: StockPerformance | None  # trailing windows; only with 'performance'
+    exchange: str | None = None  # listing venue; DB-first, filled once from the feed
 
 
 class GetTickerCard:
@@ -124,12 +129,16 @@ class GetTickerCard:
         fundamentals: StockFundamentalsProvider | None = None,
         performance: StockPerformanceProvider | None = None,
         profile: CompanyProfileProvider | None = None,
+        stocks: StockDataProvider | None = None,
+        repository: TickerRepository | None = None,
     ) -> None:
         self._quotes = quotes
         self._estimates = estimates
         self._fundamentals = fundamentals
         self._performance = performance
         self._profile = profile
+        self._stocks = stocks
+        self._repository = repository
 
     def execute(
         self, symbol: str, include: Sequence[str] | None = None
@@ -148,6 +157,7 @@ class GetTickerCard:
             performance=(
                 self._get_performance(normalized) if "performance" in wanted else None
             ),
+            exchange=self._get_exchange(normalized),
         )
 
     def _get_valuation(self, symbol: str, quote: Quote) -> TickerValuation:
@@ -163,6 +173,26 @@ class GetTickerCard:
             forward_pe=estimates.forward_pe(quote.price),
             forward_eps_growth=estimates.forward_eps_growth(),
         )
+
+    def _get_exchange(self, symbol: str) -> str | None:
+        # DB-first, filled once: a stock's listing exchange effectively never
+        # changes, so the first view of a symbol pays one full-snapshot call to
+        # learn it and every later view serves it straight from the stocks row.
+        # Best-effort like the other always-on enrichment.
+        if self._repository is None:
+            return None
+        stored = self._repository.get_exchange(symbol)
+        if stored is not None:
+            return stored
+        if self._stocks is None:
+            return None
+        try:
+            exchange = self._stocks.get_stock(symbol).exchange
+        except (StockNotFound, StockDataUnavailable):
+            return None  # best-effort: never sink the card
+        if exchange:
+            self._repository.save_exchange(symbol, exchange)
+        return exchange
 
     def _get_profile(self, symbol: str) -> CompanyProfile | None:
         # The clean display name ("Micron Technology") — the slim quote carries no

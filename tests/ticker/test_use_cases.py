@@ -17,6 +17,7 @@ from app.stocks.entities import (
     AnalystEstimates,
     CompanyProfile,
     Quote,
+    Stock,
     StockFundamentals,
     StockPerformance,
 )
@@ -24,11 +25,13 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AnalystEstimatesProvider,
     CompanyProfileProvider,
+    StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
     StockQuoteProvider,
 )
 from app.stocks.ticker.entities import TickerValuation
+from app.stocks.ticker.repository import TickerRepository
 from app.stocks.ticker.use_cases import GetTickerCard
 
 _EMPTY = AnalystEstimates(
@@ -128,6 +131,49 @@ class _FakeProfile(CompanyProfileProvider):
         if self._error is not None:
             raise self._error
         return CompanyProfile(name="Micron Technology")
+
+
+class _FakeStocks(StockDataProvider):
+    """The full-snapshot source the exchange lazy fill reads on a miss."""
+
+    def __init__(self, exchange: str | None = "NASDAQ", error=None) -> None:
+        self._exchange = exchange
+        self._error = error
+        self.calls: list[str] = []
+
+    def get_stock(self, symbol: str) -> Stock:
+        self.calls.append(symbol)
+        if self._error is not None:
+            raise self._error
+        return Stock(
+            symbol=symbol,
+            name=None,
+            exchange=self._exchange,
+            price=100.0,
+            open=None,
+            high=None,
+            low=None,
+            previous_close=None,
+            volume=None,
+            bid=None,
+            ask=None,
+            as_of=None,
+        )
+
+
+class _FakeRepo(TickerRepository):
+    """In-memory exchange store; records saves so tests can assert the fill."""
+
+    def __init__(self, exchange: str | None = None) -> None:
+        self._exchange = exchange
+        self.saves: list[tuple[str, str]] = []
+
+    def get_exchange(self, symbol: str) -> str | None:
+        return self._exchange
+
+    def save_exchange(self, symbol: str, exchange: str) -> None:
+        self.saves.append((symbol, exchange))
+        self._exchange = exchange
 
 
 # ───────────────────────────── entity rules ─────────────────────────────
@@ -310,6 +356,65 @@ def test_enrichment_failures_never_sink_the_card(error):
     assert card.profile is None  # swallowed, not raised
     assert card.fundamentals is None
     assert card.performance is None
+
+
+# ───────────────────────────── the exchange lazy fill ─────────────────────────────
+
+
+def test_exchange_served_from_the_repository_without_a_feed_call():
+    stocks = _FakeStocks()
+    repo = _FakeRepo(exchange="NASDAQ")
+
+    card = GetTickerCard(
+        _FakeQuotes(), _FakeEstimates(), stocks=stocks, repository=repo
+    ).execute("MU")
+
+    assert card.exchange == "NASDAQ"
+    assert stocks.calls == []  # stored -> the full snapshot is never fetched
+    assert repo.saves == []
+
+
+def test_exchange_miss_fetches_once_and_stores():
+    stocks = _FakeStocks(exchange="NASDAQ")
+    repo = _FakeRepo(exchange=None)
+
+    card = GetTickerCard(
+        _FakeQuotes(), _FakeEstimates(), stocks=stocks, repository=repo
+    ).execute("MU")
+
+    assert card.exchange == "NASDAQ"
+    assert stocks.calls == ["MU"]  # one full-snapshot call to learn it
+    assert repo.saves == [("MU", "NASDAQ")]  # ...then it lives on the stocks row
+
+
+def test_exchange_fetch_failure_never_sinks_the_card():
+    stocks = _FakeStocks(error=StockDataUnavailable("MU", "alpaca down"))
+    repo = _FakeRepo(exchange=None)
+
+    card = GetTickerCard(
+        _FakeQuotes(), _FakeEstimates(), stocks=stocks, repository=repo
+    ).execute("MU")
+
+    assert card.exchange is None  # swallowed, not raised
+    assert repo.saves == []
+
+
+def test_exchange_unknown_at_the_feed_is_not_stored():
+    stocks = _FakeStocks(exchange=None)
+    repo = _FakeRepo(exchange=None)
+
+    card = GetTickerCard(
+        _FakeQuotes(), _FakeEstimates(), stocks=stocks, repository=repo
+    ).execute("MU")
+
+    assert card.exchange is None
+    assert repo.saves == []  # nothing learned -> nothing written
+
+
+def test_exchange_absent_without_wiring():
+    # No repository (or no feed): the card still serves, exchange simply null.
+    card = GetTickerCard(_FakeQuotes(), _FakeEstimates()).execute("MU")
+    assert card.exchange is None
 
 
 def test_quote_failure_propagates():

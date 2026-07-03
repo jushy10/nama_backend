@@ -33,15 +33,21 @@ class DividendResponse(BaseModel):
 
 
 class TickerMetricsResponse(BaseModel):
-    """The card's derived metrics — currently the forward PEG.
+    """The card's valuation and profitability metrics.
 
-    The forward cousin of the snapshot's trailing ``metrics.peg``: forward P/E over
-    expected FY1→FY2 EPS growth, dividing by growth analysts *expect* rather than a
-    possibly rebound-inflated growth already reported. ``null`` when no forward
-    consensus is stored for the symbol yet, or a leg is non-positive (expected loss
-    or shrinkage)."""
+    Two PEGs, side by side: ``peg`` is the trailing read (trailing P/E over
+    *already-reported* EPS growth — which a cyclical rebound can inflate and pin
+    the ratio near zero), ``forward_peg`` the honest forward cousin (forward P/E
+    over the FY1→FY2 growth analysts *expect*); ``forward_peg`` is ``null`` when
+    no forward consensus is stored for the symbol yet, or a leg is non-positive.
+    The margins are the trailing profitability ladder (percent), from the same
+    fundamentals call the market cap rides."""
 
+    peg: float | None = None  # trailing P/E / trailing EPS growth
     forward_peg: float | None = None  # forward P/E / expected FY1->FY2 EPS growth
+    gross_margin: float | None = None  # percent
+    operating_margin: float | None = None  # percent
+    net_margin: float | None = None  # percent
 
 
 class TickerCardResponse(BaseModel):
@@ -49,14 +55,16 @@ class TickerCardResponse(BaseModel):
 
     ``ticker`` is the symbol and ``price``/``change``/``change_percent`` the day's
     move (same rules as every other price view); ``name`` is the clean company
-    display name and ``market_cap`` fundamentals-vendor enrichment (best-effort,
-    ``null`` when unconfigured or unavailable). ``dividend``, ``performance`` and
-    ``metrics`` appear only when asked for via ``?include=`` — ``null`` otherwise,
-    and ``null`` for the best-effort ones even when requested if their source is
-    down or keyless."""
+    display name, ``exchange`` the listing venue (served from the ``stocks`` row,
+    learned once — it never changes), and ``market_cap`` fundamentals-vendor
+    enrichment — all best-effort, ``null`` when unconfigured or unavailable.
+    ``dividend``, ``performance`` and ``metrics`` appear only when asked for via
+    ``?include=`` — ``null`` otherwise, and ``null`` for the best-effort ones even
+    when requested if their source is down or keyless."""
 
     ticker: str
     name: str | None = None  # clean display name ("Micron Technology")
+    exchange: str | None = None  # listing venue (e.g. "NASDAQ"); DB-backed
     price: float
     change: float | None = None  # absolute move vs the previous close
     change_percent: float | None = None  # percent move vs the previous close

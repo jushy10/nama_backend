@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from app.stocks.endpoints import ticker_endpoints as endpoints
 from app.stocks.entities import (
     CompanyProfile,
+    KeyMetrics,
     Quote,
     StockFundamentals,
     StockPerformance,
@@ -73,6 +74,13 @@ def _a_card(*, include: frozenset[str] = frozenset()) -> TickerCard:
             # Vendor-noisy on purpose: the presenter must round both to 2 decimals.
             dividend_per_share=0.4649,
             dividend_yield=0.047123,
+            metrics=KeyMetrics(
+                pe=22.4,
+                eps_growth_yoy=700.7,  # peg property -> 0.03
+                gross_margin=52.1,
+                operating_margin=38.9,
+                net_margin=33.5,
+            ),
         ),
         performance=(
             StockPerformance(
@@ -82,6 +90,7 @@ def _a_card(*, include: frozenset[str] = frozenset()) -> TickerCard:
             if "performance" in include
             else None
         ),
+        exchange="NASDAQ",
     )
 
 
@@ -92,6 +101,7 @@ def test_presents_the_core_card_with_null_optin_blocks_by_default():
     body = resp.json()
     assert body["ticker"] == "MU"  # the symbol, in this endpoint's vocabulary
     assert body["name"] == "Micron Technology"  # profile vendor's clean display name
+    assert body["exchange"] == "NASDAQ"  # DB-backed, always served
     assert body["price"] == 975.56
     assert body["change"] == 12.3  # vs the previous close, same rule as /quote
     assert body["change_percent"] == 1.28
@@ -118,7 +128,14 @@ def test_presents_the_optin_blocks_when_included():
     assert body["performance"] == {
         "1w": 1.5, "1m": 8.0, "3m": 40.0, "6m": 90.0, "ytd": 120.0, "1y": 150.0,
     }
-    assert body["metrics"] == {"forward_peg": 0.13}
+    # Trailing PEG + margins ride the fundamentals; forward PEG the stored consensus.
+    assert body["metrics"] == {
+        "peg": 0.03,  # 22.4 / 700.7 — the degenerate trailing read, for contrast
+        "forward_peg": 0.13,
+        "gross_margin": 52.1,
+        "operating_margin": 38.9,
+        "net_margin": 33.5,
+    }
 
 
 def test_passes_the_raw_include_params_through_to_the_use_case():
@@ -129,24 +146,35 @@ def test_passes_the_raw_include_params_through_to_the_use_case():
     assert fake.calls == [("MU", ["dividend,metrics"])]
 
 
-def test_dividend_requested_but_fundamentals_unavailable_is_null():
-    card = _a_card(include=frozenset({"dividend"}))
+def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
+    card = _a_card(include=frozenset({"dividend", "metrics"}))
     fake = _FakeUseCase(
         result=TickerCard(
             quote=card.quote,
             include=card.include,
-            valuation=None,
+            valuation=card.valuation,  # the consensus half still serves
             profile=None,
             fundamentals=None,  # keyless or failed Finnhub
             performance=None,
+            exchange=None,
         )
     )
-    resp = _client(fake).get("/stocks/ticker/MU?include=dividend")
+    resp = _client(fake).get("/stocks/ticker/MU?include=dividend,metrics")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["name"] is None
+    assert body["exchange"] is None
     assert body["market_cap"] is None
     assert body["dividend"] is None  # requested, but nothing to serve
+    # The metrics block still appears (it was requested) with its trailing half
+    # null and the consensus-backed forward PEG intact.
+    assert body["metrics"] == {
+        "peg": None,
+        "forward_peg": 0.13,
+        "gross_margin": None,
+        "operating_margin": None,
+        "net_margin": None,
+    }
 
 
 def test_sets_the_cache_header():
