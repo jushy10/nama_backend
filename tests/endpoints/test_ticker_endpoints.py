@@ -62,7 +62,12 @@ def _a_card(*, include: frozenset[str] = frozenset()) -> TickerCard:
         include=include,
         valuation=(
             TickerValuation(
-                symbol="MU", price=975.56, forward_pe=13.3, forward_eps_growth=104.1
+                symbol="MU",
+                price=975.56,
+                forward_pe=13.3,
+                forward_eps_growth=104.1,
+                # Consensus-basis TTM: trailing_pe = 975.56 / 43.55 -> 22.4.
+                ttm_eps=43.55,
             )
             if "metrics" in include
             else None
@@ -147,10 +152,11 @@ def test_presents_the_optin_blocks_when_included():
     assert body["performance"] == {
         "1w": 1.5, "1m": 8.0, "3m": 40.0, "6m": 90.0, "ytd": 120.0, "1y": 150.0,
     }
-    # Trailing P/E + PEG + margins ride the fundamentals; forward PEG the stored
-    # consensus.
+    # The trailing P/E rides the valuation's consensus-basis TTM (not the
+    # vendor's KeyMetrics.pe); PEG + margins ride the fundamentals; forward PEG
+    # the stored consensus.
     assert body["metrics"] == {
-        "pe": 22.4,
+        "pe": 22.4,  # 975.56 / 43.55 — the valuation's trailing_pe
         "peg": 0.03,  # 22.4 / 700.7 — the degenerate trailing read, for contrast
         "forward_peg": 0.13,
         "gross_margin": 52.1,
@@ -196,10 +202,12 @@ def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
     assert body["exchange"] is None
     assert body["market_cap"] is None
     assert body["dividend"] is None  # requested, but nothing to serve
-    # The metrics block still appears (it was requested) with its trailing half
-    # null and the consensus-backed forward PEG intact.
+    # The metrics block still appears (it was requested) with its
+    # fundamentals-backed half null; the valuation-backed pair — the trailing
+    # P/E (quarterly TTM) and the forward PEG (stored consensus) — still serves,
+    # since neither rides Finnhub.
     assert body["metrics"] == {
-        "pe": None,
+        "pe": 22.4,
         "peg": None,
         "forward_peg": 0.13,
         "gross_margin": None,

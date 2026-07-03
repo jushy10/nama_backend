@@ -3,7 +3,8 @@
 Offline: hand-written fakes for the provider and repository ports, so this exercises only
 the orchestration — symbol normalization and timeline pass-through on the read side; which
 targets are refreshed, in what order, failure/empty handling, and the per-run limit on the
-sync side — independent of yfinance or the DB.
+sync side — independent of yfinance or the DB. Plus the timeline's pure TTM rule
+(``ttm_eps``), which the ticker card's trailing P/E leans on.
 """
 
 from datetime import date
@@ -44,6 +45,58 @@ def _a_timeline(symbol: str) -> QuarterlyEarningsTimeline:
             ),
         ),
     )
+
+
+# ───────────────────────────── entity rules ─────────────────────────────
+
+
+def _reported(year: int, quarter: int, eps: float) -> QuarterlyEarnings:
+    return QuarterlyEarnings(
+        fiscal_year=year, fiscal_quarter=quarter, period_end=None, report_date=None,
+        eps_actual=eps, eps_estimate=None, eps_surprise=None,
+        eps_surprise_percent=None, revenue_estimate=None,
+    )
+
+
+def _upcoming(year: int, quarter: int) -> QuarterlyEarnings:
+    return QuarterlyEarnings(
+        fiscal_year=year, fiscal_quarter=quarter, period_end=None, report_date=None,
+        eps_actual=None, eps_estimate=2.0, eps_surprise=None,
+        eps_surprise_percent=None, revenue_estimate=None,
+    )
+
+
+def test_ttm_eps_sums_the_four_newest_reported_quarters():
+    # Five reported quarters: the oldest (1.0) must fall out of the sum, and the
+    # upcoming quarter contributes nothing.
+    timeline = QuarterlyEarningsTimeline(
+        symbol="MU",
+        quarters=(
+            _reported(2025, 2, 1.0),
+            _reported(2025, 3, 1.5),
+            _reported(2025, 4, 2.0),
+            _reported(2026, 1, 2.5),
+            _reported(2026, 2, 3.0),
+            _upcoming(2026, 3),
+        ),
+    )
+    assert timeline.ttm_eps == pytest.approx(9.0)  # 1.5 + 2.0 + 2.5 + 3.0
+
+
+def test_ttm_eps_is_none_with_fewer_than_four_reported_quarters():
+    # A partial sum understates the year — three reported quarters (plus an
+    # upcoming one) must not masquerade as a TTM figure.
+    timeline = QuarterlyEarningsTimeline(
+        symbol="MU",
+        quarters=(
+            _reported(2025, 4, 2.0),
+            _reported(2026, 1, 2.5),
+            _reported(2026, 2, 3.0),
+            _upcoming(2026, 3),
+        ),
+    )
+    assert timeline.ttm_eps is None
+    assert QuarterlyEarningsTimeline("MU", ()).ttm_eps is None
 
 
 # ───────────────────────────── GetQuarterlyEarnings ─────────────────────────────

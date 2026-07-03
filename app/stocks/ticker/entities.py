@@ -1,16 +1,20 @@
-"""Entities: a stock's forward-PEG read and its options-market read.
+"""Entities: a stock's valuation read (trailing + forward) and its options-market read.
 
 Slice-local domain objects (this sub-slice keeps its own ``entities`` rather than
 reaching into the shared ``app/stocks/entities.py``, the same convention as the
 earnings and recommendations sub-slices). Pure and vendor-agnostic — stdlib only.
 
-``TickerValuation`` models the forward analogue of the trailing PEG: the forward
-P/E (today's price against next fiscal year's consensus EPS) divided by the EPS
-growth analysts expect the year after that (FY1 → FY2). Where the trailing PEG
-divides by growth *already reported* — which a cyclical rebound can inflate into
-the hundreds of percent, pinning the ratio near zero — this one divides by growth
-analysts still *expect*, so it answers "is today's price justified by what's
-supposed to come" rather than "by what already happened".
+``TickerValuation`` models the card's valuation multiples on one EPS basis — the
+analyst-consensus (adjusted) one. The trailing P/E is today's price over the sum
+of the 4 newest reported quarters' consensus-basis EPS (not a vendor's GAAP TTM
+read, so it's directly comparable with the forward legs). The forward PEG is the
+forward analogue of the trailing PEG: the forward P/E (today's price against next
+fiscal year's consensus EPS) divided by the EPS growth analysts expect the year
+after that (FY1 → FY2). Where the trailing PEG divides by growth *already
+reported* — which a cyclical rebound can inflate into the hundreds of percent,
+pinning the ratio near zero — this one divides by growth analysts still
+*expect*, so it answers "is today's price justified by what's supposed to come"
+rather than "by what already happened".
 
 ``OptionContract`` + ``TickerOptionsMetrics`` model what the options market says
 about the stock: how nervous it is (at-the-money implied volatility), how big a
@@ -30,18 +34,40 @@ from typing import Sequence
 
 @dataclass(frozen=True)
 class TickerValuation:
-    """One symbol's forward-PEG inputs at today's price.
+    """One symbol's valuation legs at today's price.
 
-    The two legs arrive precomputed (the use case derives them from the live quote
-    and the stored consensus estimates); the entity owns the rule that combines
-    them. The legs are optional: estimates are consensus coverage, and a symbol
-    without stored forward years simply carries ``None``s around a live price.
+    The legs arrive precomputed (the use case derives them from the live quote,
+    the stored consensus estimates, and the quarterly-earnings timeline); the
+    entity owns the rules that combine them. The legs are optional: estimates
+    are consensus coverage and the TTM sum needs four cached quarters, so a
+    symbol missing either simply carries ``None``s around a live price.
+
+    ``ttm_eps`` is deliberately on the *consensus (adjusted)* basis — the sum of
+    the 4 newest reported quarters' "Reported EPS" — not GAAP diluted: the
+    forward legs are quoted on the consensus basis, so anchoring the trailing
+    multiple on the same basis is what makes ``trailing_pe`` and ``forward_pe``
+    a comparable pair (a GAAP trailing leg would make the walk between them a
+    basis artifact, not a story about growth).
     """
 
     symbol: str
     price: float  # the live price the multiple was taken at
     forward_pe: float | None  # price / FY1 consensus EPS
     forward_eps_growth: float | None  # FY1 -> FY2 consensus EPS growth (percent)
+    ttm_eps: float | None = None  # trailing 12m EPS, consensus basis (4 reported quarters)
+
+    @property
+    def trailing_pe(self) -> float | None:
+        """Trailing P/E on the consensus basis: price over ``ttm_eps``.
+
+        The trailing counterpart of ``forward_pe``, on the same (adjusted) EPS
+        basis so the two multiples read as one walk. Same guard as the other
+        ratios here: ``None`` unless both legs are positive — a loss-making
+        trailing year (or a broken quote) makes the multiple meaningless.
+        """
+        if self.ttm_eps is None or self.ttm_eps <= 0 or self.price <= 0:
+            return None
+        return round(self.price / self.ttm_eps, 2)
 
     @property
     def forward_peg(self) -> float | None:

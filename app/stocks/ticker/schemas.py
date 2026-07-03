@@ -38,17 +38,21 @@ class DividendResponse(BaseModel):
 class TickerMetricsResponse(BaseModel):
     """The card's valuation and profitability metrics.
 
-    ``pe`` is the vendor's trailing multiple (price over *reported* EPS, off the
-    fundamentals call the market cap rides). Then two PEGs, side by side:
-    ``peg`` is the trailing read (trailing P/E over *already-reported* EPS
-    growth — which a cyclical rebound can inflate and pin the ratio near zero),
-    ``forward_peg`` the honest forward cousin (forward P/E over the FY1→FY2
-    growth analysts *expect*); ``forward_peg`` is ``null`` when no forward
-    consensus is stored for the symbol yet, or a leg is non-positive. The
-    margins are the trailing profitability ladder (percent), from the same
-    fundamentals call."""
+    ``pe`` is the trailing multiple on the **analyst-consensus (adjusted) EPS
+    basis**: live price over the sum of the 4 newest reported quarters'
+    consensus-basis EPS from the quarterly-earnings slice — deliberately not the
+    fundamentals vendor's GAAP-ish TTM read, so it sits on the same basis as the
+    forward consensus legs (``null`` until 4 quarters are cached, or when the
+    trailing year is a loss). Then two PEGs, side by side:
+    ``peg`` is the trailing read (the vendor's trailing P/E over
+    *already-reported* EPS growth — which a cyclical rebound can inflate and pin
+    the ratio near zero), ``forward_peg`` the honest forward cousin (forward P/E
+    over the FY1→FY2 growth analysts *expect*); ``forward_peg`` is ``null`` when
+    no forward consensus is stored for the symbol yet, or a leg is
+    non-positive. The margins are the trailing profitability ladder (percent),
+    off the fundamentals call the market cap rides."""
 
-    pe: float | None = None  # trailing: price / reported EPS (vendor's TTM read)
+    pe: float | None = None  # trailing: price / TTM EPS (consensus basis, 4 quarters)
     peg: float | None = None  # trailing P/E / trailing EPS growth
     forward_peg: float | None = None  # forward P/E / expected FY1->FY2 EPS growth
     gross_margin: float | None = None  # percent

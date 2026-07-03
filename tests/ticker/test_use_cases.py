@@ -13,6 +13,11 @@ from datetime import date, datetime, timezone
 
 import pytest
 
+from app.stocks.earnings.quarterly.entities import (
+    QuarterlyEarnings,
+    QuarterlyEarningsTimeline,
+)
+from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.entities import (
     AnalystEstimates,
     CompanyProfile,
@@ -189,6 +194,34 @@ class _FakeRepo(TickerRepository):
         self._exchange = exchange
 
 
+def _a_reported_quarter(year: int, quarter: int, eps: float) -> QuarterlyEarnings:
+    return QuarterlyEarnings(
+        fiscal_year=year, fiscal_quarter=quarter, period_end=None, report_date=None,
+        eps_actual=eps, eps_estimate=None, eps_surprise=None,
+        eps_surprise_percent=None, revenue_estimate=None,
+    )
+
+
+def _four_quarters(*eps: float) -> QuarterlyEarningsTimeline:
+    quarters = tuple(
+        _a_reported_quarter(2026, i + 1, e) for i, e in enumerate(eps)
+    )
+    return QuarterlyEarningsTimeline(symbol="MU", quarters=quarters)
+
+
+class _FakeEarnings(QuarterlyEarningsProvider):
+    def __init__(self, timeline: QuarterlyEarningsTimeline | None = None, error=None):
+        self._timeline = timeline or QuarterlyEarningsTimeline("MU", ())
+        self._error = error
+        self.calls: list[str] = []
+
+    def get_quarterly_earnings(self, symbol: str) -> QuarterlyEarningsTimeline:
+        self.calls.append(symbol)
+        if self._error is not None:
+            raise self._error
+        return self._timeline
+
+
 _TODAY = date(2026, 7, 3)
 _NEAR = date(2026, 7, 31)  # ~28 days out — the ~1-month window's pick
 _FAR = date(2026, 10, 2)  # ~91 days out — the ~3-month window's pick
@@ -280,6 +313,23 @@ def test_forward_peg_is_the_ratio_of_the_two_legs():
 )
 def test_forward_peg_is_none_without_two_positive_legs(pe, growth):
     assert _a_valuation(pe, growth).forward_peg is None
+
+
+def test_trailing_pe_divides_price_by_the_consensus_ttm():
+    v = TickerValuation(
+        symbol="MU", price=100.0, forward_pe=None, forward_eps_growth=None, ttm_eps=8.0
+    )
+    assert v.trailing_pe == 12.5
+
+
+@pytest.mark.parametrize("ttm", [None, 0.0, -3.2])
+def test_trailing_pe_is_none_without_a_positive_ttm(ttm):
+    # No cached quarters (or a loss-making trailing year): the multiple is
+    # meaningless, same guard as the forward legs.
+    v = TickerValuation(
+        symbol="MU", price=100.0, forward_pe=None, forward_eps_growth=None, ttm_eps=ttm
+    )
+    assert v.trailing_pe is None
 
 
 def test_options_metrics_derives_all_four_reads_from_the_two_chains():
@@ -586,6 +636,72 @@ def test_estimates_failure_propagates_when_metrics_is_requested():
     estimates = _FakeEstimates(error=StockDataUnavailable("MU", "db down"))
     with pytest.raises(StockDataUnavailable):
         GetTickerCard(_FakeQuotes(), estimates).execute("MU", include=["metrics"])
+
+
+# ──────────────────────── the trailing P/E (consensus TTM) ────────────────────────
+
+
+def test_metrics_carries_the_trailing_pe_off_the_quarterly_ttm():
+    # Four reported quarters at 1.5 + 2.0 + 2.5 + 3.0 = a 9.0 TTM against a
+    # 100.0 quote: the card's trailing multiple, on the consensus basis.
+    earnings = _FakeEarnings(_four_quarters(1.5, 2.0, 2.5, 3.0))
+
+    card = GetTickerCard(
+        _FakeQuotes(price=100.0), _FakeEstimates(), earnings=earnings
+    ).execute("MU", include=["metrics"])
+
+    assert earnings.calls == ["MU"]
+    assert card.valuation.ttm_eps == pytest.approx(9.0)
+    assert card.valuation.trailing_pe == pytest.approx(11.11)
+
+
+def test_unrequested_metrics_cost_no_earnings_call():
+    earnings = _FakeEarnings(_four_quarters(1.5, 2.0, 2.5, 3.0))
+
+    card = GetTickerCard(
+        _FakeQuotes(), _FakeEstimates(), earnings=earnings
+    ).execute("MU")
+
+    assert earnings.calls == []  # pay-per-use, like the consensus read
+    assert card.valuation is None
+
+
+def test_too_few_cached_quarters_yield_a_null_trailing_pe():
+    # An uncovered (or partially covered) symbol is a valid read — the multiple
+    # is simply absent until the quarterly slice holds a full trailing year.
+    earnings = _FakeEarnings(_four_quarters(2.5, 3.0))
+
+    card = GetTickerCard(
+        _FakeQuotes(), _FakeEstimates(), earnings=earnings
+    ).execute("MU", include=["metrics"])
+
+    assert card.valuation.ttm_eps is None
+    assert card.valuation.trailing_pe is None
+
+
+@pytest.mark.parametrize(
+    "error",
+    [StockNotFound("MU"), StockDataUnavailable("MU", "yahoo blocked")],
+)
+def test_earnings_failure_never_sinks_the_card(error):
+    # Best-effort even when requested: a cold cache miss goes live to Yahoo,
+    # and a blocked fetch must degrade to a null multiple, not a failed card.
+    earnings = _FakeEarnings(error=error)
+
+    card = GetTickerCard(
+        _FakeQuotes(), _FakeEstimates(), earnings=earnings
+    ).execute("MU", include=["metrics"])
+
+    assert card.valuation.trailing_pe is None
+    assert card.quote.symbol == "MU"  # the card still serves
+
+
+def test_unwired_earnings_provider_leaves_the_trailing_pe_none():
+    card = GetTickerCard(_FakeQuotes(), _FakeEstimates()).execute(
+        "MU", include=["metrics"]
+    )
+    assert card.valuation.ttm_eps is None
+    assert card.valuation.trailing_pe is None
 
 
 # ──────────────────────── the options_metrics block ────────────────────────

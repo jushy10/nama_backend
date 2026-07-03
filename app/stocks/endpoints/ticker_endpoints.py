@@ -4,7 +4,9 @@
 quote (price + day move), the clean company name, the listing exchange (served from
 the ``stocks`` row, learned once from the price feed), and market cap, plus **opt-in
 blocks** requested via ``?include=`` — ``dividend``, ``performance`` (trailing
-windows), ``metrics`` (trailing PEG + margins off the fundamentals call, and the
+windows), ``metrics`` (the trailing P/E — price over the quarterly slice's stored
+TTM EPS, on the analyst-consensus basis so it pairs with the forward legs —
+trailing PEG + margins off the fundamentals call, and the
 **forward PEG**: forward P/E over expected FY1→FY2 EPS growth, the one valuation
 figure no other endpoint serves), and ``options_metrics`` (the **options-market
 read**: ATM implied volatility, the priced-in expected move, the cost of a
@@ -22,7 +24,9 @@ root's factories. The quote and performance windows ride the ``@lru_cache``d Alp
 provider (whose missing-keys 503 gate the endpoint inherits: the quote is primary
 here), the name and fundamentals ride the optional Finnhub providers (best-effort,
 ``None`` without a key), the estimates ride the annual-earnings projection
-(DB-only, no key), and the options chain rides Yahoo via yfinance (keyless,
+(DB-only, no key), the trailing P/E's TTM sum rides the quarterly-earnings
+slice's read-through DB cache (keyless; live to Yahoo only on a cold miss,
+best-effort), and the options chain rides Yahoo via yfinance (keyless,
 best-effort even when requested — Yahoo intermittently blocks data-centre IPs, and
 a missing insight must not take the quote down). There's no cron or table behind
 this endpoint: the card is built around the live quote, so it's computed per
@@ -34,6 +38,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.endpoints.quarterly_earnings_endpoints import (
+    get_quarterly_earnings_provider,
+)
 from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
@@ -70,6 +78,7 @@ def get_ticker_card_use_case(
     fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
     profile: CompanyProfileProvider | None = Depends(get_profile_provider),
     options: OptionChainProvider = Depends(get_options_provider),
+    earnings: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
     db: Session = Depends(get_db),
 ) -> GetTickerCard:
     # The Alpaca singleton backs the quote, the trailing performance windows, and the
@@ -79,7 +88,9 @@ def get_ticker_card_use_case(
     # supplies the display name (the slim quote carries none), TTL-cached like on the
     # snapshot; the repository serves the stored exchange off the stocks row. The
     # options chain is the keyless yfinance singleton — always wired, best-effort
-    # at read.
+    # at read — and the quarterly-earnings provider is the same DB cache the
+    # earnings endpoint reads (lazy-filled on a miss, refreshed by its cron), so
+    # the trailing P/E's TTM sum rides rows the earnings view already keeps warm.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
     return GetTickerCard(
         provider,
@@ -90,6 +101,7 @@ def get_ticker_card_use_case(
         stocks=provider,
         repository=SqlTickerRepository(db),
         options=options,
+        earnings=earnings,
     )
 
 
@@ -150,11 +162,13 @@ def _present(card: TickerCard) -> TickerCardResponse:
         )
     metrics = None
     if "metrics" in card.include:
-        # Trailing ratios ride the fundamentals the market cap already fetched;
-        # the forward PEG comes off the valuation built from the stored consensus.
+        # The P/E pair rides the valuation: trailing off the quarterly slice's
+        # TTM sum, forward PEG off the stored consensus — one (adjusted) EPS
+        # basis for both, deliberately NOT the vendor's GAAP-ish TTM read. The
+        # PEG and margins still ride the fundamentals the market cap fetched.
         trailing = fundamentals.metrics if fundamentals else None
         metrics = TickerMetricsResponse(
-            pe=trailing.pe if trailing else None,
+            pe=card.valuation.trailing_pe if card.valuation else None,
             peg=trailing.peg if trailing else None,
             forward_peg=card.valuation.forward_peg if card.valuation else None,
             gross_margin=trailing.gross_margin if trailing else None,
