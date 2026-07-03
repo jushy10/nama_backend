@@ -1,9 +1,10 @@
 """Interface Adapter: a TTL cache in front of any CompanyProfileProvider.
 
 A company's display name is near-static — it changes maybe once a year — but
-GET /stocks/{symbol} would otherwise call the profile vendor on every hit. This
-decorator collapses repeat lookups of the same symbol onto one upstream call per
-TTL window, keeping the endpoint under the vendor's rate limit. It wraps any
+its consumers (the AI analysis context, the ticker card's one-time name fill)
+would otherwise call the profile vendor on every hit. This decorator collapses
+repeat lookups of the same symbol onto one upstream call per TTL window, keeping
+the endpoints under the vendor's rate limit. It wraps any
 CompanyProfileProvider, so the cache is independent of which vendor backs it.
 
 Only successful results are cached — including a "no name" result, so an

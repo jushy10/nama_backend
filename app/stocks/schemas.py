@@ -1,11 +1,10 @@
-"""HTTP response model for the stocks endpoint.
+"""HTTP response models for the stocks endpoints.
 
-Pydantic is a web/serialization detail, so this DTO lives at the edge —
-deliberately separate from the Stock entity so the core stays
-framework-agnostic.
+Pydantic is a web/serialization detail, so these DTOs live at the edge —
+deliberately separate from the entities so the core stays framework-agnostic.
 """
 
-from datetime import date, datetime
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,93 +26,12 @@ class StockPerformanceResponse(BaseModel):
     one_year: float | None = Field(default=None, alias="1y")
 
 
-class KeyMetricsResponse(BaseModel):
-    """Trailing valuation, financial-health, profitability and market indicators.
-
-    The valuation ratios, returns, margins and risk/range figures for the price
-    snapshot; the trailing YoY growth legs ride separately on the stock's
-    ``growth`` block. All trailing (no forward estimates); the ratios are plain
-    multiples, ``roe`` and the margins are percent, and ``fcf_per_share`` is in
-    the quote currency. Any field a vendor doesn't cover is ``null``.
-    """
-
-    pe: float | None = None  # price / trailing EPS
-    peg: float | None = None  # trailing P/E / trailing EPS growth (not forward)
-    pb: float | None = None  # price / book value
-    fcf_per_share: float | None = None  # trailing free cash flow per share
-    roe: float | None = None  # return on equity (percent)
-    # Profitability margins (percent) — on the snapshot so the stock page keeps
-    # them once the legacy /earnings endpoint is phased out.
-    gross_margin: float | None = None
-    operating_margin: float | None = None
-    net_margin: float | None = None
-    current_ratio: float | None = None
-    debt_to_equity: float | None = None
-    week_52_high: float | None = None
-    week_52_low: float | None = None
-
-
-class GrowthMetricsResponse(BaseModel):
-    """Revenue & earnings growth — trailing actuals plus forward consensus.
-
-    ``*_yoy`` is the *trailing* one-year change from reported figures (Finnhub
-    TTM); ``forward_*_growth`` is the analyst-*expected* one-year change next year
-    — FY1 → FY2 from the analyst estimates (Yahoo consensus). All percent; any leg
-    whose source is unavailable is ``null``."""
-
-    revenue_yoy: float | None = None  # trailing 1-yr revenue growth %
-    eps_yoy: float | None = None  # trailing 1-yr EPS growth %
-    forward_revenue_growth: float | None = None  # expected next-yr revenue growth (FY1→FY2) %
-    forward_eps_growth: float | None = None  # expected next-yr EPS growth (FY1→FY2) %
-
-
-class AllTimeHighResponse(BaseModel):
-    """A stock's all-time high over the available price history.
-
-    ``since`` is the earliest date that history covers — the bound on
-    "all-time," since a free feed may not reach back to the stock's listing, so a
-    caller can tell a true lifetime high from a within-window one. ``reached_on``
-    is when the high occurred. The percent the current price sits below it is
-    ``drawdown_from_high`` on the stock."""
-
-    price: float  # highest intraday price over the history
-    reached_on: date | None = None  # when the high was reached
-    since: date | None = None  # earliest date the history covers (the bound)
-
-
-class StockResponse(BaseModel):
-    symbol: str
-    name: str | None = None
-    exchange: str | None = None
-    price: float
-    change: float | None = None
-    change_percent: float | None = None
-    open: float | None = None
-    high: float | None = None
-    low: float | None = None
-    previous_close: float | None = None
-    volume: int | None = None
-    bid: float | None = None
-    ask: float | None = None
-    spread: float | None = None
-    as_of: datetime | None = None
-    market_cap: float | None = None  # raw USD
-    dividend_per_share: float | None = None  # $ per share, annual
-    dividend_yield: float | None = None  # percent
-    performance: StockPerformanceResponse | None = None
-    metrics: KeyMetricsResponse | None = None  # trailing valuation/health/market
-    forward_pe: float | None = None  # price / FY1 estimated EPS (forward, best-effort)
-    growth: GrowthMetricsResponse | None = None  # trailing YoY + forward 1-yr growth
-    all_time_high: AllTimeHighResponse | None = None
-    drawdown_from_high: float | None = None  # percent below the all-time high (<= 0)
-
-
 class QuoteResponse(BaseModel):
     """A minimal live quote for high-frequency polling.
 
-    The slim counterpart to ``StockResponse``: only the fields a ticking price
-    widget redraws. ``change``/``change_percent`` follow the same rules as the
-    full stock endpoint, so the two never disagree on the day's move."""
+    Only the fields a ticking price widget redraws. ``change``/``change_percent``
+    follow the same rules as every other price view, so the views never disagree
+    on the day's move."""
 
     symbol: str
     price: float
@@ -206,7 +124,7 @@ class ScreenedStockResponse(BaseModel):
     """One screener row: a stock's day move plus its universe metadata.
 
     ``change``/``change_percent`` follow the same rule as every other price
-    view, so a name's move here matches its ``/stocks/{symbol}`` move."""
+    view, so a name's move here matches its quote-endpoint move."""
 
     symbol: str
     name: str | None = None

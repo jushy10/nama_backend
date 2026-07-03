@@ -79,7 +79,7 @@ def trends_by_symbol(
         session.execute(
             select(StockRecommendationTrendRecord)
             .join(StockRecord, StockRecommendationTrendRecord.stock_id == StockRecord.id)
-            .where(StockRecord.symbol == symbol)
+            .where(StockRecord.ticker == symbol)
             .order_by(StockRecommendationTrendRecord.period.desc())
         ).scalars()
     )
@@ -110,13 +110,13 @@ def stalest_symbols(session: Session, limit: int) -> list[tuple[str, str | None]
     actually cached; never-viewed symbols are filled lazily on first access instead.
     """
     rows = session.execute(
-        select(StockRecord.symbol, StockRecord.name)
+        select(StockRecord.ticker, StockRecord.name)
         .join(
             StockRecommendationTrendRecord,
             StockRecommendationTrendRecord.stock_id == StockRecord.id,
         )
-        .group_by(StockRecord.id, StockRecord.symbol, StockRecord.name)
+        .group_by(StockRecord.id, StockRecord.ticker, StockRecord.name)
         .order_by(func.max(StockRecommendationTrendRecord.fetched_at).asc())
         .limit(limit)
     ).all()
-    return [(row.symbol, row.name) for row in rows]
+    return [(row.ticker, row.name) for row in rows]

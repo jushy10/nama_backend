@@ -1,17 +1,19 @@
 """HTTP API for reading a stock's ticker card.
 
 ``GET /stocks/ticker/{ticker}`` — the read endpoint for the ticker slice: the live
-quote (price + day move), the clean company name and market cap, plus **opt-in
+quote (price + day move), the clean company name, the listing exchange (served from
+the ``stocks`` row, learned once from the price feed), and market cap, plus **opt-in
 blocks** requested via ``?include=`` — ``dividend``, ``performance`` (trailing
-windows), ``metrics`` (the **forward PEG**: forward P/E over expected FY1→FY2
-EPS growth, the one valuation figure no other endpoint serves), and
-``options_metrics`` (the **options-market read**: ATM implied volatility, the
-priced-in expected move, the cost of a protective put, and the day's put/call
-lean — what the options market believes about the stock, for a buyer sizing an
-entry). Pay-per-use: a block that isn't requested costs no provider call. The
-PEG's legs deliberately stay snapshot-only (``forward_pe`` and
-``growth.forward_eps_growth`` on ``GET /stocks/{symbol}``) so the same numbers
-don't get two homes that could disagree. Controller + presenter + wiring, the
+windows), ``metrics`` (trailing PEG + margins off the fundamentals call, and the
+**forward PEG**: forward P/E over expected FY1→FY2 EPS growth, the one valuation
+figure no other endpoint serves), and ``options_metrics`` (the **options-market
+read**: ATM implied volatility, the priced-in expected move, the cost of a
+protective put, and the day's put/call lean — what the options market believes
+about the stock, for a buyer sizing an entry). Pay-per-use: a block that isn't
+requested costs no provider call. The forward PEG's legs (forward P/E, forward
+EPS growth) are deliberately not serialized here — they stay on the shared
+entities, feeding the AI analysis context — so the same numbers don't get two
+homes that could disagree. Controller + presenter + wiring, the
 composition-root way, sitting in ``app/stocks/endpoints/`` like the other
 slices' HTTP.
 
@@ -29,7 +31,9 @@ request — freshness of the consensus legs is the annual-earnings slice's job
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy.orm import Session
 
+from app.db import get_db
 from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
@@ -46,6 +50,7 @@ from app.stocks.router import (
     get_provider,
 )
 from app.stocks.schemas import StockPerformanceResponse
+from app.stocks.ticker.db_repository import SqlTickerRepository
 from app.stocks.ticker.entities import TickerOptionsMetrics
 from app.stocks.ticker.ports import OptionChainProvider
 from app.stocks.ticker.schemas import (
@@ -65,15 +70,27 @@ def get_ticker_card_use_case(
     fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
     profile: CompanyProfileProvider | None = Depends(get_profile_provider),
     options: OptionChainProvider = Depends(get_options_provider),
+    db: Session = Depends(get_db),
 ) -> GetTickerCard:
-    # The Alpaca singleton backs both the quote and the trailing performance windows
-    # (same instance as the snapshot/quote endpoints), and the estimates are the same
-    # DB-only projection the snapshot's forward P/E uses — one source of truth for
-    # every leg the card carries. The profile provider supplies the display name
-    # (the slim quote carries none), TTL-cached like on the snapshot. The options
-    # chain is the keyless yfinance singleton — always wired, best-effort at read.
+    # The Alpaca singleton backs the quote, the trailing performance windows, and the
+    # one-time exchange lookup (same instance as the snapshot/quote endpoints), and
+    # the estimates are the same DB-only projection the snapshot's forward P/E uses —
+    # one source of truth for every leg the card carries. The profile provider
+    # supplies the display name (the slim quote carries none), TTL-cached like on the
+    # snapshot; the repository serves the stored exchange off the stocks row. The
+    # options chain is the keyless yfinance singleton — always wired, best-effort
+    # at read.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
-    return GetTickerCard(provider, estimates, fundamentals, performance, profile, options)
+    return GetTickerCard(
+        provider,
+        estimates,
+        fundamentals,
+        performance,
+        profile,
+        stocks=provider,
+        repository=SqlTickerRepository(db),
+        options=options,
+    )
 
 
 def _round2(value: float | None) -> float | None:
@@ -118,8 +135,9 @@ def _present(card: TickerCard) -> TickerCardResponse:
     The domain speaks in ``symbol``; renaming it ``ticker`` is a JSON-shape choice
     made here at the edge, like the DTOs' other shape concerns. Opt-in blocks are
     emitted only when the card was asked to carry them — ``card.include`` gates
-    the dividend block, since its data rides the fundamentals the market cap
-    needs anyway; the other opt-ins are already ``None`` when unrequested."""
+    the dividend block and the metrics' trailing half, since both ride the
+    fundamentals the market cap needs anyway; performance is already ``None``
+    when unrequested."""
     fundamentals = card.fundamentals
     dividend = None
     if "dividend" in card.include and fundamentals is not None:
@@ -130,20 +148,29 @@ def _present(card: TickerCard) -> TickerCardResponse:
             yield_percentage=_round2(fundamentals.dividend_yield),
             per_share=_round2(fundamentals.dividend_per_share),
         )
+    metrics = None
+    if "metrics" in card.include:
+        # Trailing ratios ride the fundamentals the market cap already fetched;
+        # the forward PEG comes off the valuation built from the stored consensus.
+        trailing = fundamentals.metrics if fundamentals else None
+        metrics = TickerMetricsResponse(
+            peg=trailing.peg if trailing else None,
+            forward_peg=card.valuation.forward_peg if card.valuation else None,
+            gross_margin=trailing.gross_margin if trailing else None,
+            operating_margin=trailing.operating_margin if trailing else None,
+            net_margin=trailing.net_margin if trailing else None,
+        )
     return TickerCardResponse(
         ticker=card.quote.symbol,
-        name=card.profile.name if card.profile else None,
+        name=card.name,
+        exchange=card.exchange,
         price=card.quote.price,
         change=card.quote.change,
         change_percent=card.quote.change_percent,
         market_cap=fundamentals.market_cap if fundamentals else None,
         dividend=dividend,
         performance=_present_performance(card.performance),
-        metrics=(
-            TickerMetricsResponse(forward_peg=card.valuation.forward_peg)
-            if card.valuation is not None
-            else None
-        ),
+        metrics=metrics,
         options_metrics=_present_options_metrics(card.options_metrics),
     )
 
