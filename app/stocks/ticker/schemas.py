@@ -24,10 +24,12 @@ class DividendResponse(BaseModel):
     """The stock's dividend, as the fundamentals vendor reports it.
 
     ``yield_percentage`` is percent; ``per_share`` is the annual payout in the
-    quote currency. Either is ``null`` for a non-payer or an uncovered field."""
+    quote currency. Both are rounded to 2 decimals at the presenter (the vendor's
+    raw figures carry float noise). Either is ``null`` for a non-payer or an
+    uncovered field."""
 
-    yield_percentage: float | None = None  # percent
-    per_share: float | None = None  # $ per share, annual
+    yield_percentage: float | None = None  # percent, rounded to 2 decimals
+    per_share: float | None = None  # $ per share annual, rounded to 2 decimals
 
 
 class TickerMetricsResponse(BaseModel):
