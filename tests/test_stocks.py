@@ -61,7 +61,6 @@ from app.stocks.router import (
     get_sector_performance,
     get_stock_analysis,
     get_stock_candles,
-    get_stock_info,
     get_stock_logo,
     get_stock_quote,
     get_stock_rsi,
@@ -916,15 +915,6 @@ def make_client():
         quote_provider: StockQuoteProvider | None = None,
         analysis_provider: InvestmentAnalysisProvider | None = None,
     ) -> TestClient:
-        if provider is not None:
-            app.dependency_overrides[get_stock_info] = lambda: GetStockInfo(
-                provider,
-                performance_provider,
-                fundamentals_provider,
-                profile_provider,
-                ath_provider,
-                estimates_provider,
-            )
         if quote_provider is not None:
             app.dependency_overrides[get_stock_quote] = (
                 lambda: GetStockQuote(quote_provider)
@@ -958,24 +948,6 @@ def make_client():
 
     yield _make
     app.dependency_overrides.clear()
-
-
-def test_get_stock_returns_200_with_computed_fields(make_client):
-    client = make_client(FakeProvider(stock=a_stock()))
-    r = client.get("/stocks/AAPL")
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["symbol"] == "AAPL"
-    assert body["name"] == "Apple Inc."
-    assert body["price"] == 297.86
-    assert body["change"] == 1.79          # entity rule, surfaced by the presenter
-    assert body["change_percent"] == 0.6
-    assert body["spread"] == 29.91
-
-
-def test_get_stock_normalizes_lowercase(make_client):
-    client = make_client(FakeProvider(stock=a_stock()))
-    assert client.get("/stocks/aapl").json()["symbol"] == "AAPL"
 
 
 # --------------------------- AI analysis ---------------------------
@@ -1181,130 +1153,6 @@ def test_get_analysis_400_on_bad_symbol(make_client):
         analysis_provider=FakeAnalysisProvider(an_analysis()),
     )
     assert client.get("/stocks/TOOLONG/analysis").status_code == 400
-
-
-def test_get_stock_invalid_symbol_400(make_client):
-    client = make_client(FakeProvider(stock=a_stock()))
-    assert client.get("/stocks/123").status_code == 400
-
-
-def test_get_stock_unknown_symbol_404(make_client):
-    client = make_client(FakeProvider(raises=StockNotFound("ZZZZ")))
-    assert client.get("/stocks/ZZZZ").status_code == 404
-
-
-def test_get_stock_upstream_failure_502(make_client):
-    client = make_client(FakeProvider(raises=StockDataUnavailable("AAPL", "boom")))
-    assert client.get("/stocks/AAPL").status_code == 502
-
-
-def test_get_stock_includes_enrichment_with_alias_keys(make_client):
-    client = make_client(
-        FakeProvider(stock=a_stock()),
-        performance_provider=FakePerformanceProvider(a_performance()),
-        fundamentals_provider=FakeFundamentalsProvider(a_fundamentals()),
-        profile_provider=FakeProfileProvider(a_profile()),
-    )
-    body = client.get("/stocks/AAPL").json()
-    assert body["market_cap"] == 3_120_000_000_000.0
-    assert body["dividend_per_share"] == 1.0
-    assert body["dividend_yield"] == 0.42
-    # nested performance is serialized with finance-style JSON keys
-    assert body["performance"] == {
-        "1w": 1.2, "1m": -0.4, "3m": 5.1, "6m": 8.7, "ytd": 12.3, "1y": 21.0,
-    }
-    # nested key metrics ride along on the same fundamentals payload — the
-    # valuation/health/profitability/market slice; EPS + growth stay on /earnings
-    assert body["metrics"]["pe"] == 28.5
-    assert body["metrics"]["week_52_high"] == 320.0
-    assert body["metrics"]["debt_to_equity"] == 1.5
-    assert body["metrics"]["fcf_per_share"] == 6.43  # trailing free cash flow per share
-    assert body["metrics"]["roe"] == 147.4  # return on equity (percent)
-    # the margin stack is served here so the stock page keeps it once the
-    # legacy /earnings endpoint is phased out
-    assert body["metrics"]["gross_margin"] == 44.0
-    assert body["metrics"]["operating_margin"] == 30.0
-    assert body["metrics"]["net_margin"] == 25.0
-    for moved in ("eps", "eps_growth_yoy"):
-        assert moved not in body["metrics"], moved
-    # P/S and beta stay on the KeyMetrics entity (they feed the AI analysis
-    # context) but are no longer serialized on the snapshot.
-    for trimmed in ("ps", "beta"):
-        assert trimmed not in body["metrics"], trimmed
-
-
-def test_get_stock_includes_forward_estimates(make_client):
-    client = make_client(
-        FakeProvider(stock=a_stock(price=280.0)),
-        fundamentals_provider=FakeFundamentalsProvider(
-            a_fundamentals(market_cap=2_000_000_000_000.0)
-        ),
-        estimates_provider=FakeEstimatesProvider(
-            an_estimates(eps_avg=8.0, revenue_avg=400_000_000_000.0)
-        ),
-    )
-    body = client.get("/stocks/AAPL").json()
-    # The derived forward P/E rides at the top level (it needs the live price)…
-    assert body["forward_pe"] == 35.0          # 280 / 8.0
-    # …but the raw consensus block and forward P/S were trimmed off the response
-    # (the estimates entity still feeds forward_pe and the growth block).
-    for trimmed in ("forward_ps", "analyst_estimates"):
-        assert trimmed not in body, trimmed
-
-
-def test_get_stock_includes_growth_block(make_client):
-    # Both legs: trailing YoY rides on the Finnhub fundamentals, forward 1-yr growth
-    # (FY1→FY2) on the analyst estimates — combined into one `growth` block on the snapshot.
-    client = make_client(
-        FakeProvider(stock=a_stock()),
-        fundamentals_provider=FakeFundamentalsProvider(a_fundamentals()),
-        estimates_provider=FakeEstimatesProvider(an_estimates()),
-    )
-    g = client.get("/stocks/AAPL").json()["growth"]
-    assert g["revenue_yoy"] == 8.0          # trailing (Finnhub TTM)
-    assert g["eps_yoy"] == 12.0
-    assert g["forward_eps_growth"] == 15.0      # forward FY1→FY2 (analyst estimates)
-    assert g["forward_revenue_growth"] == 8.33
-
-
-def test_get_stock_includes_all_time_high_and_drawdown(make_client):
-    client = make_client(
-        FakeProvider(stock=a_stock(price=297.86)),
-        ath_provider=FakeAllTimeHighProvider(an_all_time_high(price=350.0)),
-    )
-    body = client.get("/stocks/AAPL").json()
-    assert body["all_time_high"] == {
-        "price": 350.0, "reached_on": "2026-01-05", "since": "2016-01-04",
-    }
-    assert body["drawdown_from_high"] == -14.9  # ~15% off the high
-
-
-def test_get_stock_enrichment_best_effort_returns_200(make_client):
-    client = make_client(
-        FakeProvider(stock=a_stock()),
-        performance_provider=FakePerformanceProvider(
-            raises=StockDataUnavailable("AAPL", "boom")
-        ),
-        fundamentals_provider=FakeFundamentalsProvider(raises=StockNotFound("AAPL")),
-        profile_provider=FakeProfileProvider(raises=StockDataUnavailable("AAPL", "x")),
-    )
-    r = client.get("/stocks/AAPL")
-    assert r.status_code == 200, r.text  # price survives enrichment failures
-    body = r.json()
-    assert body["price"] == 297.86
-    assert body["market_cap"] is None
-    assert body["performance"] is None
-
-
-def test_get_stock_without_enrichment_providers_nulls_fields(make_client):
-    client = make_client(FakeProvider(stock=a_stock()))
-    body = client.get("/stocks/AAPL").json()
-    assert body["market_cap"] is None
-    assert body["dividend_per_share"] is None
-    assert body["performance"] is None
-    assert body["metrics"] is None
-    assert body["all_time_high"] is None
-    assert body["drawdown_from_high"] is None
 
 
 # --------------------------- quote endpoint ---------------------------
@@ -1594,17 +1442,17 @@ def test_get_sectors_upstream_failure_502(make_client):
 # --------------------------- CORS ---------------------------
 
 def test_cors_allows_configured_origin(make_client):
-    client = make_client(FakeProvider(stock=a_stock()))
+    client = make_client(quote_provider=FakeQuoteProvider(a_quote()))
     origin = "https://namainsights.com"
-    r = client.get("/stocks/AAPL", headers={"Origin": origin})
+    r = client.get("/stocks/AAPL/quote", headers={"Origin": origin})
     assert r.status_code == 200
     assert r.headers["access-control-allow-origin"] == origin
 
 
 def test_cors_preflight_succeeds(make_client):
-    client = make_client(FakeProvider(stock=a_stock()))
+    client = make_client(quote_provider=FakeQuoteProvider(a_quote()))
     r = client.options(
-        "/stocks/AAPL",
+        "/stocks/AAPL/quote",
         headers={
             "Origin": "https://namainsights.com",
             "Access-Control-Request-Method": "GET",
@@ -1801,13 +1649,6 @@ def test_get_screener_sets_short_cache_header(make_screener_client):
     client = make_screener_client(a_screener())
     r = client.get("/stocks/screener")
     assert r.headers["cache-control"] == "public, max-age=15"
-
-
-def test_get_screener_is_not_captured_by_symbol_route(make_screener_client):
-    # "/stocks/screener" must hit the screener, not "/stocks/{symbol}" with
-    # symbol="screener" (which would 400 as an invalid symbol).
-    client = make_screener_client(a_screener())
-    assert client.get("/stocks/screener").status_code == 200
 
 
 def test_get_screener_honors_limit(make_screener_client):

@@ -1,7 +1,8 @@
 """Controller + Presenter + dependency wiring for the stocks feature.
 
-The controller (`get_stock`) adapts an HTTP request into a use-case call; the
-presenter (`_present`) adapts the returned Stock entity into the HTTP DTO.
+Each controller (e.g. `get_stock_quote_endpoint`) adapts an HTTP request into a
+use-case call; its presenter (e.g. `_present_quote`) adapts the returned entity
+into the HTTP DTO.
 
 Credentials are read from the environment (like DATABASE_URL in app/db.py).
 The provider is built lazily so the app still boots without Alpaca keys —
@@ -21,16 +22,12 @@ from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.constituents import SqlConstituentRepository
 from app.stocks.entities import (
-    AllTimeHigh,
     CandleSeries,
-    GrowthMetrics,
     InvestmentAnalysis,
-    KeyMetrics,
     MoversBoard,
     Quote,
     ScreenedStock,
     SectorPerformance,
-    Stock,
     StockIndex,
     StockPerformance,
     Timeframe,
@@ -60,12 +57,9 @@ from app.stocks.ports import (
     StockPerformanceProvider,
 )
 from app.stocks.schemas import (
-    AllTimeHighResponse,
     CandleResponse,
     CandleSeriesResponse,
-    GrowthMetricsResponse,
     InvestmentAnalysisResponse,
-    KeyMetricsResponse,
     MoversResponse,
     QuoteResponse,
     RsiPointResponse,
@@ -74,7 +68,6 @@ from app.stocks.schemas import (
     SectorBoardResponse,
     SectorPerformanceResponse,
     StockPerformanceResponse,
-    StockResponse,
 )
 from app.stocks.use_cases import (
     GetSectorPerformance,
@@ -125,11 +118,12 @@ def get_profile_provider() -> CompanyProfileProvider | None:
 def get_estimates_provider(
     db: Session = Depends(get_db),
 ) -> AnalystEstimatesProvider:
-    # Forward analyst estimates back the snapshot's forward P/E — best-effort
-    # enrichment. They're projected from the annual-earnings slice's stored forward
-    # years (the same Yahoo consensus that timeline serves), DB-only: a symbol whose
-    # timeline isn't cached yet just omits the forward metrics until the annual
-    # read path or its cron fills the rows. No second table, fetch, or cron.
+    # Forward analyst estimates back the ticker card's forward PEG and the AI
+    # analysis context — best-effort enrichment. They're projected from the
+    # annual-earnings slice's stored forward years (the same Yahoo consensus that
+    # timeline serves), DB-only: a symbol whose timeline isn't cached yet just
+    # omits the forward metrics until the annual read path or its cron fills the
+    # rows. No second table, fetch, or cron.
     return AnnualEarningsEstimatesProvider(SqlAnnualEarningsRepository(db))
 
 
@@ -139,9 +133,11 @@ def get_stock_info(
     profile: CompanyProfileProvider | None = Depends(get_profile_provider),
     estimates: AnalystEstimatesProvider | None = Depends(get_estimates_provider),
 ) -> GetStockInfo:
-    # The Alpaca provider supplies the snapshot, the performance windows, and the
-    # all-time high — all derived from the same price feed, so one instance backs
-    # each capability via its respective port.
+    # The enriched snapshot use case now serves only as the AI analysis context
+    # (the standalone GET /stocks/{symbol} endpoint was removed). The Alpaca
+    # provider supplies the snapshot, the performance windows, and the all-time
+    # high — all derived from the same price feed, so one instance backs each
+    # capability via its respective port.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
     all_time_high = provider if isinstance(provider, AllTimeHighProvider) else None
     return GetStockInfo(
@@ -150,8 +146,8 @@ def get_stock_info(
 
 
 def get_stock_quote(
-    # Same Alpaca instance — get_quote is just the snapshot half of get_stock,
-    # so the live-price poll endpoint reuses the provider with no extra wiring.
+    # Same Alpaca instance — the live-price poll endpoint reuses the provider
+    # that backs every other price view, with no extra wiring.
     provider: AlpacaStockDataProvider = Depends(get_provider),
 ) -> GetStockQuote:
     return GetStockQuote(provider)
@@ -231,44 +227,6 @@ def get_stock_logo(provider: LogoProvider = Depends(get_logo_provider)) -> GetSt
     return GetStockLogo(provider)
 
 
-def _present(stock: Stock) -> StockResponse:
-    """Presenter: domain entity -> HTTP response DTO."""
-    return StockResponse(
-        symbol=stock.symbol,
-        name=stock.name,
-        exchange=stock.exchange,
-        price=stock.price,
-        change=stock.change,
-        change_percent=stock.change_percent,
-        open=stock.open,
-        high=stock.high,
-        low=stock.low,
-        previous_close=stock.previous_close,
-        volume=stock.volume,
-        bid=stock.bid,
-        ask=stock.ask,
-        spread=stock.spread,
-        as_of=stock.as_of,
-        market_cap=stock.market_cap,
-        dividend_per_share=stock.dividend_per_share,
-        dividend_yield=stock.dividend_yield,
-        performance=_present_performance(stock.performance),
-        metrics=_present_metrics(stock.metrics),
-        forward_pe=stock.forward_pe,
-        growth=_present_growth(stock.growth),
-        all_time_high=_present_all_time_high(stock.all_time_high),
-        drawdown_from_high=stock.drawdown_from_high,
-    )
-
-
-def _present_all_time_high(high: AllTimeHigh | None) -> AllTimeHighResponse | None:
-    if high is None:
-        return None
-    return AllTimeHighResponse(
-        price=high.price, reached_on=high.reached_on, since=high.since
-    )
-
-
 def _present_quote(quote: Quote) -> QuoteResponse:
     """Presenter: quote entity -> HTTP response DTO."""
     return QuoteResponse(
@@ -296,40 +254,6 @@ def _present_performance(
         six_month=perf.six_month,
         ytd=perf.ytd,
         one_year=perf.one_year,
-    )
-
-
-def _present_metrics(metrics: KeyMetrics | None) -> KeyMetricsResponse | None:
-    # Valuation + health + profitability + market; the remaining earnings-flavored
-    # metrics (EPS, growth) are surfaced on the earnings endpoint.
-    if metrics is None:
-        return None
-    return KeyMetricsResponse(
-        pe=metrics.pe,
-        peg=metrics.peg,
-        pb=metrics.pb,
-        fcf_per_share=metrics.fcf_per_share,
-        roe=metrics.roe,
-        gross_margin=metrics.gross_margin,
-        operating_margin=metrics.operating_margin,
-        net_margin=metrics.net_margin,
-        current_ratio=metrics.current_ratio,
-        debt_to_equity=metrics.debt_to_equity,
-        week_52_high=metrics.week_52_high,
-        week_52_low=metrics.week_52_low,
-    )
-
-
-def _present_growth(growth: GrowthMetrics | None) -> GrowthMetricsResponse | None:
-    # Trailing YoY (from the Finnhub metrics) + forward 1-yr growth (FY1→FY2, from
-    # the analyst estimates) — both already on the stock, combined into one block.
-    if growth is None:
-        return None
-    return GrowthMetricsResponse(
-        revenue_yoy=growth.revenue_yoy,
-        eps_yoy=growth.eps_yoy,
-        forward_revenue_growth=growth.forward_revenue_growth,
-        forward_eps_growth=growth.forward_eps_growth,
     )
 
 
@@ -470,8 +394,6 @@ def _present_movers(board: MoversBoard) -> MoversResponse:
     )
 
 
-# Declared before "/stocks/{symbol}" so this literal path wins the match —
-# otherwise the dynamic route would capture "screener" as a symbol.
 @router.get("/stocks/screener", response_model=MoversResponse)
 def get_screener_endpoint(
     response: Response,
@@ -501,21 +423,6 @@ def get_screener_endpoint(
     # collapses onto one upstream sweep.
     response.headers["Cache-Control"] = "public, max-age=15"
     return _present_movers(board)
-
-
-@router.get("/stocks/{symbol}", response_model=StockResponse)
-def get_stock(
-    symbol: str, use_case: GetStockInfo = Depends(get_stock_info)
-) -> StockResponse:
-    try:
-        stock = use_case.execute(symbol)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except StockNotFound as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except StockDataUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
-    return _present(stock)
 
 
 @router.get("/stocks/{symbol}/quote", response_model=QuoteResponse)
