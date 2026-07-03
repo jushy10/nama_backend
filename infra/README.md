@@ -137,8 +137,12 @@ aws ec2 start-instances --instance-ids "$(terraform -chdir=environments/dev outp
 [`ecs-fargate-service`](modules/ecs-fargate-service) module:
 
 - An **ECR** repo (image registry), an **ECS cluster + service + task
-  definition**, a public **Application Load Balancer**, security groups, two IAM
-  roles, and a CloudWatch log group.
+  definition**, an **API Gateway HTTP API** in front (per-request billing; it
+  reaches the tasks through a free **VPC Link**, discovering their IPs via
+  **Cloud Map**), security groups, two IAM roles, and a CloudWatch log group.
+  This replaced a public ALB (~$24/mo in hourly + public-IPv4 charges to front
+  one task). Two consequences: requests have a **hard 30s timeout** at the
+  gateway, and the API is **HTTPS-only** (no port-80 redirect).
 - The task carries the database's `app` security group (so it can reach Postgres)
   and gets **`DATABASE_URL` injected from the SSM SecureString** — the secret
   never appears in the task definition.
@@ -186,9 +190,12 @@ returns `503`; the rest of the app is unaffected.
 Terraform creates the registry and service, but the service has **no image to run
 until CI pushes one**. So:
 
-1. **Update `nama-ci`'s policy** (it now needs ECS/ECR/ELB/logs + IAM for
-   `nama-*` roles) — re-paste [`ci-iam-policy.json`](ci-iam-policy.json), or use
-   the managed `PowerUserAccess` policy **plus** the `ManageNamaRoles` statement.
+1. **Update `nama-ci`'s policy** (it now needs ECS/ECR/API Gateway/Cloud
+   Map/logs + IAM for `nama-*` roles; `elasticloadbalancing:*` is only still
+   listed so the apply that removed the old ALB could destroy it — safe to drop
+   once that has run) — re-paste [`ci-iam-policy.json`](ci-iam-policy.json), or
+   use the managed `PowerUserAccess` policy **plus** the `ManageNamaRoles`
+   statement.
 2. **Merge → the [Infrastructure](../.github/workflows/infra.yml) workflow applies.**
    The ECS service comes up but its tasks can't start yet (no image) — expected.
 3. **The [Build & Deploy App](../.github/workflows/app-image.yml) workflow** builds
@@ -197,14 +204,17 @@ until CI pushes one**. So:
    repo to exist**, so it no longer needs a manual re-run after the Infrastructure
    run. The ECR repo keeps only recent images (untagged expire after 7 days; last
    10 kept).
-4. Once a task is healthy, hit `terraform output app_url` (an `http://…elb…`
-   address). `GET /healthz` should return `{"status":"ok"}`.
+4. Once a task is healthy, hit `terraform output app_url` (the custom domain,
+   or an `https://…execute-api…` address before DNS is set up). `GET /healthz`
+   should return `{"status":"ok"}`.
 
 ### Custom domain + HTTPS
 
 The [`dns-cert`](modules/dns-cert) module issues a free, auto-renewing ACM
-certificate (DNS-validated) and the app module adds an HTTPS listener + an
-`api.namainsights.com` record pointing at the ALB, with HTTP redirecting to HTTPS.
+certificate (DNS-validated) and the app module adds an API Gateway custom
+domain + an `api.namainsights.com` record pointing at it. HTTPS only — API
+Gateway has no port-80 listener, so plain `http://` doesn't answer (the old
+ALB used to redirect it).
 
 - The hosted zone for `namainsights.com` already exists (registered via Route 53),
   so `create_hosted_zone = false` and it all comes up in one apply.
@@ -215,10 +225,11 @@ certificate (DNS-validated) and the app module adds an HTTPS listener + an
 
 ### Cost & teardown
 
-This tier is **not** free: the ALB is ~$16/mo and the Fargate task ~$9/mo while
-running, on top of RDS. The ACM cert and Route 53 queries are negligible (the
-hosted zone is ~$0.50/mo). `terraform destroy` (or remove the `module "app"` block
-and apply) when you're done.
+This tier is cheap but **not** free: the Fargate task is ~$9/mo plus ~$3.65/mo
+for its public IPv4, on top of RDS. The API Gateway HTTP API bills per request
+(~$1/M — effectively $0 at dev traffic; the VPC Link is free), the ACM cert and
+Route 53 queries are negligible (the hosted zone is ~$0.50/mo). `terraform
+destroy` (or remove the `module "app"` block and apply) when you're done.
 
 ## Frontend on S3 + CloudFront
 
@@ -286,7 +297,7 @@ for a built SPA is pennies). `terraform destroy` (or remove `module "frontend"` 
 2. **CI user + policy** — attach [`ci-iam-policy.json`](ci-iam-policy.json) to the
    deploy IAM user, replacing `YOUR_STATE_BUCKET`. It grants SSM on `/nama/*`,
    the state bucket, `sts:GetCallerIdentity`, `rds:*` + EC2 SG/VPC actions (database),
-   ECS/ECR/ELB/logs + IAM scoped to `nama-*` roles (the app), and `s3:*` on
+   ECS/ECR/API Gateway/Cloud Map/logs + IAM scoped to `nama-*` roles (the app), and `s3:*` on
    `nama-frontend-*` + `cloudfront:*` (the static frontend). Broad on
    services, careful on IAM. Re-paste it whenever this file changes — or attach
    the managed `PowerUserAccess` policy plus the `ManageNamaRoles` statement.

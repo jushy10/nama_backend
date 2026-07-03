@@ -76,6 +76,8 @@
         "ecs:*",
         "ecr:*",
         "elasticloadbalancing:*",
+        "apigateway:*",
+        "servicediscovery:*",
         "logs:*",
         "application-autoscaling:*"
       ],
