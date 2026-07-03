@@ -8,12 +8,12 @@ run-name: Sync annual earnings
 # use case, refreshing the stalest stocks first.
 #
 # The refresh runs in SMALL BATCHES rather than one big call: the endpoint is synchronous and
-# the ALB in front of the app has a ~60s idle timeout, so a hundreds-of-symbols request would
-# 504 at the load balancer while the app kept working. Each batch refreshes a few stocks
-# (well under the timeout); refreshed stocks get a new fetch stamp, so consecutive
-# stalest-first batches naturally walk the whole stored set. The loop stops early when a
-# batch refreshes nothing (Yahoo blocking the runs) or comes back smaller than requested
-# (stored set exhausted).
+# the API Gateway in front of the app has a HARD 30s integration timeout, so a
+# hundreds-of-symbols request would 504 at the gateway while the app kept working. Each batch
+# refreshes a few stocks (well under the timeout); refreshed stocks get a new fetch stamp, so
+# consecutive stalest-first batches naturally walk the whole stored set. The loop stops early
+# when a batch refreshes nothing (Yahoo blocking the runs) or comes back smaller than
+# requested (stored set exhausted).
 #
 # Operational notes:
 #  - The live source is yfinance (Yahoo), which needs no API key. Yahoo rate-limits / blocks
@@ -43,10 +43,10 @@ concurrency:
 
 env:
   # Max stored stocks to refresh per run, and how many per HTTP call. Each batch must finish
-  # inside the ALB's ~60s idle timeout (a stock is ~4 sequential Yahoo calls), so keep the
-  # batch small; the loop covers the rest.
+  # inside API Gateway's hard 30s integration timeout (a stock is ~4 sequential Yahoo
+  # calls), so keep the batch small; the loop covers the rest.
   SYNC_ANNUAL_EARNINGS_LIMIT: "200"
-  SYNC_ANNUAL_EARNINGS_BATCH: "10"
+  SYNC_ANNUAL_EARNINGS_BATCH: "5"
 
 jobs:
   sync:

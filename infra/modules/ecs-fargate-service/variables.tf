@@ -9,7 +9,7 @@ variable "vpc_id" {
 }
 
 variable "subnet_ids" {
-  description = "Subnets for the ALB and the Fargate tasks (>= 2 AZs)."
+  description = "Subnets for the Fargate tasks and the API Gateway VPC Link ENIs (>= 2 AZs)."
   type        = list(string)
 }
 
@@ -68,7 +68,7 @@ variable "memory" {
 }
 
 variable "health_check_path" {
-  description = "HTTP path the ALB pings to check task health."
+  description = "HTTP path the container health check pings; ECS replaces tasks that fail it."
   type        = string
   default     = "/healthz"
 }
@@ -79,28 +79,16 @@ variable "image_tag" {
   default     = "latest"
 }
 
-variable "enable_https" {
-  description = "Add the HTTPS (443) listener + HTTP->HTTPS redirect. Separate from certificate_arn because count/for_each can't depend on a not-yet-known ARN."
-  type        = bool
-  default     = false
-}
-
 variable "certificate_arn" {
-  description = "ACM cert ARN for the HTTPS listener (used when enable_https = true)."
+  description = "ACM cert ARN for the API's custom domain (used when domain_name is set). Must be issued in this region."
   type        = string
   default     = null
 }
 
 variable "domain_name" {
-  description = "Hostname to point at the load balancer (e.g. api.namainsights.com). Null = no DNS record."
+  description = "Custom hostname for the API (e.g. api.namainsights.com), served HTTPS-only. Null = default execute-api endpoint only."
   type        = string
   default     = null
-}
-
-variable "additional_domain_names" {
-  description = "Extra hostnames that also alias to this load balancer (e.g. [\"www.namainsights.com\"]). Must be covered by certificate_arn when enable_https is true."
-  type        = list(string)
-  default     = []
 }
 
 variable "route53_zone_id" {

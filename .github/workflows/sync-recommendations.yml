@@ -10,12 +10,12 @@ run-name: Sync recommendations
 # SyncRecommendations use case, refreshing the stalest stocks first.
 #
 # The refresh runs in SMALL BATCHES rather than one big call: the endpoint is synchronous
-# and the ALB in front of the app has a ~60s idle timeout, so a hundreds-of-symbols
-# request would 504 at the load balancer while the app kept working. Each batch refreshes
-# a couple dozen stocks (one Yahoo call each — well under the timeout); refreshed stocks
-# get a new fetch stamp, so consecutive stalest-first batches naturally walk the whole
-# stored set. The loop stops early when a batch refreshes nothing (Yahoo blocking the
-# runs) or comes back smaller than requested (stored set exhausted).
+# and the API Gateway in front of the app has a HARD 30s integration timeout, so a
+# hundreds-of-symbols request would 504 at the gateway while the app kept working. Each
+# batch refreshes a dozen stocks (one Yahoo call each — well under the timeout); refreshed
+# stocks get a new fetch stamp, so consecutive stalest-first batches naturally walk the
+# whole stored set. The loop stops early when a batch refreshes nothing (Yahoo blocking
+# the runs) or comes back smaller than requested (stored set exhausted).
 #
 # Operational notes:
 #  - The live source is yfinance (Yahoo), which needs no API key. Yahoo rate-limits /
@@ -44,10 +44,11 @@ concurrency:
 
 env:
   # Max stored stocks to refresh per run, and how many per HTTP call. Each batch must
-  # finish inside the ALB's ~60s idle timeout (a stock is a single Yahoo call here, so
-  # the batch can be larger than the earnings syncs'); the loop covers the rest.
+  # finish inside API Gateway's hard 30s integration timeout (a stock is a single Yahoo
+  # call here, so the batch can be larger than the earnings syncs'); the loop covers
+  # the rest.
   SYNC_RECOMMENDATIONS_LIMIT: "200"
-  SYNC_RECOMMENDATIONS_BATCH: "25"
+  SYNC_RECOMMENDATIONS_BATCH: "12"
 
 jobs:
   sync:

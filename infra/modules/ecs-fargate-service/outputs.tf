@@ -1,11 +1,11 @@
 output "url" {
   description = "Public URL of the app."
-  value       = var.domain_name != null ? "https://${var.domain_name}" : "http://${aws_lb.this.dns_name}"
+  value       = var.domain_name != null ? "https://${var.domain_name}" : aws_apigatewayv2_api.this.api_endpoint
 }
 
-output "alb_dns_name" {
-  description = "ALB DNS name."
-  value       = aws_lb.this.dns_name
+output "api_endpoint" {
+  description = "The API's default execute-api endpoint — works even before DNS points at it."
+  value       = aws_apigatewayv2_api.this.api_endpoint
 }
 
 output "ecr_repository_url" {

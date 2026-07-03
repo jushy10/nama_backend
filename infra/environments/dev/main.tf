@@ -19,13 +19,12 @@ data "aws_subnets" "default" {
 }
 
 locals {
-  # An internet-facing ALB runs one node — and bills one public IPv4 (~$3.60/mo)
-  # — per subnet/AZ it spans. Spreading it across every default subnet (six AZs
-  # in us-east-1) means paying for six IPs to front a single task. Two AZs is the
-  # ALB minimum and plenty here, so pin the app to two subnets. The default VPC
-  # has one subnet per AZ, so two distinct subnets are two AZs; sort() keeps the
-  # selection stable across plans. The database keeps all subnets — it's private
-  # (no public IP) and its subnet group just wants coverage across AZs.
+  # Two subnets/AZs are plenty for the app: the API Gateway VPC Link puts one
+  # ENI in each (free — unlike the ALB this replaced, which billed a public
+  # IPv4 per AZ), and the single task lands in one of them. The default VPC
+  # has one subnet per AZ, so two distinct subnets are two AZs; sort() keeps
+  # the selection stable across plans. The database keeps all subnets — it's
+  # private (no public IP) and its subnet group just wants coverage across AZs.
   app_subnet_ids = slice(sort(data.aws_subnets.default.ids), 0, 2)
 }
 
@@ -108,9 +107,10 @@ module "dns" {
   create_zone   = var.create_hosted_zone
 }
 
-# The app on ECS Fargate, behind a public load balancer. It carries the
-# database's app security group, reads DATABASE_URL from the SSM SecureString,
-# and is served at domain_name over HTTPS.
+# The app on ECS Fargate, fronted by an API Gateway HTTP API (per-request
+# billing — no always-on load balancer). It carries the database's app
+# security group, reads DATABASE_URL from the SSM SecureString, and is served
+# at domain_name over HTTPS (HTTPS only — API Gateway has no port 80).
 module "app" {
   source = "../../modules/ecs-fargate-service"
 
@@ -146,7 +146,6 @@ module "app" {
   # inference profile (defaults to us.anthropic.claude-opus-4-8 in code).
   enable_bedrock_invoke = true
 
-  enable_https    = true
   domain_name     = var.domain_name
   route53_zone_id = module.dns.zone_id
   certificate_arn = module.dns.certificate_arn

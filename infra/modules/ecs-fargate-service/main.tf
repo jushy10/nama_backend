@@ -180,29 +180,26 @@ resource "aws_iam_role_policy" "task_bedrock" {
 }
 
 # ---------------------------------------------------------------------------
-# Networking: a public ALB, and a task SG that only accepts traffic from it.
+# Networking & ingress: an API Gateway HTTP API reaches the tasks through a
+# VPC Link (free for HTTP APIs), discovering live task IPs via Cloud Map.
+# This replaced a public ALB: an ALB bills every hour plus two public IPv4
+# addresses (~$24/mo to front a single task), while an HTTP API bills per
+# request (~$1/M) — effectively $0 at dev traffic. Two trade-offs came with it:
+#   - a HARD 30s integration timeout (the ALB idled at ~60s): long requests —
+#     the Bedrock analysis endpoint, the /internal/*/sync cron batches — must
+#     finish inside it or the caller gets a 504 while the app keeps working
+#     (the sync workflows size their batches to fit);
+#   - HTTPS only: there is no port-80 listener, so plain http://<domain> no
+#     longer answers (the old ALB redirected it).
 # Tasks also carry app_security_group_id so the database accepts them.
 # ---------------------------------------------------------------------------
-resource "aws_security_group" "alb" {
-  name_prefix = "${var.name}-alb-"
-  description = "Public HTTP to the load balancer"
+
+# The VPC Link's ENIs. No ingress rules needed — the link only originates
+# connections to the tasks; nothing dials the link's ENIs directly.
+resource "aws_security_group" "vpc_link" {
+  name_prefix = "${var.name}-link-"
+  description = "API Gateway VPC Link ENIs - egress to the app tasks"
   vpc_id      = var.vpc_id
-
-  ingress {
-    description = "HTTP from anywhere"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTPS from anywhere"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
 
   egress {
     from_port   = 0
@@ -220,15 +217,15 @@ resource "aws_security_group" "alb" {
 
 resource "aws_security_group" "service" {
   name_prefix = "${var.name}-svc-"
-  description = "App tasks: traffic from the ALB only"
+  description = "App tasks: traffic from the API Gateway VPC Link only"
   vpc_id      = var.vpc_id
 
   ingress {
-    description     = "App port from the ALB"
+    description     = "App port from the VPC Link"
     from_port       = var.container_port
     to_port         = var.container_port
     protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
+    security_groups = [aws_security_group.vpc_link.id]
   }
 
   egress {
@@ -245,101 +242,133 @@ resource "aws_security_group" "service" {
   }
 }
 
-resource "aws_lb" "this" {
-  name_prefix        = "nama-" # aws_lb name_prefix is capped at 6 chars
-  load_balancer_type = "application"
-  subnets            = var.subnet_ids
-  security_groups    = [aws_security_group.alb.id]
-  tags               = var.tags
+# Cloud Map service discovery: ECS registers every running task's private IP
+# and port here, and the API Gateway integration resolves live instances from
+# it (via DiscoverInstances, not DNS). SRV records on purpose — ECS only
+# registers the *port* attribute for SRV services, and API Gateway needs it
+# to know where to connect (with A records it would assume port 80).
+resource "aws_service_discovery_private_dns_namespace" "this" {
+  name = "${var.name}.local"
+  vpc  = var.vpc_id
+  tags = var.tags
 }
 
-resource "aws_lb_target_group" "this" {
-  name_prefix = "nama-"
-  port        = var.container_port
-  protocol    = "HTTP"
-  vpc_id      = var.vpc_id
-  target_type = "ip" # Fargate tasks register by IP
+resource "aws_service_discovery_service" "this" {
+  name = "app"
 
-  health_check {
-    path                = var.health_check_path
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-    timeout             = 5
-    interval            = 30
-    matcher             = "200"
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.this.id
+
+    dns_records {
+      type = "SRV"
+      ttl  = 10
+    }
+
+    routing_policy = "MULTIVALUE"
+  }
+
+  # "Custom" health = ECS reports task health into Cloud Map (driven by the
+  # container health check in the task definition) instead of Route 53 probing.
+  health_check_custom_config {
+    failure_threshold = 1
   }
 
   tags = var.tags
-
-  lifecycle {
-    create_before_destroy = true
-  }
 }
 
-# Port 80: forward to the app when there's no cert, otherwise redirect to HTTPS.
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.this.arn
-  port              = 80
-  protocol          = "HTTP"
-
-  default_action {
-    type             = var.enable_https ? "redirect" : "forward"
-    target_group_arn = var.enable_https ? null : aws_lb_target_group.this.arn
-
-    dynamic "redirect" {
-      for_each = var.enable_https ? [1] : []
-      content {
-        port        = "443"
-        protocol    = "HTTPS"
-        status_code = "HTTP_301"
-      }
-    }
-  }
+# The (free) VPC Link: API Gateway's foothold inside the VPC — it places an
+# ENI per subnet and forwards requests through them to the task IPs.
+resource "aws_apigatewayv2_vpc_link" "this" {
+  name               = var.name
+  subnet_ids         = var.subnet_ids
+  security_group_ids = [aws_security_group.vpc_link.id]
+  tags               = var.tags
 }
 
-# Port 443: only when HTTPS is enabled.
-resource "aws_lb_listener" "https" {
-  count = var.enable_https ? 1 : 0
-
-  load_balancer_arn = aws_lb.this.arn
-  port              = 443
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = var.certificate_arn
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.this.arn
-  }
+resource "aws_apigatewayv2_api" "this" {
+  name          = var.name
+  protocol_type = "HTTP"
+  tags          = var.tags
 }
 
-# DNS: point domain_name at the load balancer.
+resource "aws_apigatewayv2_integration" "this" {
+  api_id             = aws_apigatewayv2_api.this.id
+  integration_type   = "HTTP_PROXY"
+  integration_method = "ANY"
+  integration_uri    = aws_service_discovery_service.this.arn
+  connection_type    = "VPC_LINK"
+  connection_id      = aws_apigatewayv2_vpc_link.this.id
+
+  # Private integrations only speak payload format 1.0. 30s is the HTTP API
+  # ceiling, not a tunable — anything slower 504s at the gateway.
+  payload_format_version = "1.0"
+  timeout_milliseconds   = 30000
+}
+
+# One catch-all route: the app's FastAPI router does the real routing.
+resource "aws_apigatewayv2_route" "default" {
+  api_id    = aws_apigatewayv2_api.this.id
+  route_key = "$default"
+  target    = "integrations/${aws_apigatewayv2_integration.this.id}"
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.this.id
+  name        = "$default"
+  auto_deploy = true
+
+  # API Gateway bills per request, so a runaway/hostile client is a bill as
+  # well as load. Generous for one small task; raise alongside desired_count.
+  default_route_settings {
+    throttling_rate_limit  = 50
+    throttling_burst_limit = 100
+  }
+
+  tags = var.tags
+}
+
+locals {
+  # The custom domain needs both the hostname and an issued cert; the Route 53
+  # alias additionally needs the zone.
+  create_custom_domain = var.domain_name != null && var.certificate_arn != null
+}
+
+# Serve the API at https://domain_name. HTTPS only — API Gateway has no
+# port-80 listener, so there's no HTTP->HTTPS redirect any more.
+resource "aws_apigatewayv2_domain_name" "this" {
+  count = local.create_custom_domain ? 1 : 0
+
+  domain_name = var.domain_name
+
+  domain_name_configuration {
+    certificate_arn = var.certificate_arn
+    endpoint_type   = "REGIONAL"
+    security_policy = "TLS_1_2"
+  }
+
+  tags = var.tags
+}
+
+resource "aws_apigatewayv2_api_mapping" "this" {
+  count = local.create_custom_domain ? 1 : 0
+
+  api_id      = aws_apigatewayv2_api.this.id
+  domain_name = aws_apigatewayv2_domain_name.this[0].id
+  stage       = aws_apigatewayv2_stage.default.id
+}
+
+# DNS: point domain_name at the API's regional endpoint.
 resource "aws_route53_record" "this" {
-  count = var.domain_name == null || var.route53_zone_id == null ? 0 : 1
+  count = local.create_custom_domain && var.route53_zone_id != null ? 1 : 0
 
   zone_id = var.route53_zone_id
   name    = var.domain_name
   type    = "A"
 
   alias {
-    name                   = aws_lb.this.dns_name
-    zone_id                = aws_lb.this.zone_id
-    evaluate_target_health = true
-  }
-}
-
-# Extra hostnames (e.g. www) that alias to the same load balancer.
-resource "aws_route53_record" "additional" {
-  for_each = var.route53_zone_id == null ? toset([]) : toset(var.additional_domain_names)
-
-  zone_id = var.route53_zone_id
-  name    = each.value
-  type    = "A"
-
-  alias {
-    name                   = aws_lb.this.dns_name
-    zone_id                = aws_lb.this.zone_id
-    evaluate_target_health = true
+    name                   = aws_apigatewayv2_domain_name.this[0].domain_name_configuration[0].target_domain_name
+    zone_id                = aws_apigatewayv2_domain_name.this[0].domain_name_configuration[0].hosted_zone_id
+    evaluate_target_health = false
   }
 }
 
@@ -376,6 +405,20 @@ resource "aws_ecs_task_definition" "this" {
           { containerPort = var.container_port, protocol = "tcp" }
         ]
 
+        # The ALB's target-group check used to decide task health; with API
+        # Gateway there is no LB, so the container checks itself and ECS
+        # replaces failures. Python stdlib because the slim image has no curl.
+        healthCheck = {
+          command = [
+            "CMD-SHELL",
+            "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${var.container_port}${var.health_check_path}', timeout=4)\""
+          ]
+          interval    = 30
+          timeout     = 5
+          retries     = 3
+          startPeriod = 30
+        }
+
         logConfiguration = {
           logDriver = "awslogs"
           options = {
@@ -406,7 +449,7 @@ resource "aws_ecs_service" "this" {
 
   network_configuration {
     subnets = var.subnet_ids
-    # service SG (ALB -> task), plus the app SG (task -> database) when set.
+    # service SG (VPC Link -> task), plus the app SG (task -> database) when set.
     # A static frontend needs no database, so it carries only the service SG.
     security_groups = var.app_security_group_id == null ? [aws_security_group.service.id] : [
       aws_security_group.service.id, var.app_security_group_id
@@ -414,13 +457,16 @@ resource "aws_ecs_service" "this" {
     assign_public_ip = true # needed in public subnets to pull the image
   }
 
-  load_balancer {
-    target_group_arn = aws_lb_target_group.this.arn
-    container_name   = "app"
-    container_port   = var.container_port
+  # Register each task's IP + port in Cloud Map (SRV needs container_name +
+  # container_port) so the API Gateway integration can discover it. On a
+  # deploy, stopping tasks are deregistered a beat before they die — a brief
+  # window where the gateway can still hit the old IP (a stray 5xx during
+  # rollouts; the ALB's connection draining was more graceful).
+  service_registries {
+    registry_arn   = aws_service_discovery_service.this.arn
+    container_name = "app"
+    container_port = var.container_port
   }
-
-  depends_on = [aws_lb_listener.http]
 
   tags = var.tags
 }
