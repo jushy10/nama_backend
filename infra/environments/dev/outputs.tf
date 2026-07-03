@@ -24,8 +24,8 @@ output "database_address" {
 }
 
 output "bastion_instance_id" {
-  description = "SSM bastion instance id — the --target for `aws ssm start-session` to tunnel to the database."
-  value       = module.bastion.instance_id
+  description = "SSM bastion instance id — the --target for `aws ssm start-session` to tunnel to the database. Null while bastion_enabled = false."
+  value       = one(module.bastion[*].instance_id)
 }
 
 output "app_security_group_id" {
