@@ -63,6 +63,10 @@ def get_ticker_card_use_case(
     return GetTickerCard(provider, estimates, fundamentals, performance, profile)
 
 
+def _round2(value: float | None) -> float | None:
+    return None if value is None else round(value, 2)
+
+
 def _present_performance(
     perf: StockPerformance | None,
 ) -> StockPerformanceResponse | None:
@@ -89,9 +93,12 @@ def _present(card: TickerCard) -> TickerCardResponse:
     fundamentals = card.fundamentals
     dividend = None
     if "dividend" in card.include and fundamentals is not None:
+        # Rounded here at the edge: a dividend card shows cents / basis-point-ish
+        # precision, and the vendor's raw figures carry float noise. The shared
+        # entity stays unrounded — the snapshot serves the same fields raw.
         dividend = DividendResponse(
-            yield_percentage=fundamentals.dividend_yield,
-            per_share=fundamentals.dividend_per_share,
+            yield_percentage=_round2(fundamentals.dividend_yield),
+            per_share=_round2(fundamentals.dividend_per_share),
         )
     return TickerCardResponse(
         ticker=card.quote.symbol,

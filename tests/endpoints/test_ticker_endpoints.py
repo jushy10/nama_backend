@@ -70,8 +70,9 @@ def _a_card(*, include: frozenset[str] = frozenset()) -> TickerCard:
         profile=CompanyProfile(name="Micron Technology"),
         fundamentals=StockFundamentals(
             market_cap=1_090_000_000_000.0,
-            dividend_per_share=0.46,
-            dividend_yield=0.05,
+            # Vendor-noisy on purpose: the presenter must round both to 2 decimals.
+            dividend_per_share=0.4649,
+            dividend_yield=0.047123,
         ),
         performance=(
             StockPerformance(
@@ -112,7 +113,7 @@ def test_presents_the_optin_blocks_when_included():
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["dividend"] == {"yield_percentage": 0.05, "per_share": 0.46}
+    assert body["dividend"] == {"yield_percentage": 0.05, "per_share": 0.46}  # rounded
     # Performance keeps the finance-style aliases the snapshot uses.
     assert body["performance"] == {
         "1w": 1.5, "1m": 8.0, "3m": 40.0, "6m": 90.0, "ytd": 120.0, "1y": 150.0,
