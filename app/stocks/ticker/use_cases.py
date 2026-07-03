@@ -4,12 +4,14 @@ One action, pure orchestration over existing ports so it runs offline in tests
 against hand-written fakes and knows nothing of Alpaca, Finnhub, the database, or
 HTTP:
 
-- ``GetTickerCard`` — the read path. Normalizes the symbol, takes the live quote
-  through the ``StockQuoteProvider`` and the stored forward consensus through the
-  ``AnalystEstimatesProvider`` (wired in production as the annual-earnings
-  projection, DB-only), then layers best-effort enrichment on top: the clean
-  company display name, company fundamentals (market cap, dividend), and the
-  trailing performance windows. Returns the assembled ``TickerCard``.
+- ``GetTickerCard`` — the read path. Normalizes the ticker and the requested
+  includes, takes the live quote through the ``StockQuoteProvider``, layers the
+  always-on enrichment (the clean display name; fundamentals for the market cap),
+  and fetches the *opt-in* blocks only when asked: ``dividend`` (already carried
+  by the fundamentals call), ``performance`` (the trailing windows), and
+  ``metrics`` (the stored forward consensus, for the forward PEG). Pay-per-use:
+  a block that isn't requested costs no provider call. Returns the assembled
+  ``TickerCard``.
 
 Unlike the earnings/recommendations slices there is no sync counterpart and no
 repository: the card is built around the *live* quote, so nothing slice-owned is
@@ -21,6 +23,7 @@ must be fetched fresh anyway.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Sequence
 
 from app.stocks.entities import (
     CompanyProfile,
@@ -38,6 +41,10 @@ from app.stocks.ports import (
 )
 from app.stocks.ticker.entities import TickerValuation
 
+# The blocks a caller may opt into. Everything else on the card (ticker, name,
+# price + day move, market cap) is always served.
+INCLUDABLE = frozenset({"dividend", "performance", "metrics"})
+
 
 def _normalize_symbol(symbol: str) -> str:
     """Trim/upper-case the ticker and reject obvious junk, once, at the edge of the use
@@ -51,6 +58,28 @@ def _normalize_symbol(symbol: str) -> str:
     return normalized
 
 
+def _normalize_includes(include: Sequence[str] | None) -> frozenset[str]:
+    """Flatten/lower-case the requested includes and reject unknown ones, once, at
+    the edge — the same stance as ``_normalize_symbol``. Accepts both repeated
+    params and comma-separated values (``?include=dividend&include=metrics`` or
+    ``?include=dividend,metrics``), since both are common client idioms."""
+    if not include:
+        return frozenset()
+    parts = {
+        part.strip().lower()
+        for raw in include
+        for part in raw.split(",")
+        if part.strip()
+    }
+    unknown = parts - INCLUDABLE
+    if unknown:
+        raise ValueError(
+            f"Unknown include(s): {', '.join(sorted(unknown))}. "
+            f"Valid includes: {', '.join(sorted(INCLUDABLE))}."
+        )
+    return frozenset(parts)
+
+
 @dataclass(frozen=True)
 class TickerCard:
     """Everything the ticker endpoint serves, assembled from the ports.
@@ -59,28 +88,33 @@ class TickerCard:
     why it lives here with the orchestration (like the sync slices' report
     dataclasses) instead of in the slice's ``entities.py``: the slice-local entity
     (``TickerValuation``) owns the forward-PEG rule, and this just bundles it with
-    the quote and the best-effort enrichment blocks (``None`` when their provider
-    is unconfigured or failed — enrichment must never sink the card).
+    the quote and the enrichment blocks. ``include`` records which opt-in blocks
+    the caller asked for, so the presenter can tell "not requested" apart from
+    "requested but unavailable" (best-effort blocks are ``None`` either way).
     """
 
     quote: Quote  # live price + the day's move
-    valuation: TickerValuation  # the forward-PEG read at that price
+    include: frozenset[str]  # the opt-in blocks this card was asked to carry
+    valuation: TickerValuation | None  # the forward-PEG read; only with 'metrics'
     profile: CompanyProfile | None  # clean company display name (best-effort)
     fundamentals: StockFundamentals | None  # market cap + dividend (best-effort)
-    performance: StockPerformance | None  # trailing return windows (best-effort)
+    performance: StockPerformance | None  # trailing windows; only with 'performance'
 
 
 class GetTickerCard:
-    """Use case: a stock's ticker card — live quote, forward PEG, and enrichment.
+    """Use case: a stock's ticker card — live quote, name, market cap, and the
+    opt-in blocks (dividend, performance, forward-PEG metrics).
 
-    The quote and the estimates are primary — the card exists to price the forward
-    PEG — so either failing propagates (the endpoint maps it to HTTP). But *absent*
-    forward coverage is not a failure: an ``is_empty`` estimates block (symbol not
-    cached by the annual slice yet, or no analyst coverage) yields a null PEG
-    around a live quote, the same "no data ≠ error" stance the other slices take.
-    The profile (display name), fundamentals and performance are best-effort
-    enrichment, mirroring the stock snapshot: unconfigured or failing providers
-    just leave their blocks ``None``.
+    The quote is primary, and so is the consensus read *when 'metrics' is
+    requested* — so those failing propagates (the endpoint maps it to HTTP). But
+    *absent* forward coverage is not a failure: an ``is_empty`` estimates block
+    (symbol not cached by the annual slice yet, or no analyst coverage) yields a
+    null PEG, the same "no data ≠ error" stance the other slices take. The profile
+    (display name), fundamentals and performance are best-effort enrichment,
+    mirroring the stock snapshot: unconfigured or failing providers just leave
+    their blocks ``None``. Opt-in blocks that aren't requested cost no provider
+    call at all ('dividend' rides the fundamentals call the market cap needs
+    anyway, so it only gates presentation).
     """
 
     def __init__(
@@ -97,25 +131,37 @@ class GetTickerCard:
         self._performance = performance
         self._profile = profile
 
-    def execute(self, symbol: str) -> TickerCard:
+    def execute(
+        self, symbol: str, include: Sequence[str] | None = None
+    ) -> TickerCard:
         normalized = _normalize_symbol(symbol)
+        wanted = _normalize_includes(include)
         quote = self._quotes.get_quote(normalized)  # required; errors propagate
-        estimates = self._estimates.get_estimates(normalized)  # required; ditto
+        return TickerCard(
+            quote=quote,
+            include=wanted,
+            valuation=(
+                self._get_valuation(normalized, quote) if "metrics" in wanted else None
+            ),
+            profile=self._get_profile(normalized),
+            fundamentals=self._get_fundamentals(normalized),
+            performance=(
+                self._get_performance(normalized) if "performance" in wanted else None
+            ),
+        )
+
+    def _get_valuation(self, symbol: str, quote: Quote) -> TickerValuation:
+        # Primary when requested: the metrics block exists to price the forward
+        # PEG, so a failing consensus read propagates rather than degrading.
+        estimates = self._estimates.get_estimates(symbol)
         # The estimate entity owns the per-leg rules (positive-EPS guards,
         # FY1→FY2 growth); this just evaluates them at today's price. An empty
         # block naturally yields all-None legs — no special-casing needed.
-        valuation = TickerValuation(
-            symbol=normalized,
+        return TickerValuation(
+            symbol=symbol,
             price=quote.price,
             forward_pe=estimates.forward_pe(quote.price),
             forward_eps_growth=estimates.forward_eps_growth(),
-        )
-        return TickerCard(
-            quote=quote,
-            valuation=valuation,
-            profile=self._get_profile(normalized),
-            fundamentals=self._get_fundamentals(normalized),
-            performance=self._get_performance(normalized),
         )
 
     def _get_profile(self, symbol: str) -> CompanyProfile | None:

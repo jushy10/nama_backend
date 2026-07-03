@@ -226,10 +226,14 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > earnings slices' calendar-derived fiscal labels.
 
 > **The ticker sub-slice — `app/stocks/ticker/`.** A stock's **ticker card** at
-> `GET /stocks/ticker/{symbol}`: the live quote (`price`/`change`/`change_percent`, same
-> rules as every other price view), best-effort enrichment (`name` from the Finnhub
-> profile, `market_cap` + dividend from Finnhub fundamentals, `performance` trailing
-> windows from Alpaca), and `metrics.forward_peg` — the
+> `GET /stocks/ticker/{ticker}`. Always served: the live quote
+> (`price`/`change`/`change_percent`, same rules as every other price view), `name` (the
+> Finnhub profile's clean display name), and `market_cap` (Finnhub fundamentals) — the
+> latter two best-effort. **Opt-in blocks** via `?include=` (repeated or comma-separated;
+> unknown values are a 400; unrequested blocks are `null` and — pay-per-use — cost no
+> provider call): `dividend` (`yield_percentage` + `per_share`; rides the fundamentals
+> call the market cap needs anyway, so the include only gates presentation),
+> `performance` (trailing windows from Alpaca), and `metrics` with `forward_peg` — the
 > **forward PEG**, the one valuation figure no other endpoint serves: forward P/E (live
 > price ÷ FY1 consensus EPS) divided by expected FY1→FY2 EPS growth (a `@property` on the
 > slice-local `TickerValuation` entity, with the same positive-legs guard as the trailing
@@ -248,8 +252,10 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > and `AnalystEstimatesProvider` (the annual-earnings projection, DB-only) — wired by reusing
 > the composition root's factories from `router.py`; the composite result (`TickerCard`)
 > is a dataclass beside the use case, not a slice entity, since it just bundles shared
-> entities around the slice's one domain rule. Quote + estimates are primary (errors
-> propagate); fundamentals/performance are enrichment and never sink the card. Consensus
+> entities around the slice's one domain rule (it also carries the `include` set so the
+> presenter can tell "not requested" from "requested but unavailable"). The quote — and
+> the consensus read *when `metrics` is requested* — are primary (errors propagate);
+> name/fundamentals/performance are enrichment and never sink the card. Consensus
 > freshness rides entirely on the annual slice (lazy fill + `sync-annual-earnings` cron);
 > an uncached symbol is a **200 with a null `metrics.forward_peg`**, not a 404 — no data ≠
 > error. Caveat: the growth denominator is a single FY1→FY2 leg (Yahoo's forward ceiling),

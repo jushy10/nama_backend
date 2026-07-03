@@ -1,25 +1,27 @@
 """HTTP API for reading a stock's ticker card.
 
-``GET /stocks/ticker/{symbol}`` — the read endpoint for the ticker slice: the live
-quote (price + day move), the **forward PEG** (forward P/E over expected FY1→FY2 EPS
-growth — the one valuation figure no other endpoint serves), and best-effort
-enrichment (market cap, dividend, trailing performance windows). The PEG's legs
-deliberately stay snapshot-only (``forward_pe`` and ``growth.forward_eps_growth`` on
-``GET /stocks/{symbol}``) so the same numbers don't get two homes that could disagree.
-Controller + presenter + wiring, the composition-root way, sitting in
+``GET /stocks/ticker/{ticker}`` — the read endpoint for the ticker slice: the live
+quote (price + day move), the clean company name and market cap, plus **opt-in
+blocks** requested via ``?include=`` — ``dividend``, ``performance`` (trailing
+windows), and ``metrics`` (the **forward PEG**: forward P/E over expected FY1→FY2
+EPS growth, the one valuation figure no other endpoint serves). Pay-per-use: a
+block that isn't requested costs no provider call. The PEG's legs deliberately stay
+snapshot-only (``forward_pe`` and ``growth.forward_eps_growth`` on
+``GET /stocks/{symbol}``) so the same numbers don't get two homes that could
+disagree. Controller + presenter + wiring, the composition-root way, sitting in
 ``app/stocks/endpoints/`` like the other slices' HTTP.
 
 Wiring convention: this endpoint owns no vendor of its own — it reuses the composition
 root's factories. The quote and performance windows ride the ``@lru_cache``d Alpaca
 provider (whose missing-keys 503 gate the endpoint inherits: the quote is primary
-here), fundamentals ride the optional Finnhub provider (best-effort, ``None`` without
-a key), and the estimates ride the annual-earnings projection (DB-only, no key).
-There's no cron or table behind this endpoint: the card is built around the live
-quote, so it's computed per request — freshness of the consensus legs is the
-annual-earnings slice's job (lazy fill + its sync cron).
+here), the name and fundamentals ride the optional Finnhub providers (best-effort,
+``None`` without a key), and the estimates ride the annual-earnings projection
+(DB-only, no key). There's no cron or table behind this endpoint: the card is built
+around the live quote, so it's computed per request — freshness of the consensus legs
+is the annual-earnings slice's job (lazy fill + its sync cron).
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
@@ -36,7 +38,11 @@ from app.stocks.router import (
     get_provider,
 )
 from app.stocks.schemas import StockPerformanceResponse
-from app.stocks.ticker.schemas import TickerCardResponse, TickerMetricsResponse
+from app.stocks.ticker.schemas import (
+    DividendResponse,
+    TickerCardResponse,
+    TickerMetricsResponse,
+)
 from app.stocks.ticker.use_cases import GetTickerCard, TickerCard
 
 router = APIRouter(tags=["ticker"])
@@ -76,8 +82,17 @@ def _present(card: TickerCard) -> TickerCardResponse:
     """Presenter: ticker-card composition -> HTTP response DTO.
 
     The domain speaks in ``symbol``; renaming it ``ticker`` is a JSON-shape choice
-    made here at the edge, like the DTOs' other shape concerns."""
+    made here at the edge, like the DTOs' other shape concerns. Opt-in blocks are
+    emitted only when the card was asked to carry them — ``card.include`` gates
+    the dividend block, since its data rides the fundamentals the market cap
+    needs anyway; the other opt-ins are already ``None`` when unrequested."""
     fundamentals = card.fundamentals
+    dividend = None
+    if "dividend" in card.include and fundamentals is not None:
+        dividend = DividendResponse(
+            yield_percentage=fundamentals.dividend_yield,
+            per_share=fundamentals.dividend_per_share,
+        )
     return TickerCardResponse(
         ticker=card.quote.symbol,
         name=card.profile.name if card.profile else None,
@@ -85,21 +100,32 @@ def _present(card: TickerCard) -> TickerCardResponse:
         change=card.quote.change,
         change_percent=card.quote.change_percent,
         market_cap=fundamentals.market_cap if fundamentals else None,
-        dividend_per_share=fundamentals.dividend_per_share if fundamentals else None,
-        dividend_yield=fundamentals.dividend_yield if fundamentals else None,
+        dividend=dividend,
         performance=_present_performance(card.performance),
-        metrics=TickerMetricsResponse(forward_peg=card.valuation.forward_peg),
+        metrics=(
+            TickerMetricsResponse(forward_peg=card.valuation.forward_peg)
+            if card.valuation is not None
+            else None
+        ),
     )
 
 
-@router.get("/stocks/ticker/{symbol}", response_model=TickerCardResponse)
+@router.get("/stocks/ticker/{ticker}", response_model=TickerCardResponse)
 def get_ticker_card_endpoint(
-    symbol: str,
+    ticker: str,
     response: Response,
+    include: list[str] | None = Query(
+        default=None,
+        description=(
+            "Opt-in blocks to include: dividend, performance, metrics. Repeat the "
+            "param or comma-separate (?include=dividend,metrics). Unrequested "
+            "blocks are null and cost no upstream call."
+        ),
+    ),
     use_case: GetTickerCard = Depends(get_ticker_card_use_case),
 ) -> TickerCardResponse:
     try:
-        card = use_case.execute(symbol)
+        card = use_case.execute(ticker, include=include)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except StockNotFound as exc:

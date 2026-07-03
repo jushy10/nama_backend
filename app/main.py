@@ -74,10 +74,11 @@ app.include_router(quarterly_earnings_cron_router)
 # drives the SyncAnnualEarnings use case out of band. See
 # app/stocks/endpoints/cron_annual_earnings_endpoints.py.
 app.include_router(annual_earnings_cron_router)
-# The ticker-card read endpoint (GET /stocks/ticker/{symbol}): live quote + day move,
-# market cap/dividend and trailing performance enrichment, and metrics.forward_peg —
-# computed per request from the live quote + the stored annual-earnings consensus (no
-# table or cron of its own). See app/stocks/endpoints/ticker_endpoints.py.
+# The ticker-card read endpoint (GET /stocks/ticker/{ticker}): live quote + day move,
+# name and market cap always; dividend, performance and metrics (forward PEG) as
+# ?include= opt-ins — computed per request from the live quote + the stored
+# annual-earnings consensus (no table or cron of its own). See
+# app/stocks/endpoints/ticker_endpoints.py.
 app.include_router(ticker_router)
 # The recommendations refresh cron endpoint (POST /internal/recommendations/sync); it
 # drives the SyncRecommendations use case out of band. See
