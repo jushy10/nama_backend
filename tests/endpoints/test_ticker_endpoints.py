@@ -8,7 +8,7 @@ header, unrequested/unavailable blocks as nulls (not a 404), and the error mappi
 without touching Alpaca, Finnhub, or the database.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -21,7 +21,7 @@ from app.stocks.entities import (
     StockPerformance,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ticker.entities import TickerValuation
+from app.stocks.ticker.entities import TickerOptionsMetrics, TickerValuation
 from app.stocks.ticker.use_cases import TickerCard
 
 
@@ -82,6 +82,20 @@ def _a_card(*, include: frozenset[str] = frozenset()) -> TickerCard:
             if "performance" in include
             else None
         ),
+        options_metrics=(
+            TickerOptionsMetrics(
+                # Chain-arithmetic-noisy on purpose: the presenter must round the
+                # figures (not the dates) to 2 decimals.
+                implied_volatility=26.000000000000004,
+                expected_move_percent=5.0049999,
+                expected_move_by=date(2026, 7, 31),
+                insurance_cost_percent=4.0012,
+                insurance_expires=date(2026, 10, 2),
+                put_call_ratio=1.2004,
+            )
+            if "options_metrics" in include
+            else None
+        ),
     )
 
 
@@ -101,15 +115,21 @@ def test_presents_the_core_card_with_null_optin_blocks_by_default():
     assert body["dividend"] is None
     assert body["performance"] is None
     assert body["metrics"] is None
+    assert body["options_metrics"] is None
     assert fake.calls == [("MU", None)]
 
 
 def test_presents_the_optin_blocks_when_included():
     fake = _FakeUseCase(
-        result=_a_card(include=frozenset({"dividend", "performance", "metrics"}))
+        result=_a_card(
+            include=frozenset(
+                {"dividend", "performance", "metrics", "options_metrics"}
+            )
+        )
     )
     resp = _client(fake).get(
         "/stocks/ticker/MU?include=dividend&include=performance&include=metrics"
+        "&include=options_metrics"
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -119,6 +139,15 @@ def test_presents_the_optin_blocks_when_included():
         "1w": 1.5, "1m": 8.0, "3m": 40.0, "6m": 90.0, "ytd": 120.0, "1y": 150.0,
     }
     assert body["metrics"] == {"forward_peg": 0.13}
+    # The options figures are rounded at the edge; the sampled expiries are dates.
+    assert body["options_metrics"] == {
+        "implied_volatility": 26.0,
+        "expected_move_percent": 5.0,
+        "expected_move_by": "2026-07-31",
+        "insurance_cost_percent": 4.0,
+        "insurance_expires": "2026-10-02",
+        "put_call_ratio": 1.2,
+    }
 
 
 def test_passes_the_raw_include_params_through_to_the_use_case():
@@ -147,6 +176,25 @@ def test_dividend_requested_but_fundamentals_unavailable_is_null():
     assert body["name"] is None
     assert body["market_cap"] is None
     assert body["dividend"] is None  # requested, but nothing to serve
+
+
+def test_options_metrics_requested_but_unavailable_is_null():
+    # A Yahoo-blocked chain read leaves the block null — a 200, never an error.
+    card = _a_card()
+    fake = _FakeUseCase(
+        result=TickerCard(
+            quote=card.quote,
+            include=frozenset({"options_metrics"}),
+            valuation=None,
+            profile=card.profile,
+            fundamentals=card.fundamentals,
+            performance=None,
+            options_metrics=None,
+        )
+    )
+    resp = _client(fake).get("/stocks/ticker/MU?include=options_metrics")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["options_metrics"] is None
 
 
 def test_sets_the_cache_header():

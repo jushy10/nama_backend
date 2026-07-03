@@ -8,8 +8,10 @@ HTTP:
   includes, takes the live quote through the ``StockQuoteProvider``, layers the
   always-on enrichment (the clean display name; fundamentals for the market cap),
   and fetches the *opt-in* blocks only when asked: ``dividend`` (already carried
-  by the fundamentals call), ``performance`` (the trailing windows), and
-  ``metrics`` (the stored forward consensus, for the forward PEG). Pay-per-use:
+  by the fundamentals call), ``performance`` (the trailing windows), ``metrics``
+  (the stored forward consensus, for the forward PEG), and ``options_metrics``
+  (the options-market read: ATM implied volatility, the priced-in expected move,
+  the cost of a protective put, and the day's put/call lean). Pay-per-use:
   a block that isn't requested costs no provider call. Returns the assembled
   ``TickerCard``.
 
@@ -23,7 +25,8 @@ must be fetched fresh anyway.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from datetime import date, timedelta
+from typing import Callable, Sequence
 
 from app.stocks.entities import (
     CompanyProfile,
@@ -39,11 +42,19 @@ from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,
 )
-from app.stocks.ticker.entities import TickerValuation
+from app.stocks.ticker.entities import TickerOptionsMetrics, TickerValuation
+from app.stocks.ticker.ports import OptionChainProvider
 
 # The blocks a caller may opt into. Everything else on the card (ticker, name,
 # price + day move, market cap) is always served.
-INCLUDABLE = frozenset({"dividend", "performance", "metrics"})
+INCLUDABLE = frozenset({"dividend", "performance", "metrics", "options_metrics"})
+
+# The two expiry windows the options read samples: IV and the expected move are
+# quoted at ~1 month out (near-dated enough to reflect *current* nerves, far
+# enough to dodge same-week lottery-ticket noise), and the protective put at
+# ~3 months (a quarter of cover — the horizon a holder actually insures).
+_NEAR_WINDOW = timedelta(days=30)
+_INSURANCE_WINDOW = timedelta(days=90)
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -99,6 +110,7 @@ class TickerCard:
     profile: CompanyProfile | None  # clean company display name (best-effort)
     fundamentals: StockFundamentals | None  # market cap + dividend (best-effort)
     performance: StockPerformance | None  # trailing windows; only with 'performance'
+    options_metrics: TickerOptionsMetrics | None = None  # only with 'options_metrics'
 
 
 class GetTickerCard:
@@ -110,11 +122,14 @@ class GetTickerCard:
     *absent* forward coverage is not a failure: an ``is_empty`` estimates block
     (symbol not cached by the annual slice yet, or no analyst coverage) yields a
     null PEG, the same "no data ≠ error" stance the other slices take. The profile
-    (display name), fundamentals and performance are best-effort enrichment,
-    mirroring the stock snapshot: unconfigured or failing providers just leave
-    their blocks ``None``. Opt-in blocks that aren't requested cost no provider
-    call at all ('dividend' rides the fundamentals call the market cap needs
-    anyway, so it only gates presentation).
+    (display name), fundamentals, performance and options metrics are best-effort
+    enrichment, mirroring the stock snapshot: unconfigured or failing providers
+    just leave their blocks ``None``. The options read stays best-effort *even
+    when requested* — unlike the DB-backed consensus, it's a live Yahoo call, and
+    Yahoo intermittently blocks data-centre IPs; a colored insight going missing
+    must not take the quote down with it. Opt-in blocks that aren't requested
+    cost no provider call at all ('dividend' rides the fundamentals call the
+    market cap needs anyway, so it only gates presentation).
     """
 
     def __init__(
@@ -124,12 +139,18 @@ class GetTickerCard:
         fundamentals: StockFundamentalsProvider | None = None,
         performance: StockPerformanceProvider | None = None,
         profile: CompanyProfileProvider | None = None,
+        options: OptionChainProvider | None = None,
+        today: Callable[[], date] | None = None,
     ) -> None:
         self._quotes = quotes
         self._estimates = estimates
         self._fundamentals = fundamentals
         self._performance = performance
         self._profile = profile
+        self._options = options
+        # Injectable clock: the expiry windows are anchored on "today", and the
+        # tests pin it the way the yfinance adapters pin theirs.
+        self._today = today or date.today
 
     def execute(
         self, symbol: str, include: Sequence[str] | None = None
@@ -147,6 +168,11 @@ class GetTickerCard:
             fundamentals=self._get_fundamentals(normalized),
             performance=(
                 self._get_performance(normalized) if "performance" in wanted else None
+            ),
+            options_metrics=(
+                self._get_options_metrics(normalized, quote)
+                if "options_metrics" in wanted
+                else None
             ),
         )
 
@@ -189,3 +215,29 @@ class GetTickerCard:
             return self._performance.get_performance(symbol)
         except (StockNotFound, StockDataUnavailable):
             return None  # best-effort: never sink the card
+
+    def _get_options_metrics(self, symbol: str, quote: Quote) -> TickerOptionsMetrics | None:
+        """The options-market read: sample the ~1-month and ~3-month expiries and
+        let the entity derive the four figures at today's price.
+
+        Nearest-listed wins: options expire on fixed exchange dates, so each
+        window picks the future expiry closest to its target — and when the
+        listed dates are sparse both windows may land on the same expiry (the
+        entity dedupes the shared chain). No listed options at all is "no
+        coverage", not an error."""
+        if self._options is None:
+            return None
+        try:
+            today = self._today()
+            future = [e for e in self._options.get_expirations(symbol) if e > today]
+            if not future:
+                return None
+            near = min(future, key=lambda e: abs(e - today - _NEAR_WINDOW))
+            far = min(future, key=lambda e: abs(e - today - _INSURANCE_WINDOW))
+            near_chain = self._options.get_chain(symbol, near)
+            far_chain = (
+                near_chain if far == near else self._options.get_chain(symbol, far)
+            )
+            return TickerOptionsMetrics.from_chains(quote.price, near_chain, far_chain)
+        except (StockNotFound, StockDataUnavailable):
+            return None  # best-effort: a Yahoo-blocked read never sinks the card

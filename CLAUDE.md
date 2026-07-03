@@ -123,6 +123,7 @@ only this one file changes.
 - `adapters/yfinance_annual_earnings_adapter.py` — live source for the annual-earnings slice: **Yahoo via `yfinance`**, building the 4-recent + up-to-2-upcoming *fiscal-year* timeline (the yearly analogue of the quarterly adapter). **Past** years come from `income_stmt` (annual) — `Diluted EPS` (falling back to `Basic EPS`) as the actual, plus `Total Revenue` and `Net Income`. **Upcoming** years come from the `0y`/`+1y` rows of `earnings_estimate` + `revenue_estimate` (EPS + revenue) — Yahoo's forward ceiling (so ≤2). Forward years are labelled by `info['nextFiscalYearEnd']` (0y), falling back to one year past the latest reported year. **No annual surprise/beat** — Yahoo's estimate-vs-actual history is per-quarter, so a reported year carries an actual with no estimate. Reported years also carry `eps_actual_consensus` — the year's actual EPS on the **analyst-consensus (adjusted) basis**, i.e. the sum of its four quarterly "Reported EPS" values from a deeper `get_earnings_dates` fetch (quarters assigned to a fiscal year by their derived calendar quarter-end falling within the year ending at the true fiscal-year-end; summed only when all four slots are filled, else `None`). It exists because `eps_actual` (GAAP diluted) and the forward `eps_estimate` (adjusted consensus) are on different bases — a client anchoring a P/E walk needs both ends on one basis. Best-effort enrichment, like revenue. Key caveat: `income_stmt` is the **fundamentals endpoint Yahoo IP-gates hardest from data-centre IPs** (intermittently — prod has fetched it successfully), so it's fetched best-effort: a blocked fetch drops the reported years but leaves the forward ones, and the **merge-preserving sync** keeps the stored reported rows when that happens. `adapters/db_cached_annual_earnings_adapter.py` — the same **read-through** DB cache as quarterly (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `adapters/annual_earnings_estimates_adapter.py` — implements the `AnalystEstimatesProvider` port for the stock snapshot by **projecting the annual-earnings slice's stored forward years** into an `AnalystEstimates` block (first upcoming year → FY1, next → FY2). **DB-only, no live fall-through**: estimates are best-effort enrichment, so an uncached symbol just omits the forward metrics until the annual read path (lazy fill) or its cron populates the rows. This replaced the dedicated `stock_analyst_estimates` table + its own Yahoo fetch and cron — the annual slice stores the *same* `earnings_estimate`/`revenue_estimate` consensus, so the snapshot's `forward_pe`/forward growth now have one source of truth (the FY1 low/high range and analyst counts were dropped with the table; the serialized `analyst_estimates` block, `forward_ps`, and `metrics.ps`/`metrics.beta` were later trimmed off the HTTP response — the entities keep them, feeding `forward_pe`, the growth block, and the Bedrock analysis context)
 - `adapters/yfinance_recommendations_adapter.py` — live source for the recommendations slice: **Yahoo via `yfinance`** (`Ticker.recommendations`), the sell-side buy/hold/sell split as monthly snapshots (the same recommendation-trend data Finnhub serves, but keyless — this replaced `finnhub_recommendation_provider.py` and the `FINNHUB_API_KEY` gate on the endpoint). Yahoo labels the rows *relatively* (`0m` = this month, `-1m`, …), so the adapter anchors them on today's month into first-of-month `period` dates — the identity the DB cache keys on. `adapters/db_cached_recommendations_adapter.py` — the same **read-through** DB cache as the earnings slices (DB-first, fetch-on-miss, no TTL/serve-stale)
+- `adapters/yfinance_options_adapter.py` — live source for the ticker card's `options_metrics` block: **Yahoo via `yfinance`** (`Ticker.options` for the expiration list, `Ticker.option_chain(date)` for one expiry's calls/puts), keyless, implementing the ticker slice's `OptionChainProvider` port. Maps chain rows → `OptionContract` entities (strike, bid/ask/last, volume, open interest, IV); every *derived* figure (ATM IV, expected move, insurance cost, put/call) is entity logic, not adapter logic. **No DB cache or cron** — options prices decay by the hour, so the no-TTL read-through pattern doesn't fit; the read is live per request (the endpoint's 5-min Cache-Control is the only damping) and best-effort even when requested, since Yahoo intermittently blocks data-centre IPs
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
 - `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table) + `get_or_create_stock`. Owned by no single feature; per-feature tables hang off it and import it from here
 
@@ -233,7 +234,8 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > unknown values are a 400; unrequested blocks are `null` and — pay-per-use — cost no
 > provider call): `dividend` (`yield_percentage` + `per_share`; rides the fundamentals
 > call the market cap needs anyway, so the include only gates presentation),
-> `performance` (trailing windows from Alpaca), and `metrics` with `forward_peg` — the
+> `performance` (trailing windows from Alpaca), `options_metrics` (the **options-market
+> read**, below), and `metrics` with `forward_peg` — the
 > **forward PEG**, the one valuation figure no other endpoint serves: forward P/E (live
 > price ÷ FY1 consensus EPS) divided by expected FY1→FY2 EPS growth (a `@property` on the
 > slice-local `TickerValuation` entity, with the same positive-legs guard as the trailing
@@ -241,25 +243,41 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > growth, which a cyclical rebound can inflate into the hundreds of percent and pin the
 > ratio near zero). The PEG's *legs* deliberately stay snapshot-only (`forward_pe`,
 > `growth.forward_eps_growth` on `GET /stocks/{symbol}`) so the same numbers don't get two
-> homes that could disagree; the entity's `symbol` is renamed `ticker` at the DTO. Built
-> on the same skeleton as the other sub-slices (own `entities.py` / `use_cases.py` /
-> `schemas.py`, endpoint in `app/stocks/endpoints/ticker_endpoints.py`) but deliberately
-> **thinner: no table, repository, cron, or vendor adapter** — the card is built around
+> homes that could disagree; the entity's `symbol` is renamed `ticker` at the DTO.
+> `options_metrics` is what the options market *believes* about the stock, for a buyer
+> sizing an entry — four derived figures, deliberately not a chain browser: ATM implied
+> volatility (percent, ~1-month expiry), the priced-in `expected_move_percent` (the ATM
+> straddle over spot, by `expected_move_by`), `insurance_cost_percent` (an ATM protective
+> put ~3 months out, over spot), and the day's `put_call_ratio` (volume across the two
+> sampled expiries, deduped when sparse listings land both windows on one expiry). The
+> derivations are pure entity logic (`OptionContract` + `TickerOptionsMetrics.from_chains`
+> in the slice's `entities.py`); the chain arrives through the slice-local
+> `OptionChainProvider` port (`ticker/ports.py` — expirations first, then only the two
+> needed expiries) implemented by `adapters/yfinance_options_adapter.py` (Yahoo via
+> `yfinance`, keyless). Unlike `metrics`, this block is **best-effort even when
+> requested** — it's a live Yahoo call and Yahoo intermittently blocks data-centre IPs,
+> so a blocked read is a 200 with a null block, never a failed card. Built
+> on the same skeleton as the other sub-slices (own `entities.py` / `ports.py` /
+> `use_cases.py` / `schemas.py`, endpoint in `app/stocks/endpoints/ticker_endpoints.py`)
+> but deliberately
+> **thinner: no table, repository, or cron** — the card is built around
 > the live quote, so nothing slice-owned is worth persisting. The use case pulls
-> everything through *existing* ports — `StockQuoteProvider` + `StockPerformanceProvider`
+> everything else through *existing* ports — `StockQuoteProvider` + `StockPerformanceProvider`
 > (the Alpaca singleton, whose missing-keys 503 gate it inherits — the quote is primary),
 > `StockFundamentalsProvider` + `CompanyProfileProvider` (Finnhub, `None` without a key),
 > and `AnalystEstimatesProvider` (the annual-earnings projection, DB-only) — wired by reusing
 > the composition root's factories from `router.py`; the composite result (`TickerCard`)
 > is a dataclass beside the use case, not a slice entity, since it just bundles shared
-> entities around the slice's one domain rule (it also carries the `include` set so the
+> entities around the slice's domain rules (it also carries the `include` set so the
 > presenter can tell "not requested" from "requested but unavailable"). The quote — and
 > the consensus read *when `metrics` is requested* — are primary (errors propagate);
-> name/fundamentals/performance are enrichment and never sink the card. Consensus
+> name/fundamentals/performance/options are enrichment and never sink the card. Consensus
 > freshness rides entirely on the annual slice (lazy fill + `sync-annual-earnings` cron);
 > an uncached symbol is a **200 with a null `metrics.forward_peg`**, not a 404 — no data ≠
-> error. Caveat: the growth denominator is a single FY1→FY2 leg (Yahoo's forward ceiling),
-> not the classic five-year rate, so one boom-year estimate can still flatter the ratio.
+> error. Caveats: the growth denominator is a single FY1→FY2 leg (Yahoo's forward ceiling),
+> not the classic five-year rate, so one boom-year estimate can still flatter the ratio;
+> and the `put_call_ratio` pools only the two sampled expiries (not the whole board), so
+> thin sessions read noisier than a market-wide ratio.
 
 ### 5. DTOs — `app/stocks/schemas.py`
 Pydantic `BaseModel`s for HTTP responses. Pydantic is a serialization detail, so
@@ -425,10 +443,12 @@ app/
     │   ├── use_cases.py         #    GetStockRecommendations + SyncRecommendations
     │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
     ├── ticker/             # ── ticker-card sub-slice (its OWN entities.py; no DB/cron —
-    │   │                   #    computed per request from live quote + stored consensus):
-    │   ├── entities.py          #    TickerValuation (forward P/E + growth legs, forward_peg property)
-    │   ├── use_cases.py         #    GetTickerCard + TickerCard composite (quote/estimates/fundamentals/performance ports)
-    │   └── schemas.py           #    HTTP response DTO (quote + enrichment + metrics.forward_peg; endpoint in endpoints/)
+    │   │                   #    computed per request from live quote + stored consensus + live chain):
+    │   ├── entities.py          #    TickerValuation (forward_peg property); OptionContract +
+    │   │                        #    TickerOptionsMetrics.from_chains (the options-market read)
+    │   ├── ports.py             #    OptionChainProvider (expirations + one expiry's chain)
+    │   ├── use_cases.py         #    GetTickerCard + TickerCard composite (quote/estimates/fundamentals/performance/options ports)
+    │   └── schemas.py           #    HTTP response DTO (quote + enrichment + metrics/options_metrics blocks; endpoint in endpoints/)
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
     │   ├── cron_quarterly_earnings_endpoints.py  #  POST /internal/earnings/quarterly/sync
     │   ├── quarterly_earnings_endpoints.py       #  GET /stocks/{symbol}/earnings/quarterly
