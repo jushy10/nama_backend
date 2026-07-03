@@ -127,8 +127,10 @@ def test_presents_the_optin_blocks_when_included():
     assert body["performance"] == {
         "1w": 1.5, "1m": 8.0, "3m": 40.0, "6m": 90.0, "ytd": 120.0, "1y": 150.0,
     }
-    # Trailing PEG + margins ride the fundamentals; forward PEG the stored consensus.
+    # Trailing P/E + PEG + margins ride the fundamentals; forward PEG the stored
+    # consensus.
     assert body["metrics"] == {
+        "pe": 22.4,
         "peg": 0.03,  # 22.4 / 700.7 — the degenerate trailing read, for contrast
         "forward_peg": 0.13,
         "gross_margin": 52.1,
@@ -168,6 +170,7 @@ def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
     # The metrics block still appears (it was requested) with its trailing half
     # null and the consensus-backed forward PEG intact.
     assert body["metrics"] == {
+        "pe": None,
         "peg": None,
         "forward_peg": 0.13,
         "gross_margin": None,
