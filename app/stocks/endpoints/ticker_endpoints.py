@@ -130,7 +130,7 @@ def _present(card: TickerCard) -> TickerCardResponse:
         )
     return TickerCardResponse(
         ticker=card.quote.symbol,
-        name=card.profile.name if card.profile else None,
+        name=card.name,
         exchange=card.exchange,
         price=card.quote.price,
         change=card.quote.change,

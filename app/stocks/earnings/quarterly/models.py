@@ -86,7 +86,7 @@ def quarters_by_symbol(
         session.execute(
             select(StockQuarterlyEarningsRecord)
             .join(StockRecord, StockQuarterlyEarningsRecord.stock_id == StockRecord.id)
-            .where(StockRecord.symbol == symbol)
+            .where(StockRecord.ticker == symbol)
             .order_by(
                 StockQuarterlyEarningsRecord.fiscal_year.asc(),
                 StockQuarterlyEarningsRecord.fiscal_quarter.asc(),
@@ -114,13 +114,13 @@ def stalest_symbols(session: Session, limit: int) -> list[tuple[str, str | None]
     first access instead.
     """
     rows = session.execute(
-        select(StockRecord.symbol, StockRecord.name)
+        select(StockRecord.ticker, StockRecord.name)
         .join(
             StockQuarterlyEarningsRecord,
             StockQuarterlyEarningsRecord.stock_id == StockRecord.id,
         )
-        .group_by(StockRecord.id, StockRecord.symbol, StockRecord.name)
+        .group_by(StockRecord.id, StockRecord.ticker, StockRecord.name)
         .order_by(func.min(StockQuarterlyEarningsRecord.fetched_at).asc())
         .limit(limit)
     ).all()
-    return [(row.symbol, row.name) for row in rows]
+    return [(row.ticker, row.name) for row in rows]

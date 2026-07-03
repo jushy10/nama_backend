@@ -139,7 +139,7 @@ def test_upsert_leaves_other_stocks_untouched(session):
 def test_creates_the_parent_stock_row(session):
     repo(session).upsert("AAPL", "Apple Inc.", _a_run(_a_trend(date(2026, 6, 1), buy=5)))
     stock = session.execute(
-        select(StockRecord).where(StockRecord.symbol == "AAPL")
+        select(StockRecord).where(StockRecord.ticker == "AAPL")
     ).scalar_one()
     assert stock.name == "Apple Inc." and stock.id is not None
 
@@ -149,13 +149,13 @@ def test_fills_a_missing_name_but_never_clobbers_a_known_one(session):
     run = _a_run(_a_trend(date(2026, 6, 1), buy=5))
     r.upsert("AAPL", None, run)
     assert session.execute(
-        select(StockRecord.name).where(StockRecord.symbol == "AAPL")
+        select(StockRecord.name).where(StockRecord.ticker == "AAPL")
     ).scalar_one() is None
 
     r.upsert("AAPL", "Apple Inc.", run)
     r.upsert("AAPL", None, run)  # a nameless refresh must not erase it
     assert session.execute(
-        select(StockRecord.name).where(StockRecord.symbol == "AAPL")
+        select(StockRecord.name).where(StockRecord.ticker == "AAPL")
     ).scalar_one() == "Apple Inc."
 
 

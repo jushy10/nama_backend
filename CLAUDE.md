@@ -124,7 +124,7 @@ only this one file changes.
 - `adapters/annual_earnings_estimates_adapter.py` — implements the `AnalystEstimatesProvider` port for the stock snapshot by **projecting the annual-earnings slice's stored forward years** into an `AnalystEstimates` block (first upcoming year → FY1, next → FY2). **DB-only, no live fall-through**: estimates are best-effort enrichment, so an uncached symbol just omits the forward metrics until the annual read path (lazy fill) or its cron populates the rows. This replaced the dedicated `stock_analyst_estimates` table + its own Yahoo fetch and cron — the annual slice stores the *same* `earnings_estimate`/`revenue_estimate` consensus, so the snapshot's `forward_pe`/forward growth now have one source of truth (the FY1 low/high range and analyst counts were dropped with the table; the serialized `analyst_estimates` block, `forward_ps`, and `metrics.ps`/`metrics.beta` were later trimmed off the HTTP response — the entities keep them, feeding `forward_pe`, the growth block, and the Bedrock analysis context)
 - `adapters/yfinance_recommendations_adapter.py` — live source for the recommendations slice: **Yahoo via `yfinance`** (`Ticker.recommendations`), the sell-side buy/hold/sell split as monthly snapshots (the same recommendation-trend data Finnhub serves, but keyless — this replaced `finnhub_recommendation_provider.py` and the `FINNHUB_API_KEY` gate on the endpoint). Yahoo labels the rows *relatively* (`0m` = this month, `-1m`, …), so the adapter anchors them on today's month into first-of-month `period` dates — the identity the DB cache keys on. `adapters/db_cached_recommendations_adapter.py` — the same **read-through** DB cache as the earnings slices (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
-- `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table) + `get_or_create_stock`. Owned by no single feature; per-feature tables hang off it and import it from here
+- `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table — `ticker` (unique lookup; the column was renamed from `symbol` by migration 0010 — the domain layers still say "symbol"), plus the fill-once identity facts `name` and `exchange`) and its helpers `get_or_create_stock`, `anchor_facts`, `fill_exchange`. Owned by no single feature; per-feature tables hang off it and import it from here
 
 Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<concern>_adapter.py` for those under `app/stocks/adapters/`.
 
@@ -227,13 +227,14 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 
 > **The ticker sub-slice — `app/stocks/ticker/`.** A stock's **ticker card** at
 > `GET /stocks/ticker/{ticker}`. Always served: the live quote
-> (`price`/`change`/`change_percent`, same rules as every other price view), `name` (the
-> Finnhub profile's clean display name), `exchange` (the listing venue — **DB-first off
-> the `stocks` anchor's `exchange` column** (migration 0009), lazily filled **once** per
-> symbol from the Alpaca full snapshot since an exchange effectively never changes; the
-> slice's `repository.py`/`db_repository.py` is that one anchor-level read/fill, no
-> slice-owned table), and `market_cap` (Finnhub fundamentals) — all but the quote
-> best-effort. **Opt-in blocks** via `?include=` (repeated or comma-separated;
+> (`price`/`change`/`change_percent`, same rules as every other price view), the two
+> **DB-first identity facts** — `name` (from the Finnhub profile) and `exchange` (from
+> the Alpaca full snapshot) — each lazily filled **once** per symbol into the `stocks`
+> anchor (`name` was always on it; `exchange` came with migration 0009) and served from
+> the row forever after, since neither effectively ever changes (a rebrand needs a
+> manual row update; the slice's `repository.py`/`db_repository.py` is that anchor-level
+> read/fill, no slice-owned table), and `market_cap` (Finnhub fundamentals) — all but
+> the quote best-effort. **Opt-in blocks** via `?include=` (repeated or comma-separated;
 > unknown values are a 400; unrequested blocks are `null` and — pay-per-use — cost no
 > provider call): `dividend` (`yield_percentage` + `per_share`, rounded to 2 decimals;
 > rides the fundamentals call the market cap needs anyway, so the include only gates
@@ -407,8 +408,8 @@ app/
     ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/Logo.dev)
     ├── adapters/           # ── vendor adapters as *_adapter.py (quarterly/annual earnings: yfinance + caches; estimates projection)
     ├── stocks/             # ── shared `stocks` anchor slice:
-    │   └── models.py            #    StockRecord (the `stocks` table: symbol/name/exchange) +
-    │                            #    get_or_create_stock, exchange_by_symbol, fill_exchange
+    │   └── models.py            #    StockRecord (the `stocks` table: ticker/name/exchange) +
+    │                            #    get_or_create_stock, anchor_facts, fill_exchange
     ├── earnings/quarterly/ # ── quarterly-earnings sub-slice (its OWN entities.py):
     │   ├── entities.py          #    QuarterlyEarnings + QuarterlyEarningsTimeline (slice-local)
     │   ├── ports.py             #    live-source port (QuarterlyEarningsProvider)

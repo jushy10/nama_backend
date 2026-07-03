@@ -34,15 +34,22 @@ def test_get_or_create_fills_missing_name_but_never_clobbers(session):
     assert models.get_or_create_stock(session, "AAPL", None).name == "Apple Inc."
 
 
-def test_exchange_missing_row_or_value_reads_as_none(session):
-    assert models.exchange_by_symbol(session, "AAPL") is None  # no row at all
+def test_anchor_facts_missing_row_or_values_read_as_none(session):
+    assert models.anchor_facts(session, "AAPL") == (None, None)  # no row at all
     models.get_or_create_stock(session, "AAPL", None)
-    assert models.exchange_by_symbol(session, "AAPL") is None  # row, no exchange yet
+    assert models.anchor_facts(session, "AAPL") == (None, None)  # row, facts unknown
+
+
+def test_anchor_facts_serves_what_the_row_has_learned(session):
+    models.get_or_create_stock(session, "AAPL", "Apple Inc.")
+    assert models.anchor_facts(session, "AAPL") == ("Apple Inc.", None)
+    models.fill_exchange(session, "AAPL", "NASDAQ")
+    assert models.anchor_facts(session, "AAPL") == ("Apple Inc.", "NASDAQ")
 
 
 def test_fill_exchange_creates_the_row_and_never_clobbers(session):
     models.fill_exchange(session, "AAPL", "NASDAQ")  # creates the anchor row too
-    assert models.exchange_by_symbol(session, "AAPL") == "NASDAQ"
+    assert models.anchor_facts(session, "AAPL") == (None, "NASDAQ")
     # same no-clobber stance as the name: the first learned value settles it
     models.fill_exchange(session, "AAPL", "NYSE")
-    assert models.exchange_by_symbol(session, "AAPL") == "NASDAQ"
+    assert models.anchor_facts(session, "AAPL") == (None, "NASDAQ")

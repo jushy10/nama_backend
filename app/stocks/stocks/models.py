@@ -5,7 +5,9 @@ timelines, …) points at, so the same stock is one thing everyone references ra
 a symbol string copied around. It's owned by no single feature, so it gets its own slice
 here. Feature slices import ``StockRecord`` + ``get_or_create_stock`` and add their own
 child tables beside it. The schema is created by migration 0002 (the since-removed
-analyst-estimates feature was the first to need the anchor).
+analyst-estimates feature was the first to need the anchor); migration 0009 added
+``exchange`` and 0010 renamed the ``symbol`` column to ``ticker`` (the domain layers
+still say "symbol" — the rename is a table-vocabulary choice).
 """
 
 from __future__ import annotations
@@ -15,43 +17,43 @@ import uuid
 from sqlalchemy import String, Uuid, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
+
 from app.db import Base
 
 
 class StockRecord(Base):
     """A stock as stored in the database — the anchor per-feature tables reference.
 
-    ``id`` is a surrogate UUID so child rows have a stable foreign key; ``symbol`` is
-    the ticker everything is looked up by (unique); ``name`` is the company display
-    name and ``exchange`` the listing venue (e.g. "NASDAQ") — both nullable so a
-    lazily-stored symbol (which arrives with only its ticker) still gets a row until
-    whichever feature first learns them fills them in (migration 0009 added
-    ``exchange``).
+    ``id`` is a surrogate UUID so child rows have a stable foreign key; ``ticker`` is
+    what everything is looked up by (unique); ``name`` is the company display name and
+    ``exchange`` the listing venue (e.g. "NASDAQ") — both nullable so a lazily-stored
+    ticker (which arrives alone) still gets a row until whichever feature first learns
+    them fills them in.
     """
 
     __tablename__ = "stocks"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    symbol: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
+    ticker: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     exchange: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 def get_or_create_stock(
-    session: Session, symbol: str, name: str | None
+    session: Session, ticker: str, name: str | None
 ) -> StockRecord:
-    """Return the ``stocks`` row for ``symbol``, creating it if absent.
+    """Return the ``stocks`` row for ``ticker``, creating it if absent.
 
     Fills a missing name when one is supplied, but never clobbers a known name with
     ``None`` — so whichever feature first learns the company name sets it, and a later
-    nameless write (e.g. an estimates refresh) leaves it intact. The new row is flushed
+    nameless write (e.g. an earnings refresh) leaves it intact. The new row is flushed
     so its ``id`` is available for a child row in the same unit of work.
     """
     stock = session.execute(
-        select(StockRecord).where(StockRecord.symbol == symbol)
+        select(StockRecord).where(StockRecord.ticker == ticker)
     ).scalar_one_or_none()
     if stock is None:
-        stock = StockRecord(symbol=symbol, name=name)
+        stock = StockRecord(ticker=ticker, name=name)
         session.add(stock)
         session.flush()  # assign stock.id before a child row references it
     elif name and not stock.name:
@@ -59,20 +61,24 @@ def get_or_create_stock(
     return stock
 
 
-def exchange_by_symbol(session: Session, symbol: str) -> str | None:
-    """The stored listing exchange for ``symbol``, or ``None`` when the row doesn't
-    exist yet or hasn't learned it — the miss a lazy fill answers."""
-    return session.execute(
-        select(StockRecord.exchange).where(StockRecord.symbol == symbol)
-    ).scalar_one_or_none()
+def anchor_facts(session: Session, ticker: str) -> tuple[str | None, str | None]:
+    """The stored ``(name, exchange)`` for ``ticker`` in one query — ``(None, None)``
+    when the row doesn't exist yet, and per-field ``None`` for whatever it hasn't
+    learned. The misses a lazy fill answers."""
+    row = session.execute(
+        select(StockRecord.name, StockRecord.exchange).where(
+            StockRecord.ticker == ticker
+        )
+    ).one_or_none()
+    return (row.name, row.exchange) if row else (None, None)
 
 
-def fill_exchange(session: Session, symbol: str, exchange: str) -> None:
-    """Record ``symbol``'s listing exchange, creating the anchor row if absent.
+def fill_exchange(session: Session, ticker: str, exchange: str) -> None:
+    """Record ``ticker``'s listing exchange, creating the anchor row if absent.
 
     Same semantics as the name on ``get_or_create_stock``: fill when missing, never
     clobber a known value — an exchange effectively never changes, so the first
     feature to learn it settles it."""
-    stock = get_or_create_stock(session, symbol, None)
+    stock = get_or_create_stock(session, ticker, None)
     if not stock.exchange:
         stock.exchange = exchange

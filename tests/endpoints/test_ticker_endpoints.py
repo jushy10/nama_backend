@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import ticker_endpoints as endpoints
 from app.stocks.entities import (
-    CompanyProfile,
     KeyMetrics,
     Quote,
     StockFundamentals,
@@ -68,7 +67,7 @@ def _a_card(*, include: frozenset[str] = frozenset()) -> TickerCard:
             if "metrics" in include
             else None
         ),
-        profile=CompanyProfile(name="Micron Technology"),
+        name="Micron Technology",
         fundamentals=StockFundamentals(
             market_cap=1_090_000_000_000.0,
             # Vendor-noisy on purpose: the presenter must round both to 2 decimals.
@@ -153,9 +152,9 @@ def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
             quote=card.quote,
             include=card.include,
             valuation=card.valuation,  # the consensus half still serves
-            profile=None,
             fundamentals=None,  # keyless or failed Finnhub
             performance=None,
+            name=None,
             exchange=None,
         )
     )
