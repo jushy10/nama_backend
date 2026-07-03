@@ -14,6 +14,7 @@ import pytest
 
 from app.stocks.entities import (
     AnalystEstimates,
+    CompanyProfile,
     Quote,
     StockFundamentals,
     StockPerformance,
@@ -21,6 +22,7 @@ from app.stocks.entities import (
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AnalystEstimatesProvider,
+    CompanyProfileProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
     StockQuoteProvider,
@@ -113,6 +115,16 @@ class _FakePerformance(StockPerformanceProvider):
         return _performance()
 
 
+class _FakeProfile(CompanyProfileProvider):
+    def __init__(self, error: Exception | None = None) -> None:
+        self._error = error
+
+    def get_profile(self, symbol: str) -> CompanyProfile:
+        if self._error is not None:
+            raise self._error
+        return CompanyProfile(name="Micron Technology")
+
+
 # ───────────────────────────── entity rules ─────────────────────────────
 
 
@@ -147,12 +159,12 @@ def test_forward_peg_is_none_without_two_positive_legs(pe, growth):
 # ───────────────────────────── GetTickerCard ─────────────────────────────
 
 
-def test_assembles_the_card_from_all_four_ports():
+def test_assembles_the_card_from_all_the_ports():
     quotes = _FakeQuotes(price=100.0)
     estimates = _FakeEstimates(_estimates(eps_avg=5.0, eps_avg_fy2=7.5))
 
     card = GetTickerCard(
-        quotes, estimates, _FakeFundamentals(), _FakePerformance()
+        quotes, estimates, _FakeFundamentals(), _FakePerformance(), _FakeProfile()
     ).execute("MU")
 
     assert card.quote.symbol == "MU"
@@ -160,6 +172,7 @@ def test_assembles_the_card_from_all_four_ports():
     assert card.valuation.forward_pe == 20.0  # 100 / 5
     assert card.valuation.forward_eps_growth == 50.0  # 5 -> 7.5
     assert card.valuation.forward_peg == 0.4  # 20 / 50
+    assert card.profile == CompanyProfile(name="Micron Technology")
     assert card.fundamentals == _fundamentals()
     assert card.performance == _performance()
 
@@ -216,10 +229,11 @@ def test_expected_loss_yields_no_peg():
 
 
 def test_unwired_enrichment_leaves_the_blocks_none():
-    # No fundamentals/performance provider (e.g. no FINNHUB_API_KEY): the card
-    # still serves, its enrichment blocks simply absent.
+    # No fundamentals/performance/profile provider (e.g. no FINNHUB_API_KEY): the
+    # card still serves, its enrichment blocks simply absent.
     card = GetTickerCard(_FakeQuotes(), _FakeEstimates()).execute("MU")
 
+    assert card.profile is None
     assert card.fundamentals is None
     assert card.performance is None
 
@@ -234,9 +248,11 @@ def test_enrichment_failures_never_sink_the_card(error):
         _FakeEstimates(),
         _FakeFundamentals(error=error),
         _FakePerformance(error=error),
+        _FakeProfile(error=error),
     ).execute("MU")
 
-    assert card.fundamentals is None  # swallowed, not raised
+    assert card.profile is None  # swallowed, not raised
+    assert card.fundamentals is None
     assert card.performance is None
 
 

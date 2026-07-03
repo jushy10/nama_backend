@@ -227,8 +227,9 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 
 > **The ticker sub-slice — `app/stocks/ticker/`.** A stock's **ticker card** at
 > `GET /stocks/ticker/{symbol}`: the live quote (`price`/`change`/`change_percent`, same
-> rules as every other price view), best-effort enrichment (`market_cap` + dividend from
-> Finnhub, `performance` trailing windows from Alpaca), and `metrics.forward_peg` — the
+> rules as every other price view), best-effort enrichment (`name` from the Finnhub
+> profile, `market_cap` + dividend from Finnhub fundamentals, `performance` trailing
+> windows from Alpaca), and `metrics.forward_peg` — the
 > **forward PEG**, the one valuation figure no other endpoint serves: forward P/E (live
 > price ÷ FY1 consensus EPS) divided by expected FY1→FY2 EPS growth (a `@property` on the
 > slice-local `TickerValuation` entity, with the same positive-legs guard as the trailing
@@ -243,8 +244,8 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > the live quote, so nothing slice-owned is worth persisting. The use case pulls
 > everything through *existing* ports — `StockQuoteProvider` + `StockPerformanceProvider`
 > (the Alpaca singleton, whose missing-keys 503 gate it inherits — the quote is primary),
-> `StockFundamentalsProvider` (Finnhub, `None` without a key), and
-> `AnalystEstimatesProvider` (the annual-earnings projection, DB-only) — wired by reusing
+> `StockFundamentalsProvider` + `CompanyProfileProvider` (Finnhub, `None` without a key),
+> and `AnalystEstimatesProvider` (the annual-earnings projection, DB-only) — wired by reusing
 > the composition root's factories from `router.py`; the composite result (`TickerCard`)
 > is a dataclass beside the use case, not a slice entity, since it just bundles shared
 > entities around the slice's one domain rule. Quote + estimates are primary (errors

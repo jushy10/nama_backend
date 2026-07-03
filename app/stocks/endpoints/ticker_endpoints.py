@@ -25,12 +25,14 @@ from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AnalystEstimatesProvider,
+    CompanyProfileProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
 )
 from app.stocks.router import (
     get_estimates_provider,
     get_fundamentals_provider,
+    get_profile_provider,
     get_provider,
 )
 from app.stocks.schemas import StockPerformanceResponse
@@ -44,13 +46,15 @@ def get_ticker_card_use_case(
     provider=Depends(get_provider),
     estimates: AnalystEstimatesProvider = Depends(get_estimates_provider),
     fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
+    profile: CompanyProfileProvider | None = Depends(get_profile_provider),
 ) -> GetTickerCard:
     # The Alpaca singleton backs both the quote and the trailing performance windows
     # (same instance as the snapshot/quote endpoints), and the estimates are the same
     # DB-only projection the snapshot's forward P/E uses — one source of truth for
-    # every leg the card carries.
+    # every leg the card carries. The profile provider supplies the display name
+    # (the slim quote carries none), TTL-cached like on the snapshot.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
-    return GetTickerCard(provider, estimates, fundamentals, performance)
+    return GetTickerCard(provider, estimates, fundamentals, performance, profile)
 
 
 def _present_performance(
@@ -76,6 +80,7 @@ def _present(card: TickerCard) -> TickerCardResponse:
     fundamentals = card.fundamentals
     return TickerCardResponse(
         ticker=card.quote.symbol,
+        name=card.profile.name if card.profile else None,
         price=card.quote.price,
         change=card.quote.change,
         change_percent=card.quote.change_percent,

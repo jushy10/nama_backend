@@ -7,9 +7,9 @@ HTTP:
 - ``GetTickerCard`` — the read path. Normalizes the symbol, takes the live quote
   through the ``StockQuoteProvider`` and the stored forward consensus through the
   ``AnalystEstimatesProvider`` (wired in production as the annual-earnings
-  projection, DB-only), then layers best-effort enrichment on top: company
-  fundamentals (market cap, dividend) and the trailing performance windows.
-  Returns the assembled ``TickerCard``.
+  projection, DB-only), then layers best-effort enrichment on top: the clean
+  company display name, company fundamentals (market cap, dividend), and the
+  trailing performance windows. Returns the assembled ``TickerCard``.
 
 Unlike the earnings/recommendations slices there is no sync counterpart and no
 repository: the card is built around the *live* quote, so nothing slice-owned is
@@ -22,10 +22,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.stocks.entities import Quote, StockFundamentals, StockPerformance
+from app.stocks.entities import (
+    CompanyProfile,
+    Quote,
+    StockFundamentals,
+    StockPerformance,
+)
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AnalystEstimatesProvider,
+    CompanyProfileProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
     StockQuoteProvider,
@@ -59,6 +65,7 @@ class TickerCard:
 
     quote: Quote  # live price + the day's move
     valuation: TickerValuation  # the forward-PEG read at that price
+    profile: CompanyProfile | None  # clean company display name (best-effort)
     fundamentals: StockFundamentals | None  # market cap + dividend (best-effort)
     performance: StockPerformance | None  # trailing return windows (best-effort)
 
@@ -71,8 +78,9 @@ class GetTickerCard:
     forward coverage is not a failure: an ``is_empty`` estimates block (symbol not
     cached by the annual slice yet, or no analyst coverage) yields a null PEG
     around a live quote, the same "no data ≠ error" stance the other slices take.
-    Fundamentals and performance are best-effort enrichment, mirroring the stock
-    snapshot: unconfigured or failing providers just leave their blocks ``None``.
+    The profile (display name), fundamentals and performance are best-effort
+    enrichment, mirroring the stock snapshot: unconfigured or failing providers
+    just leave their blocks ``None``.
     """
 
     def __init__(
@@ -81,11 +89,13 @@ class GetTickerCard:
         estimates: AnalystEstimatesProvider,
         fundamentals: StockFundamentalsProvider | None = None,
         performance: StockPerformanceProvider | None = None,
+        profile: CompanyProfileProvider | None = None,
     ) -> None:
         self._quotes = quotes
         self._estimates = estimates
         self._fundamentals = fundamentals
         self._performance = performance
+        self._profile = profile
 
     def execute(self, symbol: str) -> TickerCard:
         normalized = _normalize_symbol(symbol)
@@ -103,9 +113,20 @@ class GetTickerCard:
         return TickerCard(
             quote=quote,
             valuation=valuation,
+            profile=self._get_profile(normalized),
             fundamentals=self._get_fundamentals(normalized),
             performance=self._get_performance(normalized),
         )
+
+    def _get_profile(self, symbol: str) -> CompanyProfile | None:
+        # The clean display name ("Micron Technology") — the slim quote carries no
+        # name at all, so without this the card has only the ticker to show.
+        if self._profile is None:
+            return None
+        try:
+            return self._profile.get_profile(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None  # best-effort: never sink the card
 
     def _get_fundamentals(self, symbol: str) -> StockFundamentals | None:
         if self._fundamentals is None:

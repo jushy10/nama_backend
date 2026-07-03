@@ -34,12 +34,14 @@ class TickerCardResponse(BaseModel):
     """A ticker's card: the live quote, valuation metrics, and enrichment.
 
     ``ticker`` is the symbol and ``price``/``change``/``change_percent`` the day's
-    move (same rules as every other price view). ``market_cap`` and the dividend
-    fields are fundamentals-vendor enrichment and ``performance`` the trailing
-    return windows — all best-effort, ``null`` when their source is unconfigured
-    or unavailable. ``metrics`` carries the card's derived figures (forward PEG)."""
+    move (same rules as every other price view). ``name`` is the clean company
+    display name from the profile vendor, ``market_cap`` and the dividend fields
+    are fundamentals-vendor enrichment, and ``performance`` the trailing return
+    windows — all best-effort, ``null`` when their source is unconfigured or
+    unavailable. ``metrics`` carries the card's derived figures (forward PEG)."""
 
     ticker: str
+    name: str | None = None  # clean display name ("Micron Technology")
     price: float
     change: float | None = None  # absolute move vs the previous close
     change_percent: float | None = None  # percent move vs the previous close

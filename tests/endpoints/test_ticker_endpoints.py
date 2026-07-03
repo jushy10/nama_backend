@@ -14,7 +14,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import ticker_endpoints as endpoints
-from app.stocks.entities import Quote, StockFundamentals, StockPerformance
+from app.stocks.entities import (
+    CompanyProfile,
+    Quote,
+    StockFundamentals,
+    StockPerformance,
+)
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ticker.entities import TickerValuation
 from app.stocks.ticker.use_cases import TickerCard
@@ -59,6 +64,7 @@ def _a_card(*, with_enrichment: bool = True, forward_peg_legs=(13.3, 104.1)) -> 
             forward_pe=forward_pe,
             forward_eps_growth=forward_eps_growth,
         ),
+        profile=CompanyProfile(name="Micron Technology") if with_enrichment else None,
         fundamentals=(
             StockFundamentals(
                 market_cap=1_090_000_000_000.0,
@@ -85,6 +91,7 @@ def test_presents_the_full_card():
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["ticker"] == "MU"  # the symbol, in this endpoint's vocabulary
+    assert body["name"] == "Micron Technology"  # profile vendor's clean display name
     assert body["price"] == 975.56
     assert body["change"] == 12.3  # vs the previous close, same rule as /quote
     assert body["change_percent"] == 1.28
@@ -113,6 +120,7 @@ def test_missing_enrichment_and_coverage_is_a_200_with_nulls():
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["price"] == 975.56
+    assert body["name"] is None
     assert body["market_cap"] is None
     assert body["dividend_per_share"] is None
     assert body["dividend_yield"] is None
