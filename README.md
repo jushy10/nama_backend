@@ -41,7 +41,7 @@ Tables are created by migrations, not on boot — run `alembic upgrade head` fir
 | Method | Path          | Description      |
 | ------ | ------------- | ---------------- |
 | GET    | `/healthz`    | Liveness check   |
-| GET    | `/stocks/{symbol}` | Stock info from Alpaca (e.g. `AAPL`) |
+| GET    | `/stocks/ticker/{ticker}` | Ticker card: live quote + identity, opt-in dividend/performance/metrics |
 | GET    | `/stocks/{symbol}/logo` | Company logo image |
 | GET    | `/stocks/{symbol}/candles` | OHLC candlestick chart data |
 | GET    | `/stocks/{symbol}/earnings/quarterly` | Per-quarter earnings timeline (reported + upcoming) |
@@ -97,36 +97,35 @@ alembic upgrade head
 
 ## Stocks (Alpaca)
 
-`GET /stocks/{symbol}` returns a snapshot for a ticker, fetched from Alpaca via
-the official [`alpaca-py`](https://alpaca.markets/sdks/python/) SDK. It's a
+`GET /stocks/ticker/{ticker}` returns the ticker card for a symbol: the live
+quote (price, day change), fetched from Alpaca via the official
+[`alpaca-py`](https://alpaca.markets/sdks/python/) SDK. The stocks feature is a
 self-contained **clean-architecture vertical slice** under
-[`app/stocks/`](app/stocks/): the use case depends on a `StockDataProvider`
-port, and only `alpaca_provider.py` knows Alpaca exists — so the tests run fully
-offline with a fake provider.
+[`app/stocks/`](app/stocks/): use cases depend on ports, and only
+`alpaca_provider.py` knows Alpaca exists — so the tests run fully offline with a
+fake provider.
 
-The response also carries best-effort enrichment: a **performance** object of
-trailing price returns (`1w`, `1m`, `3m`, `6m`, `ytd`, `1y`) computed from
-Alpaca daily bars, **market cap** and **dividend** (`dividend_per_share`,
-`dividend_yield`) from [Finnhub](https://finnhub.io), and **forward analyst
-estimates** — a `forward_pe` and `forward_ps` (price / next-fiscal-year consensus
-EPS and revenue) plus the raw `analyst_estimates` block (FY1/FY2 consensus EPS and
-revenue), projected from the annual-earnings cache's stored forward years (Yahoo
-consensus; no extra fetch or key). These never fail the request — if a source is
-down, unkeyed, or doesn't cover the symbol, that field comes back `null` and the
-price still returns.
+The card also carries best-effort enrichment: the company **name** and
+**exchange** (served DB-first from the `stocks` table once filled), **market
+cap** from [Finnhub](https://finnhub.io), and opt-in `dividend`, `performance`,
+and `metrics` blocks via `?include=` (the metrics block adds the trailing and
+forward PEG, the latter built on the annual-earnings cache's stored Yahoo
+consensus). Enrichment never fails the request — if a source is down, unkeyed,
+or doesn't cover the symbol, that field comes back `null` and the quote still
+returns.
 
 Credentials come from the environment (like `DATABASE_URL`):
 
 ```sh
 export APCA_API_KEY_ID=...
 export APCA_API_SECRET_KEY=...
-export FINNHUB_API_KEY=...        # optional: enables market cap + dividend
+export FINNHUB_API_KEY=...        # optional: enables name, market cap + dividend
 export LOGODEV_TOKEN=...          # required for /logo: publishable key from logo.dev
-curl localhost:8080/stocks/AAPL
+curl localhost:8080/stocks/ticker/AAPL
 ```
 
 Uses Alpaca's free **IEX** feed. Without the Alpaca keys the endpoint returns
-`503`; without `FINNHUB_API_KEY` it still serves price + performance, just with
+`503`; without `FINNHUB_API_KEY` it still serves the quote, just with the name,
 market cap and dividend omitted. The rest of the app runs regardless.
 
 ### Candlestick chart data
@@ -202,7 +201,7 @@ index membership. The table is populated out of band — the app only ever reads
 it while serving — and the screener returns an empty board until it's filled.
 
 The day's move for each name comes from a best-effort batch of Alpaca snapshots
-(the same IEX feed as `/stocks/{symbol}`), so it needs the Alpaca keys (`503`
+(the same IEX feed as the other price endpoints), so it needs the Alpaca keys (`503`
 without them). Names the feed can't price are left out of the ranking;
 `universe_count` (how many matched the filter) and `quoted_count` (how many could
 be ranked) report the coverage. A symbol never appears as both a gainer and a

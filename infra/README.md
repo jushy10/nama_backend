@@ -199,8 +199,9 @@ aws ssm put-parameter --overwrite --type SecureString \
 ```
 
 Rotate the same way (`put-parameter --overwrite`), then force a new deployment
-to pick up the value. Without the **Alpaca** keys set, `/stocks/{symbol}`
-returns `503`. The **Finnhub** key is optional: until it's set (the placeholder
+to pick up the value. Without the **Alpaca** keys set, the price endpoints (e.g.
+`/stocks/ticker/{ticker}`)
+return `503`. The **Finnhub** key is optional: until it's set (the placeholder
 isn't a real key), market cap and dividend come back `null` and the rest of the
 response is unaffected. Without the **Logo.dev** token, `/stocks/{symbol}/logo`
 returns `503`; the rest of the app is unaffected.

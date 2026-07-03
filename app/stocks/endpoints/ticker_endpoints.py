@@ -7,9 +7,10 @@ blocks** requested via ``?include=`` — ``dividend``, ``performance`` (trailing
 windows), and ``metrics`` (trailing PEG + margins off the fundamentals call, and the
 **forward PEG**: forward P/E over expected FY1→FY2 EPS growth, the one valuation
 figure no other endpoint serves). Pay-per-use: a block that isn't requested costs no
-provider call. The forward PEG's legs deliberately stay snapshot-only
-(``forward_pe`` and ``growth.forward_eps_growth`` on ``GET /stocks/{symbol}``) so
-the same numbers don't get two homes that could disagree. Controller + presenter +
+provider call. The forward PEG's legs (forward P/E, forward EPS growth) are
+deliberately not serialized here — they stay on the shared entities, feeding the
+AI analysis context — so the same numbers don't get two homes that could
+disagree. Controller + presenter +
 wiring, the composition-root way, sitting in ``app/stocks/endpoints/`` like the
 other slices' HTTP.
 
