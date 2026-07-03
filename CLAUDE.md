@@ -124,7 +124,7 @@ only this one file changes.
 - `adapters/annual_earnings_estimates_adapter.py` — implements the `AnalystEstimatesProvider` port for the stock snapshot by **projecting the annual-earnings slice's stored forward years** into an `AnalystEstimates` block (first upcoming year → FY1, next → FY2). **DB-only, no live fall-through**: estimates are best-effort enrichment, so an uncached symbol just omits the forward metrics until the annual read path (lazy fill) or its cron populates the rows. This replaced the dedicated `stock_analyst_estimates` table + its own Yahoo fetch and cron — the annual slice stores the *same* `earnings_estimate`/`revenue_estimate` consensus, so the snapshot's `forward_pe`/forward growth now have one source of truth (the FY1 low/high range and analyst counts were dropped with the table; the serialized `analyst_estimates` block, `forward_ps`, and `metrics.ps`/`metrics.beta` were later trimmed off the HTTP response — the entities keep them, feeding `forward_pe`, the growth block, and the Bedrock analysis context)
 - `adapters/yfinance_recommendations_adapter.py` — live source for the recommendations slice: **Yahoo via `yfinance`** (`Ticker.recommendations`), the sell-side buy/hold/sell split as monthly snapshots (the same recommendation-trend data Finnhub serves, but keyless — this replaced `finnhub_recommendation_provider.py` and the `FINNHUB_API_KEY` gate on the endpoint). Yahoo labels the rows *relatively* (`0m` = this month, `-1m`, …), so the adapter anchors them on today's month into first-of-month `period` dates — the identity the DB cache keys on. `adapters/db_cached_recommendations_adapter.py` — the same **read-through** DB cache as the earnings slices (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
-- `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table) + `get_or_create_stock`. Owned by no single feature; per-feature tables hang off it and import it from here
+- `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table — `ticker` (unique lookup; the column was renamed from `symbol` by migration 0010 — the domain layers still say "symbol"), plus the fill-once identity facts `name` and `exchange`) and its helpers `get_or_create_stock`, `anchor_facts`, `fill_exchange`. Owned by no single feature; per-feature tables hang off it and import it from here
 
 Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<concern>_adapter.py` for those under `app/stocks/adapters/`.
 
@@ -227,27 +227,36 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 
 > **The ticker sub-slice — `app/stocks/ticker/`.** A stock's **ticker card** at
 > `GET /stocks/ticker/{ticker}`. Always served: the live quote
-> (`price`/`change`/`change_percent`, same rules as every other price view), `name` (the
-> Finnhub profile's clean display name), and `market_cap` (Finnhub fundamentals) — the
-> latter two best-effort. **Opt-in blocks** via `?include=` (repeated or comma-separated;
+> (`price`/`change`/`change_percent`, same rules as every other price view), the two
+> **DB-first identity facts** — `name` (from the Finnhub profile) and `exchange` (from
+> the Alpaca full snapshot) — each lazily filled **once** per symbol into the `stocks`
+> anchor (`name` was always on it; `exchange` came with migration 0009) and served from
+> the row forever after, since neither effectively ever changes (a rebrand needs a
+> manual row update; the slice's `repository.py`/`db_repository.py` is that anchor-level
+> read/fill, no slice-owned table), and `market_cap` (Finnhub fundamentals) — all but
+> the quote best-effort. **Opt-in blocks** via `?include=` (repeated or comma-separated;
 > unknown values are a 400; unrequested blocks are `null` and — pay-per-use — cost no
-> provider call): `dividend` (`yield_percentage` + `per_share`; rides the fundamentals
-> call the market cap needs anyway, so the include only gates presentation),
-> `performance` (trailing windows from Alpaca), and `metrics` with `forward_peg` — the
-> **forward PEG**, the one valuation figure no other endpoint serves: forward P/E (live
+> provider call): `dividend` (`yield_percentage` + `per_share`, rounded to 2 decimals;
+> rides the fundamentals call the market cap needs anyway, so the include only gates
+> presentation), `performance` (trailing windows from Alpaca), and `metrics` — the
+> trailing `peg` + `gross_margin`/`operating_margin`/`net_margin` (off that same
+> fundamentals call) beside `forward_peg`, the **forward PEG**, the one valuation figure
+> no other endpoint serves: forward P/E (live
 > price ÷ FY1 consensus EPS) divided by expected FY1→FY2 EPS growth (a `@property` on the
 > slice-local `TickerValuation` entity, with the same positive-legs guard as the trailing
 > `KeyMetrics.peg` — it exists because a trailing PEG divides by *already-reported*
 > growth, which a cyclical rebound can inflate into the hundreds of percent and pin the
-> ratio near zero). The PEG's *legs* deliberately stay snapshot-only (`forward_pe`,
+> ratio near zero; the card serves both PEGs side by side for exactly that contrast). The
+> forward PEG's *legs* deliberately stay snapshot-only (`forward_pe`,
 > `growth.forward_eps_growth` on `GET /stocks/{symbol}`) so the same numbers don't get two
 > homes that could disagree; the entity's `symbol` is renamed `ticker` at the DTO. Built
 > on the same skeleton as the other sub-slices (own `entities.py` / `use_cases.py` /
 > `schemas.py`, endpoint in `app/stocks/endpoints/ticker_endpoints.py`) but deliberately
-> **thinner: no table, repository, cron, or vendor adapter** — the card is built around
-> the live quote, so nothing slice-owned is worth persisting. The use case pulls
+> **thinner: no table of its own, no cron, no vendor adapter** — the card is built around
+> the live quote, so nothing beyond the exchange is worth persisting. The use case pulls
 > everything through *existing* ports — `StockQuoteProvider` + `StockPerformanceProvider`
-> (the Alpaca singleton, whose missing-keys 503 gate it inherits — the quote is primary),
+> + `StockDataProvider` (the Alpaca singleton, whose missing-keys 503 gate it inherits —
+> the quote is primary; the full-snapshot port only backs the one-time exchange fill),
 > `StockFundamentalsProvider` + `CompanyProfileProvider` (Finnhub, `None` without a key),
 > and `AnalystEstimatesProvider` (the annual-earnings projection, DB-only) — wired by reusing
 > the composition root's factories from `router.py`; the composite result (`TickerCard`)
@@ -255,7 +264,7 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > entities around the slice's one domain rule (it also carries the `include` set so the
 > presenter can tell "not requested" from "requested but unavailable"). The quote — and
 > the consensus read *when `metrics` is requested* — are primary (errors propagate);
-> name/fundamentals/performance are enrichment and never sink the card. Consensus
+> name/exchange/fundamentals/performance are enrichment and never sink the card. Consensus
 > freshness rides entirely on the annual slice (lazy fill + `sync-annual-earnings` cron);
 > an uncached symbol is a **200 with a null `metrics.forward_peg`**, not a 404 — no data ≠
 > error. Caveat: the growth denominator is a single FY1→FY2 leg (Yahoo's forward ceiling),
@@ -399,7 +408,8 @@ app/
     ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/Logo.dev)
     ├── adapters/           # ── vendor adapters as *_adapter.py (quarterly/annual earnings: yfinance + caches; estimates projection)
     ├── stocks/             # ── shared `stocks` anchor slice:
-    │   └── models.py            #    StockRecord (the `stocks` table) + get_or_create_stock
+    │   └── models.py            #    StockRecord (the `stocks` table: ticker/name/exchange) +
+    │                            #    get_or_create_stock, anchor_facts, fill_exchange
     ├── earnings/quarterly/ # ── quarterly-earnings sub-slice (its OWN entities.py):
     │   ├── entities.py          #    QuarterlyEarnings + QuarterlyEarningsTimeline (slice-local)
     │   ├── ports.py             #    live-source port (QuarterlyEarningsProvider)
@@ -424,11 +434,13 @@ app/
     │   ├── models.py            #    stock_recommendation_trends ORM + query fns (anchor from stocks/)
     │   ├── use_cases.py         #    GetStockRecommendations + SyncRecommendations
     │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
-    ├── ticker/             # ── ticker-card sub-slice (its OWN entities.py; no DB/cron —
+    ├── ticker/             # ── ticker-card sub-slice (its OWN entities.py; no table/cron —
     │   │                   #    computed per request from live quote + stored consensus):
     │   ├── entities.py          #    TickerValuation (forward P/E + growth legs, forward_peg property)
+    │   ├── repository.py        #    abstract persistence port (exchange on the stocks anchor)
+    │   ├── db_repository.py     #    concrete repo: anchor-level exchange read/fill
     │   ├── use_cases.py         #    GetTickerCard + TickerCard composite (quote/estimates/fundamentals/performance ports)
-    │   └── schemas.py           #    HTTP response DTO (quote + enrichment + metrics.forward_peg; endpoint in endpoints/)
+    │   └── schemas.py           #    HTTP response DTO (quote + enrichment + opt-in dividend/performance/metrics; endpoint in endpoints/)
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
     │   ├── cron_quarterly_earnings_endpoints.py  #  POST /internal/earnings/quarterly/sync
     │   ├── quarterly_earnings_endpoints.py       #  GET /stocks/{symbol}/earnings/quarterly

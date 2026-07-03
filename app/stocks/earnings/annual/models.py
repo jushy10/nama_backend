@@ -84,7 +84,7 @@ def years_by_symbol(session: Session, symbol: str) -> list[StockAnnualEarningsRe
         session.execute(
             select(StockAnnualEarningsRecord)
             .join(StockRecord, StockAnnualEarningsRecord.stock_id == StockRecord.id)
-            .where(StockRecord.symbol == symbol)
+            .where(StockRecord.ticker == symbol)
             .order_by(StockAnnualEarningsRecord.fiscal_year.asc())
         ).scalars()
     )
@@ -108,13 +108,13 @@ def stalest_symbols(session: Session, limit: int) -> list[tuple[str, str | None]
     actually cached; never-viewed symbols are filled lazily on first access instead.
     """
     rows = session.execute(
-        select(StockRecord.symbol, StockRecord.name)
+        select(StockRecord.ticker, StockRecord.name)
         .join(
             StockAnnualEarningsRecord,
             StockAnnualEarningsRecord.stock_id == StockRecord.id,
         )
-        .group_by(StockRecord.id, StockRecord.symbol, StockRecord.name)
+        .group_by(StockRecord.id, StockRecord.ticker, StockRecord.name)
         .order_by(func.min(StockAnnualEarningsRecord.fetched_at).asc())
         .limit(limit)
     ).all()
-    return [(row.symbol, row.name) for row in rows]
+    return [(row.ticker, row.name) for row in rows]
