@@ -99,7 +99,7 @@ The app reads `DATABASE_URL` (see [`app/db.py`](../app/db.py)). Because the DB i
   stopped instance bills only its 8 GB disk (~$0.64/mo): no compute, and its
   public IP is released. It is not part of the app's serving path, so none of
   this affects the API. To open an access window: **Actions tab → "Bastion
-  session" → Run workflow** (default 30 min, max 120). The workflow starts the
+  session" → Run workflow** (default 15 min, max 120). The workflow starts the
   instance, waits until SSM sees it (~1–2 min — watch the job log for the
   "ready" line with the instance id), holds the window open, and **always stops
   it at the end** — cancelling the run stops it early, so it can't be left on

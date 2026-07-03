@@ -1,5 +1,5 @@
 name: Bastion session
-run-name: Bastion session · ${{ inputs.minutes || '30' }} min
+run-name: Bastion session · ${{ inputs.minutes || '15' }} min
 
 # On-demand database-access window. The SSM bastion is provisioned by Terraform
 # but parked STOPPED between sessions (a stopped instance bills only its disk —
@@ -26,7 +26,7 @@ on:
       minutes:
         description: "Keep the bastion on for this many minutes (1-120)"
         required: false
-        default: "30"
+        default: "15"
 
 # One session at a time; a second dispatch queues instead of fighting over the
 # same instance's start/stop.
@@ -104,8 +104,8 @@ jobs:
 
       - name: Hold the session window open
         run: |
-          M="${{ inputs.minutes || '30' }}"
-          case "$M" in *[!0-9]*|"") M=30 ;; esac
+          M="${{ inputs.minutes || '15' }}"
+          case "$M" in *[!0-9]*|"") M=15 ;; esac
           [ "$M" -gt 120 ] && M=120
           [ "$M" -lt 1 ] && M=1
           echo "Bastion stays on for $M minutes. Cancel this run to stop it early."
