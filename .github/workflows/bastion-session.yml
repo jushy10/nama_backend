@@ -1,0 +1,120 @@
+name: Bastion session
+run-name: Bastion session · ${{ inputs.minutes || '30' }} min
+
+# On-demand database-access window. The SSM bastion is provisioned by Terraform
+# but parked STOPPED between sessions (a stopped instance bills only its disk —
+# no compute, and its public IP is released). This workflow starts it, holds it
+# on for the requested window, then stops it again.
+#
+# Usage: Actions tab -> "Bastion session" -> Run workflow (pick the minutes).
+# Wait for the "bastion is ready" line in the job log (~1-2 min), then tunnel
+# from your laptop (see infra/README.md -> "Local access"). The in-progress run
+# IS the "bastion is on" indicator, and cancelling the run stops the bastion
+# early — the stop step runs even on cancellation (if: always()).
+#
+# Failure mode worth knowing: if the RUNNER itself dies mid-run (GitHub outage),
+# the stop step never fires and the bastion keeps running until stopped by a
+# later session run or `aws ec2 stop-instances`. Rare, and the cost of a miss
+# is ~$7/mo at worst — check the Actions tab if a run ends without a green stop.
+#
+# Requires nama-ci to have ec2:StartInstances / ec2:StopInstances (the
+# ManageBastionEc2 statement in infra/ci-iam-policy.json).
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Keep the bastion on for this many minutes (1-120)"
+        required: false
+        default: "30"
+
+# One session at a time; a second dispatch queues instead of fighting over the
+# same instance's start/stop.
+concurrency:
+  group: bastion-session
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  session:
+    name: Bastion session
+    runs-on: ubuntu-latest
+    # Hard backstop above the 120-minute input cap, so a wedged step can't hold
+    # the bastion on forever.
+    timeout-minutes: 130
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Start the bastion
+        id: start
+        run: |
+          set -euo pipefail
+
+          # Look the instance up by name tag — it keeps its id across
+          # stop/start, but a bastion_enabled=false/true cycle mints a new one.
+          read -r ID STATE < <(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=nama-dev-bastion" \
+                      "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --query "Reservations[].Instances[].[InstanceId,State.Name]" \
+            --output text)
+
+          if [ -z "${ID:-}" ] || [ "$ID" = "None" ]; then
+            echo "::error::No bastion instance found. Is bastion_enabled = true and the infra apply finished?"
+            exit 1
+          fi
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+
+          # A just-stopped instance can't be started until it finishes stopping.
+          if [ "$STATE" = "stopping" ]; then
+            echo "Bastion $ID is still stopping from a previous session — waiting."
+            aws ec2 wait instance-stopped --instance-ids "$ID"
+          fi
+
+          aws ec2 start-instances --instance-ids "$ID" > /dev/null
+          aws ec2 wait instance-running --instance-ids "$ID"
+
+          # Running != usable: the tunnel needs the SSM agent registered.
+          PING=""
+          for _ in $(seq 1 30); do
+            PING=$(aws ssm describe-instance-information \
+              --filters "Key=InstanceIds,Values=$ID" \
+              --query "InstanceInformationList[0].PingStatus" --output text 2>/dev/null || true)
+            [ "$PING" = "Online" ] && break
+            sleep 10
+          done
+          if [ "$PING" != "Online" ]; then
+            echo "::error::Bastion $ID started but never registered with SSM (status: ${PING:-none})."
+            exit 1
+          fi
+
+          echo "Bastion $ID is ready. Tunnel from your laptop:"
+          echo ""
+          echo "  aws ssm start-session --target $ID \\"
+          echo "    --document-name AWS-StartPortForwardingSessionToRemoteHost \\"
+          echo "    --parameters host=<rds-address>,portNumber=\"5432\",localPortNumber=\"5432\""
+          echo ""
+          echo "(Full copy-paste steps: infra/README.md -> Local access.)"
+
+      - name: Hold the session window open
+        run: |
+          M="${{ inputs.minutes || '30' }}"
+          case "$M" in *[!0-9]*|"") M=30 ;; esac
+          [ "$M" -gt 120 ] && M=120
+          [ "$M" -lt 1 ] && M=1
+          echo "Bastion stays on for $M minutes. Cancel this run to stop it early."
+          sleep $(( M * 60 ))
+
+      # Runs on success, failure, AND cancellation — this is what guarantees the
+      # bastion never outlives the session (short of the runner itself dying).
+      - name: Stop the bastion
+        if: always() && steps.start.outputs.id != ''
+        run: |
+          aws ec2 stop-instances --instance-ids "${{ steps.start.outputs.id }}" > /dev/null
+          echo "Bastion ${{ steps.start.outputs.id }} stopping — compute and public-IP billing end here."

@@ -29,9 +29,9 @@ variable "create_hosted_zone" {
 }
 
 variable "bastion_enabled" {
-  description = "Run the SSM bastion (the laptop->database tunnel host, ~$7/mo). Off by default — it's not part of the app's serving path, so this never affects the API. Flip to true (one-line PR; CI applies) when you need a database session, flip back after."
+  description = "Keep the SSM bastion (the laptop->database tunnel host) provisioned. It is parked STOPPED between sessions (~$0.64/mo, disk only) and started for a bounded window by the 'Bastion session' workflow. Set false to remove it entirely. Not in the app's serving path — never affects the API."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "frontend_domain_name" {
