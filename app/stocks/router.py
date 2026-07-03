@@ -41,6 +41,7 @@ from app.stocks.indicators import RSI_OVERBOUGHT, RSI_OVERSOLD, RsiSeries
 from app.stocks.adapters.annual_earnings_estimates_adapter import (
     AnnualEarningsEstimatesProvider,
 )
+from app.stocks.adapters.yfinance_options_adapter import YfinanceOptionChainProvider
 from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
@@ -113,6 +114,15 @@ def get_profile_provider() -> CompanyProfileProvider | None:
     if not finnhub_key:
         return None
     return CachingCompanyProfileProvider(FinnhubCompanyProfileProvider(finnhub_key))
+
+
+@lru_cache(maxsize=1)
+def get_options_provider() -> YfinanceOptionChainProvider:
+    # The ticker card's options read comes from Yahoo via yfinance — keyless,
+    # like the earnings timelines' live source, so there's no key gate here at
+    # all. Best-effort enrichment: a blocked Yahoo call leaves the block null
+    # rather than sinking the card, so the provider is always wired.
+    return YfinanceOptionChainProvider()
 
 
 def get_estimates_provider(

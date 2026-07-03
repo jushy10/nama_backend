@@ -1,15 +1,15 @@
 """Tests for the ticker use case: GetTickerCard.
 
-Offline: hand-written fakes for the quote, estimates, fundamentals, performance and
-profile ports, so this exercises only the orchestration — symbol + include
-normalization, assembling the card, the primary-vs-enrichment split (quote and a
-*requested* consensus read propagate; the rest never sinks the card), and the
-pay-per-use rule (an unrequested block costs no provider call) — plus the entity rule
-the response leans on (the forward-PEG guard), independent of Alpaca, Finnhub, or the
-DB.
+Offline: hand-written fakes for the quote, estimates, fundamentals, performance,
+profile and option-chain ports, so this exercises only the orchestration — symbol +
+include normalization, assembling the card, the primary-vs-enrichment split (quote
+and a *requested* consensus read propagate; the rest never sinks the card), and the
+pay-per-use rule (an unrequested block costs no provider call) — plus the entity
+rules the response leans on (the forward-PEG guard; the options-chain derivations),
+independent of Alpaca, Finnhub, Yahoo, or the DB.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -30,7 +30,12 @@ from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,
 )
-from app.stocks.ticker.entities import TickerValuation
+from app.stocks.ticker.entities import (
+    OptionContract,
+    TickerOptionsMetrics,
+    TickerValuation,
+)
+from app.stocks.ticker.ports import OptionChainProvider
 from app.stocks.ticker.repository import StoredTickerFacts, TickerRepository
 from app.stocks.ticker.use_cases import GetTickerCard
 
@@ -184,6 +189,68 @@ class _FakeRepo(TickerRepository):
         self._exchange = exchange
 
 
+_TODAY = date(2026, 7, 3)
+_NEAR = date(2026, 7, 31)  # ~28 days out — the ~1-month window's pick
+_FAR = date(2026, 10, 2)  # ~91 days out — the ~3-month window's pick
+
+
+def _call(expiration, strike, *, bid=None, ask=None, last=None, volume=None, iv=None):
+    return OptionContract(
+        expiration=expiration, strike=strike, is_call=True,
+        bid=bid, ask=ask, last_price=last, volume=volume, implied_volatility=iv,
+    )
+
+
+def _put(expiration, strike, *, bid=None, ask=None, last=None, volume=None, iv=None):
+    return OptionContract(
+        expiration=expiration, strike=strike, is_call=False,
+        bid=bid, ask=ask, last_price=last, volume=volume, implied_volatility=iv,
+    )
+
+
+def _near_chain() -> tuple[OptionContract, ...]:
+    # A liquid ATM pair around a 100.0 spot: straddle mid = 3.0 + 2.0 = 5.0.
+    return (
+        _call(_NEAR, 100.0, bid=2.8, ask=3.2, volume=500, iv=0.25),
+        _put(_NEAR, 100.0, bid=1.9, ask=2.1, volume=1000, iv=0.27),
+        _call(_NEAR, 110.0, bid=0.4, ask=0.6, volume=200, iv=0.30),
+    )
+
+
+def _far_chain() -> tuple[OptionContract, ...]:
+    return (
+        _put(_FAR, 100.0, bid=3.9, ask=4.1, volume=200, iv=0.24),
+        _call(_FAR, 100.0, bid=5.9, ask=6.1, volume=300, iv=0.23),
+    )
+
+
+class _FakeOptions(OptionChainProvider):
+    def __init__(self, expirations=(), chains=None, error=None) -> None:
+        self._expirations = expirations
+        self._chains = chains or {}
+        self._error = error
+        self.calls: list[tuple] = []
+
+    def get_expirations(self, symbol: str) -> tuple[date, ...]:
+        self.calls.append(("expirations", symbol))
+        if self._error is not None:
+            raise self._error
+        return tuple(self._expirations)
+
+    def get_chain(self, symbol: str, expiration: date) -> tuple[OptionContract, ...]:
+        self.calls.append(("chain", symbol, expiration))
+        if self._error is not None:
+            raise self._error
+        return tuple(self._chains.get(expiration, ()))
+
+
+def _options_provider() -> _FakeOptions:
+    return _FakeOptions(
+        expirations=(date(2026, 7, 10), _NEAR, _FAR, date(2027, 1, 15)),
+        chains={_NEAR: _near_chain(), _FAR: _far_chain()},
+    )
+
+
 # ───────────────────────────── entity rules ─────────────────────────────
 
 
@@ -213,6 +280,71 @@ def test_forward_peg_is_the_ratio_of_the_two_legs():
 )
 def test_forward_peg_is_none_without_two_positive_legs(pe, growth):
     assert _a_valuation(pe, growth).forward_peg is None
+
+
+def test_options_metrics_derives_all_four_reads_from_the_two_chains():
+    m = TickerOptionsMetrics.from_chains(100.0, _near_chain(), _far_chain())
+    # ATM IV averages the call/put nearest the money (0.25 + 0.27, NOT the
+    # further-out 110 call's 0.30), reported as a percent.
+    assert m.implied_volatility == pytest.approx(26.0)
+    # Expected move is the ATM straddle over spot: (3.0 + 2.0) / 100.
+    assert m.expected_move_percent == pytest.approx(5.0)
+    assert m.expected_move_by == _NEAR
+    # Insurance is the far ATM put's mid over spot: 4.0 / 100.
+    assert m.insurance_cost_percent == pytest.approx(4.0)
+    assert m.insurance_expires == _FAR
+    # Put/call pools both sampled expiries: (1000 + 200) / (500 + 200 + 300).
+    assert m.put_call_ratio == pytest.approx(1.2)
+
+
+def test_options_metrics_does_not_double_count_a_shared_expiry():
+    # Sparse listings can land both windows on the same expiry; its volume
+    # must be pooled once.
+    m = TickerOptionsMetrics.from_chains(100.0, _near_chain(), _near_chain())
+    assert m.put_call_ratio == pytest.approx(1000 / 700)
+    assert m.insurance_expires == _NEAR  # the put still prices off the shared chain
+    assert m.insurance_cost_percent == pytest.approx(2.0)
+
+
+def test_options_metrics_fills_what_it_can_from_a_one_sided_chain():
+    # Only the insurance expiry has contracts: no IV/straddle, but the put and
+    # the (far-only) volume pool still serve.
+    m = TickerOptionsMetrics.from_chains(100.0, (), _far_chain())
+    assert m.implied_volatility is None
+    assert m.expected_move_percent is None
+    assert m.expected_move_by is None
+    assert m.insurance_cost_percent == pytest.approx(4.0)
+    assert m.insurance_expires == _FAR
+    assert m.put_call_ratio == pytest.approx(200 / 300)
+
+
+def test_options_metrics_treats_dead_quotes_as_unpriceable():
+    # Zero bid/ask with no last trade is a dead quote, not a free straddle —
+    # and with no priceable volume-carrying calls the ratio degenerates too.
+    chain = (
+        _call(_NEAR, 100.0, bid=0.0, ask=0.0, iv=0.25),
+        _put(_NEAR, 100.0, bid=0.0, ask=0.0, iv=0.27),
+    )
+    m = TickerOptionsMetrics.from_chains(100.0, chain, chain)
+    assert m.expected_move_percent is None
+    assert m.insurance_cost_percent is None
+    assert m.implied_volatility == pytest.approx(26.0)  # IV is quoted, not priced
+    assert m.put_call_ratio is None  # no call volume to divide by
+
+
+def test_options_metrics_mid_falls_back_to_the_last_trade():
+    chain = (
+        _call(_NEAR, 100.0, last=3.0, volume=1),
+        _put(_NEAR, 100.0, last=2.0, volume=1),
+    )
+    m = TickerOptionsMetrics.from_chains(100.0, chain, ())
+    assert m.expected_move_percent == pytest.approx(5.0)
+
+
+def test_options_metrics_is_empty_at_a_non_positive_price():
+    # Every figure is a ratio to spot; a broken quote can't anchor any of them.
+    m = TickerOptionsMetrics.from_chains(0.0, _near_chain(), _far_chain())
+    assert m == TickerOptionsMetrics(None, None, None, None, None, None)
 
 
 # ───────────────────────────── GetTickerCard ─────────────────────────────
@@ -454,3 +586,81 @@ def test_estimates_failure_propagates_when_metrics_is_requested():
     estimates = _FakeEstimates(error=StockDataUnavailable("MU", "db down"))
     with pytest.raises(StockDataUnavailable):
         GetTickerCard(_FakeQuotes(), estimates).execute("MU", include=["metrics"])
+
+
+# ──────────────────────── the options_metrics block ────────────────────────
+
+
+def _card_with_options(options: _FakeOptions, include=("options_metrics",)):
+    return GetTickerCard(
+        _FakeQuotes(price=100.0),
+        _FakeEstimates(),
+        options=options,
+        today=lambda: _TODAY,
+    ).execute("MU", include=list(include))
+
+
+def test_options_metrics_samples_the_month_and_quarter_expiries():
+    options = _options_provider()
+
+    card = _card_with_options(options)
+
+    # Nearest listed expiry to each window wins: ~1 month → Jul 31, ~3 → Oct 2
+    # (not the Jul 10 weekly or the Jan LEAP).
+    assert ("chain", "MU", _NEAR) in options.calls
+    assert ("chain", "MU", _FAR) in options.calls
+    m = card.options_metrics
+    assert m.implied_volatility == pytest.approx(26.0)
+    assert m.expected_move_percent == pytest.approx(5.0)
+    assert m.expected_move_by == _NEAR
+    assert m.insurance_cost_percent == pytest.approx(4.0)
+    assert m.insurance_expires == _FAR
+    assert m.put_call_ratio == pytest.approx(1.2)
+
+
+def test_options_metrics_fetches_a_shared_expiry_once():
+    # Only one listed expiry: both windows land on it, and the chain is
+    # fetched a single time (the entity dedupes its volume too).
+    options = _FakeOptions(expirations=(_NEAR,), chains={_NEAR: _near_chain()})
+
+    card = _card_with_options(options)
+
+    assert [c for c in options.calls if c[0] == "chain"] == [("chain", "MU", _NEAR)]
+    assert card.options_metrics.put_call_ratio == pytest.approx(1000 / 700)
+
+
+def test_unrequested_options_metrics_cost_no_provider_call():
+    options = _options_provider()
+
+    card = _card_with_options(options, include=())
+
+    assert options.calls == []  # pay-per-use, like the other opt-ins
+    assert card.options_metrics is None
+
+
+def test_no_listed_options_is_no_coverage_not_an_error():
+    # Expirations empty (or all in the past): a valid read with the block absent.
+    options = _FakeOptions(expirations=(date(2026, 6, 19),))
+
+    card = _card_with_options(options)
+
+    assert card.options_metrics is None
+    assert [c for c in options.calls if c[0] == "chain"] == []  # nothing to fetch
+
+
+def test_options_failure_never_sinks_the_card():
+    # Best-effort even when requested: the options read is a live Yahoo call and
+    # a blocked IP must not take the quote down.
+    options = _FakeOptions(error=StockDataUnavailable("MU", "yahoo blocked"))
+
+    card = _card_with_options(options)
+
+    assert card.quote.price == 100.0
+    assert card.options_metrics is None
+
+
+def test_unwired_options_provider_leaves_the_block_none():
+    card = GetTickerCard(_FakeQuotes(), _FakeEstimates()).execute(
+        "MU", include=["options_metrics"]
+    )
+    assert card.options_metrics is None

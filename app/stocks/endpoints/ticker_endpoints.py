@@ -4,24 +4,30 @@
 quote (price + day move), the clean company name, the listing exchange (served from
 the ``stocks`` row, learned once from the price feed), and market cap, plus **opt-in
 blocks** requested via ``?include=`` — ``dividend``, ``performance`` (trailing
-windows), and ``metrics`` (trailing PEG + margins off the fundamentals call, and the
+windows), ``metrics`` (trailing PEG + margins off the fundamentals call, and the
 **forward PEG**: forward P/E over expected FY1→FY2 EPS growth, the one valuation
-figure no other endpoint serves). Pay-per-use: a block that isn't requested costs no
-provider call. The forward PEG's legs (forward P/E, forward EPS growth) are
-deliberately not serialized here — they stay on the shared entities, feeding the
-AI analysis context — so the same numbers don't get two homes that could
-disagree. Controller + presenter +
-wiring, the composition-root way, sitting in ``app/stocks/endpoints/`` like the
-other slices' HTTP.
+figure no other endpoint serves), and ``options_metrics`` (the **options-market
+read**: ATM implied volatility, the priced-in expected move, the cost of a
+protective put, and the day's put/call lean — what the options market believes
+about the stock, for a buyer sizing an entry). Pay-per-use: a block that isn't
+requested costs no provider call. The forward PEG's legs (forward P/E, forward
+EPS growth) are deliberately not serialized here — they stay on the shared
+entities, feeding the AI analysis context — so the same numbers don't get two
+homes that could disagree. Controller + presenter + wiring, the
+composition-root way, sitting in ``app/stocks/endpoints/`` like the other
+slices' HTTP.
 
 Wiring convention: this endpoint owns no vendor of its own — it reuses the composition
 root's factories. The quote and performance windows ride the ``@lru_cache``d Alpaca
 provider (whose missing-keys 503 gate the endpoint inherits: the quote is primary
 here), the name and fundamentals ride the optional Finnhub providers (best-effort,
-``None`` without a key), and the estimates ride the annual-earnings projection
-(DB-only, no key). There's no cron or table behind this endpoint: the card is built
-around the live quote, so it's computed per request — freshness of the consensus legs
-is the annual-earnings slice's job (lazy fill + its sync cron).
+``None`` without a key), the estimates ride the annual-earnings projection
+(DB-only, no key), and the options chain rides Yahoo via yfinance (keyless,
+best-effort even when requested — Yahoo intermittently blocks data-centre IPs, and
+a missing insight must not take the quote down). There's no cron or table behind
+this endpoint: the card is built around the live quote, so it's computed per
+request — freshness of the consensus legs is the annual-earnings slice's job
+(lazy fill + its sync cron).
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -39,13 +45,17 @@ from app.stocks.ports import (
 from app.stocks.router import (
     get_estimates_provider,
     get_fundamentals_provider,
+    get_options_provider,
     get_profile_provider,
     get_provider,
 )
 from app.stocks.schemas import StockPerformanceResponse
 from app.stocks.ticker.db_repository import SqlTickerRepository
+from app.stocks.ticker.entities import TickerOptionsMetrics
+from app.stocks.ticker.ports import OptionChainProvider
 from app.stocks.ticker.schemas import (
     DividendResponse,
+    OptionsMetricsResponse,
     TickerCardResponse,
     TickerMetricsResponse,
 )
@@ -59,6 +69,7 @@ def get_ticker_card_use_case(
     estimates: AnalystEstimatesProvider = Depends(get_estimates_provider),
     fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
     profile: CompanyProfileProvider | None = Depends(get_profile_provider),
+    options: OptionChainProvider = Depends(get_options_provider),
     db: Session = Depends(get_db),
 ) -> GetTickerCard:
     # The Alpaca singleton backs the quote, the trailing performance windows, and the
@@ -66,7 +77,9 @@ def get_ticker_card_use_case(
     # the estimates are the same DB-only projection the snapshot's forward P/E uses —
     # one source of truth for every leg the card carries. The profile provider
     # supplies the display name (the slim quote carries none), TTL-cached like on the
-    # snapshot; the repository serves the stored exchange off the stocks row.
+    # snapshot; the repository serves the stored exchange off the stocks row. The
+    # options chain is the keyless yfinance singleton — always wired, best-effort
+    # at read.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
     return GetTickerCard(
         provider,
@@ -76,6 +89,7 @@ def get_ticker_card_use_case(
         profile,
         stocks=provider,
         repository=SqlTickerRepository(db),
+        options=options,
     )
 
 
@@ -95,6 +109,23 @@ def _present_performance(
         six_month=perf.six_month,
         ytd=perf.ytd,
         one_year=perf.one_year,
+    )
+
+
+def _present_options_metrics(
+    metrics: TickerOptionsMetrics | None,
+) -> OptionsMetricsResponse | None:
+    if metrics is None:
+        return None
+    # Rounded here at the edge like the dividend: these are display figures
+    # (percents, a ratio) and the chain arithmetic carries float noise.
+    return OptionsMetricsResponse(
+        implied_volatility=_round2(metrics.implied_volatility),
+        expected_move_percent=_round2(metrics.expected_move_percent),
+        expected_move_by=metrics.expected_move_by,
+        insurance_cost_percent=_round2(metrics.insurance_cost_percent),
+        insurance_expires=metrics.insurance_expires,
+        put_call_ratio=_round2(metrics.put_call_ratio),
     )
 
 
@@ -141,6 +172,7 @@ def _present(card: TickerCard) -> TickerCardResponse:
         dividend=dividend,
         performance=_present_performance(card.performance),
         metrics=metrics,
+        options_metrics=_present_options_metrics(card.options_metrics),
     )
 
 
@@ -151,9 +183,10 @@ def get_ticker_card_endpoint(
     include: list[str] | None = Query(
         default=None,
         description=(
-            "Opt-in blocks to include: dividend, performance, metrics. Repeat the "
-            "param or comma-separate (?include=dividend,metrics). Unrequested "
-            "blocks are null and cost no upstream call."
+            "Opt-in blocks to include: dividend, performance, metrics, "
+            "options_metrics. Repeat the param or comma-separate "
+            "(?include=dividend,metrics). Unrequested blocks are null and cost "
+            "no upstream call."
         ),
     ),
     use_case: GetTickerCard = Depends(get_ticker_card_use_case),
