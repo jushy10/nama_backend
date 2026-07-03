@@ -9,11 +9,11 @@ is this endpoint's JSON vocabulary.
 one vocabulary across endpoints. ``dividend``, ``performance``, ``metrics`` and
 ``options_metrics`` are opt-in blocks (the ``include`` query param): ``null`` unless
 requested — and for the best-effort ones, ``null`` also when requested but unavailable.
-``metrics`` starts with ``forward_peg`` — the one figure no other endpoint serves — and
-is where future card-only metrics belong; the PEG's legs (``forward_pe``,
-``growth.forward_eps_growth``) deliberately stay snapshot-only so the same numbers
-don't get two homes that could disagree. ``options_metrics`` is likewise card-only:
-no other endpoint reads the options market.
+``metrics`` carries ``forward_peg`` — the one figure no other endpoint serves — and is
+where future card-only metrics belong; the PEG's legs (``forward_pe``, the forward EPS
+growth) stay unserialized, living only on the shared entities that feed the Bedrock
+analysis context. ``options_metrics`` is likewise card-only: no other endpoint reads
+the options market.
 """
 
 from datetime import date
@@ -38,14 +38,17 @@ class DividendResponse(BaseModel):
 class TickerMetricsResponse(BaseModel):
     """The card's valuation and profitability metrics.
 
-    Two PEGs, side by side: ``peg`` is the trailing read (trailing P/E over
-    *already-reported* EPS growth — which a cyclical rebound can inflate and pin
-    the ratio near zero), ``forward_peg`` the honest forward cousin (forward P/E
-    over the FY1→FY2 growth analysts *expect*); ``forward_peg`` is ``null`` when
-    no forward consensus is stored for the symbol yet, or a leg is non-positive.
-    The margins are the trailing profitability ladder (percent), from the same
-    fundamentals call the market cap rides."""
+    ``pe`` is the vendor's trailing multiple (price over *reported* EPS, off the
+    fundamentals call the market cap rides). Then two PEGs, side by side:
+    ``peg`` is the trailing read (trailing P/E over *already-reported* EPS
+    growth — which a cyclical rebound can inflate and pin the ratio near zero),
+    ``forward_peg`` the honest forward cousin (forward P/E over the FY1→FY2
+    growth analysts *expect*); ``forward_peg`` is ``null`` when no forward
+    consensus is stored for the symbol yet, or a leg is non-positive. The
+    margins are the trailing profitability ladder (percent), from the same
+    fundamentals call."""
 
+    pe: float | None = None  # trailing: price / reported EPS (vendor's TTM read)
     peg: float | None = None  # trailing P/E / trailing EPS growth
     forward_peg: float | None = None  # forward P/E / expected FY1->FY2 EPS growth
     gross_margin: float | None = None  # percent

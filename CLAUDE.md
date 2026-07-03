@@ -242,7 +242,7 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > rides the fundamentals call the market cap needs anyway, so the include only gates
 > presentation), `performance` (trailing windows from Alpaca), `options_metrics` (the
 > **options-market read**, below), and `metrics` — the
-> trailing `peg` + `gross_margin`/`operating_margin`/`net_margin` (off that same
+> trailing `pe` + `peg` + `gross_margin`/`operating_margin`/`net_margin` (off that same
 > fundamentals call) beside `forward_peg`, the **forward PEG**, the one valuation figure
 > no other endpoint serves: forward P/E (live
 > price ÷ FY1 consensus EPS) divided by expected FY1→FY2 EPS growth (a `@property` on the

@@ -154,6 +154,7 @@ def _present(card: TickerCard) -> TickerCardResponse:
         # the forward PEG comes off the valuation built from the stored consensus.
         trailing = fundamentals.metrics if fundamentals else None
         metrics = TickerMetricsResponse(
+            pe=trailing.pe if trailing else None,
             peg=trailing.peg if trailing else None,
             forward_peg=card.valuation.forward_peg if card.valuation else None,
             gross_margin=trailing.gross_margin if trailing else None,
