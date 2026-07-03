@@ -18,14 +18,32 @@ data "aws_subnets" "default" {
   }
 }
 
+# Per-subnet detail, to learn each subnet's AZ *ID* for the filter below.
+data "aws_subnet" "default" {
+  for_each = toset(data.aws_subnets.default.ids)
+  id       = each.value
+}
+
 locals {
+  # API Gateway VPC Links aren't offered in every AZ — creating one in a
+  # subnet in use1-az3 fails with "service is not available" (learned the
+  # hard way; it took the API down mid-apply). Deny-list by AZ *ID*, not name:
+  # names like us-east-1c map to different physical AZs per account, IDs are
+  # stable.
+  vpc_link_unsupported_az_ids = ["use1-az3"]
+
+  app_candidate_subnet_ids = [
+    for s in data.aws_subnet.default : s.id
+    if !contains(local.vpc_link_unsupported_az_ids, s.availability_zone_id)
+  ]
+
   # Two subnets/AZs are plenty for the app: the API Gateway VPC Link puts one
   # ENI in each (free — unlike the ALB this replaced, which billed a public
   # IPv4 per AZ), and the single task lands in one of them. The default VPC
   # has one subnet per AZ, so two distinct subnets are two AZs; sort() keeps
   # the selection stable across plans. The database keeps all subnets — it's
   # private (no public IP) and its subnet group just wants coverage across AZs.
-  app_subnet_ids = slice(sort(data.aws_subnets.default.ids), 0, 2)
+  app_subnet_ids = slice(sort(local.app_candidate_subnet_ids), 0, 2)
 }
 
 # Private PostgreSQL database (no public endpoint). The app reads its connection
