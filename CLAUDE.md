@@ -225,6 +225,29 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > near a month boundary can label a snapshot one month off; cosmetic, same spirit as the
 > earnings slices' calendar-derived fiscal labels.
 
+> **The ticker sub-slice — `app/stocks/ticker/`.** A stock's **forward PEG** at
+> `GET /stocks/ticker/{symbol}`: forward P/E (live price ÷ FY1 consensus EPS) divided by
+> expected FY1→FY2 EPS growth (a `@property` on the slice-local `TickerValuation` entity,
+> with the same positive-legs guard as the trailing `KeyMetrics.peg` — it exists because a
+> trailing PEG divides by *already-reported* growth, which a cyclical rebound can inflate
+> into the hundreds of percent and pin the ratio near zero). The response is deliberately
+> minimal — `{ticker, price, forward_peg}` (the entity's `symbol` is renamed `ticker` at
+> the DTO) — because the legs already ride on the snapshot (`forward_pe`,
+> `growth.forward_eps_growth` on `GET /stocks/{symbol}`) and repeating them would give the
+> same numbers two homes that could disagree; `price` is included because the ratio embeds
+> it. Built on the same skeleton as the other sub-slices (own `entities.py` /
+> `use_cases.py` / `schemas.py`, endpoint in `app/stocks/endpoints/ticker_endpoints.py`)
+> but deliberately **thinner: no table, repository, cron, or vendor adapter** — the PEG
+> embeds the live price, so nothing slice-owned is worth persisting. The use case pulls
+> both legs through *existing* ports: `StockQuoteProvider` (the Alpaca singleton, whose
+> missing-keys 503 gate it inherits — price is primary here) and `AnalystEstimatesProvider`
+> (the annual-earnings projection, DB-only), wired by reusing the composition root's
+> factories from `router.py`. Consensus freshness therefore rides entirely on the annual
+> slice (lazy fill + `sync-annual-earnings` cron); an uncached symbol is a **200 with a
+> null `forward_peg`** around a live price, not a 404 — no data ≠ error. Caveat: the growth
+> denominator is a single FY1→FY2 leg (Yahoo's forward ceiling), not the classic five-year
+> rate, so one boom-year estimate can still flatter the ratio.
+
 ### 5. DTOs — `app/stocks/schemas.py`
 Pydantic `BaseModel`s for HTTP responses. Pydantic is a serialization detail, so
 DTOs live at the edge, deliberately **separate from entities** — that's what
@@ -388,18 +411,24 @@ app/
     │   ├── models.py            #    stock_recommendation_trends ORM + query fns (anchor from stocks/)
     │   ├── use_cases.py         #    GetStockRecommendations + SyncRecommendations
     │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
+    ├── ticker/             # ── forward-PEG sub-slice (its OWN entities.py; no DB/cron —
+    │   │                   #    computed per request from live price + stored consensus):
+    │   ├── entities.py          #    TickerValuation (forward P/E + growth legs, forward_peg property)
+    │   ├── use_cases.py         #    GetTickerValuation (StockQuoteProvider + AnalystEstimatesProvider)
+    │   └── schemas.py           #    HTTP response DTO {ticker, price, forward_peg} (endpoint in endpoints/)
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
     │   ├── cron_quarterly_earnings_endpoints.py  #  POST /internal/earnings/quarterly/sync
     │   ├── quarterly_earnings_endpoints.py       #  GET /stocks/{symbol}/earnings/quarterly
     │   ├── cron_annual_earnings_endpoints.py     #  POST /internal/earnings/annual/sync
     │   ├── annual_earnings_endpoints.py          #  GET /stocks/{symbol}/earnings/annual
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
-    │   └── recommendations_endpoints.py          #  GET /stocks/{symbol}/recommendations
+    │   ├── recommendations_endpoints.py          #  GET /stocks/{symbol}/recommendations
+    │   └── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol}
     ├── constituents.py     # ── DB adapter: ORM model + SqlConstituentRepository
     ├── chart_window.py     # ── edge helper: range preset → time window
     ├── schemas.py          # ── HTTP response DTOs (pydantic)
     └── router.py           # ── endpoints + presenters + DI wiring (composition root)
-tests/                      # offline; fakes through the ports (mirrors app: tests/stocks, tests/earnings, tests/recommendations, tests/adapters, tests/endpoints)
+tests/                      # offline; fakes through the ports (mirrors app: tests/stocks, tests/earnings, tests/recommendations, tests/ticker, tests/adapters, tests/endpoints)
 alembic/                    # database migrations
 infra/                      # Terraform (modules + environments)
 ```

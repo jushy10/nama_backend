@@ -24,6 +24,7 @@ from app.stocks.endpoints.quarterly_earnings_endpoints import (
 from app.stocks.endpoints.recommendations_endpoints import (
     router as recommendations_router,
 )
+from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.router import router as stocks_router
 
 # Browser origins allowed to call this API (cross-origin). Comma-separated env
@@ -73,6 +74,11 @@ app.include_router(quarterly_earnings_cron_router)
 # drives the SyncAnnualEarnings use case out of band. See
 # app/stocks/endpoints/cron_annual_earnings_endpoints.py.
 app.include_router(annual_earnings_cron_router)
+# The forward-valuation read endpoint (GET /stocks/ticker/{symbol}): forward P/E,
+# expected FY1->FY2 EPS growth, and the forward PEG they imply — computed per request
+# from the live price + the stored annual-earnings consensus (no table or cron of its
+# own). See app/stocks/endpoints/ticker_endpoints.py.
+app.include_router(ticker_router)
 # The recommendations refresh cron endpoint (POST /internal/recommendations/sync); it
 # drives the SyncRecommendations use case out of band. See
 # app/stocks/endpoints/cron_recommendations_endpoints.py.
