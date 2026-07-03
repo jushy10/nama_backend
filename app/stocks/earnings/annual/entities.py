@@ -9,6 +9,14 @@ vendor-agnostic (stdlib only), modeling both halves of the timeline in one shape
 - **Upcoming** years carry the forward consensus EPS and revenue (``eps_actual`` is
   ``None`` — not yet reported).
 
+Reported years may additionally carry ``eps_actual_consensus`` — the year's actual EPS on
+the analyst-consensus (adjusted) basis, i.e. the same basis the upcoming years'
+``eps_estimate`` is quoted on. ``eps_actual`` is GAAP diluted EPS (from the income
+statement), which for high-SBC companies sits well below the adjusted figure analysts
+estimate against; a client walking from a reported year's actual to an upcoming year's
+estimate needs both ends on one basis, and ``eps_actual_consensus`` is that anchor.
+Best-effort (``None`` when the quarterly history couldn't be assembled).
+
 ``eps_actual is None`` is the single discriminator between the two, mirroring the
 quarterly slice. The deliberate divergence from quarterly: there is **no per-year
 surprise or beat**. Yahoo's estimate-vs-actual history is per-quarter, so there is no
@@ -42,6 +50,10 @@ class AnnualEarnings:
     revenue_actual: float | None  # reported revenue (raw), reported years only
     revenue_estimate: float | None  # forward consensus revenue (raw), upcoming years only
     net_income: float | None = None  # reported net income (raw), reported years only
+    # Reported actual EPS on the analyst-consensus (adjusted) basis — the sum of the fiscal
+    # year's four quarterly "Reported EPS" figures, comparable with eps_estimate (which is
+    # quoted on that basis, unlike the GAAP-diluted eps_actual). Reported years only.
+    eps_actual_consensus: float | None = None
 
     @property
     def is_reported(self) -> bool:
@@ -140,6 +152,11 @@ def _merged_year(fresh: AnnualEarnings, stored: AnnualEarnings | None) -> Annual
             revenue_estimate=fresh.revenue_estimate,
             net_income=(
                 fresh.net_income if fresh.net_income is not None else stored.net_income
+            ),
+            eps_actual_consensus=(
+                fresh.eps_actual_consensus
+                if fresh.eps_actual_consensus is not None
+                else stored.eps_actual_consensus
             ),
         )
     # Both upcoming: fill the consensus holes.

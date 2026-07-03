@@ -180,11 +180,13 @@ def test_sync_empty_live_result_is_skipped_not_stored():
     assert repo.upserts == [("AAPL", "Apple Inc.")]  # GONE never upserted
 
 
-def _reported(year: int, eps: float, revenue: float | None = 400e9) -> AnnualEarnings:
+def _reported(
+    year: int, eps: float, revenue: float | None = 400e9, consensus: float | None = None
+) -> AnnualEarnings:
     return AnnualEarnings(
         fiscal_year=year, period_end=date(year, 12, 31), eps_actual=eps,
         eps_estimate=None, revenue_actual=revenue, revenue_estimate=None,
-        net_income=100e9,
+        net_income=100e9, eps_actual_consensus=consensus,
     )
 
 
@@ -241,6 +243,25 @@ def test_sync_normal_roll_does_not_grow_the_reported_window():
     saved = repo.saved["AAPL"]
     assert [y.fiscal_year for y in saved.past] == [2022, 2023, 2024, 2025]
     assert saved.past[0].eps_actual == 6.0  # the fresh figures, not the stored ones
+
+
+def test_sync_degraded_fetch_fills_missing_consensus_actual_from_stored():
+    # The consensus-basis annual actual rides on the announcement history, fetched
+    # separately from the income statement — a refresh can return a reported year without
+    # it. The stored figure is carried forward; a fresh one wins when present.
+    stored = AnnualEarningsTimeline(
+        "AAPL", (_reported(2024, 6.0, consensus=6.4), _reported(2025, 7.3, consensus=7.8))
+    )
+    fresh = AnnualEarningsTimeline(
+        "AAPL", (_reported(2024, 6.0), _reported(2025, 7.3, consensus=7.9))
+    )
+    repo = _FakeRepo([RefreshTarget("AAPL", None)], stored={"AAPL": stored})
+
+    SyncAnnualEarnings(_TimelineSyncProvider(fresh), repo).execute()
+
+    saved = {y.fiscal_year: y for y in repo.saved["AAPL"].years}
+    assert saved[2024].eps_actual_consensus == 6.4  # stored fills the fresh hole
+    assert saved[2025].eps_actual_consensus == 7.9  # fresh wins when present
 
 
 def test_sync_reported_year_never_downgrades_to_upcoming():

@@ -70,6 +70,10 @@ class StockAnnualEarningsRecord(Base):
     revenue_actual: Mapped[float | None] = mapped_column(Float, nullable=True)
     revenue_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
     net_income: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The reported year's actual EPS on the analyst-consensus basis (sum of its four
+    # quarterly "Reported EPS" values) — comparable with eps_estimate, unlike the
+    # GAAP-diluted eps_actual. Best-effort, reported years only.
+    eps_actual_consensus: Mapped[float | None] = mapped_column(Float, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

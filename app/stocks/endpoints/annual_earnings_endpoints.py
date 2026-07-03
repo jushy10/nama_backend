@@ -75,6 +75,7 @@ def _present_year(year: AnnualEarnings) -> AnnualEarningsYearResponse:
         revenue_actual=year.revenue_actual,
         revenue_estimate=year.revenue_estimate,
         net_income=year.net_income,
+        eps_actual_consensus=year.eps_actual_consensus,
         is_reported=year.is_reported,
     )
 

@@ -52,6 +52,7 @@ def _timeline() -> AnnualEarningsTimeline:
                 revenue_actual=400e9,
                 revenue_estimate=None,
                 net_income=100e9,
+                eps_actual_consensus=6.4,
             ),
             AnnualEarnings(
                 fiscal_year=2025,
@@ -77,10 +78,12 @@ def test_presents_the_timeline_with_counts():
     assert reported["fiscal_year"] == 2024
     assert reported["eps_actual"] == 6.0 and reported["revenue_actual"] == 400e9
     assert reported["net_income"] == 100e9 and reported["revenue_estimate"] is None
+    assert reported["eps_actual_consensus"] == 6.4
     assert reported["is_reported"] is True
     assert upcoming["fiscal_year"] == 2025
     assert upcoming["eps_actual"] is None and upcoming["revenue_estimate"] == 420e9
     assert upcoming["revenue_actual"] is None and upcoming["net_income"] is None
+    assert upcoming["eps_actual_consensus"] is None
     assert upcoming["is_reported"] is False
     assert fake.calls == ["AAPL"]
 

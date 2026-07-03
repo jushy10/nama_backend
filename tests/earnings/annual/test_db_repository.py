@@ -40,7 +40,12 @@ def repo(session) -> SqlAnnualEarningsRepository:
 
 
 def _reported(
-    fy: int, eps: float, *, revenue_actual: float | None = None, net_income: float | None = None
+    fy: int,
+    eps: float,
+    *,
+    revenue_actual: float | None = None,
+    net_income: float | None = None,
+    eps_actual_consensus: float | None = None,
 ) -> AnnualEarnings:
     return AnnualEarnings(
         fiscal_year=fy,
@@ -50,6 +55,7 @@ def _reported(
         revenue_actual=revenue_actual,
         revenue_estimate=None,
         net_income=net_income,
+        eps_actual_consensus=eps_actual_consensus,
     )
 
 
@@ -70,7 +76,7 @@ def _timeline() -> AnnualEarningsTimeline:
     return AnnualEarningsTimeline(
         symbol="AAPL",
         years=(
-            _reported(2024, 6.0, revenue_actual=400e9, net_income=100e9),
+            _reported(2024, 6.0, revenue_actual=400e9, net_income=100e9, eps_actual_consensus=6.4),
             _reported(2023, 5.5),
             _upcoming(2026, 7.0, 450e9),
             _upcoming(2025, 6.5, 420e9),
@@ -95,6 +101,7 @@ def test_roundtrips_the_timeline(session):
     y2024 = next(y for y in tl.years if y.fiscal_year == 2024)
     assert y2024.eps_actual == 6.0
     assert y2024.revenue_actual == 400e9 and y2024.net_income == 100e9
+    assert y2024.eps_actual_consensus == 6.4
     assert y2024.eps_estimate is None and y2024.revenue_estimate is None
     assert y2024.is_reported is True
 
@@ -102,6 +109,7 @@ def test_roundtrips_the_timeline(session):
     assert upcoming.fiscal_year == 2025
     assert upcoming.eps_actual is None and upcoming.revenue_estimate == 420e9
     assert upcoming.revenue_actual is None and upcoming.net_income is None
+    assert upcoming.eps_actual_consensus is None
     assert upcoming.is_reported is False
 
 

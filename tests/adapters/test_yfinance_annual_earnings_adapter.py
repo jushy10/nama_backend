@@ -2,12 +2,16 @@
 
 No network: a fake Ticker returns the pandas frames yfinance would, so this checks the
 mapping — the reported years (Diluted/Basic EPS + Total Revenue + Net Income) from
-``income_stmt``, and the upcoming years (at most two: ``0y`` / ``+1y``) from the
-``earnings_estimate`` / ``revenue_estimate`` frames, labelled by the fiscal-year-end from
-``info``. Also: the chronological ordering, the calendar/off-calendar fiscal-year derivation,
-the income-statement failure degrading to a forward-only timeline (the production case where
-Yahoo IP-gates the fundamentals endpoint), an uncovered symbol degrading to an empty timeline,
-and any vendor failure on the primary surfaces becoming a domain error.
+``income_stmt``, the consensus-basis annual actual (the sum of the year's four quarterly
+"Reported EPS" values from the ``get_earnings_dates`` history, incl. the off-calendar
+fiscal-year matching and the all-four-quarters guard), and the upcoming years (at most two:
+``0y`` / ``+1y``) from the ``earnings_estimate`` / ``revenue_estimate`` frames, labelled by
+the fiscal-year-end from ``info``. Also: the chronological ordering, the
+calendar/off-calendar fiscal-year derivation, the income-statement failure degrading to a
+forward-only timeline (the production case where Yahoo IP-gates the fundamentals endpoint),
+the announcement-history failure degrading to no consensus actuals, an uncovered symbol
+degrading to an empty timeline, and any vendor failure on the primary surfaces becoming a
+domain error.
 """
 
 from datetime import date, datetime, timezone
@@ -54,6 +58,17 @@ def _estimate_frame(avgs: dict) -> pd.DataFrame:
     )
 
 
+def _earnings_dates(rows: dict[str, float | None]) -> pd.DataFrame:
+    """An announcement history like ``Ticker.get_earnings_dates``: rows indexed by the
+    announcement timestamp, with a ``Reported EPS`` column (``None`` ⇒ a scheduled future
+    announcement, NaN in the real frame)."""
+    index = pd.DatetimeIndex(
+        [pd.Timestamp(day, tz="America/New_York") for day in rows]
+    )
+    reported = [_NAN if eps is None else eps for eps in rows.values()]
+    return pd.DataFrame({"Reported EPS": reported}, index=index)
+
+
 def _epoch(day: date) -> int:
     return int(datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp())
 
@@ -67,13 +82,22 @@ class FakeTicker:
     """Stands in for ``yfinance.Ticker``; serves canned frames, or raises."""
 
     def __init__(
-        self, *, income_stmt=None, eps_estimate=None, revenue=None, info=None, error=None
+        self,
+        *,
+        income_stmt=None,
+        eps_estimate=None,
+        revenue=None,
+        info=None,
+        earnings_dates=None,
+        error=None,
     ):
         self._income_stmt = income_stmt
         self._eps_estimate = eps_estimate
         self._revenue = revenue
         self._info = info if info is not None else {}
+        self._earnings_dates = earnings_dates
         self._error = error
+        self.earnings_dates_limits: list[int] = []
 
     @property
     def earnings_estimate(self):
@@ -101,6 +125,12 @@ class FakeTicker:
             raise self._info
         return self._info
 
+    def get_earnings_dates(self, limit: int):
+        self.earnings_dates_limits.append(limit)
+        if isinstance(self._earnings_dates, Exception):  # a selective history failure
+            raise self._earnings_dates
+        return self._earnings_dates
+
 
 def provider_with(ticker: FakeTicker) -> YfinanceAnnualEarningsProvider:
     return YfinanceAnnualEarningsProvider(ticker_factory=lambda _symbol: ticker)
@@ -122,6 +152,24 @@ def _full_ticker() -> FakeTicker:
         eps_estimate=_estimate_frame({"0q": 1.6, "+1q": 1.7, "0y": 6.5, "+1y": 7.0}),
         revenue=_estimate_frame({"0q": 100e9, "+1q": 110e9, "0y": 420e9, "+1y": 450e9}),
         info=_info(date(2026, 12, 31)),  # 0y ends 2026-12-31 → fy2026; +1y → fy2027
+        # ~2½ years of quarterly announcements (newest first, like the real frame), one
+        # scheduled future row: enough to sum a consensus-basis actual for fy2025 and fy2024,
+        # while fy2023's history runs out (two quarters only) and fy2022's is absent.
+        earnings_dates=_earnings_dates(
+            {
+                "2026-04-29": None,  # scheduled, not yet reported
+                "2026-01-28": 1.7,  # fy2025 Q4
+                "2025-10-30": 1.5,  # fy2025 Q3
+                "2025-07-30": 1.5,  # fy2025 Q2
+                "2025-04-30": 1.4,  # fy2025 Q1
+                "2025-01-30": 1.5,  # fy2024 Q4
+                "2024-10-24": 1.4,  # fy2024 Q3
+                "2024-07-25": 1.4,  # fy2024 Q2
+                "2024-04-25": 1.3,  # fy2024 Q1
+                "2024-01-31": 1.3,  # fy2023 Q4
+                "2023-10-26": 1.2,  # fy2023 Q3 — fy2023 has only two quarters: no sum
+            }
+        ),
     )
 
 
@@ -141,6 +189,116 @@ def test_reported_years_carry_actuals():
     assert by_year[2025].period_end == date(2025, 12, 31)
     # a reported year carries actuals only — no estimate side (there's no annual surprise)
     assert by_year[2025].eps_estimate is None and by_year[2025].revenue_estimate is None
+
+
+def test_reported_years_carry_the_consensus_basis_actual():
+    # The sum of the fiscal year's four quarterly "Reported EPS" values — the adjusted basis
+    # the forward estimates are quoted on, distinct from the GAAP-diluted eps_actual.
+    tl = provider_with(_full_ticker()).get_annual_earnings("AAPL")
+    by_year = {y.fiscal_year: y for y in tl.past}
+    assert by_year[2025].eps_actual_consensus == 6.1  # 1.4 + 1.5 + 1.5 + 1.7
+    assert by_year[2024].eps_actual_consensus == 5.6  # 1.3 + 1.4 + 1.4 + 1.5
+    # Where the announcement history runs out, the figure is omitted — never guessed.
+    assert by_year[2023].eps_actual_consensus is None  # only two quarters of history
+    assert by_year[2022].eps_actual_consensus is None
+    # Upcoming years have no actual on any basis.
+    assert all(y.eps_actual_consensus is None for y in tl.future)
+
+
+def test_consensus_actual_requires_all_four_quarters():
+    # Three reported quarters inside the fiscal year (one missed row) must not produce a
+    # partial-year sum — better no figure than a wrong one.
+    ticker = FakeTicker(
+        income_stmt=_income_stmt(
+            ["2025-12-31"], diluted_eps=[6.0], total_revenue=[400e9], net_income=[100e9]
+        ),
+        eps_estimate=_estimate_frame({}),
+        revenue=_estimate_frame({}),
+        earnings_dates=_earnings_dates(
+            {"2026-01-28": 1.7, "2025-10-30": 1.5, "2025-07-30": 1.5}  # fy2025 Q1 missing
+        ),
+    )
+    tl = provider_with(ticker).get_annual_earnings("AAPL")
+    assert tl.past[0].eps_actual_consensus is None
+
+
+def test_consensus_actual_matches_off_calendar_fiscal_years():
+    # A Micron-like August fiscal-year-end: the four announcements from Dec through Sep
+    # belong to the fiscal year ending in August — and the prior year's Q4 (announced the
+    # September before) must stay outside the window.
+    ticker = FakeTicker(
+        income_stmt=_income_stmt(
+            ["2025-08-28"], diluted_eps=[7.59], total_revenue=[37.4e9], net_income=[8.5e9]
+        ),
+        eps_estimate=_estimate_frame({}),
+        revenue=_estimate_frame({}),
+        earnings_dates=_earnings_dates(
+            {
+                "2025-09-23": 3.03,  # fy2025 Q4 (quarter ended late Aug)
+                "2025-06-25": 1.91,  # fy2025 Q3
+                "2025-03-20": 1.56,  # fy2025 Q2
+                "2024-12-18": 1.79,  # fy2025 Q1
+                "2024-09-25": 1.18,  # fy2024 Q4 — previous year, must be excluded
+            }
+        ),
+    )
+    tl = provider_with(ticker).get_annual_earnings("MU")
+    assert tl.past[0].eps_actual_consensus == 8.29  # 1.79 + 1.56 + 1.91 + 3.03
+
+
+def test_consensus_actual_uses_the_newest_announcement_for_a_restated_quarter():
+    # Two announcements landing in the same derived quarter (a restatement/duplicate row):
+    # the most recent one wins, and the sum still covers exactly four quarters.
+    ticker = FakeTicker(
+        income_stmt=_income_stmt(
+            ["2025-12-31"], diluted_eps=[6.0], total_revenue=[400e9], net_income=[100e9]
+        ),
+        eps_estimate=_estimate_frame({}),
+        revenue=_estimate_frame({}),
+        earnings_dates=_earnings_dates(
+            {
+                "2026-02-10": 1.75,  # fy2025 Q4, restated — newest wins
+                "2026-01-28": 1.7,  # fy2025 Q4, original
+                "2025-10-30": 1.5,
+                "2025-07-30": 1.5,
+                "2025-04-30": 1.4,
+            }
+        ),
+    )
+    tl = provider_with(ticker).get_annual_earnings("AAPL")
+    assert tl.past[0].eps_actual_consensus == 6.15  # 1.4 + 1.5 + 1.5 + 1.75
+
+
+def test_earnings_dates_failure_degrades_to_no_consensus_actuals():
+    # The announcement history is best-effort enrichment: a blocked fetch drops the
+    # consensus figures but leaves the reported years (and the rest of the timeline) intact.
+    ticker = FakeTicker(
+        income_stmt=_income_stmt(
+            ["2025-12-31"], diluted_eps=[6.0], total_revenue=[400e9], net_income=[100e9]
+        ),
+        eps_estimate=_estimate_frame({"0y": 6.5}),
+        revenue=_estimate_frame({"0y": 420e9}),
+        info=_info(date(2026, 12, 31)),
+        earnings_dates=RuntimeError("earnings dates blocked"),
+    )
+    tl = provider_with(ticker).get_annual_earnings("AAPL")
+    assert tl.past[0].eps_actual == 6.0  # reported year intact
+    assert tl.past[0].eps_actual_consensus is None
+    assert [y.fiscal_year for y in tl.future] == [2026]  # timeline not sunk
+
+
+def test_announcement_history_is_not_fetched_without_reported_years():
+    # Forward-only (income statement blocked): there is no fiscal year to sum for, so the
+    # adapter must not spend a Yahoo call on the announcement history.
+    ticker = FakeTicker(
+        income_stmt=RuntimeError("income statement blocked"),
+        eps_estimate=_estimate_frame({"0y": 6.5}),
+        revenue=_estimate_frame({"0y": 420e9}),
+        info=_info(date(2026, 12, 31)),
+        earnings_dates=_earnings_dates({"2026-01-28": 1.7}),
+    )
+    provider_with(ticker).get_annual_earnings("AAPL")
+    assert ticker.earnings_dates_limits == []  # never called
 
 
 def test_years_run_chronologically_past_then_upcoming():
