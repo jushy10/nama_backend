@@ -64,10 +64,13 @@ module "database" {
 # Session Manager port forwarding (see infra/README.md → "Connecting the app").
 # It carries the database's app SG, so it is allowed to reach Postgres on 5432.
 #
-# Off by default (count = 0): it costs ~$7/mo running 24/7 but is only needed
-# for the minutes a tunnel is open, and it's fully stateless — destroying and
-# recreating it loses nothing. It is NOT in the app's serving path, so toggling
-# it never affects the API. Flip var.bastion_enabled to true when you need it.
+# Provisioned but parked STOPPED between sessions: a stopped instance bills
+# only its 8GB disk (~$0.64/mo) — no compute, and its public IP is released.
+# The "Bastion session" workflow (.github/workflows/bastion-session.yml) starts
+# it for a bounded window and always stops it after. Terraform doesn't manage
+# run state, so a stopped bastion plans clean. bastion_enabled = false removes
+# it entirely (it's stateless — nothing is lost). It is NOT in the app's
+# serving path, so none of this ever affects the API.
 module "bastion" {
   count  = var.bastion_enabled ? 1 : 0
   source = "../../modules/bastion-ssm"

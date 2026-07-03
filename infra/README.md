@@ -95,18 +95,26 @@ The app reads `DATABASE_URL` (see [`app/db.py`](../app/db.py)). Because the DB i
   becomes publicly reachable. One-time local setup: install the AWS CLI's
   [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html).
 
-  The bastion is **off by default** (`bastion_enabled = false` in
-  `environments/dev/variables.tf`) because it costs ~$7/mo idle and is only
-  needed while a tunnel is open — it is not part of the app's serving path, so
-  this never affects the API. To use it: flip the default to `true` in a
-  one-line PR, let the Infrastructure workflow apply (~2 min for the instance
-  to boot and register with SSM), tunnel, and flip it back when done (it's
-  stateless — nothing is lost on destroy).
+  The bastion is provisioned but **parked stopped** between sessions — a
+  stopped instance bills only its 8 GB disk (~$0.64/mo): no compute, and its
+  public IP is released. It is not part of the app's serving path, so none of
+  this affects the API. To open an access window: **Actions tab → "Bastion
+  session" → Run workflow** (default 15 min, max 120). The workflow starts the
+  instance, waits until SSM sees it (~1–2 min — watch the job log for the
+  "ready" line with the instance id), holds the window open, and **always stops
+  it at the end** — cancelling the run stops it early, so it can't be left on
+  by accident. (`bastion_enabled = false` in `environments/dev/variables.tf`
+  still removes it entirely — it's stateless, nothing is lost.)
 
   ```sh
-  # IDs/host come from `terraform output` (bastion_instance_id, database_address).
-  BASTION=$(terraform -chdir=environments/dev output -raw bastion_instance_id)
-  DBHOST=$(terraform -chdir=environments/dev output -raw database_address)
+  # Look both up live (no local terraform needed). The bastion keeps its id
+  # across stop/start, but a bastion_enabled off/on cycle mints a new one —
+  # so always query by tag rather than hardcoding.
+  BASTION=$(aws ec2 describe-instances \
+    --filters Name=tag:Name,Values=nama-dev-bastion Name=instance-state-name,Values=running \
+    --query 'Reservations[].Instances[].InstanceId' --output text)
+  DBHOST=$(aws rds describe-db-instances \
+    --query "DBInstances[?starts_with(DBInstanceIdentifier,'nama-dev')].Endpoint.Address" --output text)
 
   # Forward localhost:5432 -> RDS:5432 through the bastion. Leave this running.
   aws ssm start-session --target "$BASTION" \
@@ -128,15 +136,16 @@ running. It bills whether or not you use it — `terraform destroy` (or remove t
 `deletion_protection` is off and `skip_final_snapshot` is on for easy teardown.
 
 The `module "bastion"` jump host is a `t4g.nano` + its public IPv4 + 8 GB gp3 —
-roughly **$7/mo** if left on, which is why it defaults to **off**
-(`bastion_enabled = false`; see "Local access" above for the flip-on/flip-off
-flow). If you'd rather keep it enabled long-term, you can still pause the
-compute + IP charges between sessions without a Terraform change (only the
-~$0.64/mo disk keeps billing while stopped):
+roughly **$7/mo** if left running, but it spends its life **stopped** (~$0.64/mo,
+disk only; the public IP is released while stopped). The **"Bastion session"**
+workflow (see "Local access" above) starts it for a bounded window and always
+stops it after, so the running rate only applies during sessions. Manual
+fallback, e.g. if a session run died before its stop step:
 
 ```sh
-aws ec2 stop-instances  --instance-ids "$(terraform -chdir=environments/dev output -raw bastion_instance_id)"
-aws ec2 start-instances --instance-ids "$(terraform -chdir=environments/dev output -raw bastion_instance_id)"
+aws ec2 stop-instances --instance-ids "$(aws ec2 describe-instances \
+  --filters Name=tag:Name,Values=nama-dev-bastion Name=instance-state-name,Values=running \
+  --query 'Reservations[].Instances[].InstanceId' --output text)"
 ```
 
 > Provisioning RDS takes several minutes, so the `apply` step runs longer than
