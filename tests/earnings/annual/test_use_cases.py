@@ -25,6 +25,7 @@ from app.stocks.earnings.annual.use_cases import (
     SyncAnnualEarnings,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.sync_progress import SyncOutcome
 
 
 def _a_timeline(symbol: str) -> AnnualEarningsTimeline:
@@ -276,6 +277,41 @@ def test_sync_reported_year_never_downgrades_to_upcoming():
     saved = repo.saved["AAPL"]
     year_2025 = next(y for y in saved.years if y.fiscal_year == 2025)
     assert year_2025.is_reported and year_2025.eps_actual == 7.3
+
+
+def test_sync_reports_progress_once_per_stock_with_outcomes():
+    # The optional on_progress callback fires once per target — OK, then a vendor failure, then
+    # an empty result — each carrying its 1-based position and the run total. It's pure
+    # observation: the report counts are unchanged by it.
+    repo = _FakeRepo(
+        [
+            RefreshTarget("AAPL", None),
+            RefreshTarget("BAD", None),
+            RefreshTarget("GONE", None),
+        ]
+    )
+    provider = _FakeSyncProvider(
+        errors={"BAD": StockDataUnavailable("BAD", "yahoo down")}, empty={"GONE"}
+    )
+    ticks = []
+
+    report = SyncAnnualEarnings(provider, repo).execute(
+        limit=10, on_progress=ticks.append
+    )
+
+    assert (report.refreshed, report.failed) == (1, 2)
+    assert [(t.done, t.total, t.symbol, t.outcome) for t in ticks] == [
+        (1, 3, "AAPL", SyncOutcome.OK),
+        (2, 3, "BAD", SyncOutcome.FAILED),
+        (3, 3, "GONE", SyncOutcome.FAILED),
+    ]
+
+
+def test_sync_without_a_reporter_still_runs():
+    # on_progress is optional — omitting it must not change the sweep.
+    repo = _FakeRepo([RefreshTarget("AAPL", None)])
+    report = SyncAnnualEarnings(_FakeSyncProvider(), repo).execute()
+    assert (report.refreshed, report.failed) == (1, 0)
 
 
 def test_sync_defaults_to_unlimited_when_no_limit_is_given():

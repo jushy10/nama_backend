@@ -39,6 +39,7 @@ from app.stocks.earnings.quarterly.use_cases import (
 from app.stocks.endpoints.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
+    logging_progress_reporter,
     trigger_sync,
 )
 
@@ -57,7 +58,10 @@ def run_quarterly_earnings_sync(limit: int | None) -> QuarterlyEarningsSyncRepor
     try:
         report = SyncQuarterlyEarnings(
             YfinanceQuarterlyEarningsProvider(), SqlQuarterlyEarningsRepository(db)
-        ).execute(limit=limit)
+        ).execute(
+            limit=limit,
+            on_progress=logging_progress_reporter("quarterly-earnings sync"),
+        )
         logger.info(
             "quarterly-earnings sync done: refreshed=%d failed=%d limit=%s",
             report.refreshed,

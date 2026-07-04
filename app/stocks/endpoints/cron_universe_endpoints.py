@@ -38,6 +38,7 @@ from app.stocks.adapters.yfinance_screener_adapter import YfinanceScreenerProvid
 from app.stocks.endpoints.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
+    logging_progress_reporter,
     trigger_sync,
 )
 from app.stocks.universe.db_repository import SqlUniverseRepository
@@ -60,7 +61,7 @@ def run_universe_sync(limit: int) -> UniverseSyncReport:
             YfinanceScreenerProvider(),
             SqlUniverseRepository(db),
             YfinanceClassificationProvider(),
-        ).execute(limit=limit)
+        ).execute(limit=limit, on_progress=logging_progress_reporter("universe sync"))
         if report.skipped:
             logger.warning(
                 "universe sync skipped: screen came back too small (screened=%d) — "

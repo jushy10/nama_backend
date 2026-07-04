@@ -39,6 +39,7 @@ from app.stocks.recommendations.use_cases import (
 from app.stocks.endpoints.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
+    logging_progress_reporter,
     trigger_sync,
 )
 
@@ -57,7 +58,10 @@ def run_recommendations_sync(limit: int | None) -> RecommendationsSyncReport:
     try:
         report = SyncRecommendations(
             YfinanceRecommendationProvider(), SqlRecommendationsRepository(db)
-        ).execute(limit=limit)
+        ).execute(
+            limit=limit,
+            on_progress=logging_progress_reporter("recommendations sync"),
+        )
         logger.info(
             "recommendations sync done: refreshed=%d failed=%d limit=%s",
             report.refreshed,

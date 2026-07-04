@@ -8,6 +8,7 @@ still-unclassified stocks, and count pass-through — independent of Yahoo or th
 import pytest
 
 from app.stocks.exceptions import StockDataUnavailable
+from app.stocks.sync_progress import SyncOutcome
 from app.stocks.universe.entities import CompanyClassification, ScreenedStock
 from app.stocks.universe.ports import CompanyClassificationProvider, StockScreener
 from app.stocks.universe.repository import UniverseRepository, UniverseSyncCounts
@@ -183,6 +184,29 @@ def test_enrichment_leaves_an_unclassifiable_symbol_for_later():
     assert repo.classified == []  # nothing written
     # Neither enriched nor failed — nothing went wrong, it's just left for a later run.
     assert (report.enriched, report.enrich_failed) == (0, 0)
+
+
+def test_enrichment_reports_progress_per_ticker_with_three_outcomes():
+    # The enrichment pass reports each ticker: written (OK), source-blocked (FAILED), and
+    # reached-but-unclassifiable (SKIPPED — a deliberate no-op, distinct from a failure).
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN)
+    repo = _FakeRepo(missing=("AAPL", "BADX", "ETF"))
+    classifier = _FakeClassifier(
+        {
+            "AAPL": CompanyClassification(industry="consumer_electronics"),
+            "ETF": CompanyClassification(),  # reached, but nothing to classify
+        },
+        errors=("BADX",),
+    )
+    ticks = []
+
+    SyncUniverse(_FakeScreener(screen), repo, classifier).execute(on_progress=ticks.append)
+
+    assert [(t.done, t.total, t.symbol, t.outcome) for t in ticks] == [
+        (1, 3, "AAPL", SyncOutcome.OK),
+        (2, 3, "BADX", SyncOutcome.FAILED),
+        (3, 3, "ETF", SyncOutcome.SKIPPED),
+    ]
 
 
 def test_enrichment_limit_defaults_then_overrides():
