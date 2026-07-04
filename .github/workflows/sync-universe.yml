@@ -1,0 +1,83 @@
+name: Sync universe
+run-name: Sync universe
+
+# Weekly (and on-demand). The searchable universe is every US company at/above a $5B market
+# cap (~1,000–1,300 names). Membership drifts slowly — a company crossing $5B is a rare
+# event — so weekly is plenty. Unlike the earnings/recommendations syncs this is a SINGLE
+# bulk call (Nasdaq's screener returns the whole board at once) with no per-symbol vendor
+# round-trips, so there's no batching loop: one POST refreshes the lot.
+#
+# It POSTs the deployed app's universe cron endpoint
+# (app/stocks/endpoints/cron_universe_endpoints.py), which runs the SyncUniverse use case:
+# screen Nasdaq, then reconcile the stored universe (upsert present, drop the names that
+# fell below the floor / delisted). An empty or implausibly small screen (a Nasdaq block) is
+# skipped server-side, leaving the stored universe intact.
+#
+# Operational notes:
+#  - The screen reads Nasdaq's public API, which needs no key. Like Yahoo it may block
+#    data-centre IPs; a blocked screen is skipped (the endpoint returns skipped=true), so a
+#    bad day delays new data but never wipes the universe.
+#  - The write is ~1,300 DB upserts in one request, with no per-symbol vendor calls, so it
+#    stays well under API Gateway's 30s integration timeout — but give curl a generous
+#    --max-time regardless.
+#  - The endpoint is currently unauthenticated (an auth-token guard is planned); this
+#    workflow just triggers it.
+#
+# Requires the repo/environment variable API_BASE_URL — the deployed app's base URL,
+# reachable from the GitHub runner.
+
+on:
+  workflow_dispatch: {}
+  # Weekly, Sundays 06:00 UTC — staggered off the daily recommendations sync (07:30) and the
+  # Monday earnings syncs (08:00/09:00). Exact timing doesn't matter, so GitHub delaying
+  # scheduled runs under load is fine. Caveats: scheduled workflows run only from the default
+  # branch, and GitHub auto-disables the schedule after 60 days with no repo activity.
+  schedule:
+    - cron: "0 6 * * 0"
+
+concurrency:
+  group: sync-universe
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync universe
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Trigger the universe refresh
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${API_BASE_URL:-}" ]; then
+            echo "::error::API_BASE_URL is not set — add it as a repo/environment variable pointing at the deployed app."
+            exit 1
+          fi
+
+          url="${API_BASE_URL%/}/internal/universe/sync"
+          http_code=$(curl -sS -X POST "$url" \
+            --max-time 300 \
+            -o /tmp/universe_sync.json \
+            -w '%{http_code}')
+          body=$(cat /tmp/universe_sync.json 2>/dev/null || echo '{}')
+          echo "POST ${url} -> HTTP ${http_code}: ${body}"
+
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Universe sync failed (HTTP $http_code) — check the app logs."
+            exit 1
+          fi
+
+          skipped=$(echo "$body" | jq -r '.skipped // false')
+          screened=$(echo "$body" | jq -r '.screened // 0')
+          added=$(echo "$body" | jq -r '.added // 0')
+          updated=$(echo "$body" | jq -r '.updated // 0')
+          removed=$(echo "$body" | jq -r '.removed // 0')
+
+          if [ "$skipped" = "true" ]; then
+            echo "::warning::Screen came back empty/too small (screened=${screened}) — reconcile skipped, stored universe left intact (Nasdaq blocked?)."
+            exit 0
+          fi
+          echo "Universe synced: screened=${screened} added=${added} updated=${updated} removed=${removed}."

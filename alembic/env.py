@@ -21,6 +21,7 @@ from app.stocks import constituents  # noqa: F401
 from app.stocks.stocks import models as stocks_models  # noqa: F401
 from app.stocks.earnings.quarterly import models as quarterly_earnings_models  # noqa: F401
 from app.stocks.earnings.annual import models as annual_earnings_models  # noqa: F401
+from app.stocks.universe import models as universe_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
