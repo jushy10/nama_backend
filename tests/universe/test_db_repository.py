@@ -3,8 +3,7 @@
 Offline: an in-memory SQLite database stands in for the real ``stocks`` table (the universe
 has no table of its own). Verifies the additive upsert (insert new / refresh in place /
 never remove an absent member), the fill-but-don't-clobber rule for the anchor's
-name/exchange/sector, the screen stamp + added-vs-updated counting, and search (ilike on
-ticker or name, largest market cap first, screened members only, limit respected).
+name/exchange/sector, the screen stamp, and added-vs-updated counting.
 """
 
 from datetime import datetime, timezone
@@ -50,6 +49,7 @@ def _row(session, ticker) -> StockRecord:
 
 
 def _screened_count(session) -> int:
+    """Anchors marked as screened members (a ``market_cap`` is set)."""
     return session.execute(
         select(func.count())
         .select_from(StockRecord)
@@ -151,47 +151,3 @@ def test_upsert_counts_a_preexisting_unscreened_anchor_as_added(session):
     # First time it's screened => added, not updated (screened_at was null).
     assert (counts.added, counts.updated) == (1, 0)
     assert _row(session, "AAPL").market_cap == 3e12
-
-
-def test_search_matches_ticker_or_name_case_insensitively(session):
-    r = repo(session)
-    r.upsert_screen(
-        (
-            _stock("AAPL", name="Apple Inc."),
-            _stock("MSFT", name="Microsoft Corp"),
-        )
-    )
-
-    assert [s.ticker for s in r.search("apple", limit=10)] == ["AAPL"]  # by name
-    assert [s.ticker for s in r.search("msft", limit=10)] == ["MSFT"]  # by ticker
-    assert [s.ticker for s in r.search("corp", limit=10)] == ["MSFT"]  # by name
-    assert r.search("nomatch", limit=10) == ()
-
-
-def test_search_orders_by_market_cap_desc_and_respects_limit(session):
-    r = repo(session)
-    r.upsert_screen(
-        (
-            _stock("SML", name="Small Corp", market_cap=5e11),
-            _stock("BIG", name="Big Corp", market_cap=2e12),
-        )
-    )
-
-    hits = r.search("corp", limit=10)
-    assert [s.ticker for s in hits] == ["BIG", "SML"]  # largest first
-    assert isinstance(hits[0], ScreenedStock)
-    assert [s.ticker for s in r.search("corp", limit=1)] == ["BIG"]  # limit respected
-
-
-def test_search_excludes_anchors_that_were_never_screened(session):
-    # An anchor with no market_cap (reached ``stocks`` some other way) must not surface.
-    get_or_create_stock(session, "TINY", "Tiny Corp")
-    session.commit()
-    r = repo(session)
-    r.upsert_screen((_stock("BIG", name="Big Corp", market_cap=2e12),))
-
-    assert [s.ticker for s in r.search("corp", limit=10)] == ["BIG"]  # TINY excluded
-
-
-def test_search_on_empty_universe_is_empty(session):
-    assert repo(session).search("anything", limit=10) == ()

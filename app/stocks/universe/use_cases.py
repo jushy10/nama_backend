@@ -1,21 +1,21 @@
 """Application use cases for the universe slice.
 
-Two actions, both pure orchestration over the ports so they run offline in tests against
-hand-written fakes and know nothing of Yahoo, HTTP, or SQLAlchemy:
+One action, pure orchestration over the ports so it runs offline in tests against
+hand-written fakes and knows nothing of Yahoo, HTTP, or SQLAlchemy:
 
 - ``SyncUniverse`` — the out-of-band populator. Screens the US market at/above the floor
   and upserts the result onto the ``stocks`` anchor (additive: it never removes a stock).
   Invoked by the cron endpoint. Guarded so a blocked/truncated screen (empty or
   implausibly small) is skipped rather than churning a partial set.
-- ``SearchStocks`` — the read path. Normalizes the query and returns the matching screened
-  stocks, largest market cap first.
+
+The read/search path over the populated universe is **deferred** — there is no search
+endpoint yet, only the sync that fills the anchor.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.stocks.universe.entities import ScreenedStock
 from app.stocks.universe.ports import StockScreener
 from app.stocks.universe.repository import UniverseRepository
 
@@ -71,29 +71,3 @@ class SyncUniverse:
             updated=counts.updated,
             skipped=False,
         )
-
-
-class SearchStocks:
-    """Use case: find screened stocks by ticker or company name."""
-
-    DEFAULT_LIMIT = 20
-    MAX_LIMIT = 100
-
-    def __init__(self, repository: UniverseRepository) -> None:
-        self._repository = repository
-
-    def execute(
-        self, query: str, *, limit: int | None = None
-    ) -> tuple[ScreenedStock, ...]:
-        """Return up to ``limit`` (default ``DEFAULT_LIMIT``, capped at ``MAX_LIMIT``)
-        screened stocks matching ``query``, largest market cap first. Raises ``ValueError``
-        for a blank query — searching for nothing is a client error, not an empty result."""
-        normalized = (query or "").strip()
-        if not normalized:
-            raise ValueError("A search query is required.")
-        capped = (
-            self.DEFAULT_LIMIT
-            if limit is None
-            else max(1, min(limit, self.MAX_LIMIT))
-        )
-        return self._repository.search(normalized, limit=capped)

@@ -1,14 +1,14 @@
 """Abstract persistence port for the universe slice.
 
-Dependency Inversion for storage: the use cases are handed a ``UniverseRepository`` and
-never know whether it's backed by SQLAlchemy or an in-memory fake (tests) — they just call
-these methods. The concrete SQLAlchemy implementation lives in ``db_repository.py``, over
-the shared ``stocks`` anchor.
+Dependency Inversion for storage: the sync use case is handed a ``UniverseRepository`` and
+never knows whether it's backed by SQLAlchemy or an in-memory fake (tests) — it just calls
+``upsert_screen``. The concrete SQLAlchemy implementation lives in ``db_repository.py``.
 
 A *Repository*, not a *Provider*: the universe is a slow-moving set refreshed out of band
 (the cron endpoint), not a live feed. It writes the screen straight onto the ``stocks``
 anchor (ticker/name/exchange plus the denormalized ``sector``/``market_cap``/``screened_at``
-columns) — there is no separate universe table.
+columns) — there is no separate universe table. (The read/search path over it is deferred,
+so this port has only the write side.)
 """
 
 from abc import ABC, abstractmethod
@@ -35,8 +35,8 @@ class UniverseSyncCounts:
 
 
 class UniverseRepository(ABC):
-    """A persistent store for the screened universe, read for search and refreshed by the
-    sync — the shared ``stocks`` anchor, in practice."""
+    """A persistent store for the screened universe, refreshed by the sync — the shared
+    ``stocks`` anchor, in practice."""
 
     @abstractmethod
     def upsert_screen(self, stocks: tuple[ScreenedStock, ...]) -> UniverseSyncCounts:
@@ -48,14 +48,5 @@ class UniverseRepository(ABC):
         (``market_cap``/``sector``/``screened_at``) — ``sector`` only when supplied, so a
         source that omits it doesn't wipe a known one. Additive: stocks absent from the
         screen are left untouched (no delete). Commits its own write.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def search(self, query: str, *, limit: int) -> tuple[ScreenedStock, ...]:
-        """Up to ``limit`` screened stocks whose ticker or name matches ``query`` (a
-        case-insensitive substring), largest market cap first. Empty when nothing matches.
-        Only screened members are returned (rows with a ``market_cap``), so a ticker that
-        reached the anchor some other way — but was never screened — won't surface.
         """
         raise NotImplementedError

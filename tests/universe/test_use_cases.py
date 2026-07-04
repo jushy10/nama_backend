@@ -1,8 +1,8 @@
-"""Tests for the universe use cases: SyncUniverse + SearchStocks.
+"""Tests for the universe sync use case: SyncUniverse.
 
 Offline: hand-written fakes for the screener and repository ports, so this exercises only
-the orchestration — the upsert-vs-skip decision and count pass-through on the sync side,
-query normalization and the limit cap on the search side — independent of Yahoo or the DB.
+the orchestration — the upsert-vs-skip decision and count pass-through — independent of
+Yahoo or the DB.
 """
 
 import pytest
@@ -11,11 +11,7 @@ from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.universe.entities import ScreenedStock
 from app.stocks.universe.ports import StockScreener
 from app.stocks.universe.repository import UniverseRepository, UniverseSyncCounts
-from app.stocks.universe.use_cases import (
-    SearchStocks,
-    SyncUniverse,
-    UniverseSyncReport,
-)
+from app.stocks.universe.use_cases import SyncUniverse, UniverseSyncReport
 
 
 def _stock(ticker, *, market_cap=1e10, name=None, exchange=None, sector=None):
@@ -49,24 +45,15 @@ class _FakeScreener(StockScreener):
 
 
 class _FakeRepo(UniverseRepository):
-    """Records the upsert input and returns canned counts; serves canned search hits."""
+    """Records the upsert input and returns canned counts."""
 
-    def __init__(self, *, counts=UniverseSyncCounts(0, 0), hits=()) -> None:
+    def __init__(self, *, counts=UniverseSyncCounts(0, 0)) -> None:
         self._counts = counts
-        self._hits = tuple(hits)
         self.upserted: tuple[ScreenedStock, ...] | None = None
-        self.searches: list[tuple[str, int]] = []
 
     def upsert_screen(self, stocks):
         self.upserted = tuple(stocks)
         return self._counts
-
-    def search(self, query, *, limit):
-        self.searches.append((query, limit))
-        return self._hits
-
-
-# ───────────────────────────── SyncUniverse ─────────────────────────────
 
 
 def test_sync_upserts_a_healthy_screen_and_reports_counts():
@@ -112,30 +99,3 @@ def test_sync_propagates_a_hard_screen_failure():
     with pytest.raises(StockDataUnavailable):
         SyncUniverse(screener, repo).execute()
     assert repo.upserted is None  # nothing written on a hard failure
-
-
-# ───────────────────────────── SearchStocks ─────────────────────────────
-
-
-def test_search_normalizes_the_query_and_defaults_the_limit():
-    hit = _stock("AAPL", name="Apple Inc.")
-    repo = _FakeRepo(hits=(hit,))
-
-    out = SearchStocks(repo).execute("  apple ")
-
-    assert out == (hit,)
-    assert repo.searches == [("apple", SearchStocks.DEFAULT_LIMIT)]
-
-
-def test_search_rejects_a_blank_query():
-    repo = _FakeRepo()
-    with pytest.raises(ValueError):
-        SearchStocks(repo).execute("   ")
-    assert repo.searches == []  # rejected before the repo is touched
-
-
-def test_search_caps_the_limit_and_floors_it_at_one():
-    repo = _FakeRepo()
-    SearchStocks(repo).execute("x", limit=10_000)
-    SearchStocks(repo).execute("x", limit=0)
-    assert repo.searches == [("x", SearchStocks.MAX_LIMIT), ("x", 1)]

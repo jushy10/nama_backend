@@ -7,8 +7,7 @@ recommendations sub-slices). Pure and vendor-agnostic — stdlib only.
 ``ScreenedStock`` is one row of the screened universe: the identity facts the ``stocks``
 anchor holds (``ticker`` / ``name`` / ``exchange``) alongside the screen's own figures —
 ``market_cap`` (the selection criterion) and ``sector``. It is the single shape the
-screener returns, the anchor persists, and a search result carries, so nothing has to
-re-map between "a screened stock", "a stored anchor row", and "a search hit".
+screener returns and the sync persists onto the anchor.
 """
 
 from __future__ import annotations
@@ -22,8 +21,8 @@ class ScreenedStock:
 
     ``market_cap`` is in whole dollars (e.g. ``3.01e12`` for a $3.01T company). Everything
     but the ``ticker`` is optional: ``exchange`` comes from the screen, ``sector`` may be
-    absent (the yfinance screen doesn't publish it, so it rides in ``None``), and a stored
-    row read back for search carries whatever the anchor holds.
+    absent (the yfinance screen doesn't publish it, so it rides in ``None``), and the name
+    may be missing.
     """
 
     ticker: str

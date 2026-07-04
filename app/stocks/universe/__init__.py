@@ -1,8 +1,9 @@
 """The stock-universe sub-slice.
 
-Owns the searchable investable universe: every US-listed company at/above a market-cap
-floor, screened out of band and stored so the app can *discover* stocks (search by ticker
-or name) rather than only serve a symbol you already know. Thin, and table-less — it writes
-the screen straight onto the shared ``stocks`` anchor (the ``sector`` / ``market_cap`` /
-``screened_at`` columns migration 0011 added), so search is a single-table read.
+Owns the investable universe: every US-listed company at/above a market-cap floor, screened
+out of band and stored on the shared ``stocks`` anchor so the app *knows* the big-cap
+universe rather than only whatever symbols it's been asked about. Thin, and table-less — it
+writes the screen straight onto ``stocks`` (the ``sector`` / ``market_cap`` / ``screened_at``
+columns migration 0012 added). The read/search endpoint over it is **deferred**; for now the
+slice is just the sync that populates the anchor.
 """
