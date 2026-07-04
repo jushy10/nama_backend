@@ -7,8 +7,8 @@ here. Feature slices import ``StockRecord`` + ``get_or_create_stock`` and add th
 child tables beside it. The schema is created by migration 0002 (the since-removed
 analyst-estimates feature was the first to need the anchor); migration 0009 added
 ``exchange``, 0010 renamed the ``symbol`` column to ``ticker`` (the domain layers
-still say "symbol" — the rename is a table-vocabulary choice), and 0011 added the three
-universe-screen columns below.
+still say "symbol" — the rename is a table-vocabulary choice), 0011 added the trailing
+year-over-year growth columns, and 0012 the three universe-screen columns (all below).
 """
 
 from __future__ import annotations
@@ -32,6 +32,16 @@ class StockRecord(Base):
     ticker (which arrives alone) still gets a row until whichever feature first learns
     them fills them in.
 
+    ``revenue_growth_yoy`` / ``eps_growth_yoy`` are the stock's *latest trailing*
+    year-over-year growth (percent) — the newest reported fiscal year over the one
+    before it, written by the annual-earnings slice from its stored timeline. Unlike
+    ``name``/``exchange`` (fill-once identity facts) these are a moving snapshot:
+    they're **overwritten** on every annual refresh as the latest reported year rolls
+    forward, so a stock carries exactly one pair (the current one), not a history. The
+    EPS figure is on the analyst-consensus (adjusted) basis, matching the annual
+    slice's ``eps_actual_consensus``. Nullable — unset until the annual slice has two
+    reported years cached (and EPS best-effort, since the consensus basis often isn't).
+
     ``sector`` / ``market_cap`` / ``screened_at`` are the universe screen's facts, filled
     by the universe sync (the ≥$1B US screen) and deliberately denormalized onto the
     anchor so search is a single-table read. All three are nullable: a ticker that reached
@@ -49,6 +59,8 @@ class StockRecord(Base):
     ticker: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     exchange: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    revenue_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eps_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
     sector: Mapped[str | None] = mapped_column(String(64), nullable=True)
     market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
     screened_at: Mapped[datetime | None] = mapped_column(

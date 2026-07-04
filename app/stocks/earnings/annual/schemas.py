@@ -31,10 +31,17 @@ class AnnualEarningsYearResponse(BaseModel):
 
 class AnnualEarningsResponse(BaseModel):
     """A stock's per-year earnings timeline: recent reported years then upcoming ones, in
-    chronological order, with counts so a client can split the two without re-deriving them."""
+    chronological order, with counts so a client can split the two without re-deriving them.
+
+    ``revenue_growth_yoy`` / ``eps_growth_yoy`` are the latest *trailing* year-over-year
+    growth (percent) — the newest reported year over the one before it. Trailing (reported
+    actuals, not estimates); the EPS figure is on the analyst-consensus (adjusted) basis.
+    ``None`` until two reported years are present (and EPS is best-effort beyond that)."""
 
     symbol: str
     count: int
     reported_count: int
     upcoming_count: int
+    revenue_growth_yoy: float | None
+    eps_growth_yoy: float | None
     years: list[AnnualEarningsYearResponse]

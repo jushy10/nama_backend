@@ -7,8 +7,8 @@ stock that reached ``stocks`` some other way (a ticker-card lookup, an earnings 
 simply has them null, and search treats ``market_cap IS NOT NULL`` as "is a screened
 member". The ``stocks`` table already exists (created in 0002), so this only alters it.
 
-Revision ID: 0011_universe_on_stocks
-Revises: 0010_stocks_ticker
+Revision ID: 0012_universe_on_stocks
+Revises: 0011_stocks_growth_yoy
 Create Date: 2026-07-04
 
 """
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 
 # Keep the revision id <= 32 chars: alembic_version.version_num is VARCHAR(32). Postgres
 # enforces it (SQLite doesn't), so a longer id passes local tests but fails the RDS migration.
-revision: str = "0011_universe_on_stocks"
-down_revision: Union[str, None] = "0010_stocks_ticker"
+revision: str = "0012_universe_on_stocks"
+down_revision: Union[str, None] = "0011_stocks_growth_yoy"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
