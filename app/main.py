@@ -24,6 +24,9 @@ from app.stocks.endpoints.quarterly_earnings_endpoints import (
 from app.stocks.endpoints.recommendations_endpoints import (
     router as recommendations_router,
 )
+from app.stocks.endpoints.cron_universe_endpoints import (
+    router as universe_cron_router,
+)
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.router import router as stocks_router
 
@@ -85,6 +88,11 @@ app.include_router(ticker_router)
 # drives the SyncRecommendations use case out of band. See
 # app/stocks/endpoints/cron_recommendations_endpoints.py.
 app.include_router(recommendations_cron_router)
+# The universe refresh cron endpoint (POST /internal/universe/sync); it drives the
+# SyncUniverse use case out of band (yfinance screen -> stocks anchor), populating the
+# stocks table with the ≥$1B US universe. The read/search endpoint over it is deferred.
+# See app/stocks/endpoints/cron_universe_endpoints.py.
+app.include_router(universe_cron_router)
 
 
 @app.get("/healthz")
