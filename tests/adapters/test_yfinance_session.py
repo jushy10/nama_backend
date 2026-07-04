@@ -1,9 +1,10 @@
 """Tests for the shared yfinance retry/pacing helper.
 
-Offline: ``reset_crumb`` is monkeypatched to a counter so nothing touches Yahoo's real
-singleton, and the wrapped ``fn`` is a plain callable. Backoff/pacing default to 0 (env
-unset), so these run instantly. Verifies the single crumb-refresh retry on both the
-swallowed-empty path and the raised-401 path, and that unrelated errors aren't retried.
+Offline: ``reset_crumb`` is re-patched in each test to a counter (overriding the conftest
+no-op stub) so nothing touches Yahoo's real singleton, and the wrapped ``fn`` is a plain
+callable. Backoff/pacing default to 0 (env unset), so these run instantly. Verifies the
+single crumb-refresh retry on both the swallowed-empty path and the raised-401 path, and
+that unrelated errors aren't retried.
 """
 
 import pytest
@@ -11,19 +12,16 @@ import pytest
 from app.stocks.adapters import yfinance_session
 
 
-@pytest.fixture(autouse=True)
-def _no_real_crumb_reset(monkeypatch):
-    """Count crumb resets instead of poking yfinance's real global state."""
-    resets = {"n": 0}
-
-    def _fake_reset():
-        resets["n"] += 1
-
-    monkeypatch.setattr(yfinance_session, "reset_crumb", _fake_reset)
+def _count_resets(monkeypatch) -> list:
+    """Patch ``reset_crumb`` to append to (and return) a list, so a test can assert how many
+    fresh-crumb refreshes happened."""
+    resets: list = []
+    monkeypatch.setattr(yfinance_session, "reset_crumb", lambda: resets.append(1))
     return resets
 
 
-def test_empty_result_triggers_one_crumb_refresh_and_retry(_no_real_crumb_reset):
+def test_empty_result_triggers_one_crumb_refresh_and_retry(monkeypatch):
+    resets = _count_resets(monkeypatch)
     calls = {"n": 0}
 
     def fn():
@@ -35,10 +33,11 @@ def test_empty_result_triggers_one_crumb_refresh_and_retry(_no_real_crumb_reset)
 
     assert result == {"sector": "Technology"}
     assert calls["n"] == 2  # retried exactly once
-    assert _no_real_crumb_reset["n"] == 1  # crumb dropped before the retry
+    assert len(resets) == 1  # crumb dropped before the retry
 
 
-def test_still_empty_after_retry_returns_empty(_no_real_crumb_reset):
+def test_still_empty_after_retry_returns_empty(monkeypatch):
+    resets = _count_resets(monkeypatch)
     calls = {"n": 0}
 
     def fn():
@@ -49,10 +48,11 @@ def test_still_empty_after_retry_returns_empty(_no_real_crumb_reset):
 
     assert result == {}
     assert calls["n"] == 2  # one retry, then gives up rather than looping
-    assert _no_real_crumb_reset["n"] == 1
+    assert len(resets) == 1
 
 
-def test_non_empty_result_is_not_retried(_no_real_crumb_reset):
+def test_non_empty_result_is_not_retried(monkeypatch):
+    resets = _count_resets(monkeypatch)
     calls = {"n": 0}
 
     def fn():
@@ -63,10 +63,11 @@ def test_non_empty_result_is_not_retried(_no_real_crumb_reset):
 
     assert result == {"sector": "Technology"}
     assert calls["n"] == 1
-    assert _no_real_crumb_reset["n"] == 0
+    assert len(resets) == 0
 
 
-def test_raised_401_is_refreshed_and_retried_then_propagates(_no_real_crumb_reset):
+def test_raised_401_is_refreshed_and_retried_then_propagates(monkeypatch):
+    resets = _count_resets(monkeypatch)
     calls = {"n": 0}
 
     def fn():
@@ -77,10 +78,11 @@ def test_raised_401_is_refreshed_and_retried_then_propagates(_no_real_crumb_rese
         yfinance_session.call(fn)
 
     assert calls["n"] == 2  # tried, dropped the crumb, retried once, then propagated
-    assert _no_real_crumb_reset["n"] == 1
+    assert len(resets) == 1
 
 
-def test_rate_limit_and_other_errors_are_not_retried(_no_real_crumb_reset):
+def test_rate_limit_and_other_errors_are_not_retried(monkeypatch):
+    resets = _count_resets(monkeypatch)
     calls = {"n": 0}
 
     def fn():
@@ -91,10 +93,11 @@ def test_rate_limit_and_other_errors_are_not_retried(_no_real_crumb_reset):
         yfinance_session.call(fn)
 
     assert calls["n"] == 1  # a 429 is left alone — no fresh-crumb retry
-    assert _no_real_crumb_reset["n"] == 0
+    assert len(resets) == 0
 
 
-def test_hard_feature_gate_is_not_treated_as_a_crumb_401(_no_real_crumb_reset):
+def test_hard_feature_gate_is_not_treated_as_a_crumb_401(monkeypatch):
+    resets = _count_resets(monkeypatch)
     calls = {"n": 0}
 
     def fn():
@@ -109,4 +112,14 @@ def test_hard_feature_gate_is_not_treated_as_a_crumb_401(_no_real_crumb_reset):
 
     # The IP-reputation gate isn't crumb-recoverable, so it isn't retried even though it's a 401.
     assert calls["n"] == 1
-    assert _no_real_crumb_reset["n"] == 0
+    assert len(resets) == 0
+
+
+def test_frame_is_empty_predicate():
+    class _Frame:
+        def __init__(self, empty):
+            self.empty = empty
+
+    assert yfinance_session.frame_is_empty(None) is True
+    assert yfinance_session.frame_is_empty(_Frame(True)) is True
+    assert yfinance_session.frame_is_empty(_Frame(False)) is False

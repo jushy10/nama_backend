@@ -49,7 +49,10 @@ changes. It is deliberately defensive — Yahoo is an unofficial, best-effort fe
 reshapes payloads without notice and rate-limits data-centre IPs — so any failure on the
 primary (estimate) surfaces becomes ``StockDataUnavailable`` and a symbol Yahoo doesn't cover
 yields an empty timeline rather than an error. Behind the persistent DB cache, a blocked live
-call just serves the stored rows.
+call just serves the stored rows. Every Yahoo read is routed through ``yfinance_session``
+(pacing + a one-shot fresh-crumb retry on a 401); ``income_stmt`` — the hardest-gated
+endpoint — additionally retries on an *empty* result, since a swallowed crumb 401 surfaces
+that way.
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ from datetime import date, datetime, timezone
 import pandas as pd
 import yfinance as yf
 
+from app.stocks.adapters import yfinance_session
 from app.stocks.earnings.annual.entities import AnnualEarnings, AnnualEarningsTimeline
 from app.stocks.earnings.annual.ports import AnnualEarningsProvider
 from app.stocks.exceptions import StockDataUnavailable
@@ -88,8 +92,11 @@ class YfinanceAnnualEarningsProvider(AnnualEarningsProvider):
     def get_annual_earnings(self, symbol: str) -> AnnualEarningsTimeline:
         try:
             ticker = self._ticker_factory(symbol)
-            eps_estimate = ticker.earnings_estimate
-            revenue_estimate = ticker.revenue_estimate
+            # Routed through yfinance_session for pacing + a fresh-crumb retry on a raised 401.
+            # No is_empty here: the forward estimate frames are legitimately empty for a stock
+            # with no analyst coverage, so retrying on empty would just double those calls.
+            eps_estimate = yfinance_session.call(lambda: ticker.earnings_estimate)
+            revenue_estimate = yfinance_session.call(lambda: ticker.revenue_estimate)
         except Exception as exc:  # noqa: BLE001 — vendor boundary: any failure → domain error
             raise StockDataUnavailable(
                 symbol, f"yfinance annual earnings failed ({exc})"
@@ -98,9 +105,12 @@ class YfinanceAnnualEarningsProvider(AnnualEarningsProvider):
         # Reported years come from the annual income statement — the fundamentals endpoint
         # Yahoo gates hardest from data-centre IPs. Best-effort: a failure drops the reported
         # years but leaves the (forward) timeline intact, so prod serves the estimates even
-        # when this is blocked.
+        # when this is blocked. An *empty* income_stmt is how a swallowed crumb 401 surfaces
+        # (a real company always has one), so retry once with a fresh crumb.
         try:
-            income_stmt = ticker.income_stmt
+            income_stmt = yfinance_session.call(
+                lambda: ticker.income_stmt, is_empty=yfinance_session.frame_is_empty
+            )
         except Exception:  # noqa: BLE001 — enrichment: degrade to no reported years
             income_stmt = None
 
@@ -112,7 +122,9 @@ class YfinanceAnnualEarningsProvider(AnnualEarningsProvider):
         earnings_dates = None
         if reported:
             try:
-                earnings_dates = ticker.get_earnings_dates(limit=_EARNINGS_DATES_LIMIT)
+                earnings_dates = yfinance_session.call(
+                    lambda: ticker.get_earnings_dates(limit=_EARNINGS_DATES_LIMIT)
+                )
             except Exception:  # noqa: BLE001 — enrichment: degrade to no consensus actuals
                 earnings_dates = None
         consensus = _consensus_eps_actuals(earnings_dates, reported)
@@ -232,7 +244,7 @@ def _fiscal_year1_end(ticker, reported: list[AnnualEarnings]) -> date | None:
     reachable but ``info`` not). ``None`` when neither is available, in which case the
     forward years are omitted."""
     try:
-        info = ticker.info or {}
+        info = yfinance_session.call(lambda: ticker.info) or {}
         stamp = info.get("nextFiscalYearEnd")
     except Exception:  # noqa: BLE001 — info is optional; a bad `info` mustn't sink the estimates
         stamp = None

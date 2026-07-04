@@ -83,6 +83,15 @@ def reset_crumb() -> None:
         pass
 
 
+def frame_is_empty(frame) -> bool:
+    """True for a missing or empty pandas frame — the shape yfinance hands back when a crumb
+    401 is *swallowed* on a DataFrame endpoint (``income_stmt``, ``earnings_dates``,
+    ``recommendations``, …). A ready-made ``is_empty`` for those adapters, so a blocked read
+    is retried with a fresh crumb; it also matches genuine no-coverage, so the retry then just
+    returns empty. Avoids importing pandas here — ``.empty`` is duck-typed."""
+    return frame is None or bool(getattr(frame, "empty", True))
+
+
 def _is_crumb_401(exc: Exception) -> bool:
     """Whether ``exc`` looks like a recoverable Yahoo crumb/401 (worth a fresh-crumb retry).
 
