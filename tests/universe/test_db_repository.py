@@ -154,7 +154,7 @@ def test_upsert_counts_a_preexisting_unscreened_anchor_as_added(session):
     assert _row(session, "AAPL").market_cap == 3e12
 
 
-def test_tickers_missing_industry_lists_unclassified_ordered_and_capped(session):
+def test_tickers_missing_industry_lists_unclassified_by_market_cap_and_capped(session):
     r = repo(session)
     r.upsert_screen(
         (
@@ -164,7 +164,7 @@ def test_tickers_missing_industry_lists_unclassified_ordered_and_capped(session)
         )
     )
     # A non-screened, incidentally-known ticker counts too — the work-list spans the whole
-    # stocks table, not only screened members.
+    # stocks table, not only screened members — but with no market cap it sorts last.
     get_or_create_stock(session, "TSLA", None)
     session.commit()
     # Classify one so it drops out of the work-list.
@@ -172,9 +172,10 @@ def test_tickers_missing_industry_lists_unclassified_ordered_and_capped(session)
         "MSFT", CompanyClassification(sector="technology", industry="software_infrastructure")
     )
 
-    # Ascending by ticker, and capped to the limit.
-    assert r.tickers_missing_industry(10) == ("AAPL", "TSLA", "XOM")
-    assert r.tickers_missing_industry(2) == ("AAPL", "TSLA")
+    # Largest market cap first (the megacaps before the tail), the null-cap incidental
+    # ticker last, and capped to the limit — so a run classifies the biggest names first.
+    assert r.tickers_missing_industry(10) == ("AAPL", "XOM", "TSLA")
+    assert r.tickers_missing_industry(2) == ("AAPL", "XOM")
 
 
 def test_set_classification_fills_both_sides(session):

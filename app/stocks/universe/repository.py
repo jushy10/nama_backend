@@ -56,11 +56,16 @@ class UniverseRepository(ABC):
         """Return up to ``limit`` tickers whose ``industry`` is still unset — the enrichment
         pass's work-list.
 
-        Ordered deterministically (by ticker) so successive capped runs sweep the whole set.
-        A ticker keeps reappearing until its industry is filled; a symbol the source can't
-        classify (or a run that never reaches it under the cap) simply surfaces again next
-        run. Spans the whole ``stocks`` table, not only screened members, so an
-        incidentally-known ticker gets classified too.
+        Ordered **largest market cap first** (ticker as a stable tiebreak), so a capped run
+        spends its budget on the biggest, most-viewed names before the long tail — a megacap
+        is classified in an early run rather than starved behind thousands of smaller,
+        alphabetically-earlier ones (which matters because the per-ticker source is
+        rate-limited, so only so many succeed per run). Deterministic, so successive capped
+        runs still sweep the whole set. A ticker keeps reappearing until its industry is
+        filled; a symbol the source can't classify (or a run that never reaches it under the
+        cap) simply surfaces again next run. Spans the whole ``stocks`` table, not only
+        screened members, so an incidentally-known ticker (no market cap → sorted last) gets
+        classified too.
         """
         raise NotImplementedError
 

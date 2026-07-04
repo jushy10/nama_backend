@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import nulls_last, select
 from sqlalchemy.orm import Session
 
 from app.stocks.stocks.models import StockRecord, get_or_create_stock
@@ -60,11 +60,16 @@ class SqlUniverseRepository(UniverseRepository):
         return UniverseSyncCounts(added=added, updated=updated)
 
     def tickers_missing_industry(self, limit: int) -> tuple[str, ...]:
+        # Largest market cap first (ticker as a stable tiebreak) so a capped, rate-limited
+        # run spends its scarce successful .info calls on the biggest, most-viewed names —
+        # a megacap like NVDA/GOOGL is classified in the first run rather than starved
+        # behind thousands of alphabetically-earlier small caps. A non-screened incidental
+        # ticker (market_cap NULL) sorts last, after every screened member.
         rows = (
             self._session.execute(
                 select(StockRecord.ticker)
                 .where(StockRecord.industry.is_(None))
-                .order_by(StockRecord.ticker)
+                .order_by(nulls_last(StockRecord.market_cap.desc()), StockRecord.ticker)
                 .limit(limit)
             )
             .scalars()
