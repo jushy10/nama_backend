@@ -42,15 +42,18 @@ class StockRecord(Base):
     slice's ``eps_actual_consensus``. Nullable — unset until the annual slice has two
     reported years cached (and EPS best-effort, since the consensus basis often isn't).
 
-    ``sector`` / ``market_cap`` / ``screened_at`` are the universe screen's facts, filled
-    by the universe sync (the ≥$1B US screen) and deliberately denormalized onto the
-    anchor so search is a single-table read. All three are nullable: a ticker that reached
-    the table some other way (a ticker-card lookup, an earnings refresh) has never been
-    screened, so they stay null — which is exactly how search tells a screened company
+    ``sector`` / ``industry`` / ``market_cap`` / ``screened_at`` are the universe screen's
+    facts, filled by the universe sync (the ≥$1B US screen) and deliberately denormalized
+    onto the anchor so search is a single-table read. All four are nullable: a ticker that
+    reached the table some other way (a ticker-card lookup, an earnings refresh) has never
+    been screened, so they stay null — which is exactly how search tells a screened company
     apart from an incidentally-known symbol (it filters on ``market_cap IS NOT NULL``).
     ``market_cap`` is whole dollars; ``screened_at`` is when the last screen that included
-    the stock ran (the freshness stamp). ``sector`` currently rides in null because the
-    live screen source (yfinance) doesn't publish it — the column awaits a source that does.
+    the stock ran (the freshness stamp). ``sector`` and ``industry`` are the company's
+    classification as snake_case slugs (e.g. ``technology`` / ``consumer_electronics``),
+    filled once by the sync's enrichment pass from Yahoo's per-ticker ``.info`` — the bulk
+    screen carries neither, so they lag the other screen facts until enrichment reaches the
+    stock (and stay null for a symbol Yahoo doesn't classify).
     """
 
     __tablename__ = "stocks"
@@ -62,6 +65,7 @@ class StockRecord(Base):
     revenue_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
     eps_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
     sector: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    industry: Mapped[str | None] = mapped_column(String(64), nullable=True)
     market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
     screened_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
