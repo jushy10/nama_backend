@@ -42,7 +42,7 @@ def test_upgrade_creates_table_then_downgrade_drops_it(alembic):
 
 
 def test_upgrade_adds_index_membership_flags_to_stocks(alembic):
-    # 0013 folds the S&P 500 / Nasdaq-100 membership flags onto the shared stocks anchor.
+    # 0014 folds the S&P 500 / Nasdaq-100 membership flags onto the shared stocks anchor.
     config, url = alembic
 
     command.upgrade(config, "head")

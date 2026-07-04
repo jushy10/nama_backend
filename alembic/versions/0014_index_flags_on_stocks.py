@@ -9,8 +9,8 @@ known (absent from the source list == not a member), and the default backfills t
 already exist. The reconcile cron (``/internal/index-membership/sync``) keeps them current.
 The ``stocks`` table already exists (created in 0002), so this only alters it.
 
-Revision ID: 0013_index_flags_on_stocks
-Revises: 0012_universe_on_stocks
+Revision ID: 0014_index_flags_on_stocks
+Revises: 0013_stocks_industry
 Create Date: 2026-07-04
 
 """
@@ -21,8 +21,8 @@ import sqlalchemy as sa
 
 # Keep the revision id <= 32 chars: alembic_version.version_num is VARCHAR(32). Postgres
 # enforces it (SQLite doesn't), so a longer id passes local tests but fails the RDS migration.
-revision: str = "0013_index_flags_on_stocks"
-down_revision: Union[str, None] = "0012_universe_on_stocks"
+revision: str = "0014_index_flags_on_stocks"
+down_revision: Union[str, None] = "0013_stocks_industry"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

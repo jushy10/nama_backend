@@ -2,28 +2,30 @@ name: Sync annual earnings
 run-name: Sync annual earnings
 
 # Monthly (and on-demand). Reported fiscal years — and the trailing YoY growth derived from
-# them onto the stocks anchor — change about once a year per stock, and the read endpoint fills
-# new symbols lazily, so this just keeps the already-stored rows fresh; monthly is ample for a
-# once-a-year figure. It POSTs the deployed app's annual-earnings cron endpoint
+# them onto the stocks anchor — change about once a year per stock. The sweep both keeps the
+# already-stored rows fresh and SEEDS stocks not yet cached (the ≥$1B universe), un-cached
+# first. It POSTs the deployed app's annual-earnings cron endpoint
 # (app/stocks/endpoints/cron_annual_earnings_endpoints.py), which runs the SyncAnnualEarnings
-# use case, refreshing the stalest stocks first.
+# use case.
 #
 # The endpoint is FIRE-AND-FORGET: it schedules the sweep on a background thread and returns
-# 202 immediately, so this workflow makes a SINGLE quick POST — no batching. (The batched
-# loop was only needed back when the endpoint ran synchronously under API Gateway's hard 30s
-# integration timeout; the background sweep has no request clock, so one call refreshes the
-# whole stalest window.) A 200 "already_running" means a previous sweep is still in flight —
-# also success; this run just declines to start a second.
+# 202 immediately, so this workflow makes a SINGLE quick POST — no batching. By default the
+# sweep processes EVERY stock in the anchor (un-cached first, then stalest); pass the optional
+# `limit` dispatch input to cap a single run (e.g. to chunk the first seed and stay gentle on
+# Yahoo). A 200 "already_running" means a previous sweep is still in flight — also success;
+# this run just declines to start a second.
 #
 # Operational notes:
 #  - Because the sweep runs in the background, the response can't report how many stocks were
 #    refreshed — it only confirms the sweep was accepted. The counts land in the app logs
 #    (CloudWatch): "annual-earnings sync done: refreshed=… failed=…".
 #  - The live source is yfinance (Yahoo), which needs no API key. Yahoo rate-limits / blocks
-#    data-centre IPs intermittently, so a sweep may refresh fewer stocks than the limit; the
+#    data-centre IPs intermittently, so a sweep may refresh fewer stocks than requested; the
 #    next run retries the stalest first. A degraded fetch can't erase stored figures: the
 #    sync merges the fresh window with the stored rows (reported history and revenue are
 #    carried forward when Yahoo drops them), and an empty result is never stored.
+#  - An unbounded run makes one round of Yahoo calls per stock (thousands, sequential); if
+#    Yahoo starts blocking, pass `limit` to cover the universe over several smaller runs.
 #  - The endpoint is currently unauthenticated (an auth-token guard is planned); this
 #    workflow just triggers it.
 #
@@ -31,7 +33,13 @@ run-name: Sync annual earnings
 # reachable from the GitHub runner.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Optional cap on stocks to refresh this run (un-cached first, then stalest). Leave blank to process every stock."
+        required: false
+        type: string
+        default: ""
   # 1st of each month, 09:00 UTC — an hour after the quarterly-earnings sync so the two don't
   # hit Yahoo from the same host at once on a month whose 1st is a Monday. The stored annual
   # rows (reported years + the trailing YoY growth) change about once a year per stock, so a
@@ -45,11 +53,6 @@ concurrency:
   group: sync-annual-earnings
   cancel-in-progress: false
 
-env:
-  # Max stored stocks the background sweep refreshes this run, stalest first (the endpoint's
-  # ceiling). Stalest-first means a universe larger than this is covered over successive runs.
-  SYNC_ANNUAL_EARNINGS_LIMIT: "1000"
-
 jobs:
   sync:
     name: Sync annual earnings
@@ -60,6 +63,9 @@ jobs:
       - name: Trigger the annual-earnings refresh
         env:
           API_BASE_URL: ${{ vars.API_BASE_URL }}
+          # Optional per-dispatch cap; empty on scheduled runs (and by default), so the
+          # endpoint processes every stock.
+          LIMIT: ${{ github.event.inputs.limit }}
         run: |
           set -euo pipefail
 
@@ -68,7 +74,12 @@ jobs:
             exit 1
           fi
 
-          url="${API_BASE_URL%/}/internal/earnings/annual/sync?limit=${SYNC_ANNUAL_EARNINGS_LIMIT}"
+          url="${API_BASE_URL%/}/internal/earnings/annual/sync"
+          # Append ?limit= only when a limit was provided (manual dispatch); otherwise the
+          # endpoint refreshes + seeds every stock (its default).
+          if [ -n "${LIMIT:-}" ]; then
+            url="${url}?limit=${LIMIT}"
+          fi
           http_code=$(curl -sS -X POST "$url" \
             --max-time 30 \
             -o /tmp/sync_response.json \

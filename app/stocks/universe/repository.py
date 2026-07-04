@@ -14,7 +14,7 @@ so this port has only the write side.)
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from app.stocks.universe.entities import ScreenedStock
+from app.stocks.universe.entities import CompanyClassification, ScreenedStock
 
 
 @dataclass(frozen=True)
@@ -48,5 +48,32 @@ class UniverseRepository(ABC):
         (``market_cap``/``sector``/``screened_at``) — ``sector`` only when supplied, so a
         source that omits it doesn't wipe a known one. Additive: stocks absent from the
         screen are left untouched (no delete). Commits its own write.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def tickers_missing_industry(self, limit: int) -> tuple[str, ...]:
+        """Return up to ``limit`` tickers whose ``industry`` is still unset — the enrichment
+        pass's work-list.
+
+        Ordered deterministically (by ticker) so successive capped runs sweep the whole set.
+        A ticker keeps reappearing until its industry is filled; a symbol the source can't
+        classify (or a run that never reaches it under the cap) simply surfaces again next
+        run. Spans the whole ``stocks`` table, not only screened members, so an
+        incidentally-known ticker gets classified too.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_classification(
+        self, ticker: str, classification: CompanyClassification
+    ) -> None:
+        """Fill ``ticker``'s ``sector`` / ``industry`` on the anchor from ``classification``.
+
+        Fill-once, like the other anchor facts: a side is written only when the source
+        supplies it and the column is still unset, so a settled value is never clobbered and
+        a half classification (only one side known) leaves room for the other later. A no-op
+        if the ticker has no row. Commits its own write, so a partial enrichment sweep is
+        durable.
         """
         raise NotImplementedError

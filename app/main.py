@@ -92,9 +92,10 @@ app.include_router(ticker_router)
 # app/stocks/endpoints/cron_recommendations_endpoints.py.
 app.include_router(recommendations_cron_router)
 # The universe refresh cron endpoint (POST /internal/universe/sync); it drives the
-# SyncUniverse use case out of band (yfinance screen -> stocks anchor), populating the
-# stocks table with the ≥$1B US universe. The read/search endpoint over it is deferred.
-# See app/stocks/endpoints/cron_universe_endpoints.py.
+# SyncUniverse use case out of band (yfinance screen -> stocks anchor, then per-ticker
+# sector/industry enrichment), populating the stocks table with the ≥$1B US universe.
+# Fire-and-forget like the earnings crons (202 + background thread). The read/search
+# endpoint over it is deferred. See app/stocks/endpoints/cron_universe_endpoints.py.
 app.include_router(universe_cron_router)
 # The index-membership refresh cron endpoint (POST /internal/index-membership/sync); it drives
 # the SyncIndexMembership use case out of band (Finnhub -> stocks anchor), reconciling the

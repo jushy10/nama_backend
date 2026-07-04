@@ -96,9 +96,9 @@ class SqlRecommendationsRepository(RecommendationsRepository):
             )
         self._session.commit()
 
-    def refresh_targets(self, limit: int) -> list[RefreshTarget]:
-        # Delegates the query to models (least-recently-refreshed first); this layer just
-        # wraps each (symbol, name) pair in the domain-facing RefreshTarget.
+    def refresh_targets(self, limit: int | None) -> list[RefreshTarget]:
+        # Delegates the query to models (un-cached first, then least-recently-refreshed);
+        # this layer just wraps each (symbol, name) pair in the domain-facing RefreshTarget.
         return [
             RefreshTarget(symbol, name)
             for symbol, name in models.stalest_symbols(self._session, limit)

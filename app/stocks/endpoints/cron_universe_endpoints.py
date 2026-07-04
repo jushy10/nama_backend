@@ -1,76 +1,113 @@
 """HTTP API for invoking the universe refresh — the cron entrypoint.
 
-The refresh is a use case (``SyncUniverse``) invoked over HTTP, so a scheduler (the
-sync-universe GitHub workflow, or any cron) drives it by POSTing here. The endpoint runs
-the refresh synchronously and returns a small JSON summary.
+The refresh is a use case (``SyncUniverse``) driven over HTTP: a scheduler (the sync-universe
+GitHub workflow, or any cron) POSTs here to kick it off.
 
-Wiring lives here, the composition-root way: build the live yfinance screener adapter + the
-SQL repository and hand them to the use case. Yahoo's screener needs no API key, so there's
-no credential to gate on; the sync is always constructable.
+The sweep is **fire-and-forget**. It used to run synchronously — a handful of fast bulk screen
+pages, safely inside API Gateway's hard 30s integration timeout. That changed when the sync
+gained a second pass: after the screen, it enriches each still-unclassified stock's
+sector/industry through a *per-ticker* Yahoo ``.info`` call (the bulk screen carries neither),
+and a few hundred to a few thousand sequential calls take minutes — well past 30s. So the
+endpoint now schedules the sweep on a background thread and returns ``202`` at once; the shared
+``background_sync`` helper owns the threading, the single-flight guard, and the exception
+handling (see it for the full rationale and the per-process-guard caveat). A partial run is
+safe: the screen upsert and each enrichment write commit independently, and the enrichment is
+fill-once, so an interrupted run just resumes on the next trigger.
 
-Unlike the earnings / recommendations crons this makes no per-symbol vendor round-trips —
-just a handful of paginated screen calls (yfinance pages the whole ≥$1B set 250 at a time,
-~12 pages) followed by a batch of DB upserts — so there's no batching / limit knob: one POST
-refreshes the whole universe.
+Wiring lives here, the composition-root way: ``run_universe_sync`` opens a fresh session and
+builds the live yfinance screener + classification adapters and the SQL repository for the use
+case. Yahoo needs no API key, so there's no credential to gate on; the sync is always
+constructable. ``get_sync_runner`` is the DI seam tests override with a fake.
 
 Security: this endpoint is currently **unauthenticated** — it writes the database (and hits
 Yahoo) and is triggered over the public internet by the sync workflow, so an auth token
-(planned: a shared ``CRON_SYNC_TOKEN`` bearer guard) should be added before the endpoints
-are considered hardened.
+(planned: a shared ``CRON_SYNC_TOKEN`` bearer guard) should be added before the endpoints are
+considered hardened.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
+import logging
+import threading
 
-from app.db import get_db
+from fastapi import APIRouter, Depends, Query, Response, status
+
+from app.db import SessionLocal
+from app.stocks.adapters.yfinance_classification_adapter import (
+    YfinanceClassificationProvider,
+)
 from app.stocks.adapters.yfinance_screener_adapter import YfinanceScreenerProvider
-from app.stocks.exceptions import StockDataUnavailable
+from app.stocks.endpoints.background_sync import (
+    SyncRunner,
+    SyncTriggerResponse,
+    trigger_sync,
+)
 from app.stocks.universe.db_repository import SqlUniverseRepository
 from app.stocks.universe.use_cases import SyncUniverse, UniverseSyncReport
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["universe-cron"])
 
-
-class UniverseSyncResponse(BaseModel):
-    """The refresh run's summary: how many names the screen returned, the anchors added /
-    updated by the upsert, and ``skipped`` — ``true`` when the screen came back empty or
-    implausibly small (a Yahoo block) and the upsert was skipped to avoid writing a partial
-    set (the counts are then both zero). The sync is additive, so there is no ``removed``."""
-
-    screened: int
-    added: int
-    updated: int
-    skipped: bool
+# Single-flight guard for the universe sweep only — independent of the other cron slices,
+# which may run at the same time (a lock only stops a sweep overlapping itself).
+_sync_lock = threading.Lock()
 
 
-def get_sync_universe(db: Session = Depends(get_db)) -> SyncUniverse:
-    # The refresh reads Yahoo directly (not the DB it fills). Yahoo's screener needs no key,
-    # so there's nothing to gate on — the sync is always wired.
-    return SyncUniverse(YfinanceScreenerProvider(), SqlUniverseRepository(db))
-
-
-def _present(report: UniverseSyncReport) -> UniverseSyncResponse:
-    """Presenter: use-case result -> HTTP response DTO."""
-    return UniverseSyncResponse(
-        screened=report.screened,
-        added=report.added,
-        updated=report.updated,
-        skipped=report.skipped,
-    )
-
-
-@router.post("/internal/universe/sync", response_model=UniverseSyncResponse)
-def sync_universe_endpoint(
-    use_case: SyncUniverse = Depends(get_sync_universe),
-) -> UniverseSyncResponse:
-    # Runs synchronously: a few paginated screen fetches + a batch of DB upserts. No
-    # per-symbol vendor calls, so it stays well under a gateway timeout — but the caller
-    # should still allow a generous idle timeout.
+def run_universe_sync(limit: int) -> UniverseSyncReport:
+    """Perform one full sync run (screen + enrich) with its **own** DB session (the request-
+    scoped ``get_db`` one is closed by the time the background thread runs)."""
+    db = SessionLocal()
     try:
-        report = use_case.execute()
-    except StockDataUnavailable as exc:
-        # A hard screen failure (Yahoo block / bad payload). A merely *degraded* screen
-        # doesn't raise — the use case skips it and reports skipped=true (a 200).
-        raise HTTPException(502, str(exc)) from exc
-    return _present(report)
+        report = SyncUniverse(
+            YfinanceScreenerProvider(),
+            SqlUniverseRepository(db),
+            YfinanceClassificationProvider(),
+        ).execute(limit=limit)
+        if report.skipped:
+            logger.warning(
+                "universe sync skipped: screen came back too small (screened=%d) — "
+                "nothing written (Yahoo blocked?)",
+                report.screened,
+            )
+        else:
+            logger.info(
+                "universe sync done: screened=%d added=%d updated=%d enriched=%d "
+                "enrich_failed=%d limit=%d",
+                report.screened,
+                report.added,
+                report.updated,
+                report.enriched,
+                report.enrich_failed,
+                limit,
+            )
+        return report
+    finally:
+        db.close()
+
+
+def get_sync_runner() -> SyncRunner:
+    """DI seam for the sweep's unit of work; tests override it with a fake."""
+    return run_universe_sync
+
+
+@router.post(
+    "/internal/universe/sync",
+    response_model=SyncTriggerResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def sync_universe_endpoint(
+    response: Response,
+    limit: int = Query(
+        SyncUniverse.DEFAULT_LIMIT,
+        ge=1,
+        le=3000,
+        description=(
+            "Max stocks whose sector/industry the background sweep classifies this run, via a "
+            "per-ticker Yahoo call. The market screen itself always runs in full; only the "
+            "enrichment pass is capped, so a universe larger than this is classified over "
+            "successive runs. Kept bounded to stay gentle on Yahoo's rate limits."
+        ),
+    ),
+    run: SyncRunner = Depends(get_sync_runner),
+) -> SyncTriggerResponse:
+    # Fire-and-forget: start the sweep on a guarded background thread and return 202 at once,
+    # or 200 "already_running" if one is already in flight. See background_sync.trigger_sync.
+    return trigger_sync(_sync_lock, run, limit, response, label="universe sync")
