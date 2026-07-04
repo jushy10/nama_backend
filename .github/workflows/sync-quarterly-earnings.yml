@@ -7,17 +7,19 @@ run-name: Sync quarterly earnings
 # (app/stocks/endpoints/cron_quarterly_earnings_endpoints.py), which runs the
 # SyncQuarterlyEarnings use case, refreshing the stalest stocks first.
 #
-# The refresh runs in SMALL BATCHES rather than one big call: the endpoint is synchronous
-# and the API Gateway in front of the app has a HARD 30s integration timeout, so a
-# hundreds-of-symbols request would 504 at the gateway while the app kept working. Each
-# batch refreshes a few stocks (well under the timeout); refreshed stocks get a new fetch
-# stamp, so consecutive stalest-first batches naturally walk the whole stored set. The loop
-# stops early when a batch refreshes nothing (Yahoo blocking the runs) or comes back
-# smaller than requested (stored set exhausted).
+# The endpoint is FIRE-AND-FORGET: it schedules the sweep on a background thread and returns
+# 202 immediately, so this workflow makes a SINGLE quick POST — no batching. (The batched
+# loop was only needed back when the endpoint ran synchronously under API Gateway's hard 30s
+# integration timeout; the background sweep has no request clock, so one call refreshes the
+# whole stalest window.) A 200 "already_running" means a previous sweep is still in flight —
+# also success; this run just declines to start a second.
 #
 # Operational notes:
+#  - Because the sweep runs in the background, the response can't report how many stocks were
+#    refreshed — it only confirms the sweep was accepted. The counts land in the app logs
+#    (CloudWatch): "quarterly-earnings sync done: refreshed=… failed=…".
 #  - The live source is yfinance (Yahoo), which needs no API key. Yahoo rate-limits / blocks
-#    data-centre IPs intermittently, so a run may refresh fewer stocks than the limit; the
+#    data-centre IPs intermittently, so a sweep may refresh fewer stocks than the limit; the
 #    next run retries the stalest first. A degraded fetch can't erase stored figures: the
 #    sync merges the fresh window with the stored rows (revenue actuals and quarters Yahoo
 #    drops are carried forward), and an empty result is never stored.
@@ -41,11 +43,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Max stored stocks to refresh per run, and how many per HTTP call. Each batch must finish
-  # inside API Gateway's hard 30s integration timeout (a stock is ~4 sequential Yahoo
-  # calls), so keep the batch small; the loop covers the rest.
-  SYNC_QUARTERLY_EARNINGS_LIMIT: "200"
-  SYNC_QUARTERLY_EARNINGS_BATCH: "5"
+  # Max stored stocks the background sweep refreshes this run, stalest first (the endpoint's
+  # ceiling). Stalest-first means a universe larger than this is covered over successive runs.
+  SYNC_QUARTERLY_EARNINGS_LIMIT: "1000"
 
 jobs:
   sync:
@@ -54,7 +54,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Trigger the quarterly-earnings refresh (batched)
+      - name: Trigger the quarterly-earnings refresh
         env:
           API_BASE_URL: ${{ vars.API_BASE_URL }}
         run: |
@@ -65,47 +65,19 @@ jobs:
             exit 1
           fi
 
-          total="${SYNC_QUARTERLY_EARNINGS_LIMIT}"
-          batch="${SYNC_QUARTERLY_EARNINGS_BATCH}"
-          url="${API_BASE_URL%/}/internal/earnings/quarterly/sync?limit=${batch}"
-          refreshed_total=0
-          failed_total=0
-          done_count=0
+          url="${API_BASE_URL%/}/internal/earnings/quarterly/sync?limit=${SYNC_QUARTERLY_EARNINGS_LIMIT}"
+          http_code=$(curl -sS -X POST "$url" \
+            --max-time 30 \
+            -o /tmp/sync_response.json \
+            -w '%{http_code}')
+          body=$(cat /tmp/sync_response.json 2>/dev/null || echo '{}')
+          echo "POST ${url} -> HTTP ${http_code}: ${body}"
 
-          while [ "$done_count" -lt "$total" ]; do
-            http_code=$(curl -sS -X POST "$url" \
-              --max-time 120 \
-              -o /tmp/sync_response.json \
-              -w '%{http_code}')
-            body=$(cat /tmp/sync_response.json 2>/dev/null || echo '{}')
-            echo "POST limit=${batch} -> HTTP ${http_code}: ${body}"
-
-            if [ "$http_code" != "200" ]; then
-              echo "::error::Quarterly-earnings sync batch failed (HTTP $http_code) — check the app logs."
-              exit 1
-            fi
-
-            refreshed=$(echo "$body" | jq -r '.refreshed // 0')
-            failed=$(echo "$body" | jq -r '.failed // 0')
-            refreshed_total=$((refreshed_total + refreshed))
-            failed_total=$((failed_total + failed))
-            done_count=$((done_count + refreshed + failed))
-
-            # Nothing refreshed: either no stored stocks or Yahoo is blocking every fetch —
-            # more batches won't help this run.
-            if [ "$refreshed" -eq 0 ]; then
-              echo "No stocks refreshed in this batch — stopping early."
-              break
-            fi
-            # A short batch means the stored set is smaller than the request — done.
-            if [ $((refreshed + failed)) -lt "$batch" ]; then
-              echo "Stored set exhausted — stopping."
-              break
-            fi
-          done
-
-          echo "Quarterly earnings synced: refreshed=${refreshed_total} failed=${failed_total}."
-          if [ "$refreshed_total" -eq 0 ] && [ "$failed_total" -gt 0 ]; then
-            echo "::error::Every attempted stock failed this run (Yahoo blocked?) — stored rows keep serving; the next run retries."
+          # 202 = sweep started; 200 = a sweep was already running (also fine). Anything
+          # else is a real failure (the app is down, or the trigger was rejected).
+          if [ "$http_code" != "202" ] && [ "$http_code" != "200" ]; then
+            echo "::error::Quarterly-earnings sync trigger failed (HTTP $http_code) — check the app logs."
             exit 1
           fi
+
+          echo "Quarterly-earnings sweep triggered ($(echo "$body" | jq -r '.status // "?"'))."
