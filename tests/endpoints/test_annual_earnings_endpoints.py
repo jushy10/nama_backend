@@ -85,7 +85,43 @@ def test_presents_the_timeline_with_counts():
     assert upcoming["revenue_actual"] is None and upcoming["net_income"] is None
     assert upcoming["eps_actual_consensus"] is None
     assert upcoming["is_reported"] is False
+    # Only one reported year here, so the trailing YoY snapshot has no prior to compare.
+    assert body["revenue_growth_yoy"] is None and body["eps_growth_yoy"] is None
     assert fake.calls == ["AAPL"]
+
+
+def test_presents_latest_trailing_yoy_when_two_reported_years():
+    timeline = AnnualEarningsTimeline(
+        symbol="AAPL",
+        years=(
+            AnnualEarnings(
+                fiscal_year=2023,
+                period_end=date(2023, 12, 31),
+                eps_actual=4.5,
+                eps_estimate=None,
+                revenue_actual=300e9,
+                revenue_estimate=None,
+                net_income=80e9,
+                eps_actual_consensus=5.0,
+            ),
+            AnnualEarnings(
+                fiscal_year=2024,
+                period_end=date(2024, 12, 31),
+                eps_actual=6.0,
+                eps_estimate=None,
+                revenue_actual=360e9,
+                revenue_estimate=None,
+                net_income=100e9,
+                eps_actual_consensus=6.0,
+            ),
+        ),
+    )
+    resp = _client(_FakeUseCase(result=timeline)).get("/stocks/AAPL/earnings/annual")
+    assert resp.status_code == 200
+    body = resp.json()
+    # Trailing YoY: revenue (360-300)/300 = +20%; eps on the consensus basis (6.0-5.0)/5.0 = +20%
+    assert body["revenue_growth_yoy"] == 20.0
+    assert body["eps_growth_yoy"] == 20.0
 
 
 def test_empty_timeline_is_a_200_with_no_years():

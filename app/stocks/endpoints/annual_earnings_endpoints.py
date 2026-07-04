@@ -87,6 +87,8 @@ def _present(timeline: AnnualEarningsTimeline) -> AnnualEarningsResponse:
         count=len(timeline.years),
         reported_count=len(timeline.past),
         upcoming_count=len(timeline.future),
+        revenue_growth_yoy=timeline.latest_revenue_growth_yoy,
+        eps_growth_yoy=timeline.latest_eps_growth_yoy,
         years=[_present_year(y) for y in timeline.years],
     )
 

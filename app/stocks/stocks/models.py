@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import String, Uuid, select
+from sqlalchemy import Float, String, Uuid, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 
@@ -29,6 +29,16 @@ class StockRecord(Base):
     ``exchange`` the listing venue (e.g. "NASDAQ") — both nullable so a lazily-stored
     ticker (which arrives alone) still gets a row until whichever feature first learns
     them fills them in.
+
+    ``revenue_growth_yoy`` / ``eps_growth_yoy`` are the stock's *latest trailing*
+    year-over-year growth (percent) — the newest reported fiscal year over the one
+    before it, written by the annual-earnings slice from its stored timeline. Unlike
+    ``name``/``exchange`` (fill-once identity facts) these are a moving snapshot:
+    they're **overwritten** on every annual refresh as the latest reported year rolls
+    forward, so a stock carries exactly one pair (the current one), not a history. The
+    EPS figure is on the analyst-consensus (adjusted) basis, matching the annual
+    slice's ``eps_actual_consensus``. Nullable — unset until the annual slice has two
+    reported years cached (and EPS best-effort, since the consensus basis often isn't).
     """
 
     __tablename__ = "stocks"
@@ -37,6 +47,8 @@ class StockRecord(Base):
     ticker: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     exchange: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    revenue_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eps_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 def get_or_create_stock(

@@ -91,6 +91,40 @@ class AnnualEarningsTimeline:
         """The upcoming (not-yet-reported) years, soonest first."""
         return tuple(y for y in self.years if not y.is_reported)
 
+    @property
+    def latest_revenue_growth_yoy(self) -> float | None:
+        """Trailing YoY revenue growth (percent): the newest reported year's revenue
+        over the prior reported year's.
+
+        A *trailing* indicator — both legs are already-reported actuals, so it says
+        what growth the business has shown, not what's expected (the forward analogue
+        is ``AnalystEstimates.forward_revenue_growth``). ``revenue_actual`` is a single
+        basis, so no basis caveat applies. ``None`` with fewer than two reported years,
+        a missing figure, or a non-positive prior (growth off a non-positive base is
+        meaningless)."""
+        reported = self.past
+        if len(reported) < 2:
+            return None
+        return _growth_percent(reported[-1].revenue_actual, reported[-2].revenue_actual)
+
+    @property
+    def latest_eps_growth_yoy(self) -> float | None:
+        """Trailing YoY EPS growth (percent) on the analyst-consensus (adjusted) basis:
+        the newest reported year's ``eps_actual_consensus`` over the prior reported
+        year's.
+
+        Deliberately the *consensus* basis on both legs — not the GAAP-diluted
+        ``eps_actual`` — so the number is real growth, not a GAAP-vs-adjusted artifact
+        (the same reason ``eps_actual_consensus`` exists). Trailing, like the revenue
+        counterpart. ``None`` with fewer than two reported years, a missing
+        consensus figure (best-effort — often unfilled), or a non-positive prior."""
+        reported = self.past
+        if len(reported) < 2:
+            return None
+        return _growth_percent(
+            reported[-1].eps_actual_consensus, reported[-2].eps_actual_consensus
+        )
+
     def filled_from(
         self, stored: "AnnualEarningsTimeline | None"
     ) -> "AnnualEarningsTimeline":
@@ -128,6 +162,16 @@ class AnnualEarningsTimeline:
         upcoming = [y for y in combined if not y.is_reported]
         years = sorted(reported + upcoming, key=lambda y: y.fiscal_year)
         return AnnualEarningsTimeline(symbol=self.symbol, years=tuple(years))
+
+
+def _growth_percent(current: float | None, prior: float | None) -> float | None:
+    """One-year point-to-point growth (percent): the change from ``prior`` to
+    ``current``. A plain percentage gain/loss, not a compounded rate. ``None`` unless
+    both legs are present and ``prior`` is positive — a non-positive or missing base
+    makes the ratio meaningless. Mirrors the shared ``_forward_one_year_growth`` guard."""
+    if current is None or prior is None or prior <= 0:
+        return None
+    return round((current - prior) / prior * 100, 2)
 
 
 def _merged_year(fresh: AnnualEarnings, stored: AnnualEarnings | None) -> AnnualEarnings:

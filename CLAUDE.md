@@ -125,7 +125,7 @@ only this one file changes.
 - `adapters/yfinance_recommendations_adapter.py` — live source for the recommendations slice: **Yahoo via `yfinance`** (`Ticker.recommendations`), the sell-side buy/hold/sell split as monthly snapshots (the same recommendation-trend data Finnhub serves, but keyless — this replaced `finnhub_recommendation_provider.py` and the `FINNHUB_API_KEY` gate on the endpoint). Yahoo labels the rows *relatively* (`0m` = this month, `-1m`, …), so the adapter anchors them on today's month into first-of-month `period` dates — the identity the DB cache keys on. `adapters/db_cached_recommendations_adapter.py` — the same **read-through** DB cache as the earnings slices (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `adapters/yfinance_options_adapter.py` — live source for the ticker card's `options_metrics` block: **Yahoo via `yfinance`** (`Ticker.options` for the expiration list, `Ticker.option_chain(date)` for one expiry's calls/puts), keyless, implementing the ticker slice's `OptionChainProvider` port. Maps chain rows → `OptionContract` entities (strike, bid/ask/last, volume, open interest, IV); every *derived* figure (ATM IV, expected move, insurance cost, put/call) is entity logic, not adapter logic. **No DB cache or cron** — options prices decay by the hour, so the no-TTL read-through pattern doesn't fit; the read is live per request (the endpoint's 5-min Cache-Control is the only damping) and best-effort even when requested, since Yahoo intermittently blocks data-centre IPs
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
-- `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table — `ticker` (unique lookup; the column was renamed from `symbol` by migration 0010 — the domain layers still say "symbol"), plus the fill-once identity facts `name` and `exchange`) and its helpers `get_or_create_stock`, `anchor_facts`, `fill_exchange`. Owned by no single feature; per-feature tables hang off it and import it from here
+- `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table — `ticker` (unique lookup; the column was renamed from `symbol` by migration 0010 — the domain layers still say "symbol"), the fill-once identity facts `name` and `exchange`, and the mutable `revenue_growth_yoy` / `eps_growth_yoy` **latest trailing YoY snapshot** (migration 0011 — percent; EPS on the analyst-consensus/adjusted basis; **overwritten** every refresh by the annual-earnings slice as the newest reported year rolls forward, unlike the fill-once facts)) and its helpers `get_or_create_stock`, `anchor_facts`, `fill_exchange`. Owned by no single feature; per-feature tables hang off it and import it from here
 
 Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<concern>_adapter.py` for those under `app/stocks/adapters/`.
 
@@ -199,6 +199,17 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > without them, so a bad Yahoo day delays new data but never erases existing rows.
 > Fiscal-year labels are more exact than quarterly's — `income_stmt` reports the
 > true fiscal-year-end date, so the label is that date's calendar year.
+> The slice also computes the stock's **latest trailing YoY growth** — `revenue_growth_yoy`
+> and `eps_growth_yoy` (percent), the newest reported year over the one before it — as
+> `@property`s on `AnnualEarningsTimeline` (`revenue_actual` for revenue; `eps_actual_consensus`
+> on *both* legs for EPS, so it's real growth and not a GAAP-vs-adjusted artifact; the same
+> positive-prior guard as the PEGs). These are *trailing* (reported actuals, the backward-looking
+> cousin of `AnalystEstimates.forward_*_growth`). Served top-level on the read endpoint **and**
+> persisted as a moving snapshot on the shared `stocks` anchor — the single write point,
+> `SqlAnnualEarningsRepository.upsert`, overwrites the pair on every refresh (cron sync *and*
+> lazy fill both funnel through it), so a stock carries just the current pair (dropping to
+> `null` if a degraded window leaves fewer than two reported years). One figure per stock, not
+> a per-year history — the anchor is one row per stock.
 
 > **The recommendations sub-slice — `app/stocks/recommendations/`.** Analyst
 > recommendation trends (the sell-side buy/hold/sell split by month), built on the same
@@ -437,7 +448,7 @@ app/
     ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/Logo.dev)
     ├── adapters/           # ── vendor adapters as *_adapter.py (quarterly/annual earnings: yfinance + caches; estimates projection)
     ├── stocks/             # ── shared `stocks` anchor slice:
-    │   └── models.py            #    StockRecord (the `stocks` table: ticker/name/exchange) +
+    │   └── models.py            #    StockRecord (the `stocks` table: ticker/name/exchange + trailing YoY growth snapshot) +
     │                            #    get_or_create_stock, anchor_facts, fill_exchange
     ├── earnings/quarterly/ # ── quarterly-earnings sub-slice (its OWN entities.py):
     │   ├── entities.py          #    QuarterlyEarnings + QuarterlyEarningsTimeline (slice-local)
