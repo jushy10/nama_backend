@@ -1,9 +1,10 @@
 name: Sync annual earnings
 run-name: Sync annual earnings
 
-# Weekly (and on-demand). Reported fiscal years and forward-year estimates change through the
-# year, and the read endpoint fills new symbols lazily, so this just keeps the already-stored
-# rows fresh. It POSTs the deployed app's annual-earnings cron endpoint
+# Monthly (and on-demand). Reported fiscal years — and the trailing YoY growth derived from
+# them onto the stocks anchor — change about once a year per stock, and the read endpoint fills
+# new symbols lazily, so this just keeps the already-stored rows fresh; monthly is ample for a
+# once-a-year figure. It POSTs the deployed app's annual-earnings cron endpoint
 # (app/stocks/endpoints/cron_annual_earnings_endpoints.py), which runs the SyncAnnualEarnings
 # use case, refreshing the stalest stocks first.
 #
@@ -29,13 +30,14 @@ run-name: Sync annual earnings
 
 on:
   workflow_dispatch: {}
-  # Mondays, 09:00 UTC — an hour after the quarterly-earnings sync, so the two don't hit Yahoo
-  # from the same host at once. Weekly keeps forward estimates and freshly-reported years
-  # current; exact timing doesn't matter, so GitHub delaying scheduled runs under load is fine.
-  # Caveats: scheduled workflows run only from the default branch, and GitHub auto-disables the
-  # schedule after 60 days with no repo activity.
+  # 1st of each month, 09:00 UTC — an hour after the quarterly-earnings sync so the two don't
+  # hit Yahoo from the same host at once on a month whose 1st is a Monday. The stored annual
+  # rows (reported years + the trailing YoY growth) change about once a year per stock, so a
+  # monthly refresh keeps them current; exact timing doesn't matter, so GitHub delaying
+  # scheduled runs under load is fine. Caveats: scheduled workflows run only from the default
+  # branch, and GitHub auto-disables the schedule after 60 days with no repo activity.
   schedule:
-    - cron: "0 9 * * 1"
+    - cron: "0 9 1 * *"
 
 concurrency:
   group: sync-annual-earnings

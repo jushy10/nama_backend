@@ -177,6 +177,116 @@ def test_fills_a_missing_name_but_never_clobbers_a_known_one(session):
     )
 
 
+def _stock_growth(session, ticker: str = "AAPL"):
+    """The (revenue_growth_yoy, eps_growth_yoy) snapshot written on the stocks anchor."""
+    return session.execute(
+        select(StockRecord.revenue_growth_yoy, StockRecord.eps_growth_yoy).where(
+            StockRecord.ticker == ticker
+        )
+    ).one()
+
+
+def test_upsert_writes_the_latest_trailing_yoy_snapshot(session):
+    # Two reported years with revenue + consensus EPS, so both trailing legs compute.
+    repo(session).upsert(
+        "AAPL",
+        "Apple Inc.",
+        AnnualEarningsTimeline(
+            "AAPL",
+            (
+                _reported(2023, 5.0, revenue_actual=300e9, eps_actual_consensus=5.0),
+                _reported(2024, 6.0, revenue_actual=360e9, eps_actual_consensus=6.0),
+                _upcoming(2025, 6.5, 400e9),  # ignored: not reported
+            ),
+        ),
+    )
+    rev, eps = _stock_growth(session)
+    # revenue (360-300)/300 = +20%; eps on the consensus basis (6.0-5.0)/5.0 = +20%
+    assert rev == 20.0 and eps == 20.0
+
+
+def test_upsert_overwrites_the_growth_snapshot_each_refresh(session):
+    # Unlike the fill-once name/exchange, the snapshot moves: a later refresh whose newest
+    # reported year rolled forward replaces the stored pair.
+    r = repo(session)
+    r.upsert(
+        "AAPL",
+        "Apple Inc.",
+        AnnualEarningsTimeline(
+            "AAPL",
+            (
+                _reported(2023, 5.0, revenue_actual=300e9, eps_actual_consensus=5.0),
+                _reported(2024, 6.0, revenue_actual=360e9, eps_actual_consensus=6.0),
+            ),
+        ),
+    )
+    r.upsert(
+        "AAPL",
+        "Apple Inc.",
+        AnnualEarningsTimeline(
+            "AAPL",
+            (
+                _reported(2024, 6.0, revenue_actual=360e9, eps_actual_consensus=6.0),
+                _reported(2025, 9.0, revenue_actual=450e9, eps_actual_consensus=9.0),
+            ),
+        ),
+    )
+    rev, eps = _stock_growth(session)
+    # now 2025 vs 2024: revenue (450-360)/360 = +25%; eps (9-6)/6 = +50%
+    assert rev == 25.0 and eps == 50.0
+
+
+def test_growth_snapshot_is_null_without_two_reported_years(session):
+    repo(session).upsert(
+        "AAPL",
+        "Apple Inc.",
+        AnnualEarningsTimeline(
+            "AAPL",
+            (
+                _reported(2024, 6.0, revenue_actual=360e9, eps_actual_consensus=6.0),
+                _upcoming(2025, 6.5, 400e9),
+            ),
+        ),
+    )
+    rev, eps = _stock_growth(session)
+    assert rev is None and eps is None
+
+
+def test_eps_growth_snapshot_is_null_when_consensus_basis_missing(session):
+    # Revenue still computes; EPS needs the consensus basis on both years, and it's
+    # best-effort — here the prior year never filled it, so EPS growth is null.
+    repo(session).upsert(
+        "AAPL",
+        "Apple Inc.",
+        AnnualEarningsTimeline(
+            "AAPL",
+            (
+                _reported(2023, 5.0, revenue_actual=300e9),  # no eps_actual_consensus
+                _reported(2024, 6.0, revenue_actual=360e9, eps_actual_consensus=6.0),
+            ),
+        ),
+    )
+    rev, eps = _stock_growth(session)
+    assert rev == 20.0 and eps is None
+
+
+def test_eps_growth_snapshot_is_null_off_a_loss_year(session):
+    # A non-positive prior-year EPS makes the percentage meaningless (guard: prior > 0).
+    repo(session).upsert(
+        "AAPL",
+        "Apple Inc.",
+        AnnualEarningsTimeline(
+            "AAPL",
+            (
+                _reported(2023, -1.0, revenue_actual=300e9, eps_actual_consensus=-1.0),
+                _reported(2024, 6.0, revenue_actual=360e9, eps_actual_consensus=6.0),
+            ),
+        ),
+    )
+    rev, eps = _stock_growth(session)
+    assert rev == 20.0 and eps is None
+
+
 def test_refresh_targets_orders_stalest_first_and_carries_the_name(session):
     # refresh_targets wraps the stalest-first query the cron walks; a stock's rows share a
     # fetch stamp, so an older upsert sorts ahead of a newer one, each paired with its name.
