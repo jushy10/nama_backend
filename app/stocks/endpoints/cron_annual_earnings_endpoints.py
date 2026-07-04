@@ -39,9 +39,11 @@ from app.stocks.earnings.annual.use_cases import (
 from app.stocks.endpoints.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
+    combined_reporter,
     logging_progress_reporter,
     trigger_sync,
 )
+from app.stocks.endpoints.sync_status import register_tracker, track_run
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["annual-earnings-cron"])
@@ -49,6 +51,8 @@ router = APIRouter(tags=["annual-earnings-cron"])
 # Single-flight guard for the annual sweep only — independent of the other cron slices,
 # which may run at the same time (a lock only stops a sweep overlapping itself).
 _sync_lock = threading.Lock()
+# Per-slice progress tracker backing GET /internal/sync/status.
+_status = register_tracker("annual-earnings")
 
 
 def run_annual_earnings_sync(limit: int | None) -> AnnualEarningsSyncReport:
@@ -56,18 +60,21 @@ def run_annual_earnings_sync(limit: int | None) -> AnnualEarningsSyncReport:
     ``get_db`` one is closed by the time the background thread runs)."""
     db = SessionLocal()
     try:
-        report = SyncAnnualEarnings(
-            YfinanceAnnualEarningsProvider(), SqlAnnualEarningsRepository(db)
-        ).execute(
-            limit=limit,
-            on_progress=logging_progress_reporter("annual-earnings sync"),
-        )
-        logger.info(
-            "annual-earnings sync done: refreshed=%d failed=%d limit=%s",
-            report.refreshed,
-            report.failed,
-            report.limit,
-        )
+        with track_run(_status, limit):
+            report = SyncAnnualEarnings(
+                YfinanceAnnualEarningsProvider(), SqlAnnualEarningsRepository(db)
+            ).execute(
+                limit=limit,
+                on_progress=combined_reporter(
+                    logging_progress_reporter("annual-earnings sync"), _status
+                ),
+            )
+            logger.info(
+                "annual-earnings sync done: refreshed=%d failed=%d limit=%s",
+                report.refreshed,
+                report.failed,
+                report.limit,
+            )
         return report
     finally:
         db.close()

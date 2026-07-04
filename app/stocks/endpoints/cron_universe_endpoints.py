@@ -38,9 +38,11 @@ from app.stocks.adapters.yfinance_screener_adapter import YfinanceScreenerProvid
 from app.stocks.endpoints.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
+    combined_reporter,
     logging_progress_reporter,
     trigger_sync,
 )
+from app.stocks.endpoints.sync_status import register_tracker, track_run
 from app.stocks.universe.db_repository import SqlUniverseRepository
 from app.stocks.universe.use_cases import SyncUniverse, UniverseSyncReport
 
@@ -50,6 +52,9 @@ router = APIRouter(tags=["universe-cron"])
 # Single-flight guard for the universe sweep only — independent of the other cron slices,
 # which may run at the same time (a lock only stops a sweep overlapping itself).
 _sync_lock = threading.Lock()
+# Per-slice progress tracker backing GET /internal/sync/status. `total`/`done` here cover the
+# per-ticker enrichment pass — the bulk screen is one call, not a per-stock loop.
+_status = register_tracker("universe")
 
 
 def run_universe_sync(limit: int) -> UniverseSyncReport:
@@ -57,28 +62,34 @@ def run_universe_sync(limit: int) -> UniverseSyncReport:
     scoped ``get_db`` one is closed by the time the background thread runs)."""
     db = SessionLocal()
     try:
-        report = SyncUniverse(
-            YfinanceScreenerProvider(),
-            SqlUniverseRepository(db),
-            YfinanceClassificationProvider(),
-        ).execute(limit=limit, on_progress=logging_progress_reporter("universe sync"))
-        if report.skipped:
-            logger.warning(
-                "universe sync skipped: screen came back too small (screened=%d) — "
-                "nothing written (Yahoo blocked?)",
-                report.screened,
+        with track_run(_status, limit):
+            report = SyncUniverse(
+                YfinanceScreenerProvider(),
+                SqlUniverseRepository(db),
+                YfinanceClassificationProvider(),
+            ).execute(
+                limit=limit,
+                on_progress=combined_reporter(
+                    logging_progress_reporter("universe sync"), _status
+                ),
             )
-        else:
-            logger.info(
-                "universe sync done: screened=%d added=%d updated=%d enriched=%d "
-                "enrich_failed=%d limit=%d",
-                report.screened,
-                report.added,
-                report.updated,
-                report.enriched,
-                report.enrich_failed,
-                limit,
-            )
+            if report.skipped:
+                logger.warning(
+                    "universe sync skipped: screen came back too small (screened=%d) — "
+                    "nothing written (Yahoo blocked?)",
+                    report.screened,
+                )
+            else:
+                logger.info(
+                    "universe sync done: screened=%d added=%d updated=%d enriched=%d "
+                    "enrich_failed=%d limit=%d",
+                    report.screened,
+                    report.added,
+                    report.updated,
+                    report.enriched,
+                    report.enrich_failed,
+                    limit,
+                )
         return report
     finally:
         db.close()

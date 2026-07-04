@@ -151,3 +151,16 @@ def logging_progress_reporter(
             )
 
     return report
+
+
+def combined_reporter(*reporters: ProgressReporter | None) -> ProgressReporter:
+    """Fan each per-stock tick out to several reporters — e.g. the log heartbeat *and* the
+    status tracker. ``None`` entries are ignored, so callers can pass an optional reporter
+    without a guard."""
+    active = [reporter for reporter in reporters if reporter is not None]
+
+    def report(progress: SyncProgress) -> None:
+        for reporter in active:
+            reporter(progress)
+
+    return report

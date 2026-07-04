@@ -28,6 +28,9 @@ from app.stocks.endpoints.recommendations_endpoints import (
 from app.stocks.endpoints.cron_universe_endpoints import (
     router as universe_cron_router,
 )
+from app.stocks.endpoints.sync_status_endpoints import (
+    router as sync_status_router,
+)
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.router import router as stocks_router
 
@@ -100,6 +103,11 @@ app.include_router(recommendations_cron_router)
 # Fire-and-forget like the earnings crons (202 + background thread). The read/search
 # endpoint over it is deferred. See app/stocks/endpoints/cron_universe_endpoints.py.
 app.include_router(universe_cron_router)
+# The cron progress endpoint (GET /internal/sync/status): the in-process progress of every
+# fire-and-forget sync sweep (running/idle, done/total, ok/failed/skipped tallies), fed by the
+# same per-stock callback that drives the log heartbeats. See
+# app/stocks/endpoints/sync_status_endpoints.py.
+app.include_router(sync_status_router)
 
 
 @app.get("/healthz")
