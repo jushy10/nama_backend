@@ -61,11 +61,11 @@ class RecommendationsRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def refresh_targets(self, limit: int) -> list[RefreshTarget]:
-        """Return up to ``limit`` stored symbols most in need of a refresh,
-        least-recently-refreshed first, each paired with the name on its ``stocks`` row.
+    def refresh_targets(self, limit: int | None) -> list[RefreshTarget]:
+        """Return the stocks most in need of a refresh, un-cached first then
+        least-recently-refreshed, each paired with the name on its ``stocks`` row.
 
-        The out-of-band sync walks these to renew the rows users actually view while
-        staying gentle on the vendor; symbols never stored (hence never viewed) aren't
-        returned — those are filled lazily on first access instead."""
+        Includes stocks not yet cached, so the out-of-band sync both *seeds* new coverage and
+        renews stale rows. ``limit`` caps the batch; ``None`` returns every anchor stock (one
+        sweep seeds them all). Lazy fill on first access still covers a symbol between sweeps."""
         raise NotImplementedError

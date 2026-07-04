@@ -224,10 +224,10 @@ def test_sync_empty_live_result_is_skipped_not_stored():
     assert repo.upserts == [("AAPL", "Apple Inc.")]  # GONE never upserted
 
 
-def test_sync_default_limit_is_applied_when_unspecified():
+def test_sync_defaults_to_unlimited_when_no_limit_is_given():
     repo = _FakeRepo([])
     SyncRecommendations(_FakeSyncProvider(), repo).execute()
-    assert repo.refresh_limit == SyncRecommendations.DEFAULT_LIMIT
+    assert repo.refresh_limit is None  # None => process every anchor stock (seed + refresh)
 
 
 def test_sync_limit_is_passed_through_and_floored_at_one():

@@ -50,7 +50,7 @@ router = APIRouter(tags=["annual-earnings-cron"])
 _sync_lock = threading.Lock()
 
 
-def run_annual_earnings_sync(limit: int) -> AnnualEarningsSyncReport:
+def run_annual_earnings_sync(limit: int | None) -> AnnualEarningsSyncReport:
     """Perform one full refresh run with its **own** DB session (the request-scoped
     ``get_db`` one is closed by the time the background thread runs)."""
     db = SessionLocal()
@@ -59,7 +59,7 @@ def run_annual_earnings_sync(limit: int) -> AnnualEarningsSyncReport:
             YfinanceAnnualEarningsProvider(), SqlAnnualEarningsRepository(db)
         ).execute(limit=limit)
         logger.info(
-            "annual-earnings sync done: refreshed=%d failed=%d limit=%d",
+            "annual-earnings sync done: refreshed=%d failed=%d limit=%s",
             report.refreshed,
             report.failed,
             report.limit,
@@ -81,13 +81,13 @@ def get_sync_runner() -> SyncRunner:
 )
 async def sync_annual_earnings_endpoint(
     response: Response,
-    limit: int = Query(
-        SyncAnnualEarnings.DEFAULT_LIMIT,
+    limit: int | None = Query(
+        None,
         ge=1,
-        le=1000,
         description=(
-            "Max stored stocks the background sweep refreshes this run, stalest first. "
-            "Kept bounded so the sequential Yahoo calls stay gentle on its rate limits."
+            "Optional cap on stocks refreshed this run (un-cached first, then stalest). "
+            "Omit to process every stock in the anchor — the default; pass a value to "
+            "throttle the sequential Yahoo calls."
         ),
     ),
     run: SyncRunner = Depends(get_sync_runner),
