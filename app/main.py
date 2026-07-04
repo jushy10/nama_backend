@@ -96,7 +96,7 @@ app.include_router(recommendations_cron_router)
 # route. See app/stocks/endpoints/universe_search_endpoints.py.
 app.include_router(universe_search_router)
 # The universe refresh cron endpoint (POST /internal/universe/sync); it drives the
-# SyncUniverse use case out of band (Nasdaq screen -> DB). See
+# SyncUniverse use case out of band (yfinance screen -> stocks anchor). See
 # app/stocks/endpoints/cron_universe_endpoints.py.
 app.include_router(universe_cron_router)
 

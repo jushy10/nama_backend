@@ -1,8 +1,8 @@
 """Tests for the universe use cases: SyncUniverse + SearchStocks.
 
 Offline: hand-written fakes for the screener and repository ports, so this exercises only
-the orchestration — the reconcile-vs-skip decision and count pass-through on the sync side,
-query normalization and the limit cap on the search side — independent of Nasdaq or the DB.
+the orchestration — the upsert-vs-skip decision and count pass-through on the sync side,
+query normalization and the limit cap on the search side — independent of Yahoo or the DB.
 """
 
 import pytest
@@ -49,16 +49,16 @@ class _FakeScreener(StockScreener):
 
 
 class _FakeRepo(UniverseRepository):
-    """Records the reconcile input and returns canned counts; serves canned search hits."""
+    """Records the upsert input and returns canned counts; serves canned search hits."""
 
-    def __init__(self, *, counts=UniverseSyncCounts(0, 0, 0), hits=()) -> None:
+    def __init__(self, *, counts=UniverseSyncCounts(0, 0), hits=()) -> None:
         self._counts = counts
         self._hits = tuple(hits)
-        self.replaced: tuple[ScreenedStock, ...] | None = None
+        self.upserted: tuple[ScreenedStock, ...] | None = None
         self.searches: list[tuple[str, int]] = []
 
-    def replace_universe(self, stocks):
-        self.replaced = tuple(stocks)
+    def upsert_screen(self, stocks):
+        self.upserted = tuple(stocks)
         return self._counts
 
     def search(self, query, *, limit):
@@ -69,22 +69,17 @@ class _FakeRepo(UniverseRepository):
 # ───────────────────────────── SyncUniverse ─────────────────────────────
 
 
-def test_sync_reconciles_a_healthy_screen_and_reports_counts():
+def test_sync_upserts_a_healthy_screen_and_reports_counts():
     screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN)  # exactly at the sanity floor
     screener = _FakeScreener(screen)
-    repo = _FakeRepo(counts=UniverseSyncCounts(added=3, updated=7, removed=2))
+    repo = _FakeRepo(counts=UniverseSyncCounts(added=3, updated=7))
 
     report = SyncUniverse(screener, repo).execute()
 
     assert isinstance(report, UniverseSyncReport)
     assert screener.calls == [SyncUniverse.MIN_MARKET_CAP]  # the floor is passed through
-    assert repo.replaced == screen  # the whole screen reached the reconcile
-    assert (report.screened, report.added, report.updated, report.removed) == (
-        len(screen),
-        3,
-        7,
-        2,
-    )
+    assert repo.upserted == screen  # the whole screen reached the upsert
+    assert (report.screened, report.added, report.updated) == (len(screen), 3, 7)
     assert report.skipped is False
 
 
@@ -95,29 +90,28 @@ def test_sync_skips_an_empty_screen_without_touching_the_store():
     report = SyncUniverse(screener, repo).execute()
 
     assert report.skipped is True
-    assert (report.screened, report.added, report.updated, report.removed) == (0, 0, 0, 0)
-    assert repo.replaced is None  # reconcile never called — the store is left intact
+    assert (report.screened, report.added, report.updated) == (0, 0, 0)
+    assert repo.upserted is None  # upsert never called — the store is left intact
 
 
 def test_sync_skips_an_implausibly_small_screen():
-    # Below the sanity floor => treat as truncated/blocked and don't reconcile: a delete
-    # against a partial screen could wipe real members.
+    # Below the sanity floor => treat as truncated/blocked and don't write a partial set.
     screener = _FakeScreener(_a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN - 1))
     repo = _FakeRepo()
 
     report = SyncUniverse(screener, repo).execute()
 
     assert report.skipped is True
-    assert repo.replaced is None
+    assert repo.upserted is None
 
 
 def test_sync_propagates_a_hard_screen_failure():
-    screener = _FakeScreener(error=StockDataUnavailable("*", "nasdaq blocked"))
+    screener = _FakeScreener(error=StockDataUnavailable("*", "yahoo blocked"))
     repo = _FakeRepo()
 
     with pytest.raises(StockDataUnavailable):
         SyncUniverse(screener, repo).execute()
-    assert repo.replaced is None  # nothing written on a hard failure
+    assert repo.upserted is None  # nothing written on a hard failure
 
 
 # ───────────────────────────── SearchStocks ─────────────────────────────

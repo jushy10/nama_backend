@@ -2,7 +2,7 @@
 
 Offline: a fake SyncUniverse is injected through dependency_overrides, so this checks only
 the controller — it invokes the use case, presents the summary, and maps a hard screen
-failure to 502 — without touching Nasdaq or the database.
+failure to 502 — without touching Yahoo or the database.
 """
 
 from fastapi import FastAPI
@@ -37,17 +37,14 @@ def _client(fake: _FakeSync) -> TestClient:
 
 def test_runs_the_sync_and_returns_the_summary():
     fake = _FakeSync(
-        UniverseSyncReport(
-            screened=1200, added=30, updated=1160, removed=10, skipped=False
-        )
+        UniverseSyncReport(screened=1200, added=30, updated=1170, skipped=False)
     )
     resp = _client(fake).post("/internal/universe/sync")
     assert resp.status_code == 200
     assert resp.json() == {
         "screened": 1200,
         "added": 30,
-        "updated": 1160,
-        "removed": 10,
+        "updated": 1170,
         "skipped": False,
     }
     assert fake.calls == 1
@@ -55,7 +52,7 @@ def test_runs_the_sync_and_returns_the_summary():
 
 def test_reports_a_skipped_screen_as_a_200():
     fake = _FakeSync(
-        UniverseSyncReport(screened=0, added=0, updated=0, removed=0, skipped=True)
+        UniverseSyncReport(screened=0, added=0, updated=0, skipped=True)
     )
     resp = _client(fake).post("/internal/universe/sync")
     assert resp.status_code == 200
@@ -63,13 +60,13 @@ def test_reports_a_skipped_screen_as_a_200():
 
 
 def test_hard_screen_failure_maps_to_502():
-    fake = _FakeSync(error=StockDataUnavailable("*", "nasdaq blocked"))
+    fake = _FakeSync(error=StockDataUnavailable("*", "yahoo blocked"))
     resp = _client(fake).post("/internal/universe/sync")
     assert resp.status_code == 502
     assert fake.calls == 1
 
 
 def test_sync_is_wired_without_any_api_key():
-    # Nasdaq's screener needs no credential, so the real DI builds the use case with no key.
+    # Yahoo's screener needs no credential, so the real DI builds the use case with no key.
     use_case = cron.get_sync_universe(db=None)
     assert isinstance(use_case, SyncUniverse)

@@ -2,22 +2,22 @@ name: Sync universe
 run-name: Sync universe
 
 # Weekly (and on-demand). The searchable universe is every US company at/above a $5B market
-# cap (~1,000–1,300 names). Membership drifts slowly — a company crossing $5B is a rare
-# event — so weekly is plenty. Unlike the earnings/recommendations syncs this is a SINGLE
-# bulk call (Nasdaq's screener returns the whole board at once) with no per-symbol vendor
-# round-trips, so there's no batching loop: one POST refreshes the lot.
+# cap (~1,000–1,500 names). Membership drifts slowly — a company crossing $5B is a rare
+# event — so weekly is plenty. Unlike the earnings/recommendations syncs this makes no
+# per-symbol vendor round-trips — just a few paginated screen calls (yfinance pages the
+# ≥$5B set 250 at a time) — so there's no batching loop: one POST refreshes the lot.
 #
 # It POSTs the deployed app's universe cron endpoint
 # (app/stocks/endpoints/cron_universe_endpoints.py), which runs the SyncUniverse use case:
-# screen Nasdaq, then reconcile the stored universe (upsert present, drop the names that
-# fell below the floor / delisted). An empty or implausibly small screen (a Nasdaq block) is
-# skipped server-side, leaving the stored universe intact.
+# screen the US market via yfinance (Yahoo), then upsert the result straight onto the stocks
+# anchor (additive — present stocks are inserted/refreshed, none are removed). An empty or
+# implausibly small screen (a Yahoo block) is skipped server-side, so nothing is written.
 #
 # Operational notes:
-#  - The screen reads Nasdaq's public API, which needs no key. Like Yahoo it may block
-#    data-centre IPs; a blocked screen is skipped (the endpoint returns skipped=true), so a
-#    bad day delays new data but never wipes the universe.
-#  - The write is ~1,300 DB upserts in one request, with no per-symbol vendor calls, so it
+#  - The screen reads Yahoo via yfinance, which needs no key but may block data-centre IPs;
+#    a blocked screen is skipped (the endpoint returns skipped=true), so a bad day just
+#    delays new data — the stocks already stored are additive and stay put.
+#  - The write is ~1,450 DB upserts in one request, with no per-symbol vendor calls, so it
 #    stays well under API Gateway's 30s integration timeout — but give curl a generous
 #    --max-time regardless.
 #  - The endpoint is currently unauthenticated (an auth-token guard is planned); this
@@ -74,10 +74,9 @@ jobs:
           screened=$(echo "$body" | jq -r '.screened // 0')
           added=$(echo "$body" | jq -r '.added // 0')
           updated=$(echo "$body" | jq -r '.updated // 0')
-          removed=$(echo "$body" | jq -r '.removed // 0')
 
           if [ "$skipped" = "true" ]; then
-            echo "::warning::Screen came back empty/too small (screened=${screened}) — reconcile skipped, stored universe left intact (Nasdaq blocked?)."
+            echo "::warning::Screen came back empty/too small (screened=${screened}) — upsert skipped, nothing written (Yahoo blocked?)."
             exit 0
           fi
-          echo "Universe synced: screened=${screened} added=${added} updated=${updated} removed=${removed}."
+          echo "Universe synced: screened=${screened} added=${added} updated=${updated}."

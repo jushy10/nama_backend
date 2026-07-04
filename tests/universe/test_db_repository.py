@@ -1,9 +1,10 @@
 """Tests for the database-backed UniverseRepository.
 
-Offline: an in-memory SQLite database stands in for the real tables. Verifies the reconcile
-(insert new / update in place / remove absent — with the ``stocks`` anchor rows preserved),
-the anchor name+exchange fill-but-don't-clobber, the screen stamp, and search (ilike on
-ticker or name, largest market cap first, limit respected).
+Offline: an in-memory SQLite database stands in for the real ``stocks`` table (the universe
+has no table of its own). Verifies the additive upsert (insert new / refresh in place /
+never remove an absent member), the fill-but-don't-clobber rule for the anchor's
+name/exchange/sector, the screen stamp + added-vs-updated counting, and search (ilike on
+ticker or name, largest market cap first, screened members only, limit respected).
 """
 
 from datetime import datetime, timezone
@@ -13,12 +14,11 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.stocks.stocks.models import StockRecord
+from app.stocks.stocks.models import StockRecord, get_or_create_stock
 from app.stocks.universe.db_repository import SqlUniverseRepository
 from app.stocks.universe.entities import ScreenedStock
-from app.stocks.universe.models import StockUniverseRecord
 
-_NOW = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture
@@ -43,23 +43,22 @@ def _stock(ticker, *, name=None, exchange=None, market_cap=1e10, sector=None):
     )
 
 
-def _anchor(session, ticker) -> tuple[str | None, str | None]:
-    row = session.execute(
-        select(StockRecord.name, StockRecord.exchange).where(
-            StockRecord.ticker == ticker
-        )
-    ).one()
-    return (row.name, row.exchange)
-
-
-def _universe_count(session) -> int:
+def _row(session, ticker) -> StockRecord:
     return session.execute(
-        select(func.count()).select_from(StockUniverseRecord)
+        select(StockRecord).where(StockRecord.ticker == ticker)
     ).scalar_one()
 
 
-def test_replace_inserts_new_members_fills_the_anchor_and_stamps(session):
-    counts = repo(session).replace_universe(
+def _screened_count(session) -> int:
+    return session.execute(
+        select(func.count())
+        .select_from(StockRecord)
+        .where(StockRecord.market_cap.is_not(None))
+    ).scalar_one()
+
+
+def test_upsert_inserts_new_members_fills_the_anchor_and_stamps(session):
+    counts = repo(session).upsert_screen(
         (
             _stock(
                 "AAPL",
@@ -68,64 +67,95 @@ def test_replace_inserts_new_members_fills_the_anchor_and_stamps(session):
                 market_cap=3e12,
                 sector="Technology",
             ),
-            _stock("XOM", name="Exxon Mobil", market_cap=5e11, sector="Energy"),
+            _stock("XOM", name="Exxon Mobil", market_cap=5e11),
         )
     )
 
-    assert (counts.added, counts.updated, counts.removed) == (2, 0, 0)
-    assert _universe_count(session) == 2
-    assert _anchor(session, "AAPL") == ("Apple Inc.", "NASDAQ")
-    assert _anchor(session, "XOM") == ("Exxon Mobil", None)  # no exchange on the screen
-    # The screen time is stamped on each membership row (SQLite hands it back naive).
-    stamp = session.execute(
-        select(StockUniverseRecord.screened_at)
-    ).scalars().first()
-    assert stamp.replace(tzinfo=timezone.utc) == _NOW
+    assert (counts.added, counts.updated) == (2, 0)
+    assert _screened_count(session) == 2
+    aapl = _row(session, "AAPL")
+    assert (aapl.name, aapl.exchange, aapl.market_cap, aapl.sector) == (
+        "Apple Inc.",
+        "NASDAQ",
+        3e12,
+        "Technology",
+    )
+    # The screen time is stamped on the anchor (SQLite hands it back naive).
+    assert aapl.screened_at.replace(tzinfo=timezone.utc) == _NOW
+    xom = _row(session, "XOM")
+    assert (xom.name, xom.exchange, xom.sector) == ("Exxon Mobil", None, None)
 
 
-def test_replace_updates_market_cap_in_place(session):
+def test_upsert_refreshes_market_cap_in_place(session):
     r = repo(session)
-    r.replace_universe((_stock("AAPL", market_cap=3.0e12, sector="Technology"),))
-    counts = r.replace_universe((_stock("AAPL", market_cap=3.4e12, sector="Tech"),))
+    r.upsert_screen((_stock("AAPL", market_cap=3.0e12),))
+    counts = r.upsert_screen((_stock("AAPL", market_cap=3.4e12),))
 
-    assert (counts.added, counts.updated, counts.removed) == (0, 1, 0)
-    assert _universe_count(session) == 1  # updated, not duplicated
-    row = session.execute(select(StockUniverseRecord)).scalars().one()
-    assert row.market_cap == 3.4e12 and row.sector == "Tech"
+    assert (counts.added, counts.updated) == (0, 1)
+    assert _screened_count(session) == 1  # refreshed, not duplicated
+    assert _row(session, "AAPL").market_cap == 3.4e12
 
 
-def test_replace_removes_absent_members_but_keeps_their_anchor(session):
+def test_upsert_is_additive_absent_members_are_kept(session):
     r = repo(session)
-    r.replace_universe(
-        (_stock("AAPL", name="Apple Inc."), _stock("XOM", name="Exxon Mobil"))
+    r.upsert_screen(
+        (_stock("AAPL", market_cap=3e12), _stock("XOM", market_cap=5e11))
     )
     # A later screen no longer lists XOM (fell below the floor / delisted).
-    counts = r.replace_universe((_stock("AAPL", name="Apple Inc."),))
+    counts = r.upsert_screen((_stock("AAPL", market_cap=3.1e12),))
 
-    assert (counts.added, counts.updated, counts.removed) == (0, 1, 1)
-    assert _universe_count(session) == 1  # only AAPL remains a member
-    # XOM's membership row is gone, but its anchor row survives (other slices may use it).
-    assert _anchor(session, "XOM") == ("Exxon Mobil", None)
+    assert (counts.added, counts.updated) == (0, 1)
+    # XOM is NOT removed — the sync is additive; its last-screened cap survives.
+    assert _screened_count(session) == 2
+    assert _row(session, "XOM").market_cap == 5e11
 
 
-def test_replace_fills_missing_anchor_facts_but_never_clobbers(session):
+def test_upsert_fills_missing_anchor_facts_but_never_clobbers(session):
     r = repo(session)
-    # First screen knows the name but not the exchange.
-    r.replace_universe((_stock("AAPL", name="Apple Inc."),))
-    assert _anchor(session, "AAPL") == ("Apple Inc.", None)
+    # First screen knows the name but not the exchange/sector.
+    r.upsert_screen((_stock("AAPL", name="Apple Inc.", market_cap=3e12),))
+    aapl = _row(session, "AAPL")
+    assert (aapl.name, aapl.exchange, aapl.sector) == ("Apple Inc.", None, None)
 
-    # A later, nameless screen learns the exchange: the name must survive, exchange fills.
-    r.replace_universe((_stock("AAPL", name=None, exchange="NASDAQ"),))
-    assert _anchor(session, "AAPL") == ("Apple Inc.", "NASDAQ")
+    # A later, nameless screen learns the exchange + sector: the name survives, they fill.
+    r.upsert_screen(
+        (
+            _stock(
+                "AAPL", name=None, exchange="NASDAQ", sector="Technology", market_cap=3e12
+            ),
+        )
+    )
+    aapl = _row(session, "AAPL")
+    assert (aapl.name, aapl.exchange, aapl.sector) == (
+        "Apple Inc.",
+        "NASDAQ",
+        "Technology",
+    )
 
-    # A different exchange never overwrites the settled one.
-    r.replace_universe((_stock("AAPL", name=None, exchange="NYSE"),))
-    assert _anchor(session, "AAPL") == ("Apple Inc.", "NASDAQ")
+    # A different exchange/sector never overwrites the settled ones.
+    r.upsert_screen(
+        (_stock("AAPL", exchange="NYSE", sector="Energy", market_cap=3e12),)
+    )
+    aapl = _row(session, "AAPL")
+    assert (aapl.exchange, aapl.sector) == ("NASDAQ", "Technology")
+
+
+def test_upsert_counts_a_preexisting_unscreened_anchor_as_added(session):
+    # A ticker the app already knows (e.g. from a ticker-card lookup), never screened.
+    get_or_create_stock(session, "AAPL", "Apple Inc.")
+    session.commit()
+
+    counts = repo(session).upsert_screen(
+        (_stock("AAPL", market_cap=3e12, exchange="NASDAQ"),)
+    )
+    # First time it's screened => added, not updated (screened_at was null).
+    assert (counts.added, counts.updated) == (1, 0)
+    assert _row(session, "AAPL").market_cap == 3e12
 
 
 def test_search_matches_ticker_or_name_case_insensitively(session):
     r = repo(session)
-    r.replace_universe(
+    r.upsert_screen(
         (
             _stock("AAPL", name="Apple Inc."),
             _stock("MSFT", name="Microsoft Corp"),
@@ -140,7 +170,7 @@ def test_search_matches_ticker_or_name_case_insensitively(session):
 
 def test_search_orders_by_market_cap_desc_and_respects_limit(session):
     r = repo(session)
-    r.replace_universe(
+    r.upsert_screen(
         (
             _stock("SML", name="Small Corp", market_cap=5e11),
             _stock("BIG", name="Big Corp", market_cap=2e12),
@@ -151,6 +181,16 @@ def test_search_orders_by_market_cap_desc_and_respects_limit(session):
     assert [s.ticker for s in hits] == ["BIG", "SML"]  # largest first
     assert isinstance(hits[0], ScreenedStock)
     assert [s.ticker for s in r.search("corp", limit=1)] == ["BIG"]  # limit respected
+
+
+def test_search_excludes_anchors_that_were_never_screened(session):
+    # An anchor with no market_cap (reached ``stocks`` some other way) must not surface.
+    get_or_create_stock(session, "TINY", "Tiny Corp")
+    session.commit()
+    r = repo(session)
+    r.upsert_screen((_stock("BIG", name="Big Corp", market_cap=2e12),))
+
+    assert [s.ticker for s in r.search("corp", limit=10)] == ["BIG"]  # TINY excluded
 
 
 def test_search_on_empty_universe_is_empty(session):

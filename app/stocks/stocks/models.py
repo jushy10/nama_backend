@@ -6,15 +6,17 @@ a symbol string copied around. It's owned by no single feature, so it gets its o
 here. Feature slices import ``StockRecord`` + ``get_or_create_stock`` and add their own
 child tables beside it. The schema is created by migration 0002 (the since-removed
 analyst-estimates feature was the first to need the anchor); migration 0009 added
-``exchange`` and 0010 renamed the ``symbol`` column to ``ticker`` (the domain layers
-still say "symbol" — the rename is a table-vocabulary choice).
+``exchange``, 0010 renamed the ``symbol`` column to ``ticker`` (the domain layers
+still say "symbol" — the rename is a table-vocabulary choice), and 0011 added the three
+universe-screen columns below.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import String, Uuid, select
+from sqlalchemy import DateTime, Float, String, Uuid, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 
@@ -29,6 +31,16 @@ class StockRecord(Base):
     ``exchange`` the listing venue (e.g. "NASDAQ") — both nullable so a lazily-stored
     ticker (which arrives alone) still gets a row until whichever feature first learns
     them fills them in.
+
+    ``sector`` / ``market_cap`` / ``screened_at`` are the universe screen's facts, filled
+    by the universe sync (the ≥$5B US screen) and deliberately denormalized onto the
+    anchor so search is a single-table read. All three are nullable: a ticker that reached
+    the table some other way (a ticker-card lookup, an earnings refresh) has never been
+    screened, so they stay null — which is exactly how search tells a screened company
+    apart from an incidentally-known symbol (it filters on ``market_cap IS NOT NULL``).
+    ``market_cap`` is whole dollars; ``screened_at`` is when the last screen that included
+    the stock ran (the freshness stamp). ``sector`` currently rides in null because the
+    live screen source (yfinance) doesn't publish it — the column awaits a source that does.
     """
 
     __tablename__ = "stocks"
@@ -37,6 +49,11 @@ class StockRecord(Base):
     ticker: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     exchange: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sector: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    screened_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 def get_or_create_stock(

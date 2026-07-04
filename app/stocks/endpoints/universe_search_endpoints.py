@@ -3,8 +3,8 @@
 ``GET /stocks/search?q=…`` — the read endpoint for the universe slice: find companies in the
 screened US ≥$5B universe by ticker or company name, largest market cap first. This is the
 app's only *discovery* route; every other stocks endpoint is keyed on a symbol you already
-know. It reads the ``stock_universe`` rows populated out of band by the universe cron, so it
-never touches a vendor.
+know. It reads the screened ``stocks`` anchor rows populated out of band by the universe
+cron (those carrying a ``market_cap``), so it never touches a vendor.
 
 Controller + presenter + wiring, the composition-root way, sitting in
 ``app/stocks/endpoints/`` beside the cron entrypoint (``cron_universe_endpoints``) so all of
