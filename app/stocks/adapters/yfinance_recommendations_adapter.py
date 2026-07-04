@@ -13,7 +13,8 @@ changes. It is deliberately defensive — Yahoo is an unofficial, best-effort fe
 reshapes payloads without notice and rate-limits data-centre IPs — so any vendor failure
 becomes ``StockDataUnavailable`` and a symbol Yahoo doesn't cover yields an empty run
 rather than an error. Behind the persistent DB cache, a blocked live call just serves the
-stored rows.
+stored rows. The fetch is routed through ``yfinance_session`` so a transient crumb 401 —
+which yfinance swallows into an empty frame — is retried once with a fresh crumb.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from datetime import date
 import pandas as pd
 import yfinance as yf
 
+from app.stocks.adapters import yfinance_session
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.recommendations.entities import (
     AnalystRecommendations,
@@ -55,7 +57,12 @@ class YfinanceRecommendationProvider(RecommendationProvider):
 
     def get_recommendations(self, symbol: str) -> AnalystRecommendations:
         try:
-            frame = self._ticker_factory(symbol).recommendations
+            # An empty frame is how yfinance surfaces a swallowed crumb 401, so retry once
+            # with a fresh crumb; genuine no-coverage just comes back empty after that.
+            frame = yfinance_session.call(
+                lambda: self._ticker_factory(symbol).recommendations,
+                is_empty=yfinance_session.frame_is_empty,
+            )
         except Exception as exc:  # noqa: BLE001 — vendor boundary: any failure → domain error
             raise StockDataUnavailable(
                 symbol, f"yfinance recommendations failed ({exc})"

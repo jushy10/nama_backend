@@ -5,9 +5,9 @@ hand-written fakes and knows nothing of Yahoo, HTTP, or SQLAlchemy:
 
 - ``SyncUniverse`` — the out-of-band populator. Two passes in one run: (1) screen the US
   market at/above the floor and upsert the result onto the ``stocks`` anchor (additive: it
-  never removes a stock); (2) enrich up to ``limit`` stored stocks that still lack an
-  ``industry``, classifying each through a per-ticker call and writing its sector/industry
-  slugs. Invoked by the (fire-and-forget) cron endpoint. Guarded so a blocked/truncated
+  never removes a stock); (2) enrich up to ``limit`` stored stocks that still lack a
+  ``sector`` or ``industry``, classifying each through a per-ticker call and writing its
+  sector/industry slugs. Invoked by the (fire-and-forget) cron endpoint. Guarded so a blocked/truncated
   screen (empty or implausibly small) skips *both* passes rather than churning a partial set
   or hammering the same blocked vendor with per-ticker calls.
 
@@ -98,7 +98,7 @@ class SyncUniverse:
                 enrich_failed=0,
             )
         counts = self._repository.upsert_screen(screened)
-        enriched, enrich_failed = self._enrich_missing_industries(capped)
+        enriched, enrich_failed = self._enrich_missing_classifications(capped)
         return UniverseSyncReport(
             screened=len(screened),
             added=counts.added,
@@ -108,15 +108,15 @@ class SyncUniverse:
             enrich_failed=enrich_failed,
         )
 
-    def _enrich_missing_industries(self, limit: int) -> tuple[int, int]:
-        """Classify up to ``limit`` stored stocks that still lack an ``industry``, writing each
-        one's sector/industry. Returns ``(enriched, failed)``: ``enriched`` wrote a
+    def _enrich_missing_classifications(self, limit: int) -> tuple[int, int]:
+        """Classify up to ``limit`` stored stocks still missing a sector or industry, writing
+        each one's sector/industry. Returns ``(enriched, failed)``: ``enriched`` wrote a
         classification, ``failed`` couldn't reach the source. A symbol the source reaches but
         can't classify (both sides ``None``) is neither — it's left for a later run rather than
         counted, since nothing was written and nothing went wrong."""
         enriched = 0
         failed = 0
-        for ticker in self._repository.tickers_missing_industry(limit):
+        for ticker in self._repository.tickers_missing_classification(limit):
             try:
                 classification = self._classifier.get_classification(ticker)
             except (StockNotFound, StockDataUnavailable):
