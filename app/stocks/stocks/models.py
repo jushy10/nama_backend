@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, String, Uuid, select
+from sqlalchemy import Boolean, DateTime, Float, String, Uuid, false, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 
@@ -51,6 +51,13 @@ class StockRecord(Base):
     ``market_cap`` is whole dollars; ``screened_at`` is when the last screen that included
     the stock ran (the freshness stamp). ``sector`` currently rides in null because the
     live screen source (yfinance) doesn't publish it — the column awaits a source that does.
+
+    ``in_sp500`` / ``in_nasdaq100`` are index-membership flags, reconciled by the
+    index-membership sync (Finnhub → this anchor). Unlike the screen facts these are
+    ``NOT NULL`` (default ``False``): membership is a known yes/no — absent from the
+    source list means "not a member", not "unknown" — so every row carries a definite
+    answer. The reconcile both *marks* current members and *clears* companies that dropped
+    out of an index, so a stale flag never lingers.
     """
 
     __tablename__ = "stocks"
@@ -65,6 +72,12 @@ class StockRecord(Base):
     market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
     screened_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    in_sp500: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(), default=False
+    )
+    in_nasdaq100: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(), default=False
     )
 
 

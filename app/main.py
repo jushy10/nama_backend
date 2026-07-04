@@ -27,6 +27,9 @@ from app.stocks.endpoints.recommendations_endpoints import (
 from app.stocks.endpoints.cron_universe_endpoints import (
     router as universe_cron_router,
 )
+from app.stocks.endpoints.cron_index_membership_endpoints import (
+    router as index_membership_cron_router,
+)
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.router import router as stocks_router
 
@@ -93,6 +96,11 @@ app.include_router(recommendations_cron_router)
 # stocks table with the ≥$1B US universe. The read/search endpoint over it is deferred.
 # See app/stocks/endpoints/cron_universe_endpoints.py.
 app.include_router(universe_cron_router)
+# The index-membership refresh cron endpoint (POST /internal/index-membership/sync); it drives
+# the SyncIndexMembership use case out of band (Finnhub -> stocks anchor), reconciling the
+# in_sp500 / in_nasdaq100 membership flags. See
+# app/stocks/endpoints/cron_index_membership_endpoints.py.
+app.include_router(index_membership_cron_router)
 
 
 @app.get("/healthz")
