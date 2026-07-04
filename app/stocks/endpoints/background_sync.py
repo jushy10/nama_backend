@@ -25,13 +25,31 @@ taken inside the runner so the single-flight guarantee holds across containers.
 """
 
 import logging
+import os
 import threading
 from collections.abc import Callable
 
 from fastapi import Response, status
 from pydantic import BaseModel
 
+from app.stocks.sync_progress import ProgressReporter, SyncOutcome, SyncProgress
+
 logger = logging.getLogger(__name__)
+
+def _progress_every_from_env() -> int:
+    """Heartbeat cadence for the progress log: one INFO line per this many stocks (plus the
+    first and the last, and a WARNING on every failure). Env-overridable so ops can go finer
+    (``1`` = a line per stock) or coarser without a code change; the default keeps a
+    ~2,800-stock sweep to ~110 heartbeat lines. A malformed value falls back to the default
+    rather than crashing app boot (this runs at import)."""
+    try:
+        return max(1, int(os.environ.get("SYNC_PROGRESS_EVERY", "25")))
+    except ValueError:
+        logger.warning("ignoring non-integer SYNC_PROGRESS_EVERY; using 25")
+        return 25
+
+
+_PROGRESS_EVERY = _progress_every_from_env()
 
 # A sync runner performs one full sweep of up to ``limit`` stocks most in need of a refresh
 # (``None`` = every stock). Its return value is ignored (the refreshed/failed counts go to the
@@ -90,3 +108,59 @@ def trigger_sync(
         lock.release()  # thread never started — don't strand the guard
         raise
     return SyncTriggerResponse(status="accepted", limit=limit)
+
+
+def logging_progress_reporter(
+    label: str, *, every: int = _PROGRESS_EVERY
+) -> ProgressReporter:
+    """Build a ``ProgressReporter`` that writes a sweep's progress to the log as it advances.
+
+    Each failure is logged at WARNING (the actionable events, always surfaced); a heartbeat at
+    INFO every ``every`` stocks — plus the first and the last — carries the running tallies, so
+    a minutes-long sweep shows a live, bounded trail in the container logs (→ CloudWatch on
+    Fargate) instead of one line per stock. The reporter is stateful (it accumulates the
+    tallies), so build a fresh one per run. The underlying per-stock callback still fires for
+    *every* stock, so a future status endpoint can read every tick without touching the sweeps.
+    """
+    tally = {SyncOutcome.OK: 0, SyncOutcome.FAILED: 0, SyncOutcome.SKIPPED: 0}
+
+    def report(progress: SyncProgress) -> None:
+        tally[progress.outcome] += 1
+        if progress.outcome is SyncOutcome.FAILED:
+            logger.warning(
+                "%s: %d/%d %s failed%s",
+                label,
+                progress.done,
+                progress.total,
+                progress.symbol,
+                f": {progress.detail}" if progress.detail else "",
+            )
+        if (
+            progress.done == 1
+            or progress.done % every == 0
+            or progress.done == progress.total
+        ):
+            logger.info(
+                "%s: %d/%d done (ok=%d failed=%d skipped=%d)",
+                label,
+                progress.done,
+                progress.total,
+                tally[SyncOutcome.OK],
+                tally[SyncOutcome.FAILED],
+                tally[SyncOutcome.SKIPPED],
+            )
+
+    return report
+
+
+def combined_reporter(*reporters: ProgressReporter | None) -> ProgressReporter:
+    """Fan each per-stock tick out to several reporters — e.g. the log heartbeat *and* the
+    status tracker. ``None`` entries are ignored, so callers can pass an optional reporter
+    without a guard."""
+    active = [reporter for reporter in reporters if reporter is not None]
+
+    def report(progress: SyncProgress) -> None:
+        for reporter in active:
+            reporter(progress)
+
+    return report

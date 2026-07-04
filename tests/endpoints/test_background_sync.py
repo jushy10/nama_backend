@@ -9,11 +9,13 @@ Determinism: ``trigger_sync`` holds the lock until the daemon thread releases it
 re-acquiring the lock is a "sweep done" barrier — no sleeps.
 """
 
+import logging
 import threading
 
 from fastapi import Response
 
 from app.stocks.endpoints import background_sync
+from app.stocks.sync_progress import SyncOutcome, SyncProgress
 
 
 class _FakeRunner:
@@ -69,3 +71,38 @@ def test_a_runner_error_is_swallowed_and_the_guard_released():
     # barrier would hang — and the exception must not have propagated out of the thread.
     _drain(lock)
     assert runner.calls == [10]
+
+
+# ───────────────────────── logging_progress_reporter ─────────────────────────
+
+
+def test_progress_reporter_heartbeats_on_interval_and_warns_on_failure(caplog):
+    # every=2, so ticks 1 (first), 2 (interval), and 4 (last) heartbeat at INFO; tick 3 is
+    # silent. A FAILED tick also logs a WARNING naming the symbol and reason.
+    report = background_sync.logging_progress_reporter("test sync", every=2)
+    with caplog.at_level(logging.INFO, logger=background_sync.__name__):
+        report(SyncProgress(1, 4, "AAA", SyncOutcome.OK))
+        report(SyncProgress(2, 4, "BBB", SyncOutcome.FAILED, "unavailable"))
+        report(SyncProgress(3, 4, "CCC", SyncOutcome.OK))
+        report(SyncProgress(4, 4, "DDD", SyncOutcome.OK))
+
+    infos = [r for r in caplog.records if r.levelno == logging.INFO]
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(infos) == 3  # ticks 1, 2, 4 — not 3
+    assert len(warnings) == 1
+    assert "BBB" in warnings[0].getMessage()
+    assert "unavailable" in warnings[0].getMessage()
+    # The final heartbeat carries the running tallies accumulated across the whole run.
+    assert "ok=3 failed=1 skipped=0" in infos[-1].getMessage()
+
+
+def test_progress_reporter_counts_skipped_separately_from_failed(caplog):
+    report = background_sync.logging_progress_reporter("test sync", every=1)
+    with caplog.at_level(logging.INFO, logger=background_sync.__name__):
+        report(SyncProgress(1, 2, "AAA", SyncOutcome.SKIPPED, "unclassified"))
+        report(SyncProgress(2, 2, "BBB", SyncOutcome.OK))
+
+    # SKIPPED is a deliberate no-op, not a failure: no WARNING, and its own tally column.
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+    infos = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert "ok=1 failed=0 skipped=1" in infos[-1].getMessage()

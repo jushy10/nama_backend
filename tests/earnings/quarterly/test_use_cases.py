@@ -26,6 +26,7 @@ from app.stocks.earnings.quarterly.use_cases import (
     SyncQuarterlyEarnings,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.sync_progress import SyncOutcome
 
 
 def _a_timeline(symbol: str) -> QuarterlyEarningsTimeline:
@@ -322,6 +323,33 @@ def test_sync_normal_roll_does_not_grow_the_reported_window():
         (2025, 4),
         (2026, 1),
     ]  # (2025, 1) rolled off; the window stayed four reported quarters
+
+
+def test_sync_reports_progress_once_per_stock_with_outcomes():
+    # on_progress fires once per target — OK, a vendor failure, then an empty result — each
+    # carrying its 1-based position and the run total. Pure observation; counts are unchanged.
+    repo = _FakeRepo(
+        [
+            RefreshTarget("AAPL", None),
+            RefreshTarget("BAD", None),
+            RefreshTarget("GONE", None),
+        ]
+    )
+    provider = _FakeSyncProvider(
+        errors={"BAD": StockDataUnavailable("BAD", "yahoo down")}, empty={"GONE"}
+    )
+    ticks = []
+
+    report = SyncQuarterlyEarnings(provider, repo).execute(
+        limit=10, on_progress=ticks.append
+    )
+
+    assert (report.refreshed, report.failed) == (1, 2)
+    assert [(t.done, t.total, t.symbol, t.outcome) for t in ticks] == [
+        (1, 3, "AAPL", SyncOutcome.OK),
+        (2, 3, "BAD", SyncOutcome.FAILED),
+        (3, 3, "GONE", SyncOutcome.FAILED),
+    ]
 
 
 def test_sync_defaults_to_unlimited_when_no_limit_is_given():

@@ -26,6 +26,7 @@ from app.stocks.recommendations.use_cases import (
     RecommendationsSyncReport,
     SyncRecommendations,
 )
+from app.stocks.sync_progress import SyncOutcome
 
 
 def _a_trend(period, *, strong_buy=0, buy=0, hold=0, sell=0, strong_sell=0):
@@ -222,6 +223,33 @@ def test_sync_empty_live_result_is_skipped_not_stored():
 
     assert (report.refreshed, report.failed) == (1, 1)
     assert repo.upserts == [("AAPL", "Apple Inc.")]  # GONE never upserted
+
+
+def test_sync_reports_progress_once_per_stock_with_outcomes():
+    # on_progress fires once per target — OK, a vendor failure, then an empty result — each
+    # carrying its 1-based position and the run total. Pure observation; counts are unchanged.
+    repo = _FakeRepo(
+        [
+            RefreshTarget("AAPL", None),
+            RefreshTarget("BAD", None),
+            RefreshTarget("GONE", None),
+        ]
+    )
+    provider = _FakeSyncProvider(
+        errors={"BAD": StockDataUnavailable("BAD", "yahoo down")}, empty={"GONE"}
+    )
+    ticks = []
+
+    report = SyncRecommendations(provider, repo).execute(
+        limit=10, on_progress=ticks.append
+    )
+
+    assert (report.refreshed, report.failed) == (1, 2)
+    assert [(t.done, t.total, t.symbol, t.outcome) for t in ticks] == [
+        (1, 3, "AAPL", SyncOutcome.OK),
+        (2, 3, "BAD", SyncOutcome.FAILED),
+        (3, 3, "GONE", SyncOutcome.FAILED),
+    ]
 
 
 def test_sync_defaults_to_unlimited_when_no_limit_is_given():

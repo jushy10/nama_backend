@@ -362,6 +362,27 @@ secrets.
 **Input normalization** happens once, at the top of the use case
 (`_normalize_symbol`), so every layer below sees clean input.
 
+**Sync progress, logging & status.** The fire-and-forget `/internal/*/sync` sweeps report
+progress *as they go* through a dependency-free channel: each `Sync*` use case takes an
+optional `on_progress: ProgressReporter` and calls it once per stock with a `SyncProgress`
+tick (`done`/`total`/`symbol`/`SyncOutcome`), from `app/stocks/sync_progress.py` (the shared
+kernel, importable by any slice's use case like `exceptions.py`). It's pure observation —
+never affects the run, and an omitted reporter runs silently. The cron runners fan each tick
+(via `background_sync.combined_reporter`) to **two** sinks:
+- `background_sync.logging_progress_reporter(label)` — logs a WARNING per failure and an INFO
+  heartbeat every `SYNC_PROGRESS_EVERY` stocks (default 25; env-tunable) carrying running
+  tallies, plus the existing end-of-run summary.
+- a per-slice `sync_status.SyncStatusTracker` (registered by name; `track_run` brackets the
+  runner to mark it started/finished) — the in-process state behind **`GET /internal/sync/status`**,
+  which reports every slice's `state`/`done`/`total`/`ok`/`failed`/`skipped`/timestamps in one
+  poll. In-process and per-slice (same caveat as the single-flight lock — resets on restart,
+  correct only with one task); for universe, `total`/`done` cover the per-ticker enrichment pass.
+
+**Gotcha the logging half fixes:** under bare `uvicorn app.main:app`, uvicorn leaves the root
+logger at WARNING, so `app.*` INFO is dropped before emission — `configure_logging()` (called in
+`main.py`) attaches a stdout handler to the `app` logger at `LOG_LEVEL` (default INFO) so these
+lines actually reach the container logs (→ CloudWatch on Fargate).
+
 ---
 
 ## "Where does this go?"
@@ -437,11 +458,13 @@ To change the DB schema: edit the model in `app/stocks/constituents.py`, then
 
 ```
 app/
-├── main.py                 # FastAPI app: CORS, lifespan, /healthz, include_router
+├── main.py                 # FastAPI app: CORS, lifespan, /healthz, include_router, configure_logging()
 ├── db.py                   # engine/session/Base/get_db (DATABASE_URL-driven)
+├── logging_config.py       # configure_logging(): app.* → stdout at LOG_LEVEL (default INFO)
 └── stocks/                 # the stocks vertical slice
     ├── entities.py         # ── domain objects + intrinsic rules
     ├── indicators.py       # ── pure domain calc (RSI)
+    ├── sync_progress.py    # ── shared kernel: SyncProgress/SyncOutcome/ProgressReporter (sync-sweep progress channel)
     ├── ports.py            # ── abstract interfaces (ABCs)
     ├── use_cases.py        # ── orchestration (one class per action)
     ├── exceptions.py       # ── domain errors
@@ -484,12 +507,17 @@ app/
     │   ├── use_cases.py         #    GetTickerCard + TickerCard composite (quote/estimates/fundamentals/performance/options/quarterly-earnings ports)
     │   └── schemas.py           #    HTTP response DTO (quote + enrichment + opt-in dividend/performance/metrics/options_metrics; endpoint in endpoints/)
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
+    │   ├── background_sync.py                    #  shared cron machinery: trigger_sync (fire-and-forget +
+    │   │                                         #  single-flight) + logging/combined progress reporters
+    │   ├── sync_status.py                        #  in-process per-slice SyncStatusTracker + registry + track_run
+    │   ├── sync_status_endpoints.py              #  GET /internal/sync/status (progress of every sweep)
     │   ├── cron_quarterly_earnings_endpoints.py  #  POST /internal/earnings/quarterly/sync
     │   ├── quarterly_earnings_endpoints.py       #  GET /stocks/{symbol}/earnings/quarterly
     │   ├── cron_annual_earnings_endpoints.py     #  POST /internal/earnings/annual/sync
     │   ├── annual_earnings_endpoints.py          #  GET /stocks/{symbol}/earnings/annual
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
     │   ├── recommendations_endpoints.py          #  GET /stocks/{symbol}/recommendations
+    │   ├── cron_universe_endpoints.py            #  POST /internal/universe/sync
     │   └── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol}
     ├── constituents.py     # ── DB adapter: ORM model + SqlConstituentRepository
     ├── chart_window.py     # ── edge helper: range preset → time window

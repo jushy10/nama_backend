@@ -39,8 +39,11 @@ from app.stocks.earnings.quarterly.use_cases import (
 from app.stocks.endpoints.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
+    combined_reporter,
+    logging_progress_reporter,
     trigger_sync,
 )
+from app.stocks.endpoints.sync_status import register_tracker, track_run
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["quarterly-earnings-cron"])
@@ -48,6 +51,8 @@ router = APIRouter(tags=["quarterly-earnings-cron"])
 # Single-flight guard for the quarterly sweep only — independent of the other cron slices,
 # which may run at the same time (a lock only stops a sweep overlapping itself).
 _sync_lock = threading.Lock()
+# Per-slice progress tracker backing GET /internal/sync/status.
+_status = register_tracker("quarterly-earnings")
 
 
 def run_quarterly_earnings_sync(limit: int | None) -> QuarterlyEarningsSyncReport:
@@ -55,15 +60,21 @@ def run_quarterly_earnings_sync(limit: int | None) -> QuarterlyEarningsSyncRepor
     ``get_db`` one is closed by the time the background thread runs)."""
     db = SessionLocal()
     try:
-        report = SyncQuarterlyEarnings(
-            YfinanceQuarterlyEarningsProvider(), SqlQuarterlyEarningsRepository(db)
-        ).execute(limit=limit)
-        logger.info(
-            "quarterly-earnings sync done: refreshed=%d failed=%d limit=%s",
-            report.refreshed,
-            report.failed,
-            report.limit,
-        )
+        with track_run(_status, limit):
+            report = SyncQuarterlyEarnings(
+                YfinanceQuarterlyEarningsProvider(), SqlQuarterlyEarningsRepository(db)
+            ).execute(
+                limit=limit,
+                on_progress=combined_reporter(
+                    logging_progress_reporter("quarterly-earnings sync"), _status
+                ),
+            )
+            logger.info(
+                "quarterly-earnings sync done: refreshed=%d failed=%d limit=%s",
+                report.refreshed,
+                report.failed,
+                report.limit,
+            )
         return report
     finally:
         db.close()

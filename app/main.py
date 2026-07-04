@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.logging_config import configure_logging
 from app.stocks.endpoints.annual_earnings_endpoints import (
     router as annual_earnings_router,
 )
@@ -27,8 +28,16 @@ from app.stocks.endpoints.recommendations_endpoints import (
 from app.stocks.endpoints.cron_universe_endpoints import (
     router as universe_cron_router,
 )
+from app.stocks.endpoints.sync_status_endpoints import (
+    router as sync_status_router,
+)
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.router import router as stocks_router
+
+# Send app.* logs (sync-sweep progress heartbeats + end-of-run summaries) to stdout at
+# INFO. Without this, bare `uvicorn app.main:app` leaves the root logger at WARNING and our
+# INFO lines are dropped before they reach the container logs. See app/logging_config.py.
+configure_logging()
 
 # Browser origins allowed to call this API (cross-origin). Comma-separated env
 # var so prod and local dev differ without a code change; defaults to the
@@ -94,6 +103,11 @@ app.include_router(recommendations_cron_router)
 # Fire-and-forget like the earnings crons (202 + background thread). The read/search
 # endpoint over it is deferred. See app/stocks/endpoints/cron_universe_endpoints.py.
 app.include_router(universe_cron_router)
+# The cron progress endpoint (GET /internal/sync/status): the in-process progress of every
+# fire-and-forget sync sweep (running/idle, done/total, ok/failed/skipped tallies), fed by the
+# same per-stock callback that drives the log heartbeats. See
+# app/stocks/endpoints/sync_status_endpoints.py.
+app.include_router(sync_status_router)
 
 
 @app.get("/healthz")

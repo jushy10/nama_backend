@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.sync_progress import ProgressReporter, SyncOutcome, report_progress
 from app.stocks.universe.ports import CompanyClassificationProvider, StockScreener
 from app.stocks.universe.repository import UniverseRepository
 
@@ -74,7 +75,12 @@ class SyncUniverse:
         self._repository = repository
         self._classifier = classifier
 
-    def execute(self, *, limit: int | None = None) -> UniverseSyncReport:
+    def execute(
+        self,
+        *,
+        limit: int | None = None,
+        on_progress: ProgressReporter | None = None,
+    ) -> UniverseSyncReport:
         """Screen the market, upsert the result onto the anchor, then classify up to ``limit``
         (default ``DEFAULT_LIMIT``) still-unclassified stocks.
 
@@ -85,6 +91,10 @@ class SyncUniverse:
         be as well). Otherwise the whole screen is upserted (additive) and the enrichment pass
         runs. A single symbol's classification failure never aborts the run — it's counted and
         the sweep continues.
+
+        ``on_progress``, if given, is called once per stock during the per-ticker enrichment
+        pass (the minutes-long part); the cron runner logs a heartbeat from it. It is pure
+        observation and never affects the run.
         """
         capped = self.DEFAULT_LIMIT if limit is None else max(1, limit)
         screened = self._screener.screen(min_market_cap=self.MIN_MARKET_CAP)
@@ -98,7 +108,7 @@ class SyncUniverse:
                 enrich_failed=0,
             )
         counts = self._repository.upsert_screen(screened)
-        enriched, enrich_failed = self._enrich_missing_industries(capped)
+        enriched, enrich_failed = self._enrich_missing_industries(capped, on_progress)
         return UniverseSyncReport(
             screened=len(screened),
             added=counts.added,
@@ -108,24 +118,36 @@ class SyncUniverse:
             enrich_failed=enrich_failed,
         )
 
-    def _enrich_missing_industries(self, limit: int) -> tuple[int, int]:
+    def _enrich_missing_industries(
+        self, limit: int, on_progress: ProgressReporter | None
+    ) -> tuple[int, int]:
         """Classify up to ``limit`` stored stocks that still lack an ``industry``, writing each
         one's sector/industry. Returns ``(enriched, failed)``: ``enriched`` wrote a
         classification, ``failed`` couldn't reach the source. A symbol the source reaches but
         can't classify (both sides ``None``) is neither — it's left for a later run rather than
-        counted, since nothing was written and nothing went wrong."""
+        counted, since nothing was written and nothing went wrong (reported as ``SKIPPED``)."""
+        tickers = self._repository.tickers_missing_industry(limit)
+        total = len(tickers)
         enriched = 0
         failed = 0
-        for ticker in self._repository.tickers_missing_industry(limit):
+        for index, ticker in enumerate(tickers, start=1):
             try:
                 classification = self._classifier.get_classification(ticker)
             except (StockNotFound, StockDataUnavailable):
                 # The source couldn't serve this symbol this run (outage/block). Leave it as
                 # is and count it; the next run retries it.
                 failed += 1
+                report_progress(
+                    on_progress, index, total, ticker, SyncOutcome.FAILED, "unavailable"
+                )
                 continue
             if classification.industry is None and classification.sector is None:
-                continue  # source has no classification yet — leave it for a later run
+                # source has no classification yet — leave it for a later run
+                report_progress(
+                    on_progress, index, total, ticker, SyncOutcome.SKIPPED, "unclassified"
+                )
+                continue
             self._repository.set_classification(ticker, classification)
             enriched += 1
+            report_progress(on_progress, index, total, ticker, SyncOutcome.OK)
         return enriched, failed
