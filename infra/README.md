@@ -95,16 +95,13 @@ The app reads `DATABASE_URL` (see [`app/db.py`](../app/db.py)). Because the DB i
   becomes publicly reachable. One-time local setup: install the AWS CLI's
   [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html).
 
-  The bastion is provisioned but **parked stopped** between sessions — a
-  stopped instance bills only its 8 GB disk (~$0.64/mo): no compute, and its
-  public IP is released. It is not part of the app's serving path, so none of
-  this affects the API. To open an access window: **Actions tab → "Bastion
-  session" → Run workflow** (default 15 min, max 120). The workflow starts the
-  instance, waits until SSM sees it (~1–2 min — watch the job log for the
-  "ready" line with the instance id), holds the window open, and **always stops
-  it at the end** — cancelling the run stops it early, so it can't be left on
-  by accident. (`bastion_enabled = false` in `environments/dev/variables.tf`
-  still removes it entirely — it's stateless, nothing is lost.)
+  The bastion is **kept running continuously** so the tunnel is always ready —
+  there's no session to start first. Terraform owns its power state (the
+  `aws_ec2_instance_state.bastion` resource holds it `running`, starting it on
+  apply if anything ever stopped it), so there's nothing to toggle. It's a
+  `t4g.nano` (~$7/mo) and is not part of the app's serving path, so none of this
+  affects the API. (`bastion_enabled = false` in `environments/dev/variables.tf`
+  removes it entirely — it's stateless, nothing is lost.)
 
   ```sh
   # Look both up live (no local terraform needed). The bastion keeps its id
@@ -136,11 +133,11 @@ running. It bills whether or not you use it — `terraform destroy` (or remove t
 `deletion_protection` is off and `skip_final_snapshot` is on for easy teardown.
 
 The `module "bastion"` jump host is a `t4g.nano` + its public IPv4 + 8 GB gp3 —
-roughly **$7/mo** if left running, but it spends its life **stopped** (~$0.64/mo,
-disk only; the public IP is released while stopped). The **"Bastion session"**
-workflow (see "Local access" above) starts it for a bounded window and always
-stops it after, so the running rate only applies during sessions. Manual
-fallback, e.g. if a session run died before its stop step:
+roughly **$7/mo**, and it is now **left running continuously** so the database
+tunnel is always available (Terraform holds it in the `running` state). To stop
+paying the running rate for a while, set `bastion_enabled = false` (removes it —
+it's stateless) for a durable pause; a manual `stop-instances` works too but the
+next `terraform apply` starts it back up:
 
 ```sh
 aws ec2 stop-instances --instance-ids "$(aws ec2 describe-instances \

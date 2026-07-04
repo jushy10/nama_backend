@@ -64,13 +64,12 @@ module "database" {
 # Session Manager port forwarding (see infra/README.md → "Connecting the app").
 # It carries the database's app SG, so it is allowed to reach Postgres on 5432.
 #
-# Provisioned but parked STOPPED between sessions: a stopped instance bills
-# only its 8GB disk (~$0.64/mo) — no compute, and its public IP is released.
-# The "Bastion session" workflow (.github/workflows/bastion-session.yml) starts
-# it for a bounded window and always stops it after. Terraform doesn't manage
-# run state, so a stopped bastion plans clean. bastion_enabled = false removes
-# it entirely (it's stateless — nothing is lost). It is NOT in the app's
-# serving path, so none of this ever affects the API.
+# Kept running continuously (see aws_ec2_instance_state below) so the tunnel is
+# always available with nothing to toggle. A t4g.nano + its public IPv4 + 8GB
+# disk runs ~$7/mo — we accept that over the hassle of starting it per session.
+# bastion_enabled = false removes it entirely (it's stateless — nothing is
+# lost). It is NOT in the app's serving path, so none of this ever affects the
+# API.
 module "bastion" {
   count  = var.bastion_enabled ? 1 : 0
   source = "../../modules/bastion-ssm"
@@ -80,6 +79,19 @@ module "bastion" {
   subnet_id = local.app_subnet_ids[0]
 
   extra_security_group_ids = [module.database.app_security_group_id]
+}
+
+# Hold the bastion in the "running" state — this is what makes it always-on.
+# Terraform's aws_instance boots the box running but never reconciles its power
+# state afterward, so this companion resource owns it: on apply it starts the
+# instance if anything stopped it (an accidental stop, an AWS maintenance event,
+# or the freshly-minted instance after a bastion_enabled off→on cycle) and
+# otherwise plans clean. It replaces the old "Bastion session" GitHub workflow
+# that started the box for a bounded window and stopped it after.
+resource "aws_ec2_instance_state" "bastion" {
+  count       = var.bastion_enabled ? 1 : 0
+  instance_id = module.bastion[0].instance_id
+  state       = "running"
 }
 
 # Stock-data credentials for the stocks feature (GET /stocks/{symbol}). Created
