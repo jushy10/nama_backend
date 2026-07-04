@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import nulls_last, select
+from sqlalchemy import nulls_last, or_, select
 from sqlalchemy.orm import Session
 
 from app.stocks.stocks.models import StockRecord, get_or_create_stock
@@ -59,7 +59,12 @@ class SqlUniverseRepository(UniverseRepository):
         self._session.commit()
         return UniverseSyncCounts(added=added, updated=updated)
 
-    def tickers_missing_industry(self, limit: int) -> tuple[str, ...]:
+    def tickers_missing_classification(self, limit: int) -> tuple[str, ...]:
+        # Missing *either* side: a stock is on the work-list until both sector and industry
+        # are filled, so a one-sided classification (Yahoo returned only industry, say) gets
+        # revisited instead of being stuck with a null sector forever — set_classification is
+        # fill-once per side, so a later run completes it.
+        #
         # Largest market cap first (ticker as a stable tiebreak) so a capped, rate-limited
         # run spends its scarce successful .info calls on the biggest, most-viewed names —
         # a megacap like NVDA/GOOGL is classified in the first run rather than starved
@@ -68,7 +73,12 @@ class SqlUniverseRepository(UniverseRepository):
         rows = (
             self._session.execute(
                 select(StockRecord.ticker)
-                .where(StockRecord.industry.is_(None))
+                .where(
+                    or_(
+                        StockRecord.industry.is_(None),
+                        StockRecord.sector.is_(None),
+                    )
+                )
                 .order_by(nulls_last(StockRecord.market_cap.desc()), StockRecord.ticker)
                 .limit(limit)
             )

@@ -73,7 +73,7 @@ class _FakeRepo(UniverseRepository):
         self.upserted = tuple(stocks)
         return self._counts
 
-    def tickers_missing_industry(self, limit):
+    def tickers_missing_classification(self, limit):
         self.missing_limit = limit
         return self._missing
 
