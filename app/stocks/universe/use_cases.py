@@ -37,11 +37,11 @@ class UniverseSyncReport:
 class SyncUniverse:
     """Populate/refresh the searchable universe from a live market screen."""
 
-    # The market-cap floor that defines the universe: US companies worth at least $5B.
-    MIN_MARKET_CAP = 5_000_000_000.0
+    # The market-cap floor that defines the universe: US companies worth at least $1B.
+    MIN_MARKET_CAP = 1_000_000_000.0
 
     # Below this many screened names the result is treated as truncated or blocked (a
-    # healthy US ≥$5B screen is ~1,000–1,500 names), so the upsert is skipped — a bad
+    # healthy US ≥$1B screen is ~2,800 names), so the upsert is skipped — a bad
     # vendor day shouldn't re-stamp only a partial slice as freshly screened. The screener
     # also raises on a hard failure (which propagates); this guards a *degraded* success.
     MIN_PLAUSIBLE_SCREEN = 100

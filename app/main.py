@@ -92,7 +92,7 @@ app.include_router(ticker_router)
 # app/stocks/endpoints/cron_recommendations_endpoints.py.
 app.include_router(recommendations_cron_router)
 # The stock-search read endpoint (GET /stocks/search): find companies in the screened
-# ≥$5B universe by ticker or name, largest market cap first — the app's only discovery
+# ≥$1B universe by ticker or name, largest market cap first — the app's only discovery
 # route. See app/stocks/endpoints/universe_search_endpoints.py.
 app.include_router(universe_search_router)
 # The universe refresh cron endpoint (POST /internal/universe/sync); it drives the

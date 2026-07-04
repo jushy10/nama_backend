@@ -1,7 +1,7 @@
 """HTTP API for searching the stock universe.
 
 ``GET /stocks/search?q=…`` — the read endpoint for the universe slice: find companies in the
-screened US ≥$5B universe by ticker or company name, largest market cap first. This is the
+screened US ≥$1B universe by ticker or company name, largest market cap first. This is the
 app's only *discovery* route; every other stocks endpoint is keyed on a symbol you already
 know. It reads the screened ``stocks`` anchor rows populated out of band by the universe
 cron (those carrying a ``market_cap``), so it never touches a vendor.

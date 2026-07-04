@@ -1,11 +1,11 @@
 name: Sync universe
 run-name: Sync universe
 
-# Weekly (and on-demand). The searchable universe is every US company at/above a $5B market
-# cap (~1,000–1,500 names). Membership drifts slowly — a company crossing $5B is a rare
+# Weekly (and on-demand). The searchable universe is every US company at/above a $1B market
+# cap (~2,800 names). Membership drifts slowly — a company crossing $1B is a rare
 # event — so weekly is plenty. Unlike the earnings/recommendations syncs this makes no
 # per-symbol vendor round-trips — just a few paginated screen calls (yfinance pages the
-# ≥$5B set 250 at a time) — so there's no batching loop: one POST refreshes the lot.
+# ≥$1B set 250 at a time) — so there's no batching loop: one POST refreshes the lot.
 #
 # It POSTs the deployed app's universe cron endpoint
 # (app/stocks/endpoints/cron_universe_endpoints.py), which runs the SyncUniverse use case:
@@ -17,7 +17,7 @@ run-name: Sync universe
 #  - The screen reads Yahoo via yfinance, which needs no key but may block data-centre IPs;
 #    a blocked screen is skipped (the endpoint returns skipped=true), so a bad day just
 #    delays new data — the stocks already stored are additive and stay put.
-#  - The write is ~1,450 DB upserts in one request, with no per-symbol vendor calls, so it
+#  - The write is ~2,800 DB upserts in one request, with no per-symbol vendor calls, so it
 #    stays well under API Gateway's 30s integration timeout — but give curl a generous
 #    --max-time regardless.
 #  - The endpoint is currently unauthenticated (an auth-token guard is planned); this

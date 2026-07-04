@@ -1,6 +1,6 @@
 """universe columns on stocks
 
-The searchable ≥$5B universe is folded straight into the ``stocks`` anchor rather than a
+The searchable ≥$1B universe is folded straight into the ``stocks`` anchor rather than a
 separate membership table: this adds the three screen facts the universe sync fills —
 ``sector``, ``market_cap`` and ``screened_at`` (the last-screen stamp). All nullable: a
 stock that reached ``stocks`` some other way (a ticker-card lookup, an earnings refresh)

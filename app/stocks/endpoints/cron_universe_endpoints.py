@@ -9,8 +9,8 @@ SQL repository and hand them to the use case. Yahoo's screener needs no API key,
 no credential to gate on; the sync is always constructable.
 
 Unlike the earnings / recommendations crons this makes no per-symbol vendor round-trips —
-just a handful of paginated screen calls (yfinance pages the whole ≥$5B set 250 at a time,
-~6 pages) followed by a batch of DB upserts — so there's no batching / limit knob: one POST
+just a handful of paginated screen calls (yfinance pages the whole ≥$1B set 250 at a time,
+~12 pages) followed by a batch of DB upserts — so there's no batching / limit knob: one POST
 refreshes the whole universe.
 
 Security: this endpoint is currently **unauthenticated** — it writes the database (and hits

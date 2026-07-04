@@ -33,7 +33,7 @@ class StockRecord(Base):
     them fills them in.
 
     ``sector`` / ``market_cap`` / ``screened_at`` are the universe screen's facts, filled
-    by the universe sync (the ≥$5B US screen) and deliberately denormalized onto the
+    by the universe sync (the ≥$1B US screen) and deliberately denormalized onto the
     anchor so search is a single-table read. All three are nullable: a ticker that reached
     the table some other way (a ticker-card lookup, an earnings refresh) has never been
     screened, so they stay null — which is exactly how search tells a screened company
