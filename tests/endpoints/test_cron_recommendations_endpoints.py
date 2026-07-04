@@ -14,10 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import cron_recommendations_endpoints as cron
-from app.stocks.recommendations.use_cases import (
-    RecommendationsSyncReport,
-    SyncRecommendations,
-)
+from app.stocks.recommendations.use_cases import RecommendationsSyncReport
 
 
 class _FakeRunner:
@@ -56,14 +53,13 @@ def test_accepts_the_trigger_and_runs_the_sweep_with_the_limit():
     assert fake.calls == [50]  # the query limit reached the runner
 
 
-def test_defaults_the_limit_when_omitted():
-    default = SyncRecommendations.DEFAULT_LIMIT
-    fake = _FakeRunner(RecommendationsSyncReport(refreshed=0, failed=0, limit=default))
+def test_defaults_to_unlimited_when_omitted():
+    fake = _FakeRunner(RecommendationsSyncReport(refreshed=0, failed=0, limit=None))
     resp = _client(fake).post("/internal/recommendations/sync")
     assert resp.status_code == 202
-    assert resp.json() == {"status": "accepted", "limit": default}
+    assert resp.json() == {"status": "accepted", "limit": None}
     _drain()
-    assert fake.calls == [default]
+    assert fake.calls == [None]  # None => the sweep processes every stock
 
 
 def test_a_trigger_while_a_sweep_runs_is_a_noop():

@@ -100,23 +100,31 @@ def delete_trends_for_periods(
     )
 
 
-def stalest_symbols(session: Session, limit: int) -> list[tuple[str, str | None]]:
-    """Up to ``limit`` stored ``(symbol, name)`` pairs, least-recently-refreshed first.
+def stalest_symbols(
+    session: Session, limit: int | None = None
+) -> list[tuple[str, str | None]]:
+    """``(symbol, name)`` pairs from the ``stocks`` anchor, most in need of a refresh first.
 
-    One entry per stock, ordered by the *newest* fetch stamp among its rows — the merge
-    keeps old stamps on old months forever, so the min would pin a long-cached stock
-    permanently stale; the max is when the stock was last actually refreshed. Only
-    symbols that already have trend rows are returned, so a refresh walks what's
-    actually cached; never-viewed symbols are filled lazily on first access instead.
+    A **LEFT JOIN**, so every anchor stock is included — even one with no trend rows yet — and
+    the sync both *seeds* new coverage and renews stale rows. Cached stocks are ordered by the
+    *newest* fetch stamp among their rows (the merge keeps old stamps on old months forever, so
+    the min would pin a long-cached stock permanently stale; the max is when it was last
+    actually refreshed). Ordering is **un-cached first**: a never-fetched stock has a NULL max
+    stamp and sorts ahead of any cached stock. ``limit`` caps the batch; ``None`` (the default)
+    returns every stock, so one sweep can seed the whole anchor. Lazy fill on first access still
+    covers a symbol between sweeps.
     """
-    rows = session.execute(
+    max_fetched = func.max(StockRecommendationTrendRecord.fetched_at)
+    stmt = (
         select(StockRecord.ticker, StockRecord.name)
-        .join(
+        .outerjoin(
             StockRecommendationTrendRecord,
             StockRecommendationTrendRecord.stock_id == StockRecord.id,
         )
         .group_by(StockRecord.id, StockRecord.ticker, StockRecord.name)
-        .order_by(func.max(StockRecommendationTrendRecord.fetched_at).asc())
-        .limit(limit)
-    ).all()
-    return [(row.ticker, row.name) for row in rows]
+        # un-cached (NULL stamp) first, then least-recently-refreshed — portable NULLs-first.
+        .order_by(max_fetched.is_(None).desc(), max_fetched.asc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return [(row.ticker, row.name) for row in session.execute(stmt).all()]

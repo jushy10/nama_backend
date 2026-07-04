@@ -50,19 +50,17 @@ class GetAnnualEarnings:
 @dataclass(frozen=True)
 class AnnualEarningsSyncReport:
     """The outcome of one refresh run: how many stocks were renewed, how many the provider
-    couldn't serve this run (or returned empty for), and the per-run cap."""
+    couldn't serve this run (or returned empty for), and the per-run cap (``None`` when the
+    run was uncapped)."""
 
     refreshed: int
     failed: int
-    limit: int
+    limit: int | None
 
 
 class SyncAnnualEarnings:
-    """Renew stored annual earnings from the live source, stalest stocks first."""
-
-    # Default stocks per run; the caller (the cron endpoint) can override per invocation.
-    # Kept modest so the sequential Yahoo calls stay gentle on its rate limits.
-    DEFAULT_LIMIT = 200
+    """Renew stored annual earnings from the live source, most-stale stocks first — and
+    **seed** stocks not yet cached (never-fetched anchor stocks come first)."""
 
     def __init__(
         self,
@@ -73,13 +71,14 @@ class SyncAnnualEarnings:
         self._repository = repository
 
     def execute(self, *, limit: int | None = None) -> AnnualEarningsSyncReport:
-        """Refresh up to ``limit`` stalest stocks (default ``DEFAULT_LIMIT``), returning a
-        summary. Never raises for a single symbol's failure — the run continues and the
-        failure is counted, so one bad symbol doesn't abort the whole sweep."""
-        capped = self.DEFAULT_LIMIT if limit is None else max(1, limit)
+        """Refresh up to ``limit`` stocks most in need of it (un-cached first, then stalest);
+        ``limit=None`` (the default) processes every stock in the anchor. Returns a summary.
+        Never raises for a single symbol's failure — the run continues and the failure is
+        counted, so one bad symbol doesn't abort the whole sweep."""
+        effective = None if limit is None else max(1, limit)
         refreshed = 0
         failed = 0
-        for target in self._repository.refresh_targets(capped):
+        for target in self._repository.refresh_targets(effective):
             try:
                 timeline = self._provider.get_annual_earnings(target.symbol)
             except (StockNotFound, StockDataUnavailable):
@@ -93,12 +92,17 @@ class SyncAnnualEarnings:
             if timeline.is_empty:
                 failed += 1
                 continue
-            # A *degraded* fetch must not wipe stored figures either: the upsert rewrites
-            # the whole window, so fill the fresh timeline's holes from the stored rows
-            # (reported years Yahoo dropped this run, missing revenue/net income) before
-            # persisting. Reported figures never change, so the stored values stay true.
-            timeline = timeline.filled_from(self._repository.get(target.symbol))
+            # A *degraded* fetch must not wipe stored figures either: the upsert rewrites the
+            # whole window, so fill the fresh timeline's holes from the stored rows (reported
+            # years Yahoo dropped this run, missing revenue/net income) before persisting. A
+            # newly-seeded stock has nothing stored, so there's nothing to fill from. Reported
+            # figures never change, so the stored values stay true.
+            stored = self._repository.get(target.symbol)
+            if stored is not None:
+                timeline = timeline.filled_from(stored)
             # Carry the stored name so a nameless refresh doesn't drop a known one.
             self._repository.upsert(target.symbol, target.name, timeline)
             refreshed += 1
-        return AnnualEarningsSyncReport(refreshed=refreshed, failed=failed, limit=capped)
+        return AnnualEarningsSyncReport(
+            refreshed=refreshed, failed=failed, limit=effective
+        )

@@ -278,10 +278,10 @@ def test_sync_reported_year_never_downgrades_to_upcoming():
     assert year_2025.is_reported and year_2025.eps_actual == 7.3
 
 
-def test_sync_default_limit_is_applied_when_unspecified():
+def test_sync_defaults_to_unlimited_when_no_limit_is_given():
     repo = _FakeRepo([])
     SyncAnnualEarnings(_FakeSyncProvider(), repo).execute()
-    assert repo.refresh_limit == SyncAnnualEarnings.DEFAULT_LIMIT
+    assert repo.refresh_limit is None  # None => process every anchor stock (seed + refresh)
 
 
 def test_sync_limit_is_passed_through_and_floored_at_one():
