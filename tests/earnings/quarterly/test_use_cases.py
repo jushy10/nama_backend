@@ -324,10 +324,10 @@ def test_sync_normal_roll_does_not_grow_the_reported_window():
     ]  # (2025, 1) rolled off; the window stayed four reported quarters
 
 
-def test_sync_default_limit_is_applied_when_unspecified():
+def test_sync_defaults_to_unlimited_when_no_limit_is_given():
     repo = _FakeRepo([])
     SyncQuarterlyEarnings(_FakeSyncProvider(), repo).execute()
-    assert repo.refresh_limit == SyncQuarterlyEarnings.DEFAULT_LIMIT
+    assert repo.refresh_limit is None  # None => process every anchor stock (seed + refresh)
 
 
 def test_sync_limit_is_passed_through_and_floored_at_one():

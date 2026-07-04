@@ -22,6 +22,7 @@ from app.stocks.earnings.annual.entities import (
 from app.stocks.earnings.annual.models import (
     StockAnnualEarningsRecord,
     StockRecord,
+    get_or_create_stock,
 )
 
 _NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
@@ -303,3 +304,16 @@ def test_refresh_targets_orders_stalest_first_and_carries_the_name(session):
     assert [t.symbol for t in targets] == ["MSFT", "AAPL"]  # stalest first
     assert targets[0] == ("MSFT", "Microsoft")  # RefreshTarget carries the stored name
     assert newer.refresh_targets(1) == [("MSFT", "Microsoft")]  # limit respected
+
+
+def test_refresh_targets_seeds_uncached_anchor_stocks_first(session):
+    # A stock in the anchor with no year rows yet (e.g. added by the universe sync) is a
+    # *seed* target — returned ahead of any cached stock so a sweep fills new coverage first.
+    r = repo(session)
+    r.upsert("MSFT", "Microsoft", AnnualEarningsTimeline("MSFT", (_reported(2024, 11.0),)))
+    get_or_create_stock(session, "NEWCO", "New Co")  # anchor only, never fetched
+    session.commit()
+
+    targets = r.refresh_targets(None)  # None => every anchor stock
+    assert [t.symbol for t in targets] == ["NEWCO", "MSFT"]  # un-cached seeded first
+    assert dict(targets)["NEWCO"] == "New Co"  # carries the anchor name

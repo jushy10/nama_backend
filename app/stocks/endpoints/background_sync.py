@@ -33,22 +33,23 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-# A sync runner performs one full sweep capped at ``limit`` stalest stocks. Its return value
-# is ignored (the refreshed/failed counts go to the logs, not the HTTP response) — it exists
-# only for the runner's own logging and for tests to assert against.
-SyncRunner = Callable[[int], object]
+# A sync runner performs one full sweep of up to ``limit`` stocks most in need of a refresh
+# (``None`` = every stock). Its return value is ignored (the refreshed/failed counts go to the
+# logs, not the HTTP response) — it exists only for the runner's own logging and for tests to
+# assert against.
+SyncRunner = Callable[[int | None], object]
 
 
 class SyncTriggerResponse(BaseModel):
     """The trigger's outcome: whether a sweep was started or one was already running, and
-    the per-run cap the background sweep applies."""
+    the per-run cap the background sweep applies (``null`` when the run is uncapped)."""
 
     status: str  # "accepted" | "already_running"
-    limit: int
+    limit: int | None
 
 
 def _run_guarded(
-    lock: threading.Lock, run: SyncRunner, limit: int, label: str
+    lock: threading.Lock, run: SyncRunner, limit: int | None, label: str
 ) -> None:
     """Background body: run the sweep, always release the guard, and never let an exception
     escape the thread (an unhandled one would otherwise die silently and, worse, strand the
@@ -64,7 +65,7 @@ def _run_guarded(
 def trigger_sync(
     lock: threading.Lock,
     run: SyncRunner,
-    limit: int,
+    limit: int | None,
     response: Response,
     *,
     label: str,

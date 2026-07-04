@@ -51,19 +51,17 @@ class GetStockRecommendations:
 @dataclass(frozen=True)
 class RecommendationsSyncReport:
     """The outcome of one refresh run: how many stocks were renewed, how many the
-    provider couldn't serve this run (or returned empty for), and the per-run cap."""
+    provider couldn't serve this run (or returned empty for), and the per-run cap
+    (``None`` when the run was uncapped)."""
 
     refreshed: int
     failed: int
-    limit: int
+    limit: int | None
 
 
 class SyncRecommendations:
-    """Renew stored recommendation trends from the live source, stalest stocks first."""
-
-    # Default stocks per run; the caller (the cron endpoint) can override per invocation.
-    # Kept modest so the sequential Yahoo calls stay gentle on its rate limits.
-    DEFAULT_LIMIT = 200
+    """Renew stored recommendation trends from the live source, most-stale stocks first —
+    and **seed** stocks not yet cached (never-fetched anchor stocks come first)."""
 
     def __init__(
         self,
@@ -74,13 +72,14 @@ class SyncRecommendations:
         self._repository = repository
 
     def execute(self, *, limit: int | None = None) -> RecommendationsSyncReport:
-        """Refresh up to ``limit`` stalest stocks (default ``DEFAULT_LIMIT``), returning
-        a summary. Never raises for a single symbol's failure — the run continues and the
-        failure is counted, so one bad symbol doesn't abort the whole sweep."""
-        capped = self.DEFAULT_LIMIT if limit is None else max(1, limit)
+        """Refresh up to ``limit`` stocks most in need of it (un-cached first, then stalest);
+        ``limit=None`` (the default) processes every stock in the anchor. Returns a summary.
+        Never raises for a single symbol's failure — the run continues and the failure is
+        counted, so one bad symbol doesn't abort the whole sweep."""
+        effective = None if limit is None else max(1, limit)
         refreshed = 0
         failed = 0
-        for target in self._repository.refresh_targets(capped):
+        for target in self._repository.refresh_targets(effective):
             try:
                 recommendations = self._provider.get_recommendations(target.symbol)
             except (StockNotFound, StockDataUnavailable):
@@ -98,4 +97,6 @@ class SyncRecommendations:
             # Carry the stored name so a nameless refresh doesn't drop a known one.
             self._repository.upsert(target.symbol, target.name, recommendations)
             refreshed += 1
-        return RecommendationsSyncReport(refreshed=refreshed, failed=failed, limit=capped)
+        return RecommendationsSyncReport(
+            refreshed=refreshed, failed=failed, limit=effective
+        )
