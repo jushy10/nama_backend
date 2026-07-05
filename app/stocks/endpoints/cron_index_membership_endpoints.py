@@ -1,7 +1,10 @@
 """HTTP API for invoking the index-membership refresh — the cron entrypoint.
 
 The refresh is a use case (``SyncIndexMembership``) driven over HTTP: a scheduler (the
-sync-index-membership GitHub workflow, or any cron) POSTs here to kick it off.
+sync-index-membership GitHub workflow, or any cron) POSTs here to kick it off. The workflow now
+launches this as a one-off ECS task via ``python -m app.sync index-membership`` (reusing
+``run_index_membership_sync`` below), the same shape as the other sync sweeps; this endpoint
+stays as the runner's source and for a manual/HTTP trigger.
 
 The run is **fire-and-forget**, the same shape as the earnings/recommendations crons: it
 schedules the work on a background thread and returns ``202`` at once, so it can't 504 at the
@@ -15,29 +18,27 @@ that then appears in the ``202`` body is a cosmetic artefact of the shared ``Syn
 shape; it means nothing here.
 
 Wiring lives here, the composition-root way: ``run_index_membership_sync`` opens a fresh session
-and builds the Finnhub adapter + the SQL repository for the use case. The membership source is
-Finnhub's ``/index/constituents`` — a **keyed** endpoint (index data is on Finnhub's paid tier),
-so the wiring **requires ``FINNHUB_API_KEY``**: ``get_sync_runner`` returns a ``503`` when it's
-absent (the "missing required key" rule), rather than scheduling a sweep that can't fetch. A key
-that is present but *unentitled* passes the gate and surfaces later as a logged failure (both
-indices come back empty → the sweep raises and ``background_sync`` logs it). ``get_sync_runner``
-is the DI seam tests override with a fake.
+and builds the Wikipedia adapter + the SQL repository for the use case. The membership source is
+Wikipedia's S&P 500 / Nasdaq-100 rosters — **keyless** (this replaced Finnhub's paid, and
+403-gated, ``/index/constituents``), so there is no credential to gate on and the sync is always
+constructable, like the universe sweep. A source failure (e.g. Wikipedia unreachable, or a page
+whose roster can't be parsed) surfaces later as a logged failure inside ``background_sync``, not
+a startup error.
 
 Security: this endpoint is currently **unauthenticated** — it writes the database (and hits
-Finnhub) and is triggered over the public internet by the sync workflow, so an auth token
+Wikipedia) and is triggered over the public internet by the sync workflow, so an auth token
 (planned: a shared ``CRON_SYNC_TOKEN`` bearer guard) should be added before the endpoints are
 considered hardened.
 """
 
 import logging
-import os
 import threading
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.finnhub_index_membership_adapter import (
-    FinnhubIndexMembershipProvider,
+from app.stocks.adapters.wikipedia_index_membership_adapter import (
+    WikipediaIndexMembershipProvider,
 )
 from app.stocks.endpoints.background_sync import (
     SyncRunner,
@@ -62,13 +63,12 @@ def run_index_membership_sync(_limit: int) -> IndexMembershipSyncReport:
     """Perform one full reconcile with its **own** DB session (the request-scoped ``get_db`` one
     is closed by the time the background thread runs). The ``_limit`` from the shared runner
     signature is ignored — this reconcile is always a full mark/clear against both index lists,
-    not a stalest-N sweep. Reads ``FINNHUB_API_KEY`` from the env (the endpoint's gate has
-    already ensured it's present)."""
-    key = os.environ.get("FINNHUB_API_KEY", "")
+    not a stalest-N sweep. The Wikipedia source is keyless, so there's nothing to read from the
+    env."""
     db = SessionLocal()
     try:
         report = SyncIndexMembership(
-            FinnhubIndexMembershipProvider(key), SqlIndexMembershipRepository(db)
+            WikipediaIndexMembershipProvider(), SqlIndexMembershipRepository(db)
         ).execute()
         logger.info(
             "index-membership sync done: sp500 members=%d marked=%d cleared=%d skipped=%s | "
@@ -90,14 +90,8 @@ def run_index_membership_sync(_limit: int) -> IndexMembershipSyncReport:
 def get_sync_runner() -> SyncRunner:
     """DI seam for the reconcile's unit of work; tests override it with a fake.
 
-    Gates on the Finnhub key: index data is a keyed Finnhub capability, so a missing
-    ``FINNHUB_API_KEY`` is a hard misconfiguration — a ``503`` here, before any sweep is
-    scheduled — rather than a background sweep that can't fetch."""
-    if not os.environ.get("FINNHUB_API_KEY"):
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "FINNHUB_API_KEY is not configured; index membership needs it.",
-        )
+    The Wikipedia source is keyless, so — unlike the old Finnhub wiring — there's no API key to
+    gate on: the runner is always available (the same shape as the universe sweep)."""
     return run_index_membership_sync
 
 
