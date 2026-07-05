@@ -39,3 +39,15 @@ def test_upgrade_creates_table_then_downgrade_drops_it(alembic):
 
     command.downgrade(config, "base")
     assert "index_constituents" not in inspect(create_engine(url)).get_table_names()
+
+
+def test_upgrade_adds_index_membership_flags_to_stocks(alembic):
+    # 0014 folds the S&P 500 / Nasdaq-100 membership flags onto the shared stocks anchor.
+    config, url = alembic
+
+    command.upgrade(config, "head")
+    columns = {c["name"] for c in inspect(create_engine(url)).get_columns("stocks")}
+    assert {"in_sp500", "in_nasdaq100"} <= columns
+
+    command.downgrade(config, "base")
+    assert "stocks" not in inspect(create_engine(url)).get_table_names()

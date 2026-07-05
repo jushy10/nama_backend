@@ -22,6 +22,7 @@ from app.stocks.recommendations.entities import (
 from app.stocks.recommendations.models import (
     StockRecommendationTrendRecord,
     StockRecord,
+    get_or_create_stock,
 )
 
 _NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
@@ -175,3 +176,16 @@ def test_refresh_targets_orders_by_last_refresh_not_oldest_row(session):
     assert [t.symbol for t in targets] == ["MSFT", "AAPL"]  # last-refreshed last
     assert targets[0] == ("MSFT", "Microsoft")  # RefreshTarget carries the stored name
     assert fresh.refresh_targets(1) == [("MSFT", "Microsoft")]  # limit respected
+
+
+def test_refresh_targets_seeds_uncached_anchor_stocks_first(session):
+    # A stock in the anchor with no trend rows yet (e.g. added by the universe sync) is a
+    # *seed* target — returned ahead of any cached stock so a sweep fills new coverage first.
+    r = repo(session)
+    r.upsert("MSFT", "Microsoft", _a_run(_a_trend(date(2026, 6, 1), buy=9), symbol="MSFT"))
+    get_or_create_stock(session, "NEWCO", "New Co")  # anchor only, never fetched
+    session.commit()
+
+    targets = r.refresh_targets(None)  # None => every anchor stock
+    assert [t.symbol for t in targets] == ["NEWCO", "MSFT"]  # un-cached seeded first
+    assert dict(targets)["NEWCO"] == "New Co"  # carries the anchor name

@@ -3,7 +3,8 @@
 Offline: an in-memory SQLite database stands in for the real ``stocks`` table (the universe
 has no table of its own). Verifies the additive upsert (insert new / refresh in place /
 never remove an absent member), the fill-but-don't-clobber rule for the anchor's
-name/exchange/sector, the screen stamp, and added-vs-updated counting.
+name/exchange/sector, the screen stamp, added-vs-updated counting, and the enrichment pass's
+read/write of the sector/industry classification.
 """
 
 from datetime import datetime, timezone
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.db import Base
 from app.stocks.stocks.models import StockRecord, get_or_create_stock
 from app.stocks.universe.db_repository import SqlUniverseRepository
-from app.stocks.universe.entities import ScreenedStock
+from app.stocks.universe.entities import CompanyClassification, ScreenedStock
 
 _NOW = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
 
@@ -151,3 +152,77 @@ def test_upsert_counts_a_preexisting_unscreened_anchor_as_added(session):
     # First time it's screened => added, not updated (screened_at was null).
     assert (counts.added, counts.updated) == (1, 0)
     assert _row(session, "AAPL").market_cap == 3e12
+
+
+def test_tickers_missing_classification_lists_unclassified_by_market_cap_and_capped(session):
+    r = repo(session)
+    r.upsert_screen(
+        (
+            _stock("AAPL", market_cap=3e12),
+            _stock("MSFT", market_cap=2e12),
+            _stock("XOM", market_cap=5e11),
+        )
+    )
+    # A non-screened, incidentally-known ticker counts too — the work-list spans the whole
+    # stocks table, not only screened members — but with no market cap it sorts last.
+    get_or_create_stock(session, "TSLA", None)
+    session.commit()
+    # Fully classify one so it drops out of the work-list.
+    r.set_classification(
+        "MSFT", CompanyClassification(sector="technology", industry="software_infrastructure")
+    )
+
+    # Largest market cap first (the megacaps before the tail), the null-cap incidental
+    # ticker last, and capped to the limit — so a run classifies the biggest names first.
+    assert r.tickers_missing_classification(10) == ("AAPL", "XOM", "TSLA")
+    assert r.tickers_missing_classification(2) == ("AAPL", "XOM")
+
+
+def test_tickers_missing_classification_includes_a_one_sided_classification(session):
+    r = repo(session)
+    r.upsert_screen((_stock("AAPL", market_cap=3e12),))
+    # Yahoo gave only the industry last run — the sector is still null, so the stock must
+    # remain on the work-list until both sides are filled (not stuck half-classified).
+    r.set_classification("AAPL", CompanyClassification(industry="consumer_electronics"))
+
+    assert r.tickers_missing_classification(10) == ("AAPL",)
+
+
+def test_set_classification_fills_both_sides(session):
+    r = repo(session)
+    r.upsert_screen((_stock("AAPL", market_cap=3e12),))
+
+    r.set_classification(
+        "AAPL", CompanyClassification(sector="technology", industry="consumer_electronics")
+    )
+
+    aapl = _row(session, "AAPL")
+    assert (aapl.sector, aapl.industry) == ("technology", "consumer_electronics")
+
+
+def test_set_classification_is_fill_once_and_one_sided(session):
+    r = repo(session)
+    r.upsert_screen((_stock("AAPL", market_cap=3e12),))
+
+    # First run only knows the industry (Yahoo gave no sector).
+    r.set_classification("AAPL", CompanyClassification(industry="consumer_electronics"))
+    aapl = _row(session, "AAPL")
+    assert (aapl.sector, aapl.industry) == (None, "consumer_electronics")
+
+    # A later run fills the still-missing sector but never overwrites the settled industry.
+    r.set_classification(
+        "AAPL", CompanyClassification(sector="technology", industry="something_else")
+    )
+    aapl = _row(session, "AAPL")
+    assert (aapl.sector, aapl.industry) == ("technology", "consumer_electronics")
+
+
+def test_set_classification_ignores_an_unknown_ticker(session):
+    # No row for NOPE — a no-op: no row is created and nothing raises.
+    repo(session).set_classification("NOPE", CompanyClassification(industry="x"))
+    assert (
+        session.execute(
+            select(StockRecord).where(StockRecord.ticker == "NOPE")
+        ).scalar_one_or_none()
+        is None
+    )

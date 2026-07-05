@@ -1,0 +1,79 @@
+name: Sync index membership
+run-name: Sync index membership
+
+# Weekly (and on-demand). Reconciles which stocks are in the S&P 500 / Nasdaq-100 onto the
+# stocks anchor's in_sp500 / in_nasdaq100 flags. Membership only changes on the quarterly index
+# rebalances, so weekly is more than enough. It POSTs the deployed app's index-membership cron
+# endpoint (app/stocks/endpoints/cron_index_membership_endpoints.py), which runs the
+# SyncIndexMembership use case: read both membership lists from Finnhub's /index/constituents
+# (^GSPC + ^NDX), then mark current members and clear drop-outs on the anchor.
+#
+# The endpoint is FIRE-AND-FORGET: it schedules the reconcile on a background thread and returns
+# 202 immediately, so this workflow makes a SINGLE quick POST — no batching, no limit (the
+# reconcile always processes the whole membership set). A 200 "already_running" means a previous
+# reconcile is still in flight — also success; this run just declines to start a second.
+#
+# Operational notes:
+#  - Because the reconcile runs in the background, the response can't report how many flags
+#    changed — it only confirms the run was accepted. The counts land in the app logs
+#    (CloudWatch): "index-membership sync done: sp500 members=… marked=… cleared=… …".
+#  - The source is Finnhub's /index/constituents, which needs FINNHUB_API_KEY on the app (index
+#    data is a paid Finnhub capability). A missing key makes the endpoint a 503 (this run then
+#    fails visibly); a present-but-unentitled key passes the trigger but the background sweep
+#    finds nothing and logs a failure. Each index is fetched independently; an index that fails
+#    or comes back short is skipped server-side (its flags are left as-is), so a bad response
+#    delays new data but never clears a live index.
+#  - The endpoint is currently unauthenticated (an auth-token guard is planned); this workflow
+#    just triggers it.
+#
+# Requires the repo/environment variable API_BASE_URL — the deployed app's base URL, reachable
+# from the GitHub runner.
+
+on:
+  workflow_dispatch: {}
+  # Weekly, Sundays 06:30 UTC — just after the weekly universe sync (06:00) and staggered off
+  # the daily recommendations sync (07:30) and the Monday earnings syncs (08:00/09:00). Exact
+  # timing doesn't matter, so GitHub delaying scheduled runs under load is fine. Caveats:
+  # scheduled workflows run only from the default branch, and GitHub auto-disables the schedule
+  # after 60 days with no repo activity.
+  schedule:
+    - cron: "30 6 * * 0"
+
+concurrency:
+  group: sync-index-membership
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync index membership
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Trigger the index-membership refresh
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${API_BASE_URL:-}" ]; then
+            echo "::error::API_BASE_URL is not set — add it as a repo/environment variable pointing at the deployed app."
+            exit 1
+          fi
+
+          url="${API_BASE_URL%/}/internal/index-membership/sync"
+          http_code=$(curl -sS -X POST "$url" \
+            --max-time 30 \
+            -o /tmp/sync_response.json \
+            -w '%{http_code}')
+          body=$(cat /tmp/sync_response.json 2>/dev/null || echo '{}')
+          echo "POST ${url} -> HTTP ${http_code}: ${body}"
+
+          # 202 = reconcile started; 200 = one was already running (also fine). Anything else is
+          # a real failure (the app is down, or the trigger was rejected).
+          if [ "$http_code" != "202" ] && [ "$http_code" != "200" ]; then
+            echo "::error::Index-membership sync trigger failed (HTTP $http_code) — check the app logs."
+            exit 1
+          fi
+
+          echo "Index-membership reconcile triggered ($(echo "$body" | jq -r '.status // "?"'))."

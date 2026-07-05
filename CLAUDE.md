@@ -124,8 +124,10 @@ only this one file changes.
 - `adapters/annual_earnings_estimates_adapter.py` — implements the `AnalystEstimatesProvider` port by **projecting the annual-earnings slice's stored forward years** into an `AnalystEstimates` block (first upcoming year → FY1, next → FY2); it feeds the enriched stock snapshot (`GetStockInfo`, now the AI analysis context — the standalone `GET /stocks/{symbol}` endpoint was removed) and the ticker card's forward PEG. **DB-only, no live fall-through**: estimates are best-effort enrichment, so an uncached symbol just omits the forward metrics until the annual read path (lazy fill) or its cron populates the rows. This replaced the dedicated `stock_analyst_estimates` table + its own Yahoo fetch and cron — the annual slice stores the *same* `earnings_estimate`/`revenue_estimate` consensus, so the forward consensus has one source of truth (the FY1 low/high range and analyst counts were dropped with the table; the entities keep the full block, feeding `forward_pe`, the growth block, and the Bedrock analysis context)
 - `adapters/yfinance_recommendations_adapter.py` — live source for the recommendations slice: **Yahoo via `yfinance`** (`Ticker.recommendations`), the sell-side buy/hold/sell split as monthly snapshots (the same recommendation-trend data Finnhub serves, but keyless — this replaced `finnhub_recommendation_provider.py` and the `FINNHUB_API_KEY` gate on the endpoint). Yahoo labels the rows *relatively* (`0m` = this month, `-1m`, …), so the adapter anchors them on today's month into first-of-month `period` dates — the identity the DB cache keys on. `adapters/db_cached_recommendations_adapter.py` — the same **read-through** DB cache as the earnings slices (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `adapters/yfinance_options_adapter.py` — live source for the ticker card's `options_metrics` block: **Yahoo via `yfinance`** (`Ticker.options` for the expiration list, `Ticker.option_chain(date)` for one expiry's calls/puts), keyless, implementing the ticker slice's `OptionChainProvider` port. Maps chain rows → `OptionContract` entities (strike, bid/ask/last, volume, open interest, IV); every *derived* figure (ATM IV, expected move, insurance cost, put/call) is entity logic, not adapter logic. **No DB cache or cron** — options prices decay by the hour, so the no-TTL read-through pattern doesn't fit; the read is live per request (the endpoint's 5-min Cache-Control is the only damping) and best-effort even when requested, since Yahoo intermittently blocks data-centre IPs
+- `adapters/finnhub_index_membership_adapter.py` — live source for the index-membership slice: **Finnhub** (`/index/constituents` for `^GSPC` + `^NDX`) via `httpx`, implementing `IndexMembershipSource`. Unlike the price/earnings feeds this is a **keyed** source — index data is on Finnhub's paid tier, so the cron wiring requires `FINNHUB_API_KEY` (a missing key is a **503** at the endpoint; a present-but-unentitled key passes the trigger and surfaces as a logged sweep failure). Fetches each index independently, normalizes tickers to the anchor's convention (`BRK.B` → `BRK-B`), and returns the two ticker sets; a single index's failure (transport / non-200 / bad payload) degrades to empty (the other still syncs), both failing raises `StockDataUnavailable`. Same fake-`_http` seam the other `finnhub_*` adapters use for offline tests. (An earlier Wikipedia-scrape adapter was dropped for this — a crowd-edited page whose Nasdaq-100 change-log table masqueraded as the constituents list, and issuer ETF endpoints block data-centre IPs.)
+- `adapters/yfinance_screener_adapter.py` — live source for the universe slice: **Yahoo via `yfinance`** (`yf.screen` + `EquityQuery`), the ≥$1B US screen (`ScreenedStock` per row) written onto the `stocks` anchor
 - `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
-- `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table — `ticker` (unique lookup; the column was renamed from `symbol` by migration 0010 — the domain layers still say "symbol"), the fill-once identity facts `name` and `exchange`, and the mutable `revenue_growth_yoy` / `eps_growth_yoy` **latest trailing YoY snapshot** (migration 0011 — percent; EPS on the analyst-consensus/adjusted basis; **overwritten** every refresh by the annual-earnings slice as the newest reported year rolls forward, unlike the fill-once facts)) and its helpers `get_or_create_stock`, `anchor_facts`, `fill_exchange`. Owned by no single feature; per-feature tables hang off it and import it from here
+- `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table — `ticker` (unique lookup; the column was renamed from `symbol` by migration 0010 — the domain layers still say "symbol"), the fill-once identity facts `name` and `exchange`, and the mutable `revenue_growth_yoy` / `eps_growth_yoy` **latest trailing YoY snapshot** (migration 0011 — percent; EPS on the analyst-consensus/adjusted basis; **overwritten** every refresh by the annual-earnings slice as the newest reported year rolls forward, unlike the fill-once facts), the universe screen facts `sector` / `industry` / `market_cap` / `screened_at` (migration 0012; `industry` added by 0013), and the `in_sp500` / `in_nasdaq100` index-membership flags (migration 0014 — `NOT NULL`, default `False`; reconciled by the index-membership slice: current members marked, drop-outs cleared)) and its helpers `get_or_create_stock`, `anchor_facts`, `fill_exchange`. Owned by no single feature; per-feature tables hang off it and import it from here
 
 Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<concern>_adapter.py` for those under `app/stocks/adapters/`.
 
@@ -446,10 +448,11 @@ app/
     ├── use_cases.py        # ── orchestration (one class per action)
     ├── exceptions.py       # ── domain errors
     ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/Logo.dev)
-    ├── adapters/           # ── vendor adapters as *_adapter.py (quarterly/annual earnings: yfinance + caches; estimates projection)
+    ├── adapters/           # ── vendor adapters as *_adapter.py (earnings: yfinance + caches; estimates projection;
+    │                       #    universe screen: yfinance; index membership: finnhub)
     ├── stocks/             # ── shared `stocks` anchor slice:
-    │   └── models.py            #    StockRecord (the `stocks` table: ticker/name/exchange + trailing YoY growth snapshot) +
-    │                            #    get_or_create_stock, anchor_facts, fill_exchange
+    │   └── models.py            #    StockRecord (the `stocks` table: ticker/name/exchange + trailing YoY growth +
+    │                            #    universe facts + in_sp500/in_nasdaq100 flags) + get_or_create_stock, anchor_facts, fill_exchange
     ├── earnings/quarterly/ # ── quarterly-earnings sub-slice (its OWN entities.py):
     │   ├── entities.py          #    QuarterlyEarnings + QuarterlyEarningsTimeline (slice-local)
     │   ├── ports.py             #    live-source port (QuarterlyEarningsProvider)
@@ -483,6 +486,18 @@ app/
     │   ├── db_repository.py     #    concrete repo: anchor-level exchange read/fill
     │   ├── use_cases.py         #    GetTickerCard + TickerCard composite (quote/estimates/fundamentals/performance/options/quarterly-earnings ports)
     │   └── schemas.py           #    HTTP response DTO (quote + enrichment + opt-in dividend/performance/metrics/options_metrics; endpoint in endpoints/)
+    ├── universe/           # ── universe sub-slice (table-less; writes the ≥$1B US screen onto the stocks anchor):
+    │   ├── entities.py          #    ScreenedStock (slice-local)
+    │   ├── ports.py             #    live-source port (StockScreener)
+    │   ├── repository.py        #    abstract persistence port (+ UniverseSyncCounts; writes the stocks anchor)
+    │   ├── db_repository.py     #    SqlUniverseRepository: upsert_screen onto stocks
+    │   └── use_cases.py         #    SyncUniverse (screen → anchor upsert; plausibility floor)
+    ├── index_membership/   # ── index-membership sub-slice (table-less; reconciles in_sp500/in_nasdaq100 on the anchor):
+    │   ├── entities.py          #    IndexMembershipSnapshot (the two ticker sets, slice-local)
+    │   ├── ports.py             #    live-source port (IndexMembershipSource)
+    │   ├── repository.py        #    abstract persistence port (+ IndexMembershipSyncCounts)
+    │   ├── db_repository.py     #    SqlIndexMembershipRepository: reconcile (mark members / clear drop-outs) onto stocks
+    │   └── use_cases.py         #    SyncIndexMembership (per-index plausibility floor)
     ├── endpoints/          # ── HTTP endpoints outside a read slice:
     │   ├── cron_quarterly_earnings_endpoints.py  #  POST /internal/earnings/quarterly/sync
     │   ├── quarterly_earnings_endpoints.py       #  GET /stocks/{symbol}/earnings/quarterly
@@ -490,7 +505,10 @@ app/
     │   ├── annual_earnings_endpoints.py          #  GET /stocks/{symbol}/earnings/annual
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
     │   ├── recommendations_endpoints.py          #  GET /stocks/{symbol}/recommendations
-    │   └── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol}
+    │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol}
+    │   ├── cron_universe_endpoints.py            #  POST /internal/universe/sync (fire-and-forget)
+    │   ├── cron_index_membership_endpoints.py    #  POST /internal/index-membership/sync (fire-and-forget)
+    │   └── background_sync.py                    #  shared fire-and-forget helper (202 + per-slice single-flight)
     ├── constituents.py     # ── DB adapter: ORM model + SqlConstituentRepository
     ├── chart_window.py     # ── edge helper: range preset → time window
     ├── schemas.py          # ── HTTP response DTOs (pydantic)

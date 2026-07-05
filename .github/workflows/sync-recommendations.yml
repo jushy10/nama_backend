@@ -3,14 +3,19 @@ run-name: Sync recommendations
 
 # Daily (and on-demand). Analyst recommendation trends are monthly snapshots, but the *current*
 # month's counts drift as analysts issue upgrades/downgrades — and the read cache serves stored
-# rows at any age (no TTL), so freshness rides entirely on this run. Daily keeps the current
-# month at most a day stale, and it's cheap: one Yahoo call per stock.
+# rows at any age (no TTL), so freshness rides entirely on this run. The sweep both keeps the
+# stored rows fresh and SEEDS stocks not yet cached (the ≥$1B universe), un-cached first; it's
+# cheap — one Yahoo call per stock.
 #
-# It launches a one-off ECS Fargate task that runs `python -m app.sync recommendations <limit>`
-# (the SyncRecommendations use case) to completion and exits. The sweep runs on its OWN 2 GB
-# task definition (nama-dev-sync), OFF the always-on API task, so it can't OOM the small
-# service — this replaced POSTing the app's /internal/recommendations/sync endpoint. The task
-# reaches the private RDS by borrowing the app service's own network config.
+# It launches a one-off ECS Fargate task that runs `python -m app.sync recommendations [limit]`
+# (the SyncRecommendations use case) to completion and exits. The sweep runs on its OWN 1 GB task
+# definition (nama-dev-sync), OFF the always-on API task, so it can't OOM the small service —
+# this replaced POSTing the app's /internal/recommendations/sync endpoint. The task reaches the
+# private RDS by borrowing the app service's own network config.
+#
+# By default the sweep processes EVERY stock in the anchor (un-cached first, then stalest); use
+# the optional `limit` dispatch input to cap a single run (e.g. to chunk the first seed and stay
+# gentle on Yahoo).
 #
 # FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs in the
 # background on ECS (it can take several minutes) and its result — "recommendations sync done:
@@ -25,7 +30,13 @@ run-name: Sync recommendations
 # identity the deploy + migrate jobs already use to run one-off ECS tasks.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Optional cap on stocks to refresh this run (un-cached first, then stalest). Leave blank to process every stock."
+        required: false
+        type: string
+        default: ""
   # Daily, 07:30 UTC — before the market opens, and staggered off the weekly earnings syncs
   # (Mondays 08:00/09:00) so the app isn't hammering Yahoo from the same host at once. Exact
   # timing doesn't matter. Caveats: scheduled workflows run only from the default branch, and
@@ -45,9 +56,6 @@ env:
   ECS_SERVICE: nama-dev
   SYNC_TASK_DEF: nama-dev-sync
   SYNC_SLICE: recommendations
-  # Max stored stocks the sweep refreshes this run, stalest first (a universe larger than this
-  # is covered over successive runs).
-  SYNC_LIMIT: "1000"
 
 jobs:
   sync:
@@ -64,6 +72,10 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Launch the sync task
+        env:
+          # Optional per-dispatch cap; empty on scheduled runs (and by default), so the sweep
+          # processes every stock.
+          SYNC_LIMIT: ${{ github.event.inputs.limit }}
         run: |
           set -euo pipefail
 
@@ -79,14 +91,15 @@ jobs:
           netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
             --query 'services[0].networkConfiguration' --output json)
 
-          # Container command override: python -m app.sync <slice> [limit].
+          # Container command override: python -m app.sync <slice> [limit]. An empty limit
+          # (scheduled runs) omits the arg, so the sweep processes every stock.
           overrides=$(jq -cn --arg slice "$SYNC_SLICE" --arg limit "${SYNC_LIMIT:-}" '
             {containerOverrides: [{
               name: "app",
               command: (["python", "-m", "app.sync", $slice] + (if $limit == "" then [] else [$limit] end))
             }]}')
 
-          echo "Launching one-off sync task: app.sync $SYNC_SLICE ${SYNC_LIMIT:-}"
+          echo "Launching one-off sync task: app.sync $SYNC_SLICE ${SYNC_LIMIT:-(no limit)}"
           run=$(aws ecs run-task \
             --cluster "$ECS_CLUSTER" \
             --task-definition "$SYNC_TASK_DEF" \

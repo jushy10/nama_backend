@@ -1,23 +1,26 @@
 name: Sync quarterly earnings
 run-name: Sync quarterly earnings
 
-# Weekly (and on-demand). Refreshes the stalest stored quarterly-earnings rows. Reported
-# quarters and upcoming report dates change through earnings season, and the read endpoint
-# fills new symbols lazily, so this just keeps the already-stored rows fresh.
+# Weekly (and on-demand). The sweep both keeps the already-stored quarterly-earnings rows fresh
+# and SEEDS stocks not yet cached (the ≥$1B universe), un-cached first.
 #
 # It launches a one-off ECS Fargate task that runs `python -m app.sync quarterly-earnings
-# <limit>` (the SyncQuarterlyEarnings use case) to completion and exits. The sweep runs on its
-# OWN 2 GB task definition (nama-dev-sync), OFF the always-on API task, so a heavy sweep can't
+# [limit]` (the SyncQuarterlyEarnings use case) to completion and exits. The sweep runs on its
+# OWN 1 GB task definition (nama-dev-sync), OFF the always-on API task, so a heavy sweep can't
 # OOM the small service — this replaced POSTing the app's /internal/earnings/quarterly/sync
 # endpoint (which ran the sweep inside the API task). The task reaches the private RDS by
 # borrowing the app service's own network config.
 #
+# By default the sweep processes EVERY stock in the anchor (un-cached first, then stalest);
+# use the optional `limit` dispatch input to cap a single run (e.g. to chunk the first seed and
+# stay gentle on Yahoo).
+#
 # FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs in the
 # background on ECS (it can take several minutes) and its result — "quarterly-earnings sync
 # done: refreshed=… failed=…" — lands in the task's CloudWatch logs, not here. A green run
-# means the task launched; check CloudWatch for the outcome. yfinance (Yahoo) needs no API
-# key but blocks data-centre IPs intermittently; a degraded fetch can't erase stored figures
-# (the sync merges the fresh window with stored rows) and an empty result is never stored.
+# means the task launched; check CloudWatch for the outcome. yfinance (Yahoo) needs no API key
+# but blocks data-centre IPs intermittently; a degraded fetch can't erase stored figures (the
+# sync merges the fresh window with stored rows) and an empty result is never stored.
 #
 # Manual run: Actions → "Sync quarterly earnings" → Run workflow (same trigger, off-schedule).
 #
@@ -25,7 +28,13 @@ run-name: Sync quarterly earnings
 # identity the deploy + migrate jobs already use to run one-off ECS tasks.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Optional cap on stocks to refresh this run (un-cached first, then stalest). Leave blank to process every stock."
+        required: false
+        type: string
+        default: ""
   # Mondays, 08:00 UTC. Weekly keeps report dates and freshly-reported quarters current; exact
   # timing doesn't matter, so GitHub delaying scheduled runs under load is fine. Caveats:
   # scheduled workflows run only from the default branch, and GitHub auto-disables the schedule
@@ -45,9 +54,6 @@ env:
   ECS_SERVICE: nama-dev
   SYNC_TASK_DEF: nama-dev-sync
   SYNC_SLICE: quarterly-earnings
-  # Max stored stocks the sweep refreshes this run, stalest first (a universe larger than this
-  # is covered over successive runs).
-  SYNC_LIMIT: "1000"
 
 jobs:
   sync:
@@ -64,6 +70,10 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Launch the sync task
+        env:
+          # Optional per-dispatch cap; empty on scheduled runs (and by default), so the sweep
+          # processes every stock.
+          SYNC_LIMIT: ${{ github.event.inputs.limit }}
         run: |
           set -euo pipefail
 
@@ -79,14 +89,15 @@ jobs:
           netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
             --query 'services[0].networkConfiguration' --output json)
 
-          # Container command override: python -m app.sync <slice> [limit].
+          # Container command override: python -m app.sync <slice> [limit]. An empty limit
+          # (scheduled runs) omits the arg, so the sweep processes every stock.
           overrides=$(jq -cn --arg slice "$SYNC_SLICE" --arg limit "${SYNC_LIMIT:-}" '
             {containerOverrides: [{
               name: "app",
               command: (["python", "-m", "app.sync", $slice] + (if $limit == "" then [] else [$limit] end))
             }]}')
 
-          echo "Launching one-off sync task: app.sync $SYNC_SLICE ${SYNC_LIMIT:-}"
+          echo "Launching one-off sync task: app.sync $SYNC_SLICE ${SYNC_LIMIT:-(no limit)}"
           run=$(aws ecs run-task \
             --cluster "$ECS_CLUSTER" \
             --task-definition "$SYNC_TASK_DEF" \

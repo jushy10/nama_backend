@@ -74,9 +74,9 @@ variable "sync_cpu" {
 }
 
 variable "sync_memory" {
-  description = "Memory (MiB) for the out-of-band sync task. Larger than the API task on purpose — a heavy sweep (the ~2,800-row universe screen) needs headroom, but only for the minutes it runs, so it lives on a separate on-demand task instead of bloating the always-on service. Must form a valid Fargate CPU/memory pair with sync_cpu (256 CPU allows 512/1024/2048)."
+  description = "Memory (MiB) for the out-of-band sync task. Larger than the API task on purpose — a heavy sweep (the ~2,800-row universe screen + its per-ticker enrichment pass) needs headroom, but only for the minutes it runs, so it lives on a separate on-demand task instead of bloating the always-on service. Must form a valid Fargate CPU/memory pair with sync_cpu (256 CPU allows 512/1024/2048)."
   type        = number
-  default     = 2048
+  default     = 1024
 }
 
 variable "health_check_path" {

@@ -2,20 +2,22 @@
 
 Implements ``repository.py`` against the shared ``stocks`` anchor — the universe has no
 table of its own, so the screen is written straight onto ``stocks`` (ticker/name/exchange
-plus the denormalized ``sector``/``market_cap``/``screened_at`` columns). Maps
-``ScreenedStock`` entities onto anchor rows; only this layer touches SQLAlchemy.
-``upsert_screen`` commits its own write, so a successful sync is durable independent of the
-request. (There is no read/search side yet — that endpoint is deferred.)
+plus the denormalized ``sector``/``industry``/``market_cap``/``screened_at`` columns). Maps
+``ScreenedStock`` / ``CompanyClassification`` entities onto anchor rows; only this layer
+touches SQLAlchemy. ``upsert_screen`` (the screen) and ``set_classification`` (the per-ticker
+enrichment) each commit their own write, so a successful — or partial — sync is durable
+independent of the request. (There is no read/search side yet — that endpoint is deferred.)
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import nulls_last, or_, select
 from sqlalchemy.orm import Session
 
-from app.stocks.stocks.models import get_or_create_stock
-from app.stocks.universe.entities import ScreenedStock
+from app.stocks.stocks.models import StockRecord, get_or_create_stock
+from app.stocks.universe.entities import CompanyClassification, ScreenedStock
 from app.stocks.universe.repository import UniverseRepository, UniverseSyncCounts
 
 
@@ -56,3 +58,47 @@ class SqlUniverseRepository(UniverseRepository):
             anchor.screened_at = now
         self._session.commit()
         return UniverseSyncCounts(added=added, updated=updated)
+
+    def tickers_missing_classification(self, limit: int) -> tuple[str, ...]:
+        # Missing *either* side: a stock is on the work-list until both sector and industry
+        # are filled, so a one-sided classification (Yahoo returned only industry, say) gets
+        # revisited instead of being stuck with a null sector forever — set_classification is
+        # fill-once per side, so a later run completes it.
+        #
+        # Largest market cap first (ticker as a stable tiebreak) so a capped, rate-limited
+        # run spends its scarce successful .info calls on the biggest, most-viewed names —
+        # a megacap like NVDA/GOOGL is classified in the first run rather than starved
+        # behind thousands of alphabetically-earlier small caps. A non-screened incidental
+        # ticker (market_cap NULL) sorts last, after every screened member.
+        rows = (
+            self._session.execute(
+                select(StockRecord.ticker)
+                .where(
+                    or_(
+                        StockRecord.industry.is_(None),
+                        StockRecord.sector.is_(None),
+                    )
+                )
+                .order_by(nulls_last(StockRecord.market_cap.desc()), StockRecord.ticker)
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+        return tuple(rows)
+
+    def set_classification(
+        self, ticker: str, classification: CompanyClassification
+    ) -> None:
+        stock = self._session.execute(
+            select(StockRecord).where(StockRecord.ticker == ticker)
+        ).scalar_one_or_none()
+        if stock is None:
+            return
+        # Fill-once per side: write only what the source supplies and the column still lacks,
+        # so a settled value survives and a one-sided classification leaves room for the rest.
+        if classification.industry and not stock.industry:
+            stock.industry = classification.industry
+        if classification.sector and not stock.sector:
+            stock.sector = classification.sector
+        self._session.commit()

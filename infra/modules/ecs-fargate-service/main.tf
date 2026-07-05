@@ -447,10 +447,10 @@ resource "aws_ecs_task_definition" "this" {
 # completion, and exits — billed per-second, only while a sweep runs.
 #
 # Same image, roles, secrets and log group as the app; two deliberate differences:
-#   - its OWN, larger memory (sync_memory, default 2 GB) so a heavy sweep (the
-#     ~2,800-row universe screen) has headroom without bloating the small
-#     always-on API task — moving the sweeps here is what keeps the service from
-#     OOM-ing on sync work;
+#   - its OWN, larger memory (sync_memory, default 1 GB) so a heavy sweep (the
+#     ~2,800-row universe screen + its per-ticker enrichment pass) has headroom
+#     without bloating the small always-on API task — moving the sweeps here is
+#     what keeps the service from OOM-ing on sync work;
 #   - no portMappings and no healthCheck — it's a batch job, not a server.
 # The `command` here is only a bare-run fallback; every invocation overrides it
 # via `run-task --overrides` to pick the slice (e.g. app.sync universe).

@@ -14,7 +14,7 @@ so this port has only the write side.)
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from app.stocks.universe.entities import ScreenedStock
+from app.stocks.universe.entities import CompanyClassification, ScreenedStock
 
 
 @dataclass(frozen=True)
@@ -48,5 +48,42 @@ class UniverseRepository(ABC):
         (``market_cap``/``sector``/``screened_at``) — ``sector`` only when supplied, so a
         source that omits it doesn't wipe a known one. Additive: stocks absent from the
         screen are left untouched (no delete). Commits its own write.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def tickers_missing_classification(self, limit: int) -> tuple[str, ...]:
+        """Return up to ``limit`` tickers still missing a ``sector`` *or* an ``industry`` —
+        the enrichment pass's work-list.
+
+        Either side missing keeps a ticker on the list, so a one-sided classification (the
+        source returned only industry, say) is revisited until both are filled rather than
+        left half-done — ``set_classification`` is fill-once per side, so a later run
+        completes it.
+
+        Ordered **largest market cap first** (ticker as a stable tiebreak), so a capped run
+        spends its budget on the biggest, most-viewed names before the long tail — a megacap
+        is classified in an early run rather than starved behind thousands of smaller,
+        alphabetically-earlier ones (which matters because the per-ticker source is
+        rate-limited, so only so many succeed per run). Deterministic, so successive capped
+        runs still sweep the whole set. A ticker keeps reappearing until it's fully
+        classified; a symbol the source can't classify (or a run that never reaches it under
+        the cap) simply surfaces again next run. Spans the whole ``stocks`` table, not only
+        screened members, so an incidentally-known ticker (no market cap → sorted last) gets
+        classified too.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_classification(
+        self, ticker: str, classification: CompanyClassification
+    ) -> None:
+        """Fill ``ticker``'s ``sector`` / ``industry`` on the anchor from ``classification``.
+
+        Fill-once, like the other anchor facts: a side is written only when the source
+        supplies it and the column is still unset, so a settled value is never clobbered and
+        a half classification (only one side known) leaves room for the other later. A no-op
+        if the ticker has no row. Commits its own write, so a partial enrichment sweep is
+        durable.
         """
         raise NotImplementedError

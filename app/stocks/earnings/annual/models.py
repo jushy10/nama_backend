@@ -100,21 +100,29 @@ def delete_years_for_stock(session: Session, stock_id: uuid.UUID) -> None:
     )
 
 
-def stalest_symbols(session: Session, limit: int) -> list[tuple[str, str | None]]:
-    """Up to ``limit`` stored ``(symbol, name)`` pairs, stalest-fetched first.
+def stalest_symbols(
+    session: Session, limit: int | None = None
+) -> list[tuple[str, str | None]]:
+    """``(symbol, name)`` pairs from the ``stocks`` anchor, most in need of a refresh first.
 
-    One entry per stock (grouped over its year rows, ordered by the oldest fetch stamp among
-    them). Only symbols that already have year rows are returned, so a refresh walks what's
-    actually cached; never-viewed symbols are filled lazily on first access instead.
+    A **LEFT JOIN**, so every anchor stock is included — even one with no year rows yet — and
+    the sync both *seeds* new coverage and renews stale rows. Ordering is **un-cached first**:
+    a never-fetched stock has a NULL min fetch stamp and is treated as infinitely stale, so it
+    sorts ahead of any cached stock; cached stocks then follow oldest-fetch first. ``limit``
+    caps the batch; ``None`` (the default) returns every stock, so one sweep can seed the whole
+    anchor. Lazy fill on first access still covers a symbol between sweeps.
     """
-    rows = session.execute(
+    min_fetched = func.min(StockAnnualEarningsRecord.fetched_at)
+    stmt = (
         select(StockRecord.ticker, StockRecord.name)
-        .join(
+        .outerjoin(
             StockAnnualEarningsRecord,
             StockAnnualEarningsRecord.stock_id == StockRecord.id,
         )
         .group_by(StockRecord.id, StockRecord.ticker, StockRecord.name)
-        .order_by(func.min(StockAnnualEarningsRecord.fetched_at).asc())
-        .limit(limit)
-    ).all()
-    return [(row.ticker, row.name) for row in rows]
+        # un-cached (NULL stamp) first, then stalest cached — portable NULLs-first ordering.
+        .order_by(min_fetched.is_(None).desc(), min_fetched.asc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return [(row.ticker, row.name) for row in session.execute(stmt).all()]

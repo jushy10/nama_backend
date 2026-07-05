@@ -8,7 +8,9 @@ child tables beside it. The schema is created by migration 0002 (the since-remov
 analyst-estimates feature was the first to need the anchor); migration 0009 added
 ``exchange``, 0010 renamed the ``symbol`` column to ``ticker`` (the domain layers
 still say "symbol" — the rename is a table-vocabulary choice), 0011 added the trailing
-year-over-year growth columns, and 0012 the three universe-screen columns (all below).
+year-over-year growth columns, 0012 the three universe-screen columns, 0013 the
+``industry`` column, and 0014 the ``in_sp500`` / ``in_nasdaq100`` index-membership flags
+(all below).
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, String, Uuid, select
+from sqlalchemy import Boolean, DateTime, Float, String, Uuid, false, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 
@@ -42,15 +44,25 @@ class StockRecord(Base):
     slice's ``eps_actual_consensus``. Nullable — unset until the annual slice has two
     reported years cached (and EPS best-effort, since the consensus basis often isn't).
 
-    ``sector`` / ``market_cap`` / ``screened_at`` are the universe screen's facts, filled
-    by the universe sync (the ≥$1B US screen) and deliberately denormalized onto the
-    anchor so search is a single-table read. All three are nullable: a ticker that reached
-    the table some other way (a ticker-card lookup, an earnings refresh) has never been
-    screened, so they stay null — which is exactly how search tells a screened company
+    ``sector`` / ``industry`` / ``market_cap`` / ``screened_at`` are the universe screen's
+    facts, filled by the universe sync (the ≥$1B US screen) and deliberately denormalized
+    onto the anchor so search is a single-table read. All four are nullable: a ticker that
+    reached the table some other way (a ticker-card lookup, an earnings refresh) has never
+    been screened, so they stay null — which is exactly how search tells a screened company
     apart from an incidentally-known symbol (it filters on ``market_cap IS NOT NULL``).
     ``market_cap`` is whole dollars; ``screened_at`` is when the last screen that included
-    the stock ran (the freshness stamp). ``sector`` currently rides in null because the
-    live screen source (yfinance) doesn't publish it — the column awaits a source that does.
+    the stock ran (the freshness stamp). ``sector`` and ``industry`` are the company's
+    classification as snake_case slugs (e.g. ``technology`` / ``consumer_electronics``),
+    filled once by the sync's enrichment pass from Yahoo's per-ticker ``.info`` — the bulk
+    screen carries neither, so they lag the other screen facts until enrichment reaches the
+    stock (and stay null for a symbol Yahoo doesn't classify).
+
+    ``in_sp500`` / ``in_nasdaq100`` are index-membership flags, reconciled by the
+    index-membership sync (Finnhub → this anchor). Unlike the screen facts these are
+    ``NOT NULL`` (default ``False``): membership is a known yes/no — absent from the
+    source list means "not a member", not "unknown" — so every row carries a definite
+    answer. The reconcile both *marks* current members and *clears* companies that dropped
+    out of an index, so a stale flag never lingers.
     """
 
     __tablename__ = "stocks"
@@ -62,9 +74,16 @@ class StockRecord(Base):
     revenue_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
     eps_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
     sector: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    industry: Mapped[str | None] = mapped_column(String(64), nullable=True)
     market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
     screened_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    in_sp500: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(), default=False
+    )
+    in_nasdaq100: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(), default=False
     )
 
 

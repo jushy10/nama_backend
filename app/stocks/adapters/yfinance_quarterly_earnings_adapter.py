@@ -37,7 +37,10 @@ changes. It is deliberately defensive — Yahoo is an unofficial, best-effort fe
 reshapes payloads without notice and rate-limits data-centre IPs — so any vendor failure
 becomes ``StockDataUnavailable`` and a symbol Yahoo doesn't cover yields an empty timeline
 rather than an error. Behind the persistent DB cache, a blocked live call just serves the
-stored rows.
+stored rows. Every Yahoo read is routed through ``yfinance_session`` (pacing + a one-shot
+fresh-crumb retry on a 401); ``earnings_dates`` (the reported source) and
+``quarterly_income_stmt`` additionally retry on an *empty* result, since a swallowed crumb
+401 surfaces that way.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ from datetime import date, datetime
 import pandas as pd
 import yfinance as yf
 
+from app.stocks.adapters import yfinance_session
 from app.stocks.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
@@ -80,18 +84,29 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
     def get_quarterly_earnings(self, symbol: str) -> QuarterlyEarningsTimeline:
         try:
             ticker = self._ticker_factory(symbol)
-            dates = ticker.earnings_dates
-            eps_estimate = ticker.earnings_estimate
-            revenue_estimate = ticker.revenue_estimate
+            # earnings_dates is the primary reported source — a real company always has
+            # history, so an empty frame means a swallowed crumb 401: retry with a fresh
+            # crumb. The forward estimate frames are legitimately empty for an uncovered
+            # stock, so they get pacing + a raised-401 retry but no retry-on-empty.
+            dates = yfinance_session.call(
+                lambda: ticker.earnings_dates, is_empty=yfinance_session.frame_is_empty
+            )
+            eps_estimate = yfinance_session.call(lambda: ticker.earnings_estimate)
+            revenue_estimate = yfinance_session.call(lambda: ticker.revenue_estimate)
         except Exception as exc:  # noqa: BLE001 — vendor boundary: any failure → domain error
             raise StockDataUnavailable(
                 symbol, f"yfinance quarterly earnings failed ({exc})"
             ) from exc
 
         # Reported revenue is best-effort enrichment on the past quarters — a failure
-        # fetching the income statement must not sink the (primary) earnings timeline.
+        # fetching the income statement must not sink the (primary) earnings timeline. Like
+        # the annual fundamentals endpoint, an empty result is a swallowed crumb 401, so
+        # retry once with a fresh crumb.
         try:
-            income_stmt = ticker.quarterly_income_stmt
+            income_stmt = yfinance_session.call(
+                lambda: ticker.quarterly_income_stmt,
+                is_empty=yfinance_session.frame_is_empty,
+            )
         except Exception:  # noqa: BLE001 — enrichment: degrade to no revenue_actual
             income_stmt = None
         revenue_actuals = _revenue_actuals(income_stmt)

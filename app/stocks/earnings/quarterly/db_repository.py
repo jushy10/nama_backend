@@ -103,9 +103,9 @@ class SqlQuarterlyEarningsRepository(QuarterlyEarningsRepository):
             )
         self._session.commit()
 
-    def refresh_targets(self, limit: int) -> list[RefreshTarget]:
-        # Delegates the query to models (stalest-first); this layer just wraps each
-        # (symbol, name) pair in the domain-facing RefreshTarget.
+    def refresh_targets(self, limit: int | None) -> list[RefreshTarget]:
+        # Delegates the query to models (un-cached first, then stalest); this layer just
+        # wraps each (symbol, name) pair in the domain-facing RefreshTarget.
         return [
             RefreshTarget(symbol, name)
             for symbol, name in models.stalest_symbols(self._session, limit)

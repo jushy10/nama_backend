@@ -1,26 +1,31 @@
 name: Sync universe
 run-name: Sync universe
 
-# Weekly (and on-demand). The searchable universe is every US company at/above a $1B market
-# cap (~2,800 names). Membership drifts slowly — a company crossing $1B is a rare event — so
-# weekly is plenty.
+# Weekly (and on-demand). The searchable universe is every US company at/above a $1B market cap
+# (~2,800 names). Membership drifts slowly — a company crossing $1B is a rare event — so weekly
+# is plenty.
 #
-# It launches a one-off ECS Fargate task that runs `python -m app.sync universe` (the
-# SyncUniverse use case) to completion and exits: screen the US market via yfinance (Yahoo),
-# then upsert the result straight onto the stocks anchor (additive — present stocks are
-# inserted/refreshed, none removed). The sweep runs on its OWN 2 GB task definition
-# (nama-dev-sync), OFF the always-on API task — this is the heaviest sweep (the ~2,800-row
-# screen held in memory at once), the one most likely to OOM the small 512 MB service, which
-# is the whole reason it now runs as a separate task instead of POSTing /internal/universe/sync.
-# The task reaches the private RDS by borrowing the app service's own network config. Unlike
-# the earnings/recommendations syncs it makes no per-symbol vendor round-trips — just a few
-# paginated screen calls — so there is no limit knob: one run refreshes the lot.
+# It launches a one-off ECS Fargate task that runs `python -m app.sync universe 1000` (the
+# SyncUniverse use case) to completion and exits. The use case screens the US market via yfinance
+# (Yahoo) and upserts the result onto the stocks anchor (additive — present stocks are
+# inserted/refreshed, none removed), then enriches up to `limit` still-unclassified stocks'
+# sector/industry via a per-ticker Yahoo `.info` call (the bulk screen carries neither). The
+# sweep runs on its OWN 1 GB task definition (nama-dev-sync), OFF the always-on API task — it's
+# the heaviest sweep (the ~2,800-row screen held in memory, plus the enrichment pass), the one
+# most likely to OOM the small 512 MB service, which is the whole reason it now runs as a
+# separate task instead of POSTing /internal/universe/sync. The task reaches the private RDS by
+# borrowing the app service's own network config.
 #
-# FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs on ECS and
-# its result — "universe sync done: screened=… added=… updated=… skipped=…" — lands in the
-# task's CloudWatch logs, not here. A green run means the task launched; check CloudWatch for
-# the outcome. An empty or implausibly small screen (a Yahoo block) is skipped inside the sync,
-# so nothing is written and the stored (additive) universe stays put.
+# The market screen always runs in full; only the per-ticker enrichment is capped (SYNC_LIMIT).
+# Since industry is fill-once, successive weekly runs converge — each classifies only what's
+# still unset, up to the cap.
+#
+# FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs on ECS (the
+# enrichment pass makes hundreds-to-thousands of sequential Yahoo calls — minutes) and its result
+# — "universe sync done: screened=… added=… updated=… enriched=… enrich_failed=… limit=…" —
+# lands in the task's CloudWatch logs, not here. A green run means the task launched; check
+# CloudWatch for the outcome. An empty or implausibly small screen (a Yahoo block) is skipped
+# inside the sync, so nothing is written and the stored (additive) universe stays put.
 #
 # Manual run: Actions → "Sync universe" → Run workflow (same trigger, off-schedule).
 #
@@ -48,7 +53,10 @@ env:
   ECS_SERVICE: nama-dev
   SYNC_TASK_DEF: nama-dev-sync
   SYNC_SLICE: universe
-  # No SYNC_LIMIT: the universe screen takes no per-run cap (one run refreshes the whole set).
+  # Max stocks the enrichment pass classifies this run, via a per-ticker Yahoo call. The bulk
+  # screen always runs in full; only enrichment is capped. Since industry is fill-once, a
+  # universe larger than this is classified over successive weekly runs.
+  SYNC_LIMIT: "1000"
 
 jobs:
   sync:
@@ -80,15 +88,14 @@ jobs:
           netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
             --query 'services[0].networkConfiguration' --output json)
 
-          # Container command override: python -m app.sync <slice> [limit]. Universe sets no
-          # limit, so the command is just: python -m app.sync universe.
+          # Container command override: python -m app.sync universe <enrich-limit>.
           overrides=$(jq -cn --arg slice "$SYNC_SLICE" --arg limit "${SYNC_LIMIT:-}" '
             {containerOverrides: [{
               name: "app",
               command: (["python", "-m", "app.sync", $slice] + (if $limit == "" then [] else [$limit] end))
             }]}')
 
-          echo "Launching one-off sync task: app.sync $SYNC_SLICE"
+          echo "Launching one-off sync task: app.sync $SYNC_SLICE $SYNC_LIMIT"
           run=$(aws ecs run-task \
             --cluster "$ECS_CLUSTER" \
             --task-definition "$SYNC_TASK_DEF" \
@@ -106,5 +113,5 @@ jobs:
           fi
 
           echo "Launched $task_arn"
-          echo "Fire-and-forget: the sweep runs on ECS; its result —"
-          echo "\"universe sync done: screened=… added=… updated=… skipped=…\" — lands in the task's CloudWatch logs."
+          echo "Fire-and-forget: the sweep runs on ECS (the enrichment pass takes minutes); its result —"
+          echo "\"universe sync done: screened=… added=… updated=… enriched=… enrich_failed=… limit=…\" — lands in CloudWatch."

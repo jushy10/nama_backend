@@ -2,22 +2,26 @@ name: Sync annual earnings
 run-name: Sync annual earnings
 
 # Monthly (and on-demand). Reported fiscal years — and the trailing YoY growth derived from
-# them onto the stocks anchor — change about once a year per stock, and the read endpoint fills
-# new symbols lazily, so this just keeps the already-stored rows fresh; monthly is ample.
+# them onto the stocks anchor — change about once a year per stock. The sweep both keeps the
+# already-stored rows fresh and SEEDS stocks not yet cached (the ≥$1B universe), un-cached first.
 #
-# It launches a one-off ECS Fargate task that runs `python -m app.sync annual-earnings <limit>`
-# (the SyncAnnualEarnings use case) to completion and exits. The sweep runs on its OWN 2 GB
-# task definition (nama-dev-sync), OFF the always-on API task, so it can't OOM the small
-# service — this replaced POSTing the app's /internal/earnings/annual/sync endpoint. The task
-# reaches the private RDS by borrowing the app service's own network config.
+# It launches a one-off ECS Fargate task that runs `python -m app.sync annual-earnings [limit]`
+# (the SyncAnnualEarnings use case) to completion and exits. The sweep runs on its OWN 1 GB task
+# definition (nama-dev-sync), OFF the always-on API task, so it can't OOM the small service —
+# this replaced POSTing the app's /internal/earnings/annual/sync endpoint. The task reaches the
+# private RDS by borrowing the app service's own network config.
+#
+# By default the sweep processes EVERY stock in the anchor (un-cached first, then stalest); use
+# the optional `limit` dispatch input to cap a single run (e.g. to chunk the first seed and stay
+# gentle on Yahoo).
 #
 # FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs in the
 # background on ECS (it can take several minutes) and its result — "annual-earnings sync done:
 # refreshed=… failed=…" — lands in the task's CloudWatch logs, not here. A green run means the
 # task launched; check CloudWatch for the outcome. yfinance (Yahoo) needs no API key but blocks
 # data-centre IPs intermittently; a degraded fetch can't erase stored figures (the sync merges
-# the fresh window with stored rows — reported history and revenue carried forward) and an
-# empty result is never stored.
+# the fresh window with stored rows — reported history and revenue carried forward) and an empty
+# result is never stored.
 #
 # Manual run: Actions → "Sync annual earnings" → Run workflow (same trigger, off-schedule).
 #
@@ -25,12 +29,18 @@ run-name: Sync annual earnings
 # identity the deploy + migrate jobs already use to run one-off ECS tasks.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Optional cap on stocks to refresh this run (un-cached first, then stalest). Leave blank to process every stock."
+        required: false
+        type: string
+        default: ""
   # 1st of each month, 09:00 UTC — an hour after the quarterly-earnings sync so the two don't
-  # hit Yahoo from the same host at once on a month whose 1st is a Monday. The stored annual
-  # rows change about once a year per stock, so a monthly refresh keeps them current; exact
-  # timing doesn't matter. Caveats: scheduled workflows run only from the default branch, and
-  # GitHub auto-disables the schedule after 60 days with no repo activity.
+  # hit Yahoo from the same host at once on a month whose 1st is a Monday. The stored annual rows
+  # change about once a year per stock, so a monthly refresh keeps them current; exact timing
+  # doesn't matter. Caveats: scheduled workflows run only from the default branch, and GitHub
+  # auto-disables the schedule after 60 days with no repo activity.
   schedule:
     - cron: "0 9 1 * *"
 
@@ -46,9 +56,6 @@ env:
   ECS_SERVICE: nama-dev
   SYNC_TASK_DEF: nama-dev-sync
   SYNC_SLICE: annual-earnings
-  # Max stored stocks the sweep refreshes this run, stalest first (a universe larger than this
-  # is covered over successive runs).
-  SYNC_LIMIT: "1000"
 
 jobs:
   sync:
@@ -65,6 +72,10 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Launch the sync task
+        env:
+          # Optional per-dispatch cap; empty on scheduled runs (and by default), so the sweep
+          # processes every stock.
+          SYNC_LIMIT: ${{ github.event.inputs.limit }}
         run: |
           set -euo pipefail
 
@@ -80,14 +91,15 @@ jobs:
           netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
             --query 'services[0].networkConfiguration' --output json)
 
-          # Container command override: python -m app.sync <slice> [limit].
+          # Container command override: python -m app.sync <slice> [limit]. An empty limit
+          # (scheduled runs) omits the arg, so the sweep processes every stock.
           overrides=$(jq -cn --arg slice "$SYNC_SLICE" --arg limit "${SYNC_LIMIT:-}" '
             {containerOverrides: [{
               name: "app",
               command: (["python", "-m", "app.sync", $slice] + (if $limit == "" then [] else [$limit] end))
             }]}')
 
-          echo "Launching one-off sync task: app.sync $SYNC_SLICE ${SYNC_LIMIT:-}"
+          echo "Launching one-off sync task: app.sync $SYNC_SLICE ${SYNC_LIMIT:-(no limit)}"
           run=$(aws ecs run-task \
             --cluster "$ECS_CLUSTER" \
             --task-definition "$SYNC_TASK_DEF" \
