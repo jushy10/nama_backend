@@ -20,7 +20,6 @@ from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     Confidence,
-    Constituent,
     GrowthMetrics,
     InvestmentAnalysis,
     KeyMetrics,
@@ -30,7 +29,6 @@ from app.stocks.entities import (
     SectorPerformance,
     Stock,
     StockFundamentals,
-    StockIndex,
     StockPerformance,
     Timeframe,
 )
@@ -46,10 +44,8 @@ from app.stocks.ports import (
     AnalystEstimatesProvider,
     CandleProvider,
     CompanyProfileProvider,
-    ConstituentRepository,
     InvestmentAnalysisProvider,
     LogoProvider,
-    QuoteBatchProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockFundamentalsProvider,
@@ -57,7 +53,6 @@ from app.stocks.ports import (
     StockQuoteProvider,
 )
 from app.stocks.router import (
-    get_screener,
     get_sector_performance,
     get_stock_analysis,
     get_stock_candles,
@@ -73,7 +68,6 @@ from app.stocks.use_cases import (
     GetStockLogo,
     GetStockQuote,
     GetStockRsi,
-    ScreenStocks,
 )
 
 
@@ -1460,236 +1454,3 @@ def test_cors_preflight_succeeds(make_client):
     )
     assert r.status_code == 200  # was 405 before CORSMiddleware
     assert r.headers["access-control-allow-origin"] == "https://namainsights.com"
-
-
-# --------------------------- screener: fakes + builders ---------------------------
-
-class FakeConstituentRepository(ConstituentRepository):
-    """Returns a fixed universe; counts calls."""
-
-    def __init__(self, constituents):
-        self._constituents = tuple(constituents)
-        self.calls = 0
-
-    def all(self) -> tuple[Constituent, ...]:
-        self.calls += 1
-        return self._constituents
-
-
-class FakeQuoteBatchProvider(QuoteBatchProvider):
-    """Returns the configured quotes for whichever symbols are asked for.
-
-    Mirrors the real best-effort contract: a requested symbol with no
-    configured quote is simply omitted. Records the symbols it was asked for.
-    """
-
-    def __init__(self, quotes=None):
-        self._quotes = dict(quotes or {})
-        self.received: list[str] = []
-
-    def get_quotes(self, symbols: list[str]) -> dict[str, Quote]:
-        self.received = list(symbols)
-        return {s: self._quotes[s] for s in symbols if s in self._quotes}
-
-
-def a_constituent(
-    symbol="AAA", name=None, sector="Information Technology", indices=("sp500",)
-) -> Constituent:
-    return Constituent(
-        symbol=symbol, name=name or symbol, sector=sector, indices=frozenset(indices)
-    )
-
-
-def a_universe() -> list[Constituent]:
-    """Three names: two Information Technology (one also Nasdaq-100), one Energy."""
-    return [
-        a_constituent("AAA", sector="Information Technology", indices=("sp500",)),
-        a_constituent(
-            "BBB", sector="Information Technology", indices=("sp500", "nasdaq100")
-        ),
-        a_constituent("CCC", sector="Energy", indices=("sp500",)),
-    ]
-
-
-def movers_quotes(**moves) -> dict[str, Quote]:
-    """Build symbol->Quote from keyword {symbol: (price, previous_close)} pairs."""
-    return {
-        symbol: a_quote(symbol=symbol, price=price, previous_close=prev)
-        for symbol, (price, prev) in moves.items()
-    }
-
-
-# --------------------------- screener use case ---------------------------
-
-def test_screen_ranks_gainers_desc_and_losers_worst_first():
-    repo = FakeConstituentRepository(a_universe())
-    quotes = FakeQuoteBatchProvider(
-        movers_quotes(AAA=(110.0, 100.0), BBB=(90.0, 100.0), CCC=(105.0, 100.0))
-    )
-    board = ScreenStocks(repo, quotes).execute(limit=10)
-    assert [s.symbol for s in board.gainers] == ["AAA", "CCC"]  # +10%, +5%
-    assert [s.symbol for s in board.losers] == ["BBB"]          # the only negative
-    assert board.gainers[0].change_percent == 10.0
-    assert board.universe_count == 3
-    assert board.quoted_count == 3
-
-
-def test_screen_limit_caps_each_side_without_overlap():
-    repo = FakeConstituentRepository(a_universe())
-    quotes = FakeQuoteBatchProvider(
-        movers_quotes(AAA=(110.0, 100.0), BBB=(90.0, 100.0), CCC=(105.0, 100.0))
-    )
-    board = ScreenStocks(repo, quotes).execute(limit=2)
-    gainers = {s.symbol for s in board.gainers}
-    losers = {s.symbol for s in board.losers}
-    assert gainers == {"AAA", "CCC"}   # top 2 by gain
-    assert losers == {"BBB"}           # worst, and never also a gainer
-    assert gainers.isdisjoint(losers)  # a symbol is never in both
-
-
-def test_screen_filters_by_index():
-    repo = FakeConstituentRepository(a_universe())
-    quotes = FakeQuoteBatchProvider(
-        movers_quotes(AAA=(110.0, 100.0), BBB=(90.0, 100.0), CCC=(105.0, 100.0))
-    )
-    board = ScreenStocks(repo, quotes).execute(index=StockIndex.NASDAQ100)
-    assert board.universe_count == 1
-    assert quotes.received == ["BBB"]  # only the Nasdaq-100 name is fetched
-
-
-def test_screen_filters_by_sector_case_insensitively():
-    repo = FakeConstituentRepository(a_universe())
-    quotes = FakeQuoteBatchProvider(movers_quotes(CCC=(105.0, 100.0)))
-    board = ScreenStocks(repo, quotes).execute(sector="energy")
-    assert board.universe_count == 1
-    assert [s.symbol for s in board.gainers] == ["CCC"]
-
-
-def test_screen_excludes_names_without_a_usable_quote():
-    repo = FakeConstituentRepository(a_universe())
-    # BBB has no quote at all; CCC has one but no previous close (no percent).
-    quotes = FakeQuoteBatchProvider({
-        **movers_quotes(AAA=(110.0, 100.0)),
-        "CCC": a_quote(symbol="CCC", previous_close=None),
-    })
-    board = ScreenStocks(repo, quotes).execute()
-    assert board.universe_count == 3  # the filter matched all three
-    assert board.quoted_count == 1    # only AAA could actually be ranked
-    assert [s.symbol for s in board.gainers] == ["AAA"]
-
-
-def test_screen_empty_universe_returns_empty_board():
-    repo = FakeConstituentRepository(a_universe())
-    quotes = FakeQuoteBatchProvider()
-    board = ScreenStocks(repo, quotes).execute(sector="Nonexistent Sector")
-    assert board.universe_count == 0
-    assert board.gainers == () and board.losers == ()
-    assert quotes.received == []  # nothing to fetch
-
-
-def test_screen_no_quotes_for_nonempty_universe_is_unavailable():
-    # The feed returned nothing for a real universe -> upstream is down, not a
-    # genuinely flat market. Surface it rather than serving an empty board.
-    repo = FakeConstituentRepository(a_universe())
-    with pytest.raises(StockDataUnavailable):
-        ScreenStocks(repo, FakeQuoteBatchProvider()).execute()
-
-
-def test_screen_rejects_non_positive_limit():
-    repo = FakeConstituentRepository(a_universe())
-    with pytest.raises(ValueError):
-        ScreenStocks(repo, FakeQuoteBatchProvider()).execute(limit=0)
-
-
-def test_screen_as_of_is_latest_quote_timestamp():
-    repo = FakeConstituentRepository(a_universe())
-    early = datetime(2026, 6, 18, 15, 0, tzinfo=timezone.utc)
-    late = datetime(2026, 6, 18, 20, 0, tzinfo=timezone.utc)
-    quotes = FakeQuoteBatchProvider({
-        "AAA": a_quote(symbol="AAA", price=110.0, previous_close=100.0, as_of=early),
-        "BBB": a_quote(symbol="BBB", price=90.0, previous_close=100.0, as_of=late),
-    })
-    assert ScreenStocks(repo, quotes).execute().as_of == late
-
-
-# --------------------------- screener endpoint ---------------------------
-
-@pytest.fixture
-def make_screener_client():
-    def _make(use_case: ScreenStocks) -> TestClient:
-        app.dependency_overrides[get_screener] = lambda: use_case
-        return TestClient(app)
-
-    yield _make
-    app.dependency_overrides.clear()
-
-
-def a_screener(quotes=None, constituents=None) -> ScreenStocks:
-    default = movers_quotes(AAA=(110.0, 100.0), BBB=(90.0, 100.0), CCC=(105.0, 100.0))
-    return ScreenStocks(
-        FakeConstituentRepository(constituents or a_universe()),
-        FakeQuoteBatchProvider(default if quotes is None else quotes),
-    )
-
-
-def test_get_screener_returns_200_with_movers(make_screener_client):
-    client = make_screener_client(a_screener())
-    r = client.get("/stocks/screener")
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert [g["symbol"] for g in body["gainers"]] == ["AAA", "CCC"]
-    assert body["gainers"][0]["change_percent"] == 10.0  # entity rule via presenter
-    assert [l["symbol"] for l in body["losers"]] == ["BBB"]
-    assert body["losers"][0]["change_percent"] == -10.0
-    assert body["universe_count"] == 3 and body["quoted_count"] == 3
-    assert body["gainers"][0]["sector"] == "Information Technology"
-
-
-def test_get_screener_sets_short_cache_header(make_screener_client):
-    client = make_screener_client(a_screener())
-    r = client.get("/stocks/screener")
-    assert r.headers["cache-control"] == "public, max-age=15"
-
-
-def test_get_screener_honors_limit(make_screener_client):
-    client = make_screener_client(a_screener())
-    body = client.get("/stocks/screener", params={"limit": 1}).json()
-    assert len(body["gainers"]) == 1 and len(body["losers"]) == 1
-    assert body["limit"] == 1
-
-
-def test_get_screener_filters_by_index_and_sector(make_screener_client):
-    client = make_screener_client(a_screener())
-    ndx = client.get("/stocks/screener", params={"index": "nasdaq100"}).json()
-    assert ndx["index"] == "nasdaq100"
-    assert [g["symbol"] for g in ndx["gainers"]] == ["BBB"]
-    energy = client.get("/stocks/screener", params={"sector": "Energy"}).json()
-    assert energy["universe_count"] == 1
-
-
-@pytest.mark.parametrize("bad", [0, 51, -1])
-def test_get_screener_invalid_limit_422(make_screener_client, bad):
-    client = make_screener_client(a_screener())
-    assert client.get("/stocks/screener", params={"limit": bad}).status_code == 422
-
-
-def test_get_screener_invalid_index_422(make_screener_client):
-    client = make_screener_client(a_screener())
-    assert client.get("/stocks/screener", params={"index": "dow"}).status_code == 422
-
-
-def test_get_screener_empty_universe_returns_empty_lists(make_screener_client):
-    client = make_screener_client(a_screener())
-    body = client.get("/stocks/screener", params={"sector": "Nope"}).json()
-    assert body["universe_count"] == 0
-    assert body["gainers"] == [] and body["losers"] == []
-
-
-def test_get_screener_upstream_failure_502(make_screener_client):
-    # Real universe, but the quote feed yields nothing -> 502.
-    client = make_screener_client(a_screener(quotes={}))
-    assert client.get("/stocks/screener").status_code == 502
-
-
-# The recommendations endpoint moved to its own slice (app/stocks/recommendations/);
-# its tests live in tests/recommendations/ + tests/endpoints/test_recommendations_endpoints.py.

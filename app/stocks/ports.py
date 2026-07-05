@@ -14,7 +14,6 @@ from app.stocks.entities import (
     AnalystEstimates,
     CandleSeries,
     CompanyProfile,
-    Constituent,
     InvestmentAnalysis,
     Logo,
     Quote,
@@ -219,40 +218,6 @@ class SectorPerformanceProvider(ABC):
             StockNotFound: no sector data is available at all.
             StockDataUnavailable: the upstream source failed.
         """
-        raise NotImplementedError
-
-
-class QuoteBatchProvider(ABC):
-    """A gateway for many symbols' latest quotes in as few calls as possible.
-
-    Backs the screener, which ranks a whole index's day move: fetching symbols
-    one at a time would be far too many round-trips. Coverage is best-effort —
-    a symbol the feed doesn't carry is simply omitted — so callers must tolerate
-    a partial map.
-    """
-
-    @abstractmethod
-    def get_quotes(self, symbols: list[str]) -> dict[str, Quote]:
-        """Return the latest quote for each symbol that has one, keyed by symbol.
-
-        Best-effort and total: symbols the source can't price are left out, and
-        a transport failure yields a (partial or empty) map rather than raising
-        — the screener decides what an empty result means.
-        """
-        raise NotImplementedError
-
-
-class ConstituentRepository(ABC):
-    """A source of the screener's universe: index membership + sector per name.
-
-    This is static reference data, not a live feed — hence a repository rather
-    than a price ``*Provider``. The use case applies the index/sector filtering;
-    the repository just hands over the full universe.
-    """
-
-    @abstractmethod
-    def all(self) -> tuple[Constituent, ...]:
-        """Return every known constituent."""
         raise NotImplementedError
 
 

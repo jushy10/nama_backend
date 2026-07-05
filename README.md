@@ -12,7 +12,6 @@ app/
 tests/
 ├── test_stocks.py           # stock entity/use-case/API tests (offline)
 ├── test_stocks_provider.py  # Alpaca adapter tests (offline, faked SDK)
-├── test_constituents.py     # screener universe: DB repo (offline)
 └── test_migrations.py       # alembic migration applies cleanly (offline sqlite)
 alembic/                     # database migrations (alembic upgrade head)
 └── versions/
@@ -48,7 +47,6 @@ Tables are created by migrations, not on boot — run `alembic upgrade head` fir
 | GET    | `/stocks/{symbol}/earnings/annual` | Per-year earnings timeline (reported + upcoming) |
 | GET    | `/stocks/{symbol}/recommendations` | Analyst buy/hold/sell trends by month |
 | GET    | `/stocks/{symbol}/analysis` | AI-generated buy/hold/sell read (Bedrock) |
-| GET    | `/stocks/screener` | Day's biggest gainers & losers, filter by index + sector |
 
 ## Test
 
@@ -86,9 +84,9 @@ In **prod, migrations run automatically**: the
 [Build & Deploy](.github/workflows/app-image.yml) workflow applies `alembic
 upgrade head` as a one-off ECS task on each deploy — inside the VPC, against the
 private RDS — before rolling the service. The commands above are for local dev
-(or an exceptional manual run). To change the schema, edit the model in
-[`app/stocks/constituents.py`](app/stocks/constituents.py), autogenerate a
-revision, review it, then upgrade:
+(or an exceptional manual run). To change the schema, edit the relevant model
+(e.g. the shared anchor [`app/stocks/stocks/models.py`](app/stocks/stocks/models.py)),
+autogenerate a revision, review it, then upgrade:
 
 ```sh
 alembic revision --autogenerate -m "describe the change"
@@ -178,41 +176,6 @@ of serving a monogram placeholder).
 ```sh
 export LOGODEV_TOKEN=pk_...
 curl localhost:8080/stocks/AAPL/logo --output aapl.png
-```
-
-### Stock screener
-
-`GET /stocks/screener` ranks a whole index's move on the day and returns the
-biggest **gainers** and **losers** together, so a "top/bottom movers" board is a
-single request. Narrow the field with `index` (`sp500` / `nasdaq100`) and/or
-`sector` (a GICS sector, case-insensitive); omit both to screen the entire known
-universe.
-
-| Param    | Values | Default | Notes |
-| -------- | ------ | ------- | ----- |
-| `index`  | `sp500` `nasdaq100` | – (all) | Limit the universe to an index. |
-| `sector` | a GICS sector, e.g. `Information Technology`, `Health Care`, `Energy` | – (all) | Case-insensitive. |
-| `limit`  | `1`–`50` | `10` | How many names per side (gainers and losers). |
-
-The universe — which symbols belong to each index, and each one's GICS sector —
-lives in the `index_constituents` **database table** (created by an Alembic
-migration — `alembic upgrade head`), since the live market-data feed (Alpaca) doesn't expose
-index membership. The table is populated out of band — the app only ever reads
-it while serving — and the screener returns an empty board until it's filled.
-
-The day's move for each name comes from a best-effort batch of Alpaca snapshots
-(the same IEX feed as the other price endpoints), so it needs the Alpaca keys (`503`
-without them). Names the feed can't price are left out of the ranking;
-`universe_count` (how many matched the filter) and `quoted_count` (how many could
-be ranked) report the coverage. A symbol never appears as both a gainer and a
-loser, and the board is briefly cached (`Cache-Control: max-age=15`).
-
-```sh
-# Top/bottom 10 across every known name
-curl localhost:8080/stocks/screener
-
-# Nasdaq-100 information-technology names, 5 per side
-curl "localhost:8080/stocks/screener?index=nasdaq100&sector=Information%20Technology&limit=5"
 ```
 
 ### Secrets in AWS
