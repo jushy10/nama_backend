@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, String, Uuid, false, select
+from sqlalchemy import Boolean, DateTime, Float, Row, String, Uuid, false, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 
@@ -109,16 +109,26 @@ def get_or_create_stock(
     return stock
 
 
-def anchor_facts(session: Session, ticker: str) -> tuple[str | None, str | None]:
-    """The stored ``(name, exchange)`` for ``ticker`` in one query — ``(None, None)``
-    when the row doesn't exist yet, and per-field ``None`` for whatever it hasn't
-    learned. The misses a lazy fill answers."""
-    row = session.execute(
-        select(StockRecord.name, StockRecord.exchange).where(
-            StockRecord.ticker == ticker
-        )
+def anchor_facts(session: Session, ticker: str) -> Row | None:
+    """The stored anchor columns the ticker card serves DB-first, in one query —
+    ``None`` when the row doesn't exist yet.
+
+    Returns a ``Row`` with named columns (``name``, ``exchange``, ``market_cap``,
+    ``sector``, ``industry``, ``revenue_growth_yoy``, ``eps_growth_yoy``); per-field
+    ``None`` for whatever the row hasn't learned. Widened past name/exchange because
+    the card also serves the universe-screen facts and the annual slice's trailing
+    growth straight off the anchor — the caller maps it into ``StoredTickerFacts``."""
+    return session.execute(
+        select(
+            StockRecord.name,
+            StockRecord.exchange,
+            StockRecord.market_cap,
+            StockRecord.sector,
+            StockRecord.industry,
+            StockRecord.revenue_growth_yoy,
+            StockRecord.eps_growth_yoy,
+        ).where(StockRecord.ticker == ticker)
     ).one_or_none()
-    return (row.name, row.exchange) if row else (None, None)
 
 
 def fill_exchange(session: Session, ticker: str, exchange: str) -> None:

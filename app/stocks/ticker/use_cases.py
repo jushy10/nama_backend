@@ -6,18 +6,21 @@ HTTP:
 
 - ``GetTickerCard`` — the read path. Normalizes the ticker and the requested
   includes, takes the live quote through the ``StockQuoteProvider``, layers the
-  always-on enrichment (fundamentals for the market cap, plus the two DB-first
-  identity facts — the clean display name and the listing exchange — each lazily
-  filled **once** from its vendor into the ``stocks`` row), and fetches the
-  *opt-in* blocks only when asked: ``dividend`` (already carried by the
-  fundamentals call), ``performance`` (the trailing windows), ``metrics``
-  (the trailing P/E off the quarterly-earnings slice's stored TTM — consensus
-  basis, so it pairs with the forward legs — the margins/PEG off the
-  fundamentals call, and the stored forward consensus for the forward PEG),
-  and ``options_metrics`` (the options-market
+  always-on enrichment — all served off **one anchor read**: the two DB-first
+  identity facts (the clean display name and the listing exchange, each lazily
+  filled **once** from its vendor into the ``stocks`` row) plus the read-only
+  screen facts (market cap, sector, industry) the universe sync writes there —
+  and fetches the *opt-in* blocks only when asked: ``dividend`` and
+  ``performance`` (the trailing windows), ``metrics`` (the trailing P/E off the
+  quarterly-earnings slice's stored TTM — consensus basis, so it pairs with the
+  forward legs — the margins/PEG off the fundamentals call, the stored forward
+  consensus for the forward PEG, and the annual slice's stored trailing YoY
+  growth off the same anchor read), and ``options_metrics`` (the options-market
   read: ATM implied volatility, the priced-in expected move, the cost of a
   protective put, and the day's put/call lean). Pay-per-use: a block that isn't
-  requested costs no provider call. Returns the assembled ``TickerCard``.
+  requested costs no provider call — and market cap now riding the anchor, the
+  fundamentals call itself is opt-in (only ``dividend``/``metrics`` need it).
+  Returns the assembled ``TickerCard``.
 
 Unlike the earnings/recommendations slices there is no sync counterpart, and the
 only persistence is the pair of anchor-level facts (name + exchange on the
@@ -116,10 +119,17 @@ class TickerCard:
     quote: Quote  # live price + the day's move
     include: frozenset[str]  # the opt-in blocks this card was asked to carry
     valuation: TickerValuation | None  # the forward-PEG read; only with 'metrics'
-    fundamentals: StockFundamentals | None  # market cap + dividend + trailing metrics (best-effort)
+    fundamentals: StockFundamentals | None  # dividend + trailing metrics (best-effort; only with 'dividend'/'metrics')
     performance: StockPerformance | None  # trailing windows; only with 'performance'
     name: str | None = None  # display name; DB-first, filled once from the profile
     exchange: str | None = None  # listing venue; DB-first, filled once from the feed
+    # The rest ride the same anchor read, served straight from the DB (never a
+    # provider call): the universe screen's facts and the annual slice's trailing snapshot.
+    market_cap: float | None = None  # raw USD, from the universe screen
+    sector: str | None = None  # classification slug, from the universe screen
+    industry: str | None = None  # classification slug, from the universe screen
+    revenue_growth_yoy: float | None = None  # percent, annual slice's latest trailing YoY
+    eps_growth_yoy: float | None = None  # percent (consensus basis), annual slice's latest trailing YoY
     options_metrics: TickerOptionsMetrics | None = None  # only with 'options_metrics'
 
 
@@ -139,8 +149,9 @@ class GetTickerCard:
     consensus, both can go live to Yahoo (the TTM on a cold cache miss), and
     Yahoo intermittently blocks data-centre IPs; a colored insight going missing
     must not take the quote down with it. Opt-in blocks that aren't requested
-    cost no provider call at all ('dividend' rides the fundamentals call the
-    market cap needs anyway, so it only gates presentation).
+    cost no provider call at all — and market cap now served off the anchor row
+    (with sector, industry, and the trailing growth), the fundamentals call is
+    itself opt-in: only 'dividend' and 'metrics' pull it.
     """
 
     def __init__(
@@ -175,12 +186,14 @@ class GetTickerCard:
         normalized = _normalize_symbol(symbol)
         wanted = _normalize_includes(include)
         quote = self._quotes.get_quote(normalized)  # required; errors propagate
-        # One anchor read serves both DB-first facts; each falls back to its
-        # vendor (and stores what it learns) only when the row hasn't got it yet.
+        # One anchor read serves every DB-first fact: name + exchange (each falls back
+        # to its vendor, and stores what it learns, only when the row lacks it) plus the
+        # read-only screen facts (market cap, sector, industry) and the annual slice's
+        # trailing growth — all served straight from the row, no provider call.
         stored = (
             self._repository.get_facts(normalized)
             if self._repository is not None
-            else StoredTickerFacts(name=None, exchange=None)
+            else StoredTickerFacts()
         )
         return TickerCard(
             quote=quote,
@@ -188,12 +201,24 @@ class GetTickerCard:
             valuation=(
                 self._get_valuation(normalized, quote) if "metrics" in wanted else None
             ),
-            fundamentals=self._get_fundamentals(normalized),
+            # Fundamentals is opt-in now that market cap comes off the anchor: it's
+            # fetched only for the blocks that still need it (dividend, and the metrics'
+            # PEG + margins) — a bare card costs no fundamentals call.
+            fundamentals=(
+                self._get_fundamentals(normalized)
+                if wanted & {"dividend", "metrics"}
+                else None
+            ),
             performance=(
                 self._get_performance(normalized) if "performance" in wanted else None
             ),
             name=self._get_name(normalized, stored.name),
             exchange=self._get_exchange(normalized, stored.exchange),
+            market_cap=stored.market_cap,
+            sector=stored.sector,
+            industry=stored.industry,
+            revenue_growth_yoy=stored.revenue_growth_yoy,
+            eps_growth_yoy=stored.eps_growth_yoy,
             options_metrics=(
                 self._get_options_metrics(normalized, quote)
                 if "options_metrics" in wanted

@@ -73,8 +73,15 @@ def _a_card(*, include: frozenset[str] = frozenset()) -> TickerCard:
             else None
         ),
         name="Micron Technology",
+        # Market cap now rides the anchor (card.market_cap), so the fundamentals'
+        # own market_cap is a wrong-answer sentinel: the presenter must ignore it.
+        market_cap=1_090_000_000_000.0,
+        sector="technology",
+        industry="semiconductors",
+        revenue_growth_yoy=61.6,
+        eps_growth_yoy=587.4,
         fundamentals=StockFundamentals(
-            market_cap=1_090_000_000_000.0,
+            market_cap=999.0,  # sentinel: presenter reads card.market_cap, not this
             # Vendor-noisy on purpose: the presenter must round both to 2 decimals.
             dividend_per_share=0.4649,
             dividend_yield=0.047123,
@@ -123,9 +130,11 @@ def test_presents_the_core_card_with_null_optin_blocks_by_default():
     assert body["price"] == 975.56
     assert body["change"] == 12.3  # vs the previous close, same rule as /quote
     assert body["change_percent"] == 1.28
-    assert body["market_cap"] == 1_090_000_000_000.0
-    # Opt-in blocks stay null until requested — even though the fundamentals
-    # (which carry the dividend) were fetched for the market cap.
+    assert body["market_cap"] == 1_090_000_000_000.0  # off the anchor, not fundamentals
+    assert body["sector"] == "technology"  # universe-screen fact off the anchor
+    assert body["industry"] == "semiconductors"
+    # Opt-in blocks stay null until requested (and the fundamentals call that backs
+    # some of them isn't even made for a bare card now that market cap is DB-sourced).
     assert body["dividend"] is None
     assert body["performance"] is None
     assert body["metrics"] is None
@@ -162,6 +171,8 @@ def test_presents_the_optin_blocks_when_included():
         "gross_margin": 52.1,
         "operating_margin": 38.9,
         "net_margin": 33.5,
+        "revenue_growth_yoy": 61.6,  # off the anchor, alongside the forward legs
+        "eps_growth_yoy": 587.4,
     }
     # The options figures are rounded at the edge; the sampled expiries are dates.
     assert body["options_metrics"] == {
@@ -193,6 +204,10 @@ def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
             performance=None,
             name=None,
             exchange=None,
+            # market_cap unset -> null (no anchor row); the growth pair, also off
+            # the anchor, still serves — it never rode Finnhub.
+            revenue_growth_yoy=61.6,
+            eps_growth_yoy=587.4,
         )
     )
     resp = _client(fake).get("/stocks/ticker/MU?include=dividend,metrics")
@@ -204,8 +219,8 @@ def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
     assert body["dividend"] is None  # requested, but nothing to serve
     # The metrics block still appears (it was requested) with its
     # fundamentals-backed half null; the valuation-backed pair — the trailing
-    # P/E (quarterly TTM) and the forward PEG (stored consensus) — still serves,
-    # since neither rides Finnhub.
+    # P/E (quarterly TTM) and the forward PEG (stored consensus) — and the
+    # anchor-backed growth pair still serve, since none of them ride Finnhub.
     assert body["metrics"] == {
         "pe": 22.4,
         "peg": None,
@@ -213,6 +228,8 @@ def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
         "gross_margin": None,
         "operating_margin": None,
         "net_margin": None,
+        "revenue_growth_yoy": 61.6,
+        "eps_growth_yoy": 587.4,
     }
 
 

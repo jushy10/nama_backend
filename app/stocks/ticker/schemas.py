@@ -50,7 +50,11 @@ class TickerMetricsResponse(BaseModel):
     over the FY1→FY2 growth analysts *expect*); ``forward_peg`` is ``null`` when
     no forward consensus is stored for the symbol yet, or a leg is
     non-positive. The margins are the trailing profitability ladder (percent),
-    off the fundamentals call the market cap rides."""
+    off the fundamentals call. ``revenue_growth_yoy`` / ``eps_growth_yoy`` are the
+    stock's *latest trailing* year-over-year growth (percent) — the newest reported
+    fiscal year over the prior one, served straight off the ``stocks`` anchor where
+    the annual-earnings slice writes them (EPS on the analyst-consensus basis, to
+    match the forward legs); ``null`` until that slice has two reported years cached."""
 
     pe: float | None = None  # trailing: price / TTM EPS (consensus basis, 4 quarters)
     peg: float | None = None  # trailing P/E / trailing EPS growth
@@ -58,6 +62,8 @@ class TickerMetricsResponse(BaseModel):
     gross_margin: float | None = None  # percent
     operating_margin: float | None = None  # percent
     net_margin: float | None = None  # percent
+    revenue_growth_yoy: float | None = None  # percent, latest trailing YoY (annual slice)
+    eps_growth_yoy: float | None = None  # percent, latest trailing YoY, consensus basis
 
 
 class OptionsMetricsResponse(BaseModel):
@@ -81,17 +87,18 @@ class OptionsMetricsResponse(BaseModel):
 
 
 class TickerCardResponse(BaseModel):
-    """A ticker's card: the live quote, name and market cap, plus opt-in blocks.
+    """A ticker's card: the live quote, name, and the anchor facts, plus opt-in blocks.
 
     ``ticker`` is the symbol and ``price``/``change``/``change_percent`` the day's
     move (same rules as every other price view); ``name`` is the clean company
-    display name, ``exchange`` the listing venue (served from the ``stocks`` row,
-    learned once — it never changes), and ``market_cap`` fundamentals-vendor
-    enrichment — all best-effort, ``null`` when unconfigured or unavailable.
-    ``dividend``, ``performance``, ``metrics`` and ``options_metrics`` appear
-    only when asked for via
-    ``?include=`` — ``null`` otherwise, and ``null`` for the best-effort ones even
-    when requested if their source is down or keyless."""
+    display name, ``exchange`` the listing venue, and ``market_cap`` / ``sector`` /
+    ``industry`` the universe-screen facts — all served straight from the ``stocks``
+    row (``name``/``exchange`` learned once, the rest written by the universe sync),
+    each best-effort and ``null`` until the row carries it (e.g. a stock not yet
+    screened has no market cap). ``dividend``, ``performance``, ``metrics`` and
+    ``options_metrics`` appear only when asked for via ``?include=`` — ``null``
+    otherwise, and ``null`` for the best-effort ones even when requested if their
+    source is down or keyless."""
 
     ticker: str
     name: str | None = None  # clean display name ("Micron Technology")
@@ -99,7 +106,9 @@ class TickerCardResponse(BaseModel):
     price: float
     change: float | None = None  # absolute move vs the previous close
     change_percent: float | None = None  # percent move vs the previous close
-    market_cap: float | None = None  # raw USD
+    market_cap: float | None = None  # raw USD; from the stocks anchor (universe screen)
+    sector: str | None = None  # classification slug; from the stocks anchor
+    industry: str | None = None  # classification slug; from the stocks anchor
     dividend: DividendResponse | None = None  # opt-in: ?include=dividend
     performance: StockPerformanceResponse | None = None  # opt-in: ?include=performance
     metrics: TickerMetricsResponse | None = None  # opt-in: ?include=metrics
