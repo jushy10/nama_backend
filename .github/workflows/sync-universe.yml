@@ -1,42 +1,43 @@
 name: Sync universe
 run-name: Sync universe
 
-# Weekly (and on-demand). The searchable universe is every US company at/above a $1B market
-# cap (~2,800 names). Membership drifts slowly — a company crossing $1B is a rare event — so
-# weekly is plenty. It POSTs the deployed app's universe cron endpoint
-# (app/stocks/endpoints/cron_universe_endpoints.py), which runs the SyncUniverse use case:
-# screen the US market via yfinance (Yahoo) and upsert the result straight onto the stocks
-# anchor (additive — present stocks are inserted/refreshed, none are removed), then enrich the
-# still-unclassified stocks' sector/industry via a per-ticker Yahoo .info call.
+# Weekly (and on-demand). The searchable universe is every US company at/above a $1B market cap
+# (~2,800 names). Membership drifts slowly — a company crossing $1B is a rare event — so weekly
+# is plenty.
 #
-# The endpoint is FIRE-AND-FORGET: the enrichment pass makes hundreds-to-thousands of
-# sequential Yahoo calls (minutes), well past API Gateway's hard 30s integration timeout, so
-# the endpoint schedules the sweep on a background thread and returns 202 immediately. This
-# workflow therefore makes a SINGLE quick POST — no batching loop. A 200 "already_running"
-# means a previous sweep is still in flight — also success; this run just declines to start a
-# second.
+# It launches a one-off ECS Fargate task that runs `python -m app.sync universe 1000` (the
+# SyncUniverse use case) to completion and exits. The use case screens the US market via yfinance
+# (Yahoo) and upserts the result onto the stocks anchor (additive — present stocks are
+# inserted/refreshed, none removed), then enriches up to `limit` still-unclassified stocks'
+# sector/industry via a per-ticker Yahoo `.info` call (the bulk screen carries neither). The
+# sweep runs on its OWN 1 GB task definition (nama-dev-sync), OFF the always-on API task — it's
+# the heaviest sweep (the ~2,800-row screen held in memory, plus the enrichment pass), the one
+# most likely to OOM the small 512 MB service, which is the whole reason it now runs as a
+# separate task instead of POSTing /internal/universe/sync. The task reaches the private RDS by
+# borrowing the app service's own network config.
 #
-# Operational notes:
-#  - Because the sweep runs in the background, the response can't report how many stocks were
-#    screened/enriched — it only confirms the sweep was accepted. The counts land in the app
-#    logs (CloudWatch): "universe sync done: screened=… added=… updated=… enriched=… …".
-#  - The source is yfinance (Yahoo), which needs no API key but may block data-centre IPs. A
-#    blocked bulk screen is skipped server-side (nothing written, both passes skipped); a
-#    blocked per-ticker .info just leaves that stock unclassified for the next run. industry is
-#    fill-once, so successive weekly runs converge — each run only classifies what's still
-#    unset, capped by ENRICH_LIMIT.
-#  - The endpoint is currently unauthenticated (an auth-token guard is planned); this workflow
-#    just triggers it.
+# The market screen always runs in full; only the per-ticker enrichment is capped (SYNC_LIMIT).
+# Since industry is fill-once, successive weekly runs converge — each classifies only what's
+# still unset, up to the cap.
 #
-# Requires the repo/environment variable API_BASE_URL — the deployed app's base URL,
-# reachable from the GitHub runner.
+# FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs on ECS (the
+# enrichment pass makes hundreds-to-thousands of sequential Yahoo calls — minutes) and its result
+# — "universe sync done: screened=… added=… updated=… enriched=… enrich_failed=… limit=…" —
+# lands in the task's CloudWatch logs, not here. A green run means the task launched; check
+# CloudWatch for the outcome. An empty or implausibly small screen (a Yahoo block) is skipped
+# inside the sync, so nothing is written and the stored (additive) universe stays put.
+#
+# Manual run: Actions → "Sync universe" → Run workflow (same trigger, off-schedule).
+#
+# Auth: the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var — the same
+# identity the deploy + migrate jobs already use to run one-off ECS tasks.
 
 on:
   workflow_dispatch: {}
   # Weekly, Sundays 06:00 UTC — staggered off the daily recommendations sync (07:30) and the
-  # Monday earnings syncs (08:00/09:00). Exact timing doesn't matter, so GitHub delaying
-  # scheduled runs under load is fine. Caveats: scheduled workflows run only from the default
-  # branch, and GitHub auto-disables the schedule after 60 days with no repo activity.
+  # Monday earnings syncs (08:00/09:00). Exact timing doesn't matter. Caveats: scheduled
+  # workflows run only from the default branch, and GitHub auto-disables the schedule after 60
+  # days with no repo activity.
   schedule:
     - cron: "0 6 * * 0"
 
@@ -45,11 +46,17 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Max stocks the enrichment pass classifies this run, via a per-ticker Yahoo call (the
-  # endpoint's ceiling). The bulk screen always runs in full; only enrichment is capped. Since
-  # industry is fill-once, a universe larger than this is classified over successive weekly
-  # runs — each touches only the still-unclassified.
-  SYNC_UNIVERSE_ENRICH_LIMIT: "1000"
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # These match module "app" { name = "nama-dev" } in infra/environments/dev; the sync task
+  # def is that name + "-sync" (aws_ecs_task_definition.sync in the ecs-fargate-service module).
+  ECS_CLUSTER: nama-dev
+  ECS_SERVICE: nama-dev
+  SYNC_TASK_DEF: nama-dev-sync
+  SYNC_SLICE: universe
+  # Max stocks the enrichment pass classifies this run, via a per-ticker Yahoo call. The bulk
+  # screen always runs in full; only enrichment is capped. Since industry is fill-once, a
+  # universe larger than this is classified over successive weekly runs.
+  SYNC_LIMIT: "1000"
 
 jobs:
   sync:
@@ -58,30 +65,53 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Trigger the universe refresh
-        env:
-          API_BASE_URL: ${{ vars.API_BASE_URL }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Launch the sync task
         run: |
           set -euo pipefail
 
-          if [ -z "${API_BASE_URL:-}" ]; then
-            echo "::error::API_BASE_URL is not set — add it as a repo/environment variable pointing at the deployed app."
+          # The sync task runs INSIDE the VPC (the private RDS is unreachable from the runner).
+          # Borrow the app service's own network config — subnets + security groups, including
+          # the DB SG — so there's nothing to hardcode. Same approach the migrate job uses.
+          status=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" != "ACTIVE" ]; then
+            echo "::error::ECS service '$ECS_SERVICE' is not ACTIVE (status: $status) — deploy the app first."
+            exit 1
+          fi
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' --output json)
+
+          # Container command override: python -m app.sync universe <enrich-limit>.
+          overrides=$(jq -cn --arg slice "$SYNC_SLICE" --arg limit "${SYNC_LIMIT:-}" '
+            {containerOverrides: [{
+              name: "app",
+              command: (["python", "-m", "app.sync", $slice] + (if $limit == "" then [] else [$limit] end))
+            }]}')
+
+          echo "Launching one-off sync task: app.sync $SYNC_SLICE $SYNC_LIMIT"
+          run=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$SYNC_TASK_DEF" \
+            --launch-type FARGATE \
+            --network-configuration "$netcfg" \
+            --started-by "gha-sync-${GITHUB_SHA::7}" \
+            --overrides "$overrides")
+
+          # run-task exits 0 even when it places no task (capacity/throttle land in .failures),
+          # so check explicitly — this is what makes a green run mean "the task launched".
+          task_arn=$(echo "$run" | jq -r '.tasks[0].taskArn // empty')
+          if [ -z "$task_arn" ]; then
+            echo "::error::run-task launched no task: $(echo "$run" | jq -c '.failures')"
             exit 1
           fi
 
-          url="${API_BASE_URL%/}/internal/universe/sync?limit=${SYNC_UNIVERSE_ENRICH_LIMIT}"
-          http_code=$(curl -sS -X POST "$url" \
-            --max-time 30 \
-            -o /tmp/universe_sync.json \
-            -w '%{http_code}')
-          body=$(cat /tmp/universe_sync.json 2>/dev/null || echo '{}')
-          echo "POST ${url} -> HTTP ${http_code}: ${body}"
-
-          # 202 = sweep started; 200 = a sweep was already running (also fine). Anything
-          # else is a real failure (the app is down, or the trigger was rejected).
-          if [ "$http_code" != "202" ] && [ "$http_code" != "200" ]; then
-            echo "::error::Universe sync trigger failed (HTTP $http_code) — check the app logs."
-            exit 1
-          fi
-
-          echo "Universe sweep triggered ($(echo "$body" | jq -r '.status // "?"'))."
+          echo "Launched $task_arn"
+          echo "Fire-and-forget: the sweep runs on ECS (the enrichment pass takes minutes); its result —"
+          echo "\"universe sync done: screened=… added=… updated=… enriched=… enrich_failed=… limit=…\" — lands in CloudWatch."

@@ -3,34 +3,30 @@ run-name: Sync annual earnings
 
 # Monthly (and on-demand). Reported fiscal years — and the trailing YoY growth derived from
 # them onto the stocks anchor — change about once a year per stock. The sweep both keeps the
-# already-stored rows fresh and SEEDS stocks not yet cached (the ≥$1B universe), un-cached
-# first. It POSTs the deployed app's annual-earnings cron endpoint
-# (app/stocks/endpoints/cron_annual_earnings_endpoints.py), which runs the SyncAnnualEarnings
-# use case.
+# already-stored rows fresh and SEEDS stocks not yet cached (the ≥$1B universe), un-cached first.
 #
-# The endpoint is FIRE-AND-FORGET: it schedules the sweep on a background thread and returns
-# 202 immediately, so this workflow makes a SINGLE quick POST — no batching. By default the
-# sweep processes EVERY stock in the anchor (un-cached first, then stalest); pass the optional
-# `limit` dispatch input to cap a single run (e.g. to chunk the first seed and stay gentle on
-# Yahoo). A 200 "already_running" means a previous sweep is still in flight — also success;
-# this run just declines to start a second.
+# It launches a one-off ECS Fargate task that runs `python -m app.sync annual-earnings [limit]`
+# (the SyncAnnualEarnings use case) to completion and exits. The sweep runs on its OWN 1 GB task
+# definition (nama-dev-sync), OFF the always-on API task, so it can't OOM the small service —
+# this replaced POSTing the app's /internal/earnings/annual/sync endpoint. The task reaches the
+# private RDS by borrowing the app service's own network config.
 #
-# Operational notes:
-#  - Because the sweep runs in the background, the response can't report how many stocks were
-#    refreshed — it only confirms the sweep was accepted. The counts land in the app logs
-#    (CloudWatch): "annual-earnings sync done: refreshed=… failed=…".
-#  - The live source is yfinance (Yahoo), which needs no API key. Yahoo rate-limits / blocks
-#    data-centre IPs intermittently, so a sweep may refresh fewer stocks than requested; the
-#    next run retries the stalest first. A degraded fetch can't erase stored figures: the
-#    sync merges the fresh window with the stored rows (reported history and revenue are
-#    carried forward when Yahoo drops them), and an empty result is never stored.
-#  - An unbounded run makes one round of Yahoo calls per stock (thousands, sequential); if
-#    Yahoo starts blocking, pass `limit` to cover the universe over several smaller runs.
-#  - The endpoint is currently unauthenticated (an auth-token guard is planned); this
-#    workflow just triggers it.
+# By default the sweep processes EVERY stock in the anchor (un-cached first, then stalest); use
+# the optional `limit` dispatch input to cap a single run (e.g. to chunk the first seed and stay
+# gentle on Yahoo).
 #
-# Requires the repo/environment variable API_BASE_URL — the deployed app's base URL,
-# reachable from the GitHub runner.
+# FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs in the
+# background on ECS (it can take several minutes) and its result — "annual-earnings sync done:
+# refreshed=… failed=…" — lands in the task's CloudWatch logs, not here. A green run means the
+# task launched; check CloudWatch for the outcome. yfinance (Yahoo) needs no API key but blocks
+# data-centre IPs intermittently; a degraded fetch can't erase stored figures (the sync merges
+# the fresh window with stored rows — reported history and revenue carried forward) and an empty
+# result is never stored.
+#
+# Manual run: Actions → "Sync annual earnings" → Run workflow (same trigger, off-schedule).
+#
+# Auth: the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var — the same
+# identity the deploy + migrate jobs already use to run one-off ECS tasks.
 
 on:
   workflow_dispatch:
@@ -41,17 +37,25 @@ on:
         type: string
         default: ""
   # 1st of each month, 09:00 UTC — an hour after the quarterly-earnings sync so the two don't
-  # hit Yahoo from the same host at once on a month whose 1st is a Monday. The stored annual
-  # rows (reported years + the trailing YoY growth) change about once a year per stock, so a
-  # monthly refresh keeps them current; exact timing doesn't matter, so GitHub delaying
-  # scheduled runs under load is fine. Caveats: scheduled workflows run only from the default
-  # branch, and GitHub auto-disables the schedule after 60 days with no repo activity.
+  # hit Yahoo from the same host at once on a month whose 1st is a Monday. The stored annual rows
+  # change about once a year per stock, so a monthly refresh keeps them current; exact timing
+  # doesn't matter. Caveats: scheduled workflows run only from the default branch, and GitHub
+  # auto-disables the schedule after 60 days with no repo activity.
   schedule:
     - cron: "0 9 1 * *"
 
 concurrency:
   group: sync-annual-earnings
   cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # These match module "app" { name = "nama-dev" } in infra/environments/dev; the sync task
+  # def is that name + "-sync" (aws_ecs_task_definition.sync in the ecs-fargate-service module).
+  ECS_CLUSTER: nama-dev
+  ECS_SERVICE: nama-dev
+  SYNC_TASK_DEF: nama-dev-sync
+  SYNC_SLICE: annual-earnings
 
 jobs:
   sync:
@@ -60,38 +64,58 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Trigger the annual-earnings refresh
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Launch the sync task
         env:
-          API_BASE_URL: ${{ vars.API_BASE_URL }}
-          # Optional per-dispatch cap; empty on scheduled runs (and by default), so the
-          # endpoint processes every stock.
-          LIMIT: ${{ github.event.inputs.limit }}
+          # Optional per-dispatch cap; empty on scheduled runs (and by default), so the sweep
+          # processes every stock.
+          SYNC_LIMIT: ${{ github.event.inputs.limit }}
         run: |
           set -euo pipefail
 
-          if [ -z "${API_BASE_URL:-}" ]; then
-            echo "::error::API_BASE_URL is not set — add it as a repo/environment variable pointing at the deployed app."
+          # The sync task runs INSIDE the VPC (the private RDS is unreachable from the runner).
+          # Borrow the app service's own network config — subnets + security groups, including
+          # the DB SG — so there's nothing to hardcode. Same approach the migrate job uses.
+          status=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" != "ACTIVE" ]; then
+            echo "::error::ECS service '$ECS_SERVICE' is not ACTIVE (status: $status) — deploy the app first."
+            exit 1
+          fi
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' --output json)
+
+          # Container command override: python -m app.sync <slice> [limit]. An empty limit
+          # (scheduled runs) omits the arg, so the sweep processes every stock.
+          overrides=$(jq -cn --arg slice "$SYNC_SLICE" --arg limit "${SYNC_LIMIT:-}" '
+            {containerOverrides: [{
+              name: "app",
+              command: (["python", "-m", "app.sync", $slice] + (if $limit == "" then [] else [$limit] end))
+            }]}')
+
+          echo "Launching one-off sync task: app.sync $SYNC_SLICE ${SYNC_LIMIT:-(no limit)}"
+          run=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$SYNC_TASK_DEF" \
+            --launch-type FARGATE \
+            --network-configuration "$netcfg" \
+            --started-by "gha-sync-${GITHUB_SHA::7}" \
+            --overrides "$overrides")
+
+          # run-task exits 0 even when it places no task (capacity/throttle land in .failures),
+          # so check explicitly — this is what makes a green run mean "the task launched".
+          task_arn=$(echo "$run" | jq -r '.tasks[0].taskArn // empty')
+          if [ -z "$task_arn" ]; then
+            echo "::error::run-task launched no task: $(echo "$run" | jq -c '.failures')"
             exit 1
           fi
 
-          url="${API_BASE_URL%/}/internal/earnings/annual/sync"
-          # Append ?limit= only when a limit was provided (manual dispatch); otherwise the
-          # endpoint refreshes + seeds every stock (its default).
-          if [ -n "${LIMIT:-}" ]; then
-            url="${url}?limit=${LIMIT}"
-          fi
-          http_code=$(curl -sS -X POST "$url" \
-            --max-time 30 \
-            -o /tmp/sync_response.json \
-            -w '%{http_code}')
-          body=$(cat /tmp/sync_response.json 2>/dev/null || echo '{}')
-          echo "POST ${url} -> HTTP ${http_code}: ${body}"
-
-          # 202 = sweep started; 200 = a sweep was already running (also fine). Anything
-          # else is a real failure (the app is down, or the trigger was rejected).
-          if [ "$http_code" != "202" ] && [ "$http_code" != "200" ]; then
-            echo "::error::Annual-earnings sync trigger failed (HTTP $http_code) — check the app logs."
-            exit 1
-          fi
-
-          echo "Annual-earnings sweep triggered ($(echo "$body" | jq -r '.status // "?"'))."
+          echo "Launched $task_arn"
+          echo "Fire-and-forget: the sweep runs on ECS (it can take several minutes); its result —"
+          echo "\"$SYNC_SLICE sync done: refreshed=… failed=…\" — lands in the task's CloudWatch logs."

@@ -440,6 +440,62 @@ resource "aws_ecs_task_definition" "this" {
   tags = var.tags
 }
 
+# ---------------------------------------------------------------------------
+# A SECOND task definition for out-of-band batch work — the data-sync sweeps.
+# It is NOT a service: it's launched as one-off `aws ecs run-task` tasks (by the
+# sync-* GitHub workflows, or by hand), runs `python -m app.sync <slice>` to
+# completion, and exits — billed per-second, only while a sweep runs.
+#
+# Same image, roles, secrets and log group as the app; two deliberate differences:
+#   - its OWN, larger memory (sync_memory, default 1 GB) so a heavy sweep (the
+#     ~2,800-row universe screen + its per-ticker enrichment pass) has headroom
+#     without bloating the small always-on API task — moving the sweeps here is
+#     what keeps the service from OOM-ing on sync work;
+#   - no portMappings and no healthCheck — it's a batch job, not a server.
+# The `command` here is only a bare-run fallback; every invocation overrides it
+# via `run-task --overrides` to pick the slice (e.g. app.sync universe).
+# ---------------------------------------------------------------------------
+resource "aws_ecs_task_definition" "sync" {
+  family                   = "${var.name}-sync"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = var.sync_cpu
+  memory                   = var.sync_memory
+  execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.task.arn
+
+  container_definitions = jsonencode([
+    merge(
+      {
+        name      = "app"
+        image     = "${aws_ecr_repository.this.repository_url}:${var.image_tag}"
+        essential = true
+
+        # Overridden per run (run-task --overrides) to select the slice; run bare,
+        # the CLI prints usage and exits non-zero, which is a safe no-op.
+        command = ["python", "-m", "app.sync"]
+
+        logConfiguration = {
+          logDriver = "awslogs"
+          options = {
+            "awslogs-group"         = aws_cloudwatch_log_group.this.name
+            "awslogs-region"        = data.aws_region.current.name
+            "awslogs-stream-prefix" = "sync"
+          }
+        }
+      },
+      length(local.container_environment) == 0 ? {} : {
+        environment = local.container_environment
+      },
+      length(local.container_secrets) == 0 ? {} : {
+        secrets = local.container_secrets
+      }
+    )
+  ])
+
+  tags = var.tags
+}
+
 resource "aws_ecs_service" "this" {
   name            = var.name
   cluster         = aws_ecs_cluster.this.id
