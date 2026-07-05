@@ -174,16 +174,42 @@ class _FakeStocks(StockDataProvider):
 
 
 class _FakeRepo(TickerRepository):
-    """In-memory anchor-facts store; records saves so tests can assert the fills."""
+    """In-memory anchor-facts store; records saves so tests can assert the fills.
 
-    def __init__(self, name: str | None = None, exchange: str | None = None) -> None:
+    Carries the read-only screen/growth facts too (the universe and annual syncs'
+    writes onto the anchor) so tests can assert they flow onto the card unchanged."""
+
+    def __init__(
+        self,
+        name: str | None = None,
+        exchange: str | None = None,
+        *,
+        market_cap: float | None = None,
+        sector: str | None = None,
+        industry: str | None = None,
+        revenue_growth_yoy: float | None = None,
+        eps_growth_yoy: float | None = None,
+    ) -> None:
         self._name = name
         self._exchange = exchange
+        self._market_cap = market_cap
+        self._sector = sector
+        self._industry = industry
+        self._revenue_growth_yoy = revenue_growth_yoy
+        self._eps_growth_yoy = eps_growth_yoy
         self.name_saves: list[tuple[str, str]] = []
         self.exchange_saves: list[tuple[str, str]] = []
 
     def get_facts(self, symbol: str) -> StoredTickerFacts:
-        return StoredTickerFacts(name=self._name, exchange=self._exchange)
+        return StoredTickerFacts(
+            name=self._name,
+            exchange=self._exchange,
+            market_cap=self._market_cap,
+            sector=self._sector,
+            industry=self._industry,
+            revenue_growth_yoy=self._revenue_growth_yoy,
+            eps_growth_yoy=self._eps_growth_yoy,
+        )
 
     def save_name(self, symbol: str, name: str) -> None:
         self.name_saves.append((symbol, name))
@@ -420,23 +446,76 @@ def test_assembles_the_full_card_when_everything_is_included():
 
 
 def test_unrequested_blocks_cost_no_provider_call():
-    # Pay-per-use: without includes, neither the consensus read nor the
-    # performance windows are fetched — the card is just quote + name + cap.
+    # Pay-per-use: without includes, none of the consensus read, the performance
+    # windows, or the fundamentals call is made — market cap rides the anchor now,
+    # so a bare card is just quote + name + the DB facts.
     estimates = _FakeEstimates(_estimates(eps_avg=5.0, eps_avg_fy2=7.5))
     performance = _FakePerformance()
+    fundamentals = _FakeFundamentals()
 
     card = GetTickerCard(
-        _FakeQuotes(), estimates, _FakeFundamentals(), performance, _FakeProfile()
+        _FakeQuotes(), estimates, fundamentals, performance, _FakeProfile()
     ).execute("MU")
 
     assert estimates.calls == []  # never touched
     assert performance.calls == []  # never touched
+    assert fundamentals.calls == []  # market cap comes off the anchor now
     assert card.include == frozenset()
     assert card.valuation is None
     assert card.performance is None
-    # The always-on parts still ride along.
+    assert card.fundamentals is None  # opt-in: only dividend/metrics pull it
+    # The always-on name still rides along (off the profile vendor).
     assert card.name == "Micron Technology"
-    assert card.fundamentals is not None
+
+
+def test_performance_only_include_costs_no_fundamentals_call():
+    # Only dividend/metrics pull the fundamentals call: a performance-only card
+    # leaves it untouched, since market cap no longer rides it.
+    fundamentals = _FakeFundamentals()
+
+    card = GetTickerCard(
+        _FakeQuotes(), _FakeEstimates(), fundamentals, _FakePerformance()
+    ).execute("MU", include=["performance"])
+
+    assert fundamentals.calls == []
+    assert card.fundamentals is None
+    assert card.performance is not None
+
+
+def test_dividend_include_pulls_the_fundamentals_call():
+    # The other side of the gate: dividend alone is enough to fetch fundamentals.
+    fundamentals = _FakeFundamentals()
+
+    card = GetTickerCard(
+        _FakeQuotes(), _FakeEstimates(), fundamentals
+    ).execute("MU", include=["dividend"])
+
+    assert fundamentals.calls == ["MU"]
+    assert card.fundamentals == _fundamentals()
+
+
+def test_stored_anchor_facts_flow_onto_the_card():
+    # market cap, sector, industry and the trailing growth are read straight off
+    # the anchor (the universe/annual syncs' writes) — no provider call.
+    repo = _FakeRepo(
+        name="Micron Technology",
+        exchange="NASDAQ",
+        market_cap=1.09e12,
+        sector="technology",
+        industry="semiconductors",
+        revenue_growth_yoy=61.6,
+        eps_growth_yoy=587.4,
+    )
+
+    card = GetTickerCard(
+        _FakeQuotes(), _FakeEstimates(), repository=repo
+    ).execute("MU")
+
+    assert card.market_cap == 1.09e12
+    assert card.sector == "technology"
+    assert card.industry == "semiconductors"
+    assert card.revenue_growth_yoy == 61.6
+    assert card.eps_growth_yoy == 587.4
 
 
 def test_includes_accept_comma_separated_and_mixed_case_values():

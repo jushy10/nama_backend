@@ -1,18 +1,20 @@
 """HTTP API for reading a stock's ticker card.
 
 ``GET /stocks/ticker/{ticker}`` — the read endpoint for the ticker slice: the live
-quote (price + day move), the clean company name, the listing exchange (served from
-the ``stocks`` row, learned once from the price feed), and market cap, plus **opt-in
-blocks** requested via ``?include=`` — ``dividend``, ``performance`` (trailing
-windows), ``metrics`` (the trailing P/E — price over the quarterly slice's stored
-TTM EPS, on the analyst-consensus basis so it pairs with the forward legs —
-trailing PEG + margins off the fundamentals call, and the
-**forward PEG**: forward P/E over expected FY1→FY2 EPS growth, the one valuation
-figure no other endpoint serves), and ``options_metrics`` (the **options-market
-read**: ATM implied volatility, the priced-in expected move, the cost of a
-protective put, and the day's put/call lean — what the options market believes
-about the stock, for a buyer sizing an entry). Pay-per-use: a block that isn't
-requested costs no provider call. The forward PEG's legs (forward P/E, forward
+quote (price + day move), the clean company name, and the anchor facts served straight
+from the ``stocks`` row — the listing exchange (learned once from the price feed) plus
+the universe screen's market cap, sector and industry — then **opt-in blocks**
+requested via ``?include=`` — ``dividend``, ``performance`` (trailing windows),
+``metrics`` (the trailing P/E — price over the quarterly slice's stored TTM EPS, on
+the analyst-consensus basis so it pairs with the forward legs — trailing PEG + margins
+off the fundamentals call, the **forward PEG**: forward P/E over expected FY1→FY2 EPS
+growth, the one valuation figure no other endpoint serves, and the annual slice's
+latest trailing YoY revenue/EPS growth off the same anchor read), and
+``options_metrics`` (the **options-market read**: ATM implied volatility, the priced-in
+expected move, the cost of a protective put, and the day's put/call lean — what the
+options market believes about the stock, for a buyer sizing an entry). Pay-per-use: a
+block that isn't requested costs no provider call — and market cap now riding the
+anchor, the fundamentals call is itself opt-in (only ``dividend``/``metrics`` pull it). The forward PEG's legs (forward P/E, forward
 EPS growth) are deliberately not serialized here — they stay on the shared
 entities, feeding the AI analysis context — so the same numbers don't get two
 homes that could disagree. Controller + presenter + wiring, the
@@ -146,10 +148,11 @@ def _present(card: TickerCard) -> TickerCardResponse:
 
     The domain speaks in ``symbol``; renaming it ``ticker`` is a JSON-shape choice
     made here at the edge, like the DTOs' other shape concerns. Opt-in blocks are
-    emitted only when the card was asked to carry them — ``card.include`` gates
-    the dividend block and the metrics' trailing half, since both ride the
-    fundamentals the market cap needs anyway; performance is already ``None``
-    when unrequested."""
+    emitted only when the card was asked to carry them — ``card.include`` gates the
+    dividend block and the metrics' fundamentals-backed half (which is ``None`` when
+    neither was requested, since fundamentals is only fetched for those); performance
+    is already ``None`` when unrequested. Market cap, sector and industry ride the
+    anchor read, so they're always served (``null`` until the row carries them)."""
     fundamentals = card.fundamentals
     dividend = None
     if "dividend" in card.include and fundamentals is not None:
@@ -174,6 +177,10 @@ def _present(card: TickerCard) -> TickerCardResponse:
             gross_margin=trailing.gross_margin if trailing else None,
             operating_margin=trailing.operating_margin if trailing else None,
             net_margin=trailing.net_margin if trailing else None,
+            # The trailing YoY pair rides the anchor read (already rounded percent),
+            # not the fundamentals call — so it serves even when Finnhub is down.
+            revenue_growth_yoy=card.revenue_growth_yoy,
+            eps_growth_yoy=card.eps_growth_yoy,
         )
     return TickerCardResponse(
         ticker=card.quote.symbol,
@@ -182,7 +189,9 @@ def _present(card: TickerCard) -> TickerCardResponse:
         price=card.quote.price,
         change=card.quote.change,
         change_percent=card.quote.change_percent,
-        market_cap=fundamentals.market_cap if fundamentals else None,
+        market_cap=card.market_cap,
+        sector=card.sector,
+        industry=card.industry,
         dividend=dividend,
         performance=_present_performance(card.performance),
         metrics=metrics,

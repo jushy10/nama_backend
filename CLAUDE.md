@@ -248,13 +248,19 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > anchor (`name` was always on it; `exchange` came with migration 0009) and served from
 > the row forever after, since neither effectively ever changes (a rebrand needs a
 > manual row update; the slice's `repository.py`/`db_repository.py` is that anchor-level
-> read/fill, no slice-owned table), and `market_cap` (Finnhub fundamentals) — all but
-> the quote best-effort. **Opt-in blocks** via `?include=` (repeated or comma-separated;
+> read/fill, no slice-owned table), and the **read-only anchor facts** the card just
+> serves off the same row — `market_cap` / `sector` / `industry` (the universe screen's
+> facts) — all but the quote best-effort and `null` until their sync reaches the stock
+> (e.g. a symbol not yet screened has no market cap; unlike the old behaviour, the card
+> no longer falls back to Finnhub for it). One anchor read (`models.anchor_facts`, a
+> `Row` mapped into `StoredTickerFacts`) serves all of them plus the growth pair below.
+> **Opt-in blocks** via `?include=` (repeated or comma-separated;
 > unknown values are a 400; unrequested blocks are `null` and — pay-per-use — cost no
-> provider call): `dividend` (`yield_percentage` + `per_share`, rounded to 2 decimals;
-> rides the fundamentals call the market cap needs anyway, so the include only gates
-> presentation), `performance` (trailing windows from Alpaca), `options_metrics` (the
-> **options-market read**, below), and `metrics` — the trailing `pe` on the
+> provider call — and with market cap now off the anchor, the **fundamentals call itself
+> is opt-in**: only `dividend`/`metrics` pull it, so a bare card makes zero Finnhub
+> calls): `dividend` (`yield_percentage` + `per_share`, rounded to 2 decimals; rides the
+> fundamentals call that `metrics` also needs), `performance` (trailing windows from
+> Alpaca), `options_metrics` (the **options-market read**, below), and `metrics` — the trailing `pe` on the
 > **analyst-consensus (adjusted) EPS basis**: live price ÷ the quarterly-earnings slice's
 > `ttm_eps` (a timeline `@property` — the sum of the 4 newest reported quarters'
 > consensus-basis `eps_actual`; `null` until 4 quarters are cached, or when the trailing
@@ -276,6 +282,12 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > serialized on the card — and since the standalone `GET /stocks/{symbol}` snapshot
 > endpoint was removed, no endpoint serves them; they live on the shared entities and
 > feed the Bedrock analysis context; the entity's `symbol` is renamed `ticker` at the DTO.
+> The `metrics` block also carries the **latest trailing YoY growth** —
+> `revenue_growth_yoy` + `eps_growth_yoy` (percent, EPS on the consensus basis) — read
+> straight off the `stocks` anchor where the annual slice writes them (so they ride the
+> one anchor read, not Finnhub, and survive a keyless/blocked fundamentals call); `null`
+> until the annual slice has two reported years cached. They pair the backward-looking
+> growth with the forward PEG's forward-looking one, in the block already about growth.
 > `options_metrics` is what the options market *believes* about the stock, for a buyer
 > sizing an entry — four derived figures, deliberately not a chain browser: ATM implied
 > volatility (percent, ~1-month expiry), the priced-in `expected_move_percent` (the ATM

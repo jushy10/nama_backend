@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base
+from app.stocks.stocks.models import StockRecord
 from app.stocks.ticker.db_repository import SqlTickerRepository
 from app.stocks.ticker.repository import StoredTickerFacts
 
@@ -57,3 +58,30 @@ def test_saves_commit_their_own_write(session):
     repo.save_exchange("MU", "NASDAQ")
     session.rollback()
     assert repo.get_facts("MU") == StoredTickerFacts("Micron Technology", "NASDAQ")
+
+
+def test_get_facts_serves_the_screen_and_growth_facts_off_the_anchor(session):
+    # The universe/annual syncs write these onto the shared row; the card only
+    # reads them — never fills them — so a plain anchor read must return them all.
+    session.add(
+        StockRecord(
+            ticker="MU",
+            name="Micron Technology",
+            exchange="NASDAQ",
+            market_cap=1.09e12,
+            sector="technology",
+            industry="semiconductors",
+            revenue_growth_yoy=61.6,
+            eps_growth_yoy=587.4,
+        )
+    )
+    session.commit()
+    assert SqlTickerRepository(session).get_facts("MU") == StoredTickerFacts(
+        name="Micron Technology",
+        exchange="NASDAQ",
+        market_cap=1.09e12,
+        sector="technology",
+        industry="semiconductors",
+        revenue_growth_yoy=61.6,
+        eps_growth_yoy=587.4,
+    )
