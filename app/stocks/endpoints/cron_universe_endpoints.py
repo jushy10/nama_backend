@@ -19,16 +19,19 @@ Yahoo) and is triggered over the public internet by the sync workflow, so an aut
 are considered hardened.
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.stocks.adapters.yfinance_screener_adapter import YfinanceScreenerProvider
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.universe.db_repository import SqlUniverseRepository
 from app.stocks.universe.use_cases import SyncUniverse, UniverseSyncReport
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["universe-cron"])
 
 
@@ -48,6 +51,30 @@ def get_sync_universe(db: Session = Depends(get_db)) -> SyncUniverse:
     # The refresh reads Yahoo directly (not the DB it fills). Yahoo's screener needs no key,
     # so there's nothing to gate on — the sync is always wired.
     return SyncUniverse(YfinanceScreenerProvider(), SqlUniverseRepository(db))
+
+
+def run_universe_sync(limit: int | None = None) -> UniverseSyncReport:
+    """Perform one full universe refresh with its **own** DB session — the composition-root
+    unit of work the batch CLI (``app.sync``) reuses, mirroring the other slices' ``run_*_sync``.
+
+    Unlike the earnings / recommendations sweeps there is no per-run cap: the screen returns
+    the whole ≥$1B set in a handful of paginated calls, so ``limit`` is accepted (to match the
+    uniform runner signature the CLI dispatches on) but ignored."""
+    db = SessionLocal()
+    try:
+        report = SyncUniverse(
+            YfinanceScreenerProvider(), SqlUniverseRepository(db)
+        ).execute()
+        logger.info(
+            "universe sync done: screened=%d added=%d updated=%d skipped=%s",
+            report.screened,
+            report.added,
+            report.updated,
+            report.skipped,
+        )
+        return report
+    finally:
+        db.close()
 
 
 def _present(report: UniverseSyncReport) -> UniverseSyncResponse:

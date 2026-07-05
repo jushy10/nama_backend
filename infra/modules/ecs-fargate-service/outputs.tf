@@ -22,3 +22,8 @@ output "service_name" {
   description = "ECS service name."
   value       = aws_ecs_service.this.name
 }
+
+output "sync_task_family" {
+  description = "Task-definition family for the out-of-band sync tasks (the `aws ecs run-task --task-definition` target used by the sync-* workflows)."
+  value       = aws_ecs_task_definition.sync.family
+}

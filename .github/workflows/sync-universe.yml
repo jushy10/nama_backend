@@ -2,42 +2,53 @@ name: Sync universe
 run-name: Sync universe
 
 # Weekly (and on-demand). The searchable universe is every US company at/above a $1B market
-# cap (~2,800 names). Membership drifts slowly — a company crossing $1B is a rare
-# event — so weekly is plenty. Unlike the earnings/recommendations syncs this makes no
-# per-symbol vendor round-trips — just a few paginated screen calls (yfinance pages the
-# ≥$1B set 250 at a time) — so there's no batching loop: one POST refreshes the lot.
+# cap (~2,800 names). Membership drifts slowly — a company crossing $1B is a rare event — so
+# weekly is plenty.
 #
-# It POSTs the deployed app's universe cron endpoint
-# (app/stocks/endpoints/cron_universe_endpoints.py), which runs the SyncUniverse use case:
-# screen the US market via yfinance (Yahoo), then upsert the result straight onto the stocks
-# anchor (additive — present stocks are inserted/refreshed, none are removed). An empty or
-# implausibly small screen (a Yahoo block) is skipped server-side, so nothing is written.
+# It launches a one-off ECS Fargate task that runs `python -m app.sync universe` (the
+# SyncUniverse use case) to completion and exits: screen the US market via yfinance (Yahoo),
+# then upsert the result straight onto the stocks anchor (additive — present stocks are
+# inserted/refreshed, none removed). The sweep runs on its OWN 2 GB task definition
+# (nama-dev-sync), OFF the always-on API task — this is the heaviest sweep (the ~2,800-row
+# screen held in memory at once), the one most likely to OOM the small 512 MB service, which
+# is the whole reason it now runs as a separate task instead of POSTing /internal/universe/sync.
+# The task reaches the private RDS by borrowing the app service's own network config. Unlike
+# the earnings/recommendations syncs it makes no per-symbol vendor round-trips — just a few
+# paginated screen calls — so there is no limit knob: one run refreshes the lot.
 #
-# Operational notes:
-#  - The screen reads Yahoo via yfinance, which needs no key but may block data-centre IPs;
-#    a blocked screen is skipped (the endpoint returns skipped=true), so a bad day just
-#    delays new data — the stocks already stored are additive and stay put.
-#  - The write is ~2,800 DB upserts in one request, with no per-symbol vendor calls, so it
-#    stays well under API Gateway's 30s integration timeout — but give curl a generous
-#    --max-time regardless.
-#  - The endpoint is currently unauthenticated (an auth-token guard is planned); this
-#    workflow just triggers it.
+# FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs on ECS and
+# its result — "universe sync done: screened=… added=… updated=… skipped=…" — lands in the
+# task's CloudWatch logs, not here. A green run means the task launched; check CloudWatch for
+# the outcome. An empty or implausibly small screen (a Yahoo block) is skipped inside the sync,
+# so nothing is written and the stored (additive) universe stays put.
 #
-# Requires the repo/environment variable API_BASE_URL — the deployed app's base URL,
-# reachable from the GitHub runner.
+# Manual run: Actions → "Sync universe" → Run workflow (same trigger, off-schedule).
+#
+# Auth: the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var — the same
+# identity the deploy + migrate jobs already use to run one-off ECS tasks.
 
 on:
   workflow_dispatch: {}
   # Weekly, Sundays 06:00 UTC — staggered off the daily recommendations sync (07:30) and the
-  # Monday earnings syncs (08:00/09:00). Exact timing doesn't matter, so GitHub delaying
-  # scheduled runs under load is fine. Caveats: scheduled workflows run only from the default
-  # branch, and GitHub auto-disables the schedule after 60 days with no repo activity.
+  # Monday earnings syncs (08:00/09:00). Exact timing doesn't matter. Caveats: scheduled
+  # workflows run only from the default branch, and GitHub auto-disables the schedule after 60
+  # days with no repo activity.
   schedule:
     - cron: "0 6 * * 0"
 
 concurrency:
   group: sync-universe
   cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # These match module "app" { name = "nama-dev" } in infra/environments/dev; the sync task
+  # def is that name + "-sync" (aws_ecs_task_definition.sync in the ecs-fargate-service module).
+  ECS_CLUSTER: nama-dev
+  ECS_SERVICE: nama-dev
+  SYNC_TASK_DEF: nama-dev-sync
+  SYNC_SLICE: universe
+  # No SYNC_LIMIT: the universe screen takes no per-run cap (one run refreshes the whole set).
 
 jobs:
   sync:
@@ -46,37 +57,54 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Trigger the universe refresh
-        env:
-          API_BASE_URL: ${{ vars.API_BASE_URL }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Launch the sync task
         run: |
           set -euo pipefail
 
-          if [ -z "${API_BASE_URL:-}" ]; then
-            echo "::error::API_BASE_URL is not set — add it as a repo/environment variable pointing at the deployed app."
+          # The sync task runs INSIDE the VPC (the private RDS is unreachable from the runner).
+          # Borrow the app service's own network config — subnets + security groups, including
+          # the DB SG — so there's nothing to hardcode. Same approach the migrate job uses.
+          status=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" != "ACTIVE" ]; then
+            echo "::error::ECS service '$ECS_SERVICE' is not ACTIVE (status: $status) — deploy the app first."
+            exit 1
+          fi
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' --output json)
+
+          # Container command override: python -m app.sync <slice> [limit]. Universe sets no
+          # limit, so the command is just: python -m app.sync universe.
+          overrides=$(jq -cn --arg slice "$SYNC_SLICE" --arg limit "${SYNC_LIMIT:-}" '
+            {containerOverrides: [{
+              name: "app",
+              command: (["python", "-m", "app.sync", $slice] + (if $limit == "" then [] else [$limit] end))
+            }]}')
+
+          echo "Launching one-off sync task: app.sync $SYNC_SLICE"
+          run=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$SYNC_TASK_DEF" \
+            --launch-type FARGATE \
+            --network-configuration "$netcfg" \
+            --started-by "gha-sync-${GITHUB_SHA::7}" \
+            --overrides "$overrides")
+
+          # run-task exits 0 even when it places no task (capacity/throttle land in .failures),
+          # so check explicitly — this is what makes a green run mean "the task launched".
+          task_arn=$(echo "$run" | jq -r '.tasks[0].taskArn // empty')
+          if [ -z "$task_arn" ]; then
+            echo "::error::run-task launched no task: $(echo "$run" | jq -c '.failures')"
             exit 1
           fi
 
-          url="${API_BASE_URL%/}/internal/universe/sync"
-          http_code=$(curl -sS -X POST "$url" \
-            --max-time 300 \
-            -o /tmp/universe_sync.json \
-            -w '%{http_code}')
-          body=$(cat /tmp/universe_sync.json 2>/dev/null || echo '{}')
-          echo "POST ${url} -> HTTP ${http_code}: ${body}"
-
-          if [ "$http_code" != "200" ]; then
-            echo "::error::Universe sync failed (HTTP $http_code) — check the app logs."
-            exit 1
-          fi
-
-          skipped=$(echo "$body" | jq -r '.skipped // false')
-          screened=$(echo "$body" | jq -r '.screened // 0')
-          added=$(echo "$body" | jq -r '.added // 0')
-          updated=$(echo "$body" | jq -r '.updated // 0')
-
-          if [ "$skipped" = "true" ]; then
-            echo "::warning::Screen came back empty/too small (screened=${screened}) — upsert skipped, nothing written (Yahoo blocked?)."
-            exit 0
-          fi
-          echo "Universe synced: screened=${screened} added=${added} updated=${updated}."
+          echo "Launched $task_arn"
+          echo "Fire-and-forget: the sweep runs on ECS; its result —"
+          echo "\"universe sync done: screened=… added=… updated=… skipped=…\" — lands in the task's CloudWatch logs."

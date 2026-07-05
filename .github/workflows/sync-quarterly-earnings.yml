@@ -1,40 +1,35 @@
 name: Sync quarterly earnings
 run-name: Sync quarterly earnings
 
-# Weekly (and on-demand). Reported quarters and upcoming report dates change through
-# earnings season, and the read endpoint fills new symbols lazily, so this just keeps the
-# already-stored rows fresh. It POSTs the deployed app's quarterly-earnings cron endpoint
-# (app/stocks/endpoints/cron_quarterly_earnings_endpoints.py), which runs the
-# SyncQuarterlyEarnings use case, refreshing the stalest stocks first.
+# Weekly (and on-demand). Refreshes the stalest stored quarterly-earnings rows. Reported
+# quarters and upcoming report dates change through earnings season, and the read endpoint
+# fills new symbols lazily, so this just keeps the already-stored rows fresh.
 #
-# The endpoint is FIRE-AND-FORGET: it schedules the sweep on a background thread and returns
-# 202 immediately, so this workflow makes a SINGLE quick POST — no batching. (The batched
-# loop was only needed back when the endpoint ran synchronously under API Gateway's hard 30s
-# integration timeout; the background sweep has no request clock, so one call refreshes the
-# whole stalest window.) A 200 "already_running" means a previous sweep is still in flight —
-# also success; this run just declines to start a second.
+# It launches a one-off ECS Fargate task that runs `python -m app.sync quarterly-earnings
+# <limit>` (the SyncQuarterlyEarnings use case) to completion and exits. The sweep runs on its
+# OWN 2 GB task definition (nama-dev-sync), OFF the always-on API task, so a heavy sweep can't
+# OOM the small service — this replaced POSTing the app's /internal/earnings/quarterly/sync
+# endpoint (which ran the sweep inside the API task). The task reaches the private RDS by
+# borrowing the app service's own network config.
 #
-# Operational notes:
-#  - Because the sweep runs in the background, the response can't report how many stocks were
-#    refreshed — it only confirms the sweep was accepted. The counts land in the app logs
-#    (CloudWatch): "quarterly-earnings sync done: refreshed=… failed=…".
-#  - The live source is yfinance (Yahoo), which needs no API key. Yahoo rate-limits / blocks
-#    data-centre IPs intermittently, so a sweep may refresh fewer stocks than the limit; the
-#    next run retries the stalest first. A degraded fetch can't erase stored figures: the
-#    sync merges the fresh window with the stored rows (revenue actuals and quarters Yahoo
-#    drops are carried forward), and an empty result is never stored.
-#  - The endpoint is currently unauthenticated (an auth-token guard is planned); this
-#    workflow just triggers it.
+# FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs in the
+# background on ECS (it can take several minutes) and its result — "quarterly-earnings sync
+# done: refreshed=… failed=…" — lands in the task's CloudWatch logs, not here. A green run
+# means the task launched; check CloudWatch for the outcome. yfinance (Yahoo) needs no API
+# key but blocks data-centre IPs intermittently; a degraded fetch can't erase stored figures
+# (the sync merges the fresh window with stored rows) and an empty result is never stored.
 #
-# Requires the repo/environment variable API_BASE_URL — the deployed app's base URL,
-# reachable from the GitHub runner.
+# Manual run: Actions → "Sync quarterly earnings" → Run workflow (same trigger, off-schedule).
+#
+# Auth: the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var — the same
+# identity the deploy + migrate jobs already use to run one-off ECS tasks.
 
 on:
   workflow_dispatch: {}
-  # Mondays, 08:00 UTC. Weekly keeps report dates and freshly-reported quarters current;
-  # exact timing doesn't matter, so GitHub delaying scheduled runs under load is fine.
-  # Caveats: scheduled workflows run only from the default branch, and GitHub
-  # auto-disables the schedule after 60 days with no repo activity.
+  # Mondays, 08:00 UTC. Weekly keeps report dates and freshly-reported quarters current; exact
+  # timing doesn't matter, so GitHub delaying scheduled runs under load is fine. Caveats:
+  # scheduled workflows run only from the default branch, and GitHub auto-disables the schedule
+  # after 60 days with no repo activity.
   schedule:
     - cron: "0 8 * * 1"
 
@@ -43,9 +38,16 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Max stored stocks the background sweep refreshes this run, stalest first (the endpoint's
-  # ceiling). Stalest-first means a universe larger than this is covered over successive runs.
-  SYNC_QUARTERLY_EARNINGS_LIMIT: "1000"
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # These match module "app" { name = "nama-dev" } in infra/environments/dev; the sync task
+  # def is that name + "-sync" (aws_ecs_task_definition.sync in the ecs-fargate-service module).
+  ECS_CLUSTER: nama-dev
+  ECS_SERVICE: nama-dev
+  SYNC_TASK_DEF: nama-dev-sync
+  SYNC_SLICE: quarterly-earnings
+  # Max stored stocks the sweep refreshes this run, stalest first (a universe larger than this
+  # is covered over successive runs).
+  SYNC_LIMIT: "1000"
 
 jobs:
   sync:
@@ -54,30 +56,53 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Trigger the quarterly-earnings refresh
-        env:
-          API_BASE_URL: ${{ vars.API_BASE_URL }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Launch the sync task
         run: |
           set -euo pipefail
 
-          if [ -z "${API_BASE_URL:-}" ]; then
-            echo "::error::API_BASE_URL is not set — add it as a repo/environment variable pointing at the deployed app."
+          # The sync task runs INSIDE the VPC (the private RDS is unreachable from the runner).
+          # Borrow the app service's own network config — subnets + security groups, including
+          # the DB SG — so there's nothing to hardcode. Same approach the migrate job uses.
+          status=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" != "ACTIVE" ]; then
+            echo "::error::ECS service '$ECS_SERVICE' is not ACTIVE (status: $status) — deploy the app first."
+            exit 1
+          fi
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' --output json)
+
+          # Container command override: python -m app.sync <slice> [limit].
+          overrides=$(jq -cn --arg slice "$SYNC_SLICE" --arg limit "${SYNC_LIMIT:-}" '
+            {containerOverrides: [{
+              name: "app",
+              command: (["python", "-m", "app.sync", $slice] + (if $limit == "" then [] else [$limit] end))
+            }]}')
+
+          echo "Launching one-off sync task: app.sync $SYNC_SLICE ${SYNC_LIMIT:-}"
+          run=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$SYNC_TASK_DEF" \
+            --launch-type FARGATE \
+            --network-configuration "$netcfg" \
+            --started-by "gha-sync-${GITHUB_SHA::7}" \
+            --overrides "$overrides")
+
+          # run-task exits 0 even when it places no task (capacity/throttle land in .failures),
+          # so check explicitly — this is what makes a green run mean "the task launched".
+          task_arn=$(echo "$run" | jq -r '.tasks[0].taskArn // empty')
+          if [ -z "$task_arn" ]; then
+            echo "::error::run-task launched no task: $(echo "$run" | jq -c '.failures')"
             exit 1
           fi
 
-          url="${API_BASE_URL%/}/internal/earnings/quarterly/sync?limit=${SYNC_QUARTERLY_EARNINGS_LIMIT}"
-          http_code=$(curl -sS -X POST "$url" \
-            --max-time 30 \
-            -o /tmp/sync_response.json \
-            -w '%{http_code}')
-          body=$(cat /tmp/sync_response.json 2>/dev/null || echo '{}')
-          echo "POST ${url} -> HTTP ${http_code}: ${body}"
-
-          # 202 = sweep started; 200 = a sweep was already running (also fine). Anything
-          # else is a real failure (the app is down, or the trigger was rejected).
-          if [ "$http_code" != "202" ] && [ "$http_code" != "200" ]; then
-            echo "::error::Quarterly-earnings sync trigger failed (HTTP $http_code) — check the app logs."
-            exit 1
-          fi
-
-          echo "Quarterly-earnings sweep triggered ($(echo "$body" | jq -r '.status // "?"'))."
+          echo "Launched $task_arn"
+          echo "Fire-and-forget: the sweep runs on ECS (it can take several minutes); its result —"
+          echo "\"$SYNC_SLICE sync done: refreshed=… failed=…\" — lands in the task's CloudWatch logs."
