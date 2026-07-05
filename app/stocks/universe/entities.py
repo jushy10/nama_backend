@@ -76,14 +76,17 @@ class StockSort(str, Enum):
 
     A ``str`` enum so FastAPI binds it straight from the ``?sort=`` query param (an unknown
     value is a 422, like ``StockIndex``/``Timeframe``) and it serialises back as its value.
-    ``MARKET_CAP`` is the natural screener default (biggest first); the two growth fields are
-    the annual slice's latest trailing year-over-year figures on the anchor. The value → ORM
-    column mapping is the adapter's job — the enum just names the choices in domain terms.
+    ``MARKET_CAP`` is the natural screener default (biggest first); ``REVENUE_GROWTH`` /
+    ``EPS_GROWTH`` are the annual slice's latest trailing year-over-year figures on the anchor;
+    ``GROWTH`` blends the two (their equal-weight average) so one control ranks the fastest
+    all-round growers. The value → ORM column/expression mapping is the adapter's job — the enum
+    just names the choices in domain terms.
     """
 
     MARKET_CAP = "market_cap"
     REVENUE_GROWTH = "revenue_growth"
     EPS_GROWTH = "eps_growth"
+    GROWTH = "growth"
 
 
 class SortDirection(str, Enum):
@@ -91,6 +94,23 @@ class SortDirection(str, Enum):
 
     ASC = "asc"
     DESC = "desc"
+
+
+class MarketCapTier(str, Enum):
+    """A market-capitalization size bucket — the ``?market_cap=`` filter.
+
+    A ``str`` enum bound straight from the query param like ``StockSort`` (an unknown value is a
+    422). The four conventional cap tiers — ``MEGA`` ≥ $200B, ``LARGE`` $10–200B, ``MID`` $2–10B,
+    ``SMALL`` $250M–$2B — expressed as half-open ranges (lower inclusive, upper exclusive) so
+    they don't overlap at the seams. The tier → dollar-bounds mapping is the adapter's job (like
+    the sort → column map); the enum only names the choices. (The universe floor is $1B, so
+    ``SMALL`` in practice surfaces the $1–2B slice.)
+    """
+
+    MEGA = "mega"
+    LARGE = "large"
+    MID = "mid"
+    SMALL = "small"
 
 
 @dataclass(frozen=True)
@@ -123,8 +143,9 @@ class StockSearchCriteria:
     Every field is already cleaned at the use-case edge: ``query`` is trimmed (``None`` when
     blank) and matched as a case-insensitive substring against name *or* ticker; ``sector`` /
     ``industry`` are slugged to the stored convention (``None`` when blank); the index flags
-    are tri-state (``None`` = don't filter, else match the boolean); ``limit`` is clamped to a
-    sane page and ``offset`` floored at zero. The adapter turns this into one SQL query.
+    are tri-state (``None`` = don't filter, else match the boolean); ``market_cap_tier`` narrows
+    to one cap bucket (``None`` = every size); ``limit`` is clamped to a sane page and ``offset``
+    floored at zero. The adapter turns this into one SQL query.
     """
 
     query: str | None
@@ -136,6 +157,7 @@ class StockSearchCriteria:
     direction: SortDirection
     limit: int
     offset: int
+    market_cap_tier: MarketCapTier | None = None
 
 
 @dataclass(frozen=True)

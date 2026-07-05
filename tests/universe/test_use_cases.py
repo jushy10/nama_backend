@@ -13,6 +13,7 @@ from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.universe.entities import (
     Classifications,
     CompanyClassification,
+    MarketCapTier,
     ScreenedStock,
     SortDirection,
     StockSearchCriteria,
@@ -258,6 +259,7 @@ def test_search_normalizes_inputs_and_passes_clean_criteria():
         industry="  Semiconductors  ",
         in_sp500=True,
         in_nasdaq100=False,
+        market_cap_tier=MarketCapTier.LARGE,
         sort=StockSort.REVENUE_GROWTH,
         direction=SortDirection.ASC,
         limit=10,
@@ -269,6 +271,7 @@ def test_search_normalizes_inputs_and_passes_clean_criteria():
     assert c.sector == "consumer_electronics"  # slugged to the stored convention
     assert c.industry == "semiconductors"  # slugged + trimmed
     assert (c.in_sp500, c.in_nasdaq100) == (True, False)
+    assert c.market_cap_tier is MarketCapTier.LARGE  # enum passes straight through
     assert (c.sort, c.direction) == (StockSort.REVENUE_GROWTH, SortDirection.ASC)
     assert (c.limit, c.offset) == (10, 20)
 
@@ -289,6 +292,7 @@ def test_search_defaults_to_market_cap_desc_and_the_default_page():
     assert (c.sort, c.direction) == (StockSort.MARKET_CAP, SortDirection.DESC)
     assert (c.limit, c.offset) == (SearchStocks.DEFAULT_LIMIT, 0)
     assert c.query is None
+    assert c.market_cap_tier is None  # no tier filter unless asked
 
 
 @pytest.mark.parametrize(

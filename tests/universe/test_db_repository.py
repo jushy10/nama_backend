@@ -27,6 +27,7 @@ from app.stocks.universe.db_repository import (
 )
 from app.stocks.universe.entities import (
     CompanyClassification,
+    MarketCapTier,
     ScreenedStock,
     SortDirection,
     StockSearchCriteria,
@@ -347,6 +348,35 @@ def test_search_filters_by_index_membership(session):
     assert len(r.search(_criteria()).results) == 4
 
 
+def test_search_filters_by_market_cap_tier(session):
+    # Names straddling every tier seam — the ranges are half-open [low, high), so a stock
+    # sitting exactly on a boundary belongs to the *upper* tier.
+    _seed(session, "MEGA", market_cap=250e9)
+    _seed(session, "AT200B", market_cap=200e9)  # mega floor -> mega, not large
+    _seed(session, "LARGE", market_cap=50e9)
+    _seed(session, "AT10B", market_cap=10e9)  # large floor -> large, not mid
+    _seed(session, "MID", market_cap=5e9)
+    _seed(session, "AT2B", market_cap=2e9)  # mid floor -> mid, not small
+    _seed(session, "SMALL", market_cap=1.5e9)
+    r = SqlStockSearchRepository(session)
+
+    assert set(_tickers(r.search(_criteria(market_cap_tier=MarketCapTier.MEGA)))) == {
+        "MEGA",
+        "AT200B",
+    }
+    assert set(_tickers(r.search(_criteria(market_cap_tier=MarketCapTier.LARGE)))) == {
+        "LARGE",
+        "AT10B",
+    }
+    assert set(_tickers(r.search(_criteria(market_cap_tier=MarketCapTier.MID)))) == {
+        "MID",
+        "AT2B",
+    }
+    assert _tickers(r.search(_criteria(market_cap_tier=MarketCapTier.SMALL))) == ["SMALL"]
+    # No tier => every screened size is returned.
+    assert len(r.search(_criteria()).results) == 7
+
+
 def test_search_sorts_by_market_cap_both_directions(session):
     _seed(session, "MEGA", market_cap=3e12)
     _seed(session, "BIG", market_cap=1e12)
@@ -377,6 +407,31 @@ def test_search_sorts_by_growth_with_nulls_last_either_direction(session):
     assert _tickers(
         r.search(_criteria(sort=StockSort.REVENUE_GROWTH, direction=SortDirection.ASC))
     ) == ["AAA", "DDD", "BBB", "CCC"]
+
+
+def test_search_sorts_by_the_combined_growth_blend_nulls_last(session):
+    # GROWTH ranks by the equal-weight average of the two trailing-growth figures.
+    _seed(session, "AAA", revenue_growth_yoy=10.0, eps_growth_yoy=10.0)  # blend 10
+    _seed(session, "BBB", revenue_growth_yoy=40.0, eps_growth_yoy=20.0)  # blend 30
+    _seed(session, "CCC", revenue_growth_yoy=20.0, eps_growth_yoy=20.0)  # blend 20
+    # Missing *either* leg makes the blend null (a null + a number is null in SQL), so it sinks
+    # to the bottom in either direction — the blend ranks only stocks that have both figures.
+    _seed(session, "DDD", revenue_growth_yoy=100.0, eps_growth_yoy=None)
+    _seed(session, "EEE", revenue_growth_yoy=None, eps_growth_yoy=None)
+    r = SqlStockSearchRepository(session)
+
+    # Descending: 30, 20, 10, then the two blend-null names (ticker tiebreak).
+    assert _tickers(r.search(_criteria(sort=StockSort.GROWTH))) == [
+        "BBB",
+        "CCC",
+        "AAA",
+        "DDD",
+        "EEE",
+    ]
+    # Ascending: 10, 20, 30, and the nulls are STILL last (nulls_last, not just reversed).
+    assert _tickers(
+        r.search(_criteria(sort=StockSort.GROWTH, direction=SortDirection.ASC))
+    ) == ["AAA", "CCC", "BBB", "DDD", "EEE"]
 
 
 def test_search_breaks_sort_ties_by_ticker_for_stable_paging(session):

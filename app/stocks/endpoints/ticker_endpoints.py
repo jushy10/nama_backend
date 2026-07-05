@@ -28,8 +28,9 @@ Beside the card's *item* route live its *collection* and *filter menus*, reading
 - ``GET /stocks/ticker`` — a paginated search/filter/sort over the screened universe: a
   free-text ``q`` matched case-insensitively against name *or* ticker (so "NV" surfaces
   Nvidia and NVDA), ``sector``/``industry`` slug filters, the ``in_sp500``/``in_nasdaq100``
-  membership flags, and a ``sort`` (market cap default, revenue or EPS growth) with an
-  ``order``. Rows are DB facts only — no live price; a client opens ``{ticker}`` above for
+  membership flags, a ``market_cap`` tier filter (mega/large/mid/small), and a ``sort`` (market
+  cap default, revenue or EPS growth, or their blend) with an ``order``. Rows are DB facts only
+  — no live price; a client opens ``{ticker}`` above for
   the live card. Pure DB read (``SqlStockSearchRepository`` → ``SearchStocks``), no vendor
   or key, so the only request error is a 400 (a bad ``sort``/``order`` is a 422 from the
   enum binding).
@@ -88,6 +89,7 @@ from app.stocks.ticker.use_cases import GetTickerCard, TickerCard
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.universe.entities import (
     Classifications,
+    MarketCapTier,
     SortDirection,
     StockSearchPage,
     StockSort,
@@ -335,9 +337,19 @@ def search_stocks_endpoint(
     in_nasdaq100: bool | None = Query(
         None, description="Filter by Nasdaq-100 membership. Omit for both."
     ),
+    market_cap: MarketCapTier | None = Query(
+        None,
+        description=(
+            "Filter by market-cap tier: mega (>= $200B), large ($10-200B), mid ($2-10B), "
+            "or small ($250M-$2B). Omit for every size."
+        ),
+    ),
     sort: StockSort = Query(
         StockSort.MARKET_CAP,
-        description="Sort field: market_cap (default), revenue_growth, or eps_growth.",
+        description=(
+            "Sort field: market_cap (default), revenue_growth, eps_growth, or growth "
+            "(the equal-weight blend of the two)."
+        ),
     ),
     order: SortDirection = Query(
         SortDirection.DESC, description="Sort direction: asc or desc (default)."
@@ -358,6 +370,7 @@ def search_stocks_endpoint(
             industry=industry,
             in_sp500=in_sp500,
             in_nasdaq100=in_nasdaq100,
+            market_cap_tier=market_cap,
             sort=sort,
             direction=order,
             limit=limit,

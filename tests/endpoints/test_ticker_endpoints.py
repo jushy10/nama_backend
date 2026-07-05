@@ -33,6 +33,7 @@ from app.stocks.ticker.entities import TickerOptionsMetrics, TickerValuation
 from app.stocks.ticker.use_cases import TickerCard
 from app.stocks.universe.entities import (
     Classifications,
+    MarketCapTier,
     SortDirection,
     StockSearchPage,
     StockSearchResult,
@@ -380,6 +381,7 @@ def test_search_passes_query_params_through_to_the_use_case():
             "industry": "semiconductors",
             "in_sp500": "true",
             "in_nasdaq100": "false",
+            "market_cap": "large",
             "sort": "revenue_growth",
             "order": "asc",
             "limit": "10",
@@ -394,6 +396,7 @@ def test_search_passes_query_params_through_to_the_use_case():
         "industry": "semiconductors",
         "in_sp500": True,
         "in_nasdaq100": False,
+        "market_cap_tier": MarketCapTier.LARGE,
         "sort": StockSort.REVENUE_GROWTH,
         "direction": SortDirection.ASC,
         "limit": 10,
@@ -411,6 +414,7 @@ def test_search_uses_defaults_when_no_params_given():
         "industry": None,
         "in_sp500": None,
         "in_nasdaq100": None,
+        "market_cap_tier": None,
         "sort": StockSort.MARKET_CAP,
         "direction": SortDirection.DESC,
         "limit": 25,
@@ -418,7 +422,19 @@ def test_search_uses_defaults_when_no_params_given():
     }
 
 
-@pytest.mark.parametrize("param, value", [("sort", "bogus"), ("order", "sideways")])
+def test_search_accepts_the_growth_blend_sort():
+    # The combined EPS+revenue blend binds to StockSort.GROWTH like the other sort values.
+    fake = _FakeSearch(page=_a_page())
+    resp = _search_client(search=fake).get("/stocks/ticker", params={"sort": "growth"})
+
+    assert resp.status_code == 200
+    assert fake.kwargs["sort"] is StockSort.GROWTH
+
+
+@pytest.mark.parametrize(
+    "param, value",
+    [("sort", "bogus"), ("order", "sideways"), ("market_cap", "humongous")],
+)
 def test_search_rejects_an_unknown_enum_value(param, value):
     resp = _search_client(search=_FakeSearch(page=_a_page())).get(
         "/stocks/ticker", params={param: value}
