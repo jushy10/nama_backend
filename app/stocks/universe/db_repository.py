@@ -1,24 +1,42 @@
-"""Interface Adapter: the SQLAlchemy-backed UniverseRepository.
+"""Interface Adapters: the SQLAlchemy-backed universe repositories.
 
-Implements ``repository.py`` against the shared ``stocks`` anchor — the universe has no
-table of its own, so the screen is written straight onto ``stocks`` (ticker/name/exchange
-plus the denormalized ``sector``/``industry``/``market_cap``/``screened_at`` columns). Maps
-``ScreenedStock`` / ``CompanyClassification`` entities onto anchor rows; only this layer
-touches SQLAlchemy. ``upsert_screen`` (the screen) and ``set_classification`` (the per-ticker
-enrichment) each commit their own write, so a successful — or partial — sync is durable
-independent of the request. (There is no read/search side yet — that endpoint is deferred.)
+Both implement ``repository.py`` against the shared ``stocks`` anchor — the universe has no
+table of its own — and are the only layer that touches SQLAlchemy:
+
+- ``SqlUniverseRepository`` (write side): the screen is written straight onto ``stocks``
+  (ticker/name/exchange plus the denormalized ``sector``/``industry``/``market_cap``/
+  ``screened_at`` columns). Maps ``ScreenedStock`` / ``CompanyClassification`` entities onto
+  anchor rows; ``upsert_screen`` (the screen) and ``set_classification`` (the per-ticker
+  enrichment) each commit their own write, so a successful — or partial — sync is durable
+  independent of the request.
+- ``SqlStockSearchRepository`` (read side): the ``GET /stocks/ticker`` search + the
+  ``GET /stocks/classifications`` filter menus, reading those same columns back off the
+  anchor. Read-only, and scoped to **screened** rows (``market_cap IS NOT NULL``).
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import nulls_last, or_, select
+from sqlalchemy import func, nulls_last, or_, select
 from sqlalchemy.orm import Session
 
 from app.stocks.stocks.models import StockRecord, get_or_create_stock
-from app.stocks.universe.entities import CompanyClassification, ScreenedStock
-from app.stocks.universe.repository import UniverseRepository, UniverseSyncCounts
+from app.stocks.universe.entities import (
+    Classifications,
+    CompanyClassification,
+    ScreenedStock,
+    SortDirection,
+    StockSearchCriteria,
+    StockSearchPage,
+    StockSearchResult,
+    StockSort,
+)
+from app.stocks.universe.repository import (
+    StockSearchRepository,
+    UniverseRepository,
+    UniverseSyncCounts,
+)
 
 
 class SqlUniverseRepository(UniverseRepository):
@@ -102,3 +120,117 @@ class SqlUniverseRepository(UniverseRepository):
         if classification.sector and not stock.sector:
             stock.sector = classification.sector
         self._session.commit()
+
+
+# Each domain sort field → the anchor column it orders by. The growth columns are nullable
+# (the annual slice may not have filled them yet), so whichever is chosen gets wrapped in
+# nulls_last below — a missing figure sorts to the bottom in either direction.
+_SORT_COLUMNS = {
+    StockSort.MARKET_CAP: StockRecord.market_cap,
+    StockSort.REVENUE_GROWTH: StockRecord.revenue_growth_yoy,
+    StockSort.EPS_GROWTH: StockRecord.eps_growth_yoy,
+}
+
+
+def _escape_like(term: str) -> str:
+    """Escape the LIKE metacharacters in a user's search term so a literal ``%`` / ``_``
+    matches itself instead of acting as a wildcard. Paired with ``escape="\\"`` on the
+    ``.ilike`` calls below (backslash is escaped first so it doesn't double-escape the rest)."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _to_result(row: StockRecord) -> StockSearchResult:
+    """Map an anchor row onto the slice's read entity (no live price — DB facts only)."""
+    return StockSearchResult(
+        ticker=row.ticker,
+        name=row.name,
+        sector=row.sector,
+        industry=row.industry,
+        market_cap=row.market_cap,
+        revenue_growth_yoy=row.revenue_growth_yoy,
+        eps_growth_yoy=row.eps_growth_yoy,
+        in_sp500=row.in_sp500,
+        in_nasdaq100=row.in_nasdaq100,
+    )
+
+
+class SqlStockSearchRepository(StockSearchRepository):
+    """Reads the screened universe off the ``stocks`` anchor through a request-scoped session.
+
+    Read-only — the search never writes. Only screened rows (``market_cap IS NOT NULL``) are
+    visible, the gate that keeps incidentally-known, ticker-only rows out of the results.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def search(self, criteria: StockSearchCriteria) -> StockSearchPage:
+        conditions = self._conditions(criteria)
+        # Total match count, before the page window, so the client can render a pager.
+        total = self._session.execute(
+            select(func.count()).select_from(StockRecord).where(*conditions)
+        ).scalar_one()
+        column = _SORT_COLUMNS[criteria.sort]
+        ordering = (
+            column.desc() if criteria.direction is SortDirection.DESC else column.asc()
+        )
+        rows = (
+            self._session.execute(
+                select(StockRecord)
+                .where(*conditions)
+                # nulls_last so a stock still missing the sort figure sinks to the bottom
+                # (either direction); ticker as a stable tiebreak so offset paging over equal
+                # values never skips or repeats a row.
+                .order_by(nulls_last(ordering), StockRecord.ticker.asc())
+                .limit(criteria.limit)
+                .offset(criteria.offset)
+            )
+            .scalars()
+            .all()
+        )
+        return StockSearchPage(
+            results=tuple(_to_result(row) for row in rows),
+            total=total,
+            limit=criteria.limit,
+            offset=criteria.offset,
+        )
+
+    def classifications(self) -> Classifications:
+        return Classifications(
+            sectors=self._distinct(StockRecord.sector),
+            industries=self._distinct(StockRecord.industry),
+        )
+
+    def _conditions(self, criteria: StockSearchCriteria) -> list:
+        """The WHERE terms shared by the count and the page query — the screened gate plus
+        whichever filters the criteria carries (a term is added only when its field is set)."""
+        conditions = [StockRecord.market_cap.is_not(None)]  # screened-only
+        if criteria.query:
+            like = f"%{_escape_like(criteria.query)}%"
+            # Match name OR ticker — so "NV" surfaces Nvidia (by name) and NVDA (by ticker).
+            conditions.append(
+                or_(
+                    StockRecord.name.ilike(like, escape="\\"),
+                    StockRecord.ticker.ilike(like, escape="\\"),
+                )
+            )
+        if criteria.sector:
+            conditions.append(StockRecord.sector == criteria.sector)
+        if criteria.industry:
+            conditions.append(StockRecord.industry == criteria.industry)
+        if criteria.in_sp500 is not None:
+            conditions.append(StockRecord.in_sp500 == criteria.in_sp500)
+        if criteria.in_nasdaq100 is not None:
+            conditions.append(StockRecord.in_nasdaq100 == criteria.in_nasdaq100)
+        return conditions
+
+    def _distinct(self, column) -> tuple[str, ...]:
+        """The distinct non-null values of an anchor column, sorted — a filter menu."""
+        rows = (
+            self._session.execute(
+                select(column).where(column.is_not(None)).distinct().order_by(column)
+            )
+            .scalars()
+            .all()
+        )
+        return tuple(rows)

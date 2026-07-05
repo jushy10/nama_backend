@@ -7,14 +7,25 @@ never knows whether it's backed by SQLAlchemy or an in-memory fake (tests) — i
 A *Repository*, not a *Provider*: the universe is a slow-moving set refreshed out of band
 (the cron endpoint), not a live feed. It writes the screen straight onto the ``stocks``
 anchor (ticker/name/exchange plus the denormalized ``sector``/``market_cap``/``screened_at``
-columns) — there is no separate universe table. (The read/search path over it is deferred,
-so this port has only the write side.)
+columns) — there is no separate universe table.
+
+Two ports, split by capability (the ``CLAUDE.md`` "one port per capability" rule): the
+write side ``UniverseRepository`` the sync uses, and the read side ``StockSearchRepository``
+the ``GET /stocks/ticker`` search + ``GET /stocks/classifications`` endpoints use. Kept
+separate so the sync's fake never grows search methods and vice versa — they just happen to
+front the same ``stocks`` anchor.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from app.stocks.universe.entities import CompanyClassification, ScreenedStock
+from app.stocks.universe.entities import (
+    Classifications,
+    CompanyClassification,
+    ScreenedStock,
+    StockSearchCriteria,
+    StockSearchPage,
+)
 
 
 @dataclass(frozen=True)
@@ -85,5 +96,37 @@ class UniverseRepository(ABC):
         a half classification (only one side known) leaves room for the other later. A no-op
         if the ticker has no row. Commits its own write, so a partial enrichment sweep is
         durable.
+        """
+        raise NotImplementedError
+
+
+class StockSearchRepository(ABC):
+    """A read-only view over the screened universe on the ``stocks`` anchor — what the
+    ``GET /stocks/ticker`` search and ``GET /stocks/classifications`` endpoints read.
+
+    Read-only by design: the search never writes (the sync owns every column it reads), so
+    this is a separate, small port the write-side ``UniverseRepository`` doesn't share.
+    """
+
+    @abstractmethod
+    def search(self, criteria: StockSearchCriteria) -> StockSearchPage:
+        """Return the page of screened stocks matching ``criteria`` plus the total match count.
+
+        Only **screened** rows are searchable (``market_cap IS NOT NULL``) — the gate that
+        tells a curated company apart from a symbol the app merely knows incidentally (a
+        ticker-card lookup that left name/cap/sector null). Applies the filters that are set
+        (free-text substring on name *or* ticker, sector/industry slug, the two index flags),
+        orders by the requested sort with a stable ``ticker`` tiebreak and nulls last, and cuts
+        the ``limit``/``offset`` window. ``total`` is the pre-window count, for the client's
+        pager. An empty result is not an error — it's a page with no rows.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def classifications(self) -> Classifications:
+        """Return the distinct sector and industry slugs present in the universe.
+
+        Two flat, sorted, de-duplicated lists (nulls excluded) — the FE's filter menus, which
+        the search then accepts back as its ``sector`` / ``industry`` filters.
         """
         raise NotImplementedError
