@@ -25,6 +25,7 @@ from app.stocks.stocks.models import StockRecord, get_or_create_stock
 from app.stocks.universe.entities import (
     Classifications,
     CompanyClassification,
+    MarketCapTier,
     ScreenedStock,
     SortDirection,
     StockSearchCriteria,
@@ -122,13 +123,28 @@ class SqlUniverseRepository(UniverseRepository):
         self._session.commit()
 
 
-# Each domain sort field → the anchor column it orders by. The growth columns are nullable
-# (the annual slice may not have filled them yet), so whichever is chosen gets wrapped in
-# nulls_last below — a missing figure sorts to the bottom in either direction.
-_SORT_COLUMNS = {
+# Each domain sort field → the anchor column (or expression) it orders by. The growth figures
+# are nullable (the annual slice may not have filled them yet), so whichever is chosen gets
+# wrapped in nulls_last below — a missing figure sorts to the bottom in either direction.
+# GROWTH is the equal-weight blend of the two trailing-growth columns; in SQL a NULL on either
+# leg makes the sum NULL, so a stock missing *either* figure sorts last (the same nulls-last
+# rule as the single-metric growth sorts) — the blend deliberately ranks only stocks with both.
+_SORT_EXPRESSIONS = {
     StockSort.MARKET_CAP: StockRecord.market_cap,
     StockSort.REVENUE_GROWTH: StockRecord.revenue_growth_yoy,
     StockSort.EPS_GROWTH: StockRecord.eps_growth_yoy,
+    StockSort.GROWTH: (StockRecord.revenue_growth_yoy + StockRecord.eps_growth_yoy) / 2.0,
+}
+
+# Each market-cap tier → its (min_inclusive, max_exclusive) dollar bounds; ``None`` = unbounded
+# on that side. Half-open ranges so adjacent tiers meet without overlapping (a stock at exactly
+# $200B is MEGA, not LARGE). The screened gate already drops null caps, so a tier filter is just
+# the range bounds on top.
+_TIER_BOUNDS = {
+    MarketCapTier.MEGA: (200e9, None),
+    MarketCapTier.LARGE: (10e9, 200e9),
+    MarketCapTier.MID: (2e9, 10e9),
+    MarketCapTier.SMALL: (250e6, 2e9),
 }
 
 
@@ -170,9 +186,11 @@ class SqlStockSearchRepository(StockSearchRepository):
         total = self._session.execute(
             select(func.count()).select_from(StockRecord).where(*conditions)
         ).scalar_one()
-        column = _SORT_COLUMNS[criteria.sort]
+        expression = _SORT_EXPRESSIONS[criteria.sort]
         ordering = (
-            column.desc() if criteria.direction is SortDirection.DESC else column.asc()
+            expression.desc()
+            if criteria.direction is SortDirection.DESC
+            else expression.asc()
         )
         rows = (
             self._session.execute(
@@ -222,6 +240,12 @@ class SqlStockSearchRepository(StockSearchRepository):
             conditions.append(StockRecord.in_sp500 == criteria.in_sp500)
         if criteria.in_nasdaq100 is not None:
             conditions.append(StockRecord.in_nasdaq100 == criteria.in_nasdaq100)
+        if criteria.market_cap_tier is not None:
+            low, high = _TIER_BOUNDS[criteria.market_cap_tier]
+            if low is not None:
+                conditions.append(StockRecord.market_cap >= low)
+            if high is not None:
+                conditions.append(StockRecord.market_cap < high)
         return conditions
 
     def _distinct(self, column) -> tuple[str, ...]:

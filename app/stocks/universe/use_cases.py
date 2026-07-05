@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.universe.entities import (
     Classifications,
+    MarketCapTier,
     SortDirection,
     StockSearchCriteria,
     StockSearchPage,
@@ -166,6 +167,7 @@ class SearchStocks:
         industry: str | None = None,
         in_sp500: bool | None = None,
         in_nasdaq100: bool | None = None,
+        market_cap_tier: MarketCapTier | None = None,
         sort: StockSort = StockSort.MARKET_CAP,
         direction: SortDirection = SortDirection.DESC,
         limit: int | None = None,
@@ -176,8 +178,9 @@ class SearchStocks:
         ``query`` is trimmed (blank → no text filter); ``sector`` / ``industry`` are slugged to
         the stored convention with :func:`slugify` (so both the raw label and the stored slug
         match, and blank → no filter); ``limit`` defaults to ``DEFAULT_LIMIT`` and is clamped to
-        ``[1, MAX_LIMIT]``, ``offset`` floored at 0. The index flags pass through as a tri-state
-        (``None`` = don't filter). The repository does the rest.
+        ``[1, MAX_LIMIT]``, ``offset`` floored at 0. The index flags and ``market_cap_tier`` pass
+        through as-is (already validated enums / tri-state booleans, ``None`` = don't filter).
+        The repository does the rest.
         """
         text = (query or "").strip()
         capped = self.DEFAULT_LIMIT if limit is None else min(max(1, limit), self.MAX_LIMIT)
@@ -187,6 +190,7 @@ class SearchStocks:
             industry=slugify(industry),
             in_sp500=in_sp500,
             in_nasdaq100=in_nasdaq100,
+            market_cap_tier=market_cap_tier,
             sort=sort,
             direction=direction,
             limit=capped,
