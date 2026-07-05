@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.progress import NullProgress, ProgressReporter
 from app.stocks.recommendations.entities import AnalystRecommendations
 from app.stocks.recommendations.ports import RecommendationProvider
 from app.stocks.recommendations.repository import RecommendationsRepository
@@ -71,21 +72,32 @@ class SyncRecommendations:
         self._provider = provider
         self._repository = repository
 
-    def execute(self, *, limit: int | None = None) -> RecommendationsSyncReport:
+    def execute(
+        self,
+        *,
+        limit: int | None = None,
+        progress: ProgressReporter | None = None,
+    ) -> RecommendationsSyncReport:
         """Refresh up to ``limit`` stocks most in need of it (un-cached first, then stalest);
         ``limit=None`` (the default) processes every stock in the anchor. Returns a summary.
         Never raises for a single symbol's failure — the run continues and the failure is
-        counted, so one bad symbol doesn't abort the whole sweep."""
+        counted, so one bad symbol doesn't abort the whole sweep. ``progress`` (default no-op)
+        is told the target count up front and advanced per stock, so a caller can log the
+        sweep's progress without this use case knowing how."""
+        reporter = progress or NullProgress()
         effective = None if limit is None else max(1, limit)
+        targets = self._repository.refresh_targets(effective)
+        reporter.start(len(targets))
         refreshed = 0
         failed = 0
-        for target in self._repository.refresh_targets(effective):
+        for target in targets:
             try:
                 recommendations = self._provider.get_recommendations(target.symbol)
             except (StockNotFound, StockDataUnavailable):
                 # A symbol the vendor can't serve this run (outage, block, or dropped
                 # coverage) is left as-is and counted; the next run retries it.
                 failed += 1
+                reporter.advance(ok=False)
                 continue
             # An empty live result has nothing to merge (the upsert would write no rows,
             # so the stock's refresh stamp would never advance and it would jam the front
@@ -93,10 +105,12 @@ class SyncRecommendations:
             # the stored months keep serving in the meantime.
             if recommendations.is_empty:
                 failed += 1
+                reporter.advance(ok=False)
                 continue
             # Carry the stored name so a nameless refresh doesn't drop a known one.
             self._repository.upsert(target.symbol, target.name, recommendations)
             refreshed += 1
+            reporter.advance(ok=True)
         return RecommendationsSyncReport(
             refreshed=refreshed, failed=failed, limit=effective
         )

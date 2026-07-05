@@ -67,6 +67,12 @@ def run_index_membership_sync(_limit: int) -> IndexMembershipSyncReport:
     key = os.environ.get("FINNHUB_API_KEY", "")
     db = SessionLocal()
     try:
+        # No per-item heartbeat here: this reconcile is two Finnhub list fetches plus fast flag
+        # writes (seconds), not a thousands-of-stocks sweep — so a start line + the done line
+        # below are the whole progress story.
+        logger.info(
+            "index-membership sync: fetching S&P 500 + Nasdaq-100 membership from Finnhub"
+        )
         report = SyncIndexMembership(
             FinnhubIndexMembershipProvider(key), SqlIndexMembershipRepository(db)
         ).execute()

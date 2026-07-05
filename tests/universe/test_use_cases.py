@@ -195,3 +195,38 @@ def test_enrichment_limit_defaults_then_overrides():
     repo = _FakeRepo()
     SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier()).execute(limit=25)
     assert repo.missing_limit == 25
+
+
+class _RecordingReporter:
+    """A ProgressReporter that records the announced total and each advance's ok flag."""
+
+    def __init__(self) -> None:
+        self.total: int | None = None
+        self.advances: list[bool] = []
+
+    def start(self, total: int) -> None:
+        self.total = total
+
+    def advance(self, *, ok: bool = True) -> None:
+        self.advances.append(ok)
+
+
+def test_enrichment_reports_progress_to_the_injected_reporter():
+    # The heartbeat tracks the slow enrichment pass: start(total) is the count of tickers to
+    # classify, and each is advanced — a source miss as a failure, a reached-but-unclassifiable
+    # symbol as ok (nothing went wrong, just nothing to write).
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN)
+    repo = _FakeRepo(missing=("AAPL", "BADX", "ETF"))
+    classifier = _FakeClassifier(
+        {
+            "AAPL": CompanyClassification(industry="consumer_electronics"),
+            "ETF": CompanyClassification(),  # reached, but no classification yet
+        },
+        errors=("BADX",),
+    )
+    reporter = _RecordingReporter()
+
+    SyncUniverse(_FakeScreener(screen), repo, classifier).execute(progress=reporter)
+
+    assert reporter.total == 3  # three tickers to enrich
+    assert reporter.advances == [True, False, True]  # AAPL ok, BADX miss, ETF reached-empty ok
