@@ -504,7 +504,7 @@ app/
     │   ├── repository.py        #    abstract persistence ports: UniverseRepository (write) + StockSearchRepository (read)
     │   ├── db_repository.py     #    SqlUniverseRepository (upsert_screen) + SqlStockSearchRepository (search/classifications; screened-only)
     │   ├── use_cases.py         #    SyncUniverse (write) + SearchStocks / ListClassifications (read)
-    │   └── schemas.py           #    HTTP DTOs for the read endpoints (search page + classifications; endpoints in endpoints/)
+    │   └── schemas.py           #    HTTP DTOs for the read endpoints (search page + classifications; endpoints in endpoints/ticker_endpoints.py)
     ├── index_membership/   # ── index-membership sub-slice (table-less; reconciles in_sp500/in_nasdaq100 on the anchor):
     │   ├── entities.py          #    IndexMembershipSnapshot (the two ticker sets, slice-local)
     │   ├── ports.py             #    live-source port (IndexMembershipSource)
@@ -518,8 +518,7 @@ app/
     │   ├── annual_earnings_endpoints.py          #  GET /stocks/{symbol}/earnings/annual
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
     │   ├── recommendations_endpoints.py          #  GET /stocks/{symbol}/recommendations
-    │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol}
-    │   ├── universe_endpoints.py                 #  GET /stocks/ticker (search) + GET /stocks/classifications
+    │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol} (card) + GET /stocks/ticker (search) + GET /stocks/classifications
     │   ├── cron_universe_endpoints.py            #  POST /internal/universe/sync (fire-and-forget)
     │   ├── cron_index_membership_endpoints.py    #  POST /internal/index-membership/sync (fire-and-forget)
     │   └── background_sync.py                    #  shared fire-and-forget helper (202 + per-slice single-flight)
