@@ -3,45 +3,59 @@ run-name: Sync index membership
 
 # Weekly (and on-demand). Reconciles which stocks are in the S&P 500 / Nasdaq-100 onto the
 # stocks anchor's in_sp500 / in_nasdaq100 flags. Membership only changes on the quarterly index
-# rebalances, so weekly is more than enough. It POSTs the deployed app's index-membership cron
-# endpoint (app/stocks/endpoints/cron_index_membership_endpoints.py), which runs the
-# SyncIndexMembership use case: read both membership lists from Finnhub's /index/constituents
-# (^GSPC + ^NDX), then mark current members and clear drop-outs on the anchor.
+# rebalances, so weekly is more than enough.
 #
-# The endpoint is FIRE-AND-FORGET: it schedules the reconcile on a background thread and returns
-# 202 immediately, so this workflow makes a SINGLE quick POST — no batching, no limit (the
-# reconcile always processes the whole membership set). A 200 "already_running" means a previous
-# reconcile is still in flight — also success; this run just declines to start a second.
+# It launches a one-off ECS Fargate task that runs `python -m app.sync index-membership` (the
+# SyncIndexMembership use case) to completion and exits. The use case reads both rosters from
+# Wikipedia (the S&P 500 + Nasdaq-100 constituents tables — keyless), then marks current members
+# and clears drop-outs on the anchor. It runs on its OWN task definition (nama-dev-sync), OFF the
+# always-on API task, the same as the other sync sweeps — this replaced POSTing the app's
+# /internal/index-membership/sync endpoint. The task reaches the private RDS by borrowing the app
+# service's own network config.
 #
-# Operational notes:
-#  - Because the reconcile runs in the background, the response can't report how many flags
-#    changed — it only confirms the run was accepted. The counts land in the app logs
-#    (CloudWatch): "index-membership sync done: sp500 members=… marked=… cleared=… …".
-#  - The source is Finnhub's /index/constituents, which needs FINNHUB_API_KEY on the app (index
-#    data is a paid Finnhub capability). A missing key makes the endpoint a 503 (this run then
-#    fails visibly); a present-but-unentitled key passes the trigger but the background sweep
-#    finds nothing and logs a failure. Each index is fetched independently; an index that fails
-#    or comes back short is skipped server-side (its flags are left as-is), so a bad response
-#    delays new data but never clears a live index.
-#  - The endpoint is currently unauthenticated (an auth-token guard is planned); this workflow
-#    just triggers it.
+# There is no `limit`: the reconcile always processes the whole membership set (a full mark/clear
+# against both index lists), so the command takes no cap argument.
 #
-# Requires the repo/environment variable API_BASE_URL — the deployed app's base URL, reachable
-# from the GitHub runner.
+# FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs in the
+# background on ECS and its result — "index-membership sync done: sp500 members=… marked=…
+# cleared=… …" — lands in the task's CloudWatch logs, not here. A green run means the task
+# launched; check CloudWatch for the outcome.
+#
+# Source notes:
+#  - Wikipedia is keyless (this replaced Finnhub's /index/constituents, which is a paid capability
+#    the deployed key 403'd on). It welcomes programmatic reads from data-centre IPs, so it works
+#    from Fargate where the Yahoo/Nasdaq/ETF-issuer endpoints block us.
+#  - Each index page is fetched independently; a page that fails or comes back with an unparseable
+#    roster is skipped server-side (its flags are left as-is), so a bad response delays new data
+#    but never clears a live index.
+#
+# Manual run: Actions → "Sync index membership" → Run workflow (same trigger, off-schedule).
+#
+# Auth: the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var — the same
+# identity the deploy + migrate jobs already use to run one-off ECS tasks.
 
 on:
   workflow_dispatch: {}
-  # Weekly, Sundays 06:30 UTC — just after the weekly universe sync (06:00) and staggered off
-  # the daily recommendations sync (07:30) and the Monday earnings syncs (08:00/09:00). Exact
-  # timing doesn't matter, so GitHub delaying scheduled runs under load is fine. Caveats:
-  # scheduled workflows run only from the default branch, and GitHub auto-disables the schedule
-  # after 60 days with no repo activity.
+  # Weekly, Sundays 06:30 UTC — just after the weekly universe sync (06:00) and staggered off the
+  # daily recommendations sync (07:30) and the Monday earnings syncs (08:00/09:00). Exact timing
+  # doesn't matter, so GitHub delaying scheduled runs under load is fine. Caveats: scheduled
+  # workflows run only from the default branch, and GitHub auto-disables the schedule after 60
+  # days with no repo activity.
   schedule:
     - cron: "30 6 * * 0"
 
 concurrency:
   group: sync-index-membership
   cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # These match module "app" { name = "nama-dev" } in infra/environments/dev; the sync task
+  # def is that name + "-sync" (aws_ecs_task_definition.sync in the ecs-fargate-service module).
+  ECS_CLUSTER: nama-dev
+  ECS_SERVICE: nama-dev
+  SYNC_TASK_DEF: nama-dev-sync
+  SYNC_SLICE: index-membership
 
 jobs:
   sync:
@@ -50,30 +64,54 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Trigger the index-membership refresh
-        env:
-          API_BASE_URL: ${{ vars.API_BASE_URL }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Launch the sync task
         run: |
           set -euo pipefail
 
-          if [ -z "${API_BASE_URL:-}" ]; then
-            echo "::error::API_BASE_URL is not set — add it as a repo/environment variable pointing at the deployed app."
+          # The sync task runs INSIDE the VPC (the private RDS is unreachable from the runner).
+          # Borrow the app service's own network config — subnets + security groups, including
+          # the DB SG — so there's nothing to hardcode. Same approach the migrate job uses.
+          status=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" != "ACTIVE" ]; then
+            echo "::error::ECS service '$ECS_SERVICE' is not ACTIVE (status: $status) — deploy the app first."
+            exit 1
+          fi
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' --output json)
+
+          # Container command override: python -m app.sync index-membership (no limit — the
+          # reconcile always processes the whole membership set).
+          overrides=$(jq -cn --arg slice "$SYNC_SLICE" '
+            {containerOverrides: [{
+              name: "app",
+              command: ["python", "-m", "app.sync", $slice]
+            }]}')
+
+          echo "Launching one-off sync task: app.sync $SYNC_SLICE"
+          run=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$SYNC_TASK_DEF" \
+            --launch-type FARGATE \
+            --network-configuration "$netcfg" \
+            --started-by "gha-sync-${GITHUB_SHA::7}" \
+            --overrides "$overrides")
+
+          # run-task exits 0 even when it places no task (capacity/throttle land in .failures),
+          # so check explicitly — this is what makes a green run mean "the task launched".
+          task_arn=$(echo "$run" | jq -r '.tasks[0].taskArn // empty')
+          if [ -z "$task_arn" ]; then
+            echo "::error::run-task launched no task: $(echo "$run" | jq -c '.failures')"
             exit 1
           fi
 
-          url="${API_BASE_URL%/}/internal/index-membership/sync"
-          http_code=$(curl -sS -X POST "$url" \
-            --max-time 30 \
-            -o /tmp/sync_response.json \
-            -w '%{http_code}')
-          body=$(cat /tmp/sync_response.json 2>/dev/null || echo '{}')
-          echo "POST ${url} -> HTTP ${http_code}: ${body}"
-
-          # 202 = reconcile started; 200 = one was already running (also fine). Anything else is
-          # a real failure (the app is down, or the trigger was rejected).
-          if [ "$http_code" != "202" ] && [ "$http_code" != "200" ]; then
-            echo "::error::Index-membership sync trigger failed (HTTP $http_code) — check the app logs."
-            exit 1
-          fi
-
-          echo "Index-membership reconcile triggered ($(echo "$body" | jq -r '.status // "?"'))."
+          echo "Launched $task_arn"
+          echo "Fire-and-forget: the sweep runs on ECS; its result —"
+          echo "\"index-membership sync done: sp500 members=… marked=… cleared=… …\" — lands in CloudWatch."

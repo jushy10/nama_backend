@@ -1,17 +1,17 @@
 """Tests for the index-membership cron endpoint (POST /internal/index-membership/sync).
 
 Offline: a fake sync runner is injected through dependency_overrides, so this checks only the
-controller — it accepts a trigger, runs the reconcile in the background, guards against
-overlapping runs, and gates on the Finnhub key — without touching Finnhub or the database.
-There's no stalest-N limit here, so the endpoint passes 0 to the shared helper.
+controller — it accepts a trigger, runs the reconcile in the background, and guards against
+overlapping runs — without touching Wikipedia or the database. The Wikipedia source is keyless,
+so (unlike the old Finnhub wiring) there's no key gate: the runner is always available. There's
+no stalest-N limit here, so the endpoint passes 0 to the shared helper.
 
 The reconcile runs on a daemon thread, so the test that expects it to run drains it first: the
 endpoint holds ``_sync_lock`` from acceptance until the background thread finishes, so waiting to
 re-acquire the lock is a deterministic "reconcile done" barrier.
 """
 
-import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import cron_index_membership_endpoints as cron
@@ -45,8 +45,6 @@ def _report() -> IndexMembershipSyncReport:
 
 
 def _client(fake: _FakeRunner) -> TestClient:
-    # Overriding get_sync_runner bypasses the Finnhub-key gate, so these controller tests need
-    # no key set — they exercise the trigger/guard, not the wiring.
     app = FastAPI()
     app.include_router(cron.router)
     app.dependency_overrides[cron.get_sync_runner] = lambda: fake
@@ -82,25 +80,6 @@ def test_a_trigger_while_a_reconcile_runs_is_a_noop():
         cron._sync_lock.release()
 
 
-def test_endpoint_503s_without_a_finnhub_key(monkeypatch):
-    # No dependency override => the real key gate runs; with no key it's a 503 before scheduling.
-    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
-    app = FastAPI()
-    app.include_router(cron.router)
-    resp = TestClient(app).post("/internal/index-membership/sync")
-    assert resp.status_code == 503
-    # The guard must be free — a rejected request must never strand it.
-    assert cron._sync_lock.acquire(blocking=False)
-    cron._sync_lock.release()
-
-
-def test_get_sync_runner_requires_the_finnhub_key(monkeypatch):
-    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
-    with pytest.raises(HTTPException) as exc:
-        cron.get_sync_runner()
-    assert exc.value.status_code == 503
-
-
-def test_get_sync_runner_wires_the_real_runner_with_a_key(monkeypatch):
-    monkeypatch.setenv("FINNHUB_API_KEY", "test-key")
+def test_get_sync_runner_wires_the_real_runner():
+    # Keyless source: no key to gate on, so the runner is always available.
     assert cron.get_sync_runner() is cron.run_index_membership_sync
