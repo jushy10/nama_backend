@@ -47,7 +47,7 @@ calling an **adapter through a port**.
 | Entities | `entities.py`, `indicators.py` | stdlib only (`dataclasses`, `datetime`, `enum`) | anything else in `app/`, FastAPI, pydantic, any vendor SDK |
 | Ports | `ports.py` | entities, stdlib `abc` | use cases, adapters, framework, vendors |
 | Use cases | `use_cases.py` | entities, ports, exceptions, pure-domain helpers (`indicators.py`) | adapters (concrete providers), FastAPI, pydantic, any vendor SDK |
-| Adapters | `*_provider.py`, `constituents.py` | entities, ports, exceptions, **+ the vendor SDK / `httpx` / SQLAlchemy** | other adapters, use cases, FastAPI, pydantic |
+| Adapters | `*_provider.py`, `adapters/*_adapter.py` | entities, ports, exceptions, **+ the vendor SDK / `httpx` / SQLAlchemy** | other adapters, use cases, FastAPI, pydantic |
 | DTOs | `schemas.py` | pydantic only | entities, use cases, adapters |
 | Router (composition root) | `router.py` | **everything** — use cases, ports, concrete adapters, schemas, exceptions, `db`, FastAPI | — |
 
@@ -64,7 +64,7 @@ calling an **adapter through a port**.
 ### 1. Entities — `app/stocks/entities.py`
 *Enterprise Business Rules.* Pure domain objects: frozen `@dataclass`es and
 `Enum`s that model the concepts (`Stock`, `Quote`, `Candle`, `AnalystEstimates`,
-`Constituent`, …). They import nothing from the rest of the app.
+…). They import nothing from the rest of the app.
 
 Business logic that is **a fact about one entity** lives here, as a `@property`
 or `@classmethod` — computed on access, not stored:
@@ -101,10 +101,10 @@ class GetStockInfo:
 
 A use case: validates/normalizes input (`_normalize_symbol`), calls ports,
 assembles entities, applies enrichment, and enforces multi-source orchestration
-(ranking in `ScreenStocks`, the earnings context in `GetStockAnalysis`). It depends
+(the earnings context in `GetStockAnalysis`). It depends
 only on entities + ports — never a framework, never a concrete provider.
 
-### 4. Adapters — `app/stocks/*_provider.py`, `app/stocks/adapters/*_adapter.py`, `app/stocks/constituents.py`
+### 4. Adapters — `app/stocks/*_provider.py`, `app/stocks/adapters/*_adapter.py`
 *Interface Adapters.* Each implements a port and is **the only module that knows
 a given vendor exists**. It translates the vendor's SDK/HTTP/ORM models into our
 entities, and the vendor's failures into our domain exceptions. Swap vendors and
@@ -126,7 +126,6 @@ only this one file changes.
 - `adapters/yfinance_options_adapter.py` — live source for the ticker card's `options_metrics` block: **Yahoo via `yfinance`** (`Ticker.options` for the expiration list, `Ticker.option_chain(date)` for one expiry's calls/puts), keyless, implementing the ticker slice's `OptionChainProvider` port. Maps chain rows → `OptionContract` entities (strike, bid/ask/last, volume, open interest, IV); every *derived* figure (ATM IV, expected move, insurance cost, put/call) is entity logic, not adapter logic. **No DB cache or cron** — options prices decay by the hour, so the no-TTL read-through pattern doesn't fit; the read is live per request (the endpoint's 5-min Cache-Control is the only damping) and best-effort even when requested, since Yahoo intermittently blocks data-centre IPs
 - `adapters/wikipedia_index_membership_adapter.py` — live source for the index-membership slice: **Wikipedia** (`List_of_S&P_500_companies` + `Nasdaq-100`) via `httpx` + `pandas.read_html`, implementing `IndexMembershipSource`. **Keyless** — this replaced Finnhub's `/index/constituents`, which is a **paid** capability the deployed key `403`'d on; Wikipedia welcomes data-centre-IP reads (works from Fargate where Yahoo/Nasdaq/ETF-issuer endpoints block us), so the wiring is now always-constructable like the universe sweep (no `FINNHUB_API_KEY`, no 503 gate). Parses by **column signature** — reads every table and keeps the one whose flat `Symbol`/`Ticker` column yields the most tickers — so each page's *changes* log (S&P "Selected changes", Nasdaq "Component changes") is ignored, directly fixing the bug that sank the **earlier** Wikipedia attempt (it grabbed the Nasdaq-100 change-log table). Sends a descriptive `User-Agent` (Wikipedia asks). Fetches each page independently, normalizes tickers to the anchor's convention (`BRK.B` → `BRK-B`), and returns the two ticker sets; a single page's failure (transport / non-200 / unparseable body) degrades to empty (the other still syncs), both failing raises `StockDataUnavailable`. Same fake-`_http` seam the other adapters use for offline tests. (The earlier abandoned attempt is what the docstring's caution refers to; the issuer-ETF/Yahoo routes remain blocked from data-centre IPs — Wikipedia is the one that isn't.)
 - `adapters/yfinance_screener_adapter.py` — live source for the universe slice: **Yahoo via `yfinance`** (`yf.screen` + `EquityQuery`), the ≥$1B US screen (`ScreenedStock` per row) written onto the `stocks` anchor
-- `constituents.py` — owns the SQLAlchemy `ConstituentRecord` model **and** `SqlConstituentRepository`; the DB schema lives here, the entity stays ORM-free
 - `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table — `ticker` (unique lookup; the column was renamed from `symbol` by migration 0010 — the domain layers still say "symbol"), the fill-once identity facts `name` and `exchange`, and the mutable `revenue_growth_yoy` / `eps_growth_yoy` **latest trailing YoY snapshot** (migration 0011 — percent; EPS on the analyst-consensus/adjusted basis; **overwritten** every refresh by the annual-earnings slice as the newest reported year rolls forward, unlike the fill-once facts), the universe screen facts `sector` / `industry` / `market_cap` / `screened_at` (migration 0012; `industry` added by 0013), and the `in_sp500` / `in_nasdaq100` index-membership flags (migration 0014 — `NOT NULL`, default `False`; reconciled by the index-membership slice: current members marked, drop-outs cleared)) and its helpers `get_or_create_stock`, `anchor_facts`, `fill_exchange`. Owned by no single feature; per-feature tables hang off it and import it from here
 
 Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<concern>_adapter.py` for those under `app/stocks/adapters/`.
@@ -435,7 +434,8 @@ alembic upgrade head             # apply migrations (schema is Alembic-owned, no
 pytest                           # run the offline test suite
 ```
 
-To change the DB schema: edit the model in `app/stocks/constituents.py`, then
+To change the DB schema: edit the relevant model (e.g. the shared anchor
+`app/stocks/stocks/models.py`, or a slice's `models.py`), then
 `alembic revision --autogenerate -m "…"`, review the generated migration, and
 `alembic upgrade head`.
 
@@ -521,7 +521,6 @@ app/
     │   ├── cron_universe_endpoints.py            #  POST /internal/universe/sync (fire-and-forget)
     │   ├── cron_index_membership_endpoints.py    #  POST /internal/index-membership/sync (fire-and-forget)
     │   └── background_sync.py                    #  shared fire-and-forget helper (202 + per-slice single-flight)
-    ├── constituents.py     # ── DB adapter: ORM model + SqlConstituentRepository
     ├── chart_window.py     # ── edge helper: range preset → time window
     ├── schemas.py          # ── HTTP response DTOs (pydantic)
     └── router.py           # ── endpoints + presenters + DI wiring (composition root)

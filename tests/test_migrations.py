@@ -1,8 +1,8 @@
 """The Alembic migrations build the schema the ORM models expect.
 
-Runs the real migration chain against a throwaway SQLite database: upgrade
-creates ``index_constituents`` with the expected columns, downgrade drops it.
-Catches a migration that won't apply or has drifted from the model.
+Runs the real migration chain against a throwaway SQLite database: upgrade to
+head builds the tables/columns the models expect, downgrade to base tears them
+down. Catches a migration that won't apply or has drifted from the model.
 """
 
 from pathlib import Path
@@ -22,23 +22,6 @@ def alembic(tmp_path, monkeypatch):
     config = Config(str(_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(_ROOT / "alembic"))
     return config, url
-
-
-def test_upgrade_creates_table_then_downgrade_drops_it(alembic):
-    config, url = alembic
-
-    command.upgrade(config, "head")
-    columns = inspect(create_engine(url)).get_columns("index_constituents")
-    assert {c["name"] for c in columns} == {
-        "symbol",
-        "name",
-        "sector",
-        "in_sp500",
-        "in_nasdaq100",
-    }
-
-    command.downgrade(config, "base")
-    assert "index_constituents" not in inspect(create_engine(url)).get_table_names()
 
 
 def test_upgrade_adds_index_membership_flags_to_stocks(alembic):
