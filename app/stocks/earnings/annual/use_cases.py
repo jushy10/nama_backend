@@ -19,6 +19,7 @@ from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.annual.ports import AnnualEarningsProvider
 from app.stocks.earnings.annual.repository import AnnualEarningsRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.progress import NullProgress, ProgressReporter
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -70,27 +71,39 @@ class SyncAnnualEarnings:
         self._provider = provider
         self._repository = repository
 
-    def execute(self, *, limit: int | None = None) -> AnnualEarningsSyncReport:
+    def execute(
+        self,
+        *,
+        limit: int | None = None,
+        progress: ProgressReporter | None = None,
+    ) -> AnnualEarningsSyncReport:
         """Refresh up to ``limit`` stocks most in need of it (un-cached first, then stalest);
         ``limit=None`` (the default) processes every stock in the anchor. Returns a summary.
         Never raises for a single symbol's failure — the run continues and the failure is
-        counted, so one bad symbol doesn't abort the whole sweep."""
+        counted, so one bad symbol doesn't abort the whole sweep. ``progress`` (default no-op)
+        is told the target count up front and advanced per stock, so a caller can log the
+        sweep's progress without this use case knowing how."""
+        reporter = progress or NullProgress()
         effective = None if limit is None else max(1, limit)
+        targets = self._repository.refresh_targets(effective)
+        reporter.start(len(targets))
         refreshed = 0
         failed = 0
-        for target in self._repository.refresh_targets(effective):
+        for target in targets:
             try:
                 timeline = self._provider.get_annual_earnings(target.symbol)
             except (StockNotFound, StockDataUnavailable):
                 # A symbol the vendor can't serve this run (outage, block, or dropped
                 # coverage) is left as-is and counted; the next run retries it.
                 failed += 1
+                reporter.advance(ok=False)
                 continue
             # An empty live result must not wipe the stored window — an empty upsert would
             # delete every year. Skip it and count a failure so the next run retries; the
             # stored rows keep serving in the meantime.
             if timeline.is_empty:
                 failed += 1
+                reporter.advance(ok=False)
                 continue
             # A *degraded* fetch must not wipe stored figures either: the upsert rewrites the
             # whole window, so fill the fresh timeline's holes from the stored rows (reported
@@ -103,6 +116,7 @@ class SyncAnnualEarnings:
             # Carry the stored name so a nameless refresh doesn't drop a known one.
             self._repository.upsert(target.symbol, target.name, timeline)
             refreshed += 1
+            reporter.advance(ok=True)
         return AnnualEarningsSyncReport(
             refreshed=refreshed, failed=failed, limit=effective
         )

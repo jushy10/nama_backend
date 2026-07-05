@@ -40,6 +40,10 @@ from app.stocks.endpoints.background_sync import (
     SyncTriggerResponse,
     trigger_sync,
 )
+from app.stocks.endpoints.sync_progress import (
+    HeartbeatReporter,
+    progress_interval_seconds,
+)
 from app.stocks.universe.db_repository import SqlUniverseRepository
 from app.stocks.universe.use_cases import SyncUniverse, UniverseSyncReport
 
@@ -56,11 +60,18 @@ def run_universe_sync(limit: int) -> UniverseSyncReport:
     scoped ``get_db`` one is closed by the time the background thread runs)."""
     db = SessionLocal()
     try:
-        report = SyncUniverse(
-            YfinanceScreenerProvider(),
-            SqlUniverseRepository(db),
-            YfinanceClassificationProvider(),
-        ).execute(limit=limit)
+        # The screen is a handful of fast pages; the heartbeat tracks the slow half — the
+        # per-ticker enrichment pass. Log the screen phase so CloudWatch shows the run is live
+        # before the first enrichment tick.
+        logger.info("universe sync: screening the US market, then enriching classifications")
+        with HeartbeatReporter(
+            "universe sync (enrichment)", logger, interval_s=progress_interval_seconds()
+        ) as reporter:
+            report = SyncUniverse(
+                YfinanceScreenerProvider(),
+                SqlUniverseRepository(db),
+                YfinanceClassificationProvider(),
+            ).execute(limit=limit, progress=reporter)
         if report.skipped:
             logger.warning(
                 "universe sync skipped: screen came back too small (screened=%d) — "

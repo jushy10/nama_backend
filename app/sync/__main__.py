@@ -11,6 +11,12 @@ Like ``app.main`` (the web entrypoint) this is a composition-root/edge: it wires
 it just dispatches to the per-slice ``run_*_sync`` runners the cron endpoints already expose,
 so both entrypoints share one tested implementation.
 
+The sweep runs under a wall-clock backstop (``app.sync.runtime.run_with_timeout``): the one-off
+task has no task-level timeout and yfinance's calls have no hard per-request timeout, so a hung
+socket would otherwise keep the task — and its per-second billing — alive forever. The runners'
+heartbeat progress logging (``SYNC_PROGRESS_INTERVAL_S``, default 5s) makes such a stall visible
+in CloudWatch — a frozen "480/2800" line — before the backstop reaps it.
+
 ``limit`` is optional and mirrors the cron endpoints' ``limit`` query param: omit it to process
 every stock (the default — earnings/recs seed the whole anchor un-cached-first; universe screens
 in full and enriches its own default cap), or pass a value to cap a single run.
@@ -34,6 +40,7 @@ from app.stocks.endpoints.cron_quarterly_earnings_endpoints import (
 )
 from app.stocks.endpoints.cron_recommendations_endpoints import run_recommendations_sync
 from app.stocks.endpoints.cron_universe_endpoints import run_universe_sync
+from app.sync.runtime import max_runtime_seconds, run_with_timeout
 
 logger = logging.getLogger("app.sync")
 
@@ -74,7 +81,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     logger.info("starting %s sync (limit=%s)", slice_name, limit)
-    RUNNERS[slice_name](limit)  # a failure raises -> traceback + non-zero exit
+    # Wall-clock backstop: run the sweep under a hard time budget so a hung Yahoo socket can't
+    # strand this one-off task (and its billing) forever. A failure still raises -> traceback +
+    # non-zero exit; a timeout hard-exits the process (see app.sync.runtime).
+    run_with_timeout(lambda: RUNNERS[slice_name](limit), max_runtime_seconds())
     logger.info("%s sync finished", slice_name)
     return 0
 

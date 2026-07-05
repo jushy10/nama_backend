@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.progress import NullProgress, ProgressReporter
 from app.stocks.universe.ports import CompanyClassificationProvider, StockScreener
 from app.stocks.universe.repository import UniverseRepository
 
@@ -74,7 +75,12 @@ class SyncUniverse:
         self._repository = repository
         self._classifier = classifier
 
-    def execute(self, *, limit: int | None = None) -> UniverseSyncReport:
+    def execute(
+        self,
+        *,
+        limit: int | None = None,
+        progress: ProgressReporter | None = None,
+    ) -> UniverseSyncReport:
         """Screen the market, upsert the result onto the anchor, then classify up to ``limit``
         (default ``DEFAULT_LIMIT``) still-unclassified stocks.
 
@@ -84,8 +90,10 @@ class SyncUniverse:
         is skipped too (if the one bulk screen call was blocked, the per-ticker calls would
         be as well). Otherwise the whole screen is upserted (additive) and the enrichment pass
         runs. A single symbol's classification failure never aborts the run — it's counted and
-        the sweep continues.
+        the sweep continues. ``progress`` (default no-op) tracks the enrichment pass — the slow,
+        per-ticker half worth a heartbeat; the bulk screen is a handful of fast pages.
         """
+        reporter = progress or NullProgress()
         capped = self.DEFAULT_LIMIT if limit is None else max(1, limit)
         screened = self._screener.screen(min_market_cap=self.MIN_MARKET_CAP)
         if len(screened) < self.MIN_PLAUSIBLE_SCREEN:
@@ -98,7 +106,7 @@ class SyncUniverse:
                 enrich_failed=0,
             )
         counts = self._repository.upsert_screen(screened)
-        enriched, enrich_failed = self._enrich_missing_classifications(capped)
+        enriched, enrich_failed = self._enrich_missing_classifications(capped, reporter)
         return UniverseSyncReport(
             screened=len(screened),
             added=counts.added,
@@ -108,24 +116,33 @@ class SyncUniverse:
             enrich_failed=enrich_failed,
         )
 
-    def _enrich_missing_classifications(self, limit: int) -> tuple[int, int]:
+    def _enrich_missing_classifications(
+        self, limit: int, reporter: ProgressReporter
+    ) -> tuple[int, int]:
         """Classify up to ``limit`` stored stocks still missing a sector or industry, writing
         each one's sector/industry. Returns ``(enriched, failed)``: ``enriched`` wrote a
         classification, ``failed`` couldn't reach the source. A symbol the source reaches but
         can't classify (both sides ``None``) is neither — it's left for a later run rather than
-        counted, since nothing was written and nothing went wrong."""
+        counted, since nothing was written and nothing went wrong. ``reporter`` is advanced once
+        per ticker attempted (a reached-but-unclassifiable symbol counts as ``ok`` — nothing
+        went wrong — so the heartbeat's failure count tracks genuine source misses)."""
+        tickers = self._repository.tickers_missing_classification(limit)
+        reporter.start(len(tickers))
         enriched = 0
         failed = 0
-        for ticker in self._repository.tickers_missing_classification(limit):
+        for ticker in tickers:
             try:
                 classification = self._classifier.get_classification(ticker)
             except (StockNotFound, StockDataUnavailable):
                 # The source couldn't serve this symbol this run (outage/block). Leave it as
                 # is and count it; the next run retries it.
                 failed += 1
+                reporter.advance(ok=False)
                 continue
             if classification.industry is None and classification.sector is None:
+                reporter.advance(ok=True)  # reached, just nothing to write yet
                 continue  # source has no classification yet — leave it for a later run
             self._repository.set_classification(ticker, classification)
             enriched += 1
+            reporter.advance(ok=True)
         return enriched, failed

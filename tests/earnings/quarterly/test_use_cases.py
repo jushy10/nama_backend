@@ -324,6 +324,35 @@ def test_sync_normal_roll_does_not_grow_the_reported_window():
     ]  # (2025, 1) rolled off; the window stayed four reported quarters
 
 
+class _RecordingReporter:
+    """A ProgressReporter that records the announced total and each advance's ok flag."""
+
+    def __init__(self) -> None:
+        self.total: int | None = None
+        self.advances: list[bool] = []
+
+    def start(self, total: int) -> None:
+        self.total = total
+
+    def advance(self, *, ok: bool = True) -> None:
+        self.advances.append(ok)
+
+
+def test_sync_reports_progress_to_the_injected_reporter():
+    # start(total) is told the work size up front; advance() marks each stock ok/failed — so a
+    # caller (the cron runner's heartbeat) can render N/total and a success/failure split.
+    repo = _FakeRepo(
+        [RefreshTarget("AAPL", None), RefreshTarget("GONE", None), RefreshTarget("MSFT", None)]
+    )
+    provider = _FakeSyncProvider(empty={"GONE"})
+    reporter = _RecordingReporter()
+
+    SyncQuarterlyEarnings(provider, repo).execute(limit=10, progress=reporter)
+
+    assert reporter.total == 3  # the target count, before the loop
+    assert reporter.advances == [True, False, True]  # AAPL ok, GONE empty->fail, MSFT ok
+
+
 def test_sync_defaults_to_unlimited_when_no_limit_is_given():
     repo = _FakeRepo([])
     SyncQuarterlyEarnings(_FakeSyncProvider(), repo).execute()

@@ -41,6 +41,10 @@ from app.stocks.endpoints.background_sync import (
     SyncTriggerResponse,
     trigger_sync,
 )
+from app.stocks.endpoints.sync_progress import (
+    HeartbeatReporter,
+    progress_interval_seconds,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["quarterly-earnings-cron"])
@@ -55,9 +59,12 @@ def run_quarterly_earnings_sync(limit: int | None) -> QuarterlyEarningsSyncRepor
     ``get_db`` one is closed by the time the background thread runs)."""
     db = SessionLocal()
     try:
-        report = SyncQuarterlyEarnings(
-            YfinanceQuarterlyEarningsProvider(), SqlQuarterlyEarningsRepository(db)
-        ).execute(limit=limit)
+        with HeartbeatReporter(
+            "quarterly-earnings sync", logger, interval_s=progress_interval_seconds()
+        ) as reporter:
+            report = SyncQuarterlyEarnings(
+                YfinanceQuarterlyEarningsProvider(), SqlQuarterlyEarningsRepository(db)
+            ).execute(limit=limit, progress=reporter)
         logger.info(
             "quarterly-earnings sync done: refreshed=%d failed=%d limit=%s",
             report.refreshed,
