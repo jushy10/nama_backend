@@ -498,12 +498,13 @@ app/
     │   ├── db_repository.py     #    concrete repo: anchor-level exchange read/fill
     │   ├── use_cases.py         #    GetTickerCard + TickerCard composite (quote/estimates/fundamentals/performance/options/quarterly-earnings ports)
     │   └── schemas.py           #    HTTP response DTO (quote + enrichment + opt-in dividend/performance/metrics/options_metrics; endpoint in endpoints/)
-    ├── universe/           # ── universe sub-slice (table-less; writes the ≥$1B US screen onto the stocks anchor):
-    │   ├── entities.py          #    ScreenedStock (slice-local)
+    ├── universe/           # ── universe sub-slice (table-less; screens the ≥$1B US universe onto the stocks anchor AND reads it back):
+    │   ├── entities.py          #    ScreenedStock + slugify; read-side shapes (StockSearchCriteria/Result/Page, StockSort/SortDirection, Classifications)
     │   ├── ports.py             #    live-source port (StockScreener)
-    │   ├── repository.py        #    abstract persistence port (+ UniverseSyncCounts; writes the stocks anchor)
-    │   ├── db_repository.py     #    SqlUniverseRepository: upsert_screen onto stocks
-    │   └── use_cases.py         #    SyncUniverse (screen → anchor upsert; plausibility floor)
+    │   ├── repository.py        #    abstract persistence ports: UniverseRepository (write) + StockSearchRepository (read)
+    │   ├── db_repository.py     #    SqlUniverseRepository (upsert_screen) + SqlStockSearchRepository (search/classifications; screened-only)
+    │   ├── use_cases.py         #    SyncUniverse (write) + SearchStocks / ListClassifications (read)
+    │   └── schemas.py           #    HTTP DTOs for the read endpoints (search page + classifications; endpoints in endpoints/)
     ├── index_membership/   # ── index-membership sub-slice (table-less; reconciles in_sp500/in_nasdaq100 on the anchor):
     │   ├── entities.py          #    IndexMembershipSnapshot (the two ticker sets, slice-local)
     │   ├── ports.py             #    live-source port (IndexMembershipSource)
@@ -518,6 +519,7 @@ app/
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
     │   ├── recommendations_endpoints.py          #  GET /stocks/{symbol}/recommendations
     │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol}
+    │   ├── universe_endpoints.py                 #  GET /stocks/ticker (search) + GET /stocks/classifications
     │   ├── cron_universe_endpoints.py            #  POST /internal/universe/sync (fire-and-forget)
     │   ├── cron_index_membership_endpoints.py    #  POST /internal/index-membership/sync (fire-and-forget)
     │   └── background_sync.py                    #  shared fire-and-forget helper (202 + per-slice single-flight)

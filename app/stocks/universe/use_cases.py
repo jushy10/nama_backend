@@ -1,7 +1,7 @@
 """Application use cases for the universe slice.
 
-One action, pure orchestration over the ports so it runs offline in tests against
-hand-written fakes and knows nothing of Yahoo, HTTP, or SQLAlchemy:
+Pure orchestration over the ports so each runs offline in tests against hand-written fakes
+and knows nothing of Yahoo, HTTP, or SQLAlchemy:
 
 - ``SyncUniverse`` — the out-of-band populator. Two passes in one run: (1) screen the US
   market at/above the floor and upsert the result onto the ``stocks`` anchor (additive: it
@@ -10,9 +10,11 @@ hand-written fakes and knows nothing of Yahoo, HTTP, or SQLAlchemy:
   sector/industry slugs. Invoked by the (fire-and-forget) cron endpoint. Guarded so a blocked/truncated
   screen (empty or implausibly small) skips *both* passes rather than churning a partial set
   or hammering the same blocked vendor with per-ticker calls.
-
-The read/search path over the populated universe is **deferred** — there is no search
-endpoint yet, only the sync that fills the anchor.
+- ``SearchStocks`` — the read side (``GET /stocks/ticker``): normalize a search request at the
+  edge and hand the read repository a clean ``StockSearchCriteria``, returning the matched
+  page. No live feed — the universe is already on the anchor.
+- ``ListClassifications`` — the filter-menu read (``GET /stocks/classifications``): the
+  distinct sector/industry slugs the FE offers, straight from the repository.
 """
 
 from __future__ import annotations
@@ -20,8 +22,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.universe.entities import (
+    Classifications,
+    SortDirection,
+    StockSearchCriteria,
+    StockSearchPage,
+    StockSort,
+    slugify,
+)
 from app.stocks.universe.ports import CompanyClassificationProvider, StockScreener
-from app.stocks.universe.repository import UniverseRepository
+from app.stocks.universe.repository import StockSearchRepository, UniverseRepository
 
 
 @dataclass(frozen=True)
@@ -129,3 +139,73 @@ class SyncUniverse:
             self._repository.set_classification(ticker, classification)
             enriched += 1
         return enriched, failed
+
+
+class SearchStocks:
+    """Search/filter/sort the screened universe for the ``GET /stocks/ticker`` list.
+
+    Pure orchestration over the read repository: normalize the request once at the edge, hand
+    the repository a clean ``StockSearchCriteria``, return the page it matches. No live feed,
+    no vendor — the universe is already stored on the anchor by the sync.
+    """
+
+    # The default page size, and the ceiling a client can ask for. The endpoint enforces the
+    # same bounds on its query param; the use case clamps too, so a direct caller (or a test)
+    # can't ask for an unbounded or zero page.
+    DEFAULT_LIMIT = 25
+    MAX_LIMIT = 100
+
+    def __init__(self, repository: StockSearchRepository) -> None:
+        self._repository = repository
+
+    def execute(
+        self,
+        *,
+        query: str | None = None,
+        sector: str | None = None,
+        industry: str | None = None,
+        in_sp500: bool | None = None,
+        in_nasdaq100: bool | None = None,
+        sort: StockSort = StockSort.MARKET_CAP,
+        direction: SortDirection = SortDirection.DESC,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> StockSearchPage:
+        """Normalize the inputs once, at the edge, then run the search.
+
+        ``query`` is trimmed (blank → no text filter); ``sector`` / ``industry`` are slugged to
+        the stored convention with :func:`slugify` (so both the raw label and the stored slug
+        match, and blank → no filter); ``limit`` defaults to ``DEFAULT_LIMIT`` and is clamped to
+        ``[1, MAX_LIMIT]``, ``offset`` floored at 0. The index flags pass through as a tri-state
+        (``None`` = don't filter). The repository does the rest.
+        """
+        text = (query or "").strip()
+        capped = self.DEFAULT_LIMIT if limit is None else min(max(1, limit), self.MAX_LIMIT)
+        criteria = StockSearchCriteria(
+            query=text or None,
+            sector=slugify(sector),
+            industry=slugify(industry),
+            in_sp500=in_sp500,
+            in_nasdaq100=in_nasdaq100,
+            sort=sort,
+            direction=direction,
+            limit=capped,
+            offset=max(0, offset),
+        )
+        return self._repository.search(criteria)
+
+
+class ListClassifications:
+    """The distinct sector + industry slugs for the FE's filter menus
+    (``GET /stocks/classifications``).
+
+    A thin read — the repository owns the distinct query; this is its own use case only to keep
+    the one-class-per-action convention (and so the endpoint depends on a use case, not the
+    repository directly).
+    """
+
+    def __init__(self, repository: StockSearchRepository) -> None:
+        self._repository = repository
+
+    def execute(self) -> Classifications:
+        return self._repository.classifications()

@@ -31,6 +31,7 @@ from app.stocks.endpoints.cron_index_membership_endpoints import (
     router as index_membership_cron_router,
 )
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
+from app.stocks.endpoints.universe_endpoints import router as universe_router
 from app.stocks.router import router as stocks_router
 
 # Browser origins allowed to call this API (cross-origin). Comma-separated env
@@ -87,6 +88,13 @@ app.include_router(annual_earnings_cron_router)
 # consensus (no table or cron of its own). See
 # app/stocks/endpoints/ticker_endpoints.py.
 app.include_router(ticker_router)
+# The universe read endpoints (GET /stocks/ticker search + GET /stocks/classifications):
+# a paginated search/filter/sort over the screened `stocks` anchor the universe sync fills
+# (by name/ticker substring, sector/industry, index membership; sort by market cap or trailing
+# growth), and the distinct sector/industry slugs for the FE's filter menus. Pure DB reads, no
+# vendor or key. This is the read side that pairs with the ticker card's item route above. See
+# app/stocks/endpoints/universe_endpoints.py.
+app.include_router(universe_router)
 # The recommendations refresh cron endpoint (POST /internal/recommendations/sync); it
 # drives the SyncRecommendations use case out of band. See
 # app/stocks/endpoints/cron_recommendations_endpoints.py.

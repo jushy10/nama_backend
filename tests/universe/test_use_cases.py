@@ -1,17 +1,37 @@
-"""Tests for the universe sync use case: SyncUniverse.
+"""Tests for the universe use cases: SyncUniverse (write side) + SearchStocks /
+ListClassifications (read side).
 
 Offline: hand-written fakes for the screener, classifier, and repository ports, so this
-exercises only the orchestration — the upsert-vs-skip decision, the enrichment pass over
-still-unclassified stocks, and count pass-through — independent of Yahoo or the DB.
+exercises only the orchestration — the upsert-vs-skip decision and the enrichment pass for the
+sync, and the edge normalization (trim/slug/clamp) and criteria pass-through for the search —
+independent of Yahoo or the DB.
 """
 
 import pytest
 
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.universe.entities import CompanyClassification, ScreenedStock
+from app.stocks.universe.entities import (
+    Classifications,
+    CompanyClassification,
+    ScreenedStock,
+    SortDirection,
+    StockSearchCriteria,
+    StockSearchPage,
+    StockSearchResult,
+    StockSort,
+)
 from app.stocks.universe.ports import CompanyClassificationProvider, StockScreener
-from app.stocks.universe.repository import UniverseRepository, UniverseSyncCounts
-from app.stocks.universe.use_cases import SyncUniverse, UniverseSyncReport
+from app.stocks.universe.repository import (
+    StockSearchRepository,
+    UniverseRepository,
+    UniverseSyncCounts,
+)
+from app.stocks.universe.use_cases import (
+    ListClassifications,
+    SearchStocks,
+    SyncUniverse,
+    UniverseSyncReport,
+)
 
 
 def _stock(ticker, *, market_cap=1e10, name=None, exchange=None, sector=None):
@@ -195,3 +215,119 @@ def test_enrichment_limit_defaults_then_overrides():
     repo = _FakeRepo()
     SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier()).execute(limit=25)
     assert repo.missing_limit == 25
+
+
+# --- SearchStocks / ListClassifications (the read side) ------------------------------------
+
+_RESULT = StockSearchResult(
+    ticker="NVDA",
+    name="Nvidia",
+    sector="technology",
+    industry="semiconductors",
+    market_cap=3e12,
+    revenue_growth_yoy=61.6,
+    eps_growth_yoy=587.4,
+    in_sp500=True,
+    in_nasdaq100=True,
+)
+
+
+class _FakeSearchRepo(StockSearchRepository):
+    """Records the criteria it was handed and returns a canned page / classifications."""
+
+    def __init__(self, *, page=None, classifications=None) -> None:
+        self._page = page or StockSearchPage(results=(), total=0, limit=0, offset=0)
+        self._classifications = classifications or Classifications((), ())
+        self.criteria: StockSearchCriteria | None = None
+        self.classifications_calls = 0
+
+    def search(self, criteria):
+        self.criteria = criteria
+        return self._page
+
+    def classifications(self):
+        self.classifications_calls += 1
+        return self._classifications
+
+
+def test_search_normalizes_inputs_and_passes_clean_criteria():
+    repo = _FakeSearchRepo()
+    SearchStocks(repo).execute(
+        query="  NvDa ",
+        sector="Consumer Electronics",
+        industry="  Semiconductors  ",
+        in_sp500=True,
+        in_nasdaq100=False,
+        sort=StockSort.REVENUE_GROWTH,
+        direction=SortDirection.ASC,
+        limit=10,
+        offset=20,
+    )
+    c = repo.criteria
+    # Trimmed but NOT lower-cased — the SQL match is case-insensitive, so the raw case is kept.
+    assert c.query == "NvDa"
+    assert c.sector == "consumer_electronics"  # slugged to the stored convention
+    assert c.industry == "semiconductors"  # slugged + trimmed
+    assert (c.in_sp500, c.in_nasdaq100) == (True, False)
+    assert (c.sort, c.direction) == (StockSort.REVENUE_GROWTH, SortDirection.ASC)
+    assert (c.limit, c.offset) == (10, 20)
+
+
+def test_search_blank_text_and_filters_become_none():
+    repo = _FakeSearchRepo()
+    SearchStocks(repo).execute(query="   ", sector="", industry=None)
+    c = repo.criteria
+    assert (c.query, c.sector, c.industry) == (None, None, None)
+    # Index flags default to a tri-state "don't filter".
+    assert (c.in_sp500, c.in_nasdaq100) == (None, None)
+
+
+def test_search_defaults_to_market_cap_desc_and_the_default_page():
+    repo = _FakeSearchRepo()
+    SearchStocks(repo).execute()
+    c = repo.criteria
+    assert (c.sort, c.direction) == (StockSort.MARKET_CAP, SortDirection.DESC)
+    assert (c.limit, c.offset) == (SearchStocks.DEFAULT_LIMIT, 0)
+    assert c.query is None
+
+
+@pytest.mark.parametrize(
+    "given, expected",
+    [
+        (0, 1),
+        (-5, 1),
+        (1, 1),
+        (50, 50),
+        (SearchStocks.MAX_LIMIT, SearchStocks.MAX_LIMIT),
+        (SearchStocks.MAX_LIMIT + 1, SearchStocks.MAX_LIMIT),
+        (10_000, SearchStocks.MAX_LIMIT),
+    ],
+)
+def test_search_clamps_limit_into_range(given, expected):
+    repo = _FakeSearchRepo()
+    SearchStocks(repo).execute(limit=given)
+    assert repo.criteria.limit == expected
+
+
+def test_search_floors_a_negative_offset():
+    repo = _FakeSearchRepo()
+    SearchStocks(repo).execute(offset=-3)
+    assert repo.criteria.offset == 0
+
+
+def test_search_returns_the_repository_page_unchanged():
+    page = StockSearchPage(results=(_RESULT,), total=1, limit=25, offset=0)
+    repo = _FakeSearchRepo(page=page)
+    assert SearchStocks(repo).execute(query="nv") is page
+
+
+def test_list_classifications_passes_through():
+    classifications = Classifications(
+        ("energy", "technology"), ("oil_gas", "semiconductors")
+    )
+    repo = _FakeSearchRepo(classifications=classifications)
+
+    result = ListClassifications(repo).execute()
+
+    assert result is classifications
+    assert repo.classifications_calls == 1
