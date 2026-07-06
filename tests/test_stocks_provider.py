@@ -358,6 +358,33 @@ def test_to_candle_maps_fields_and_casts_volume():
     assert candle.is_bullish is True
 
 
+def test_to_candle_clamps_bad_low_spike():
+    # The real incident: SPY's 2026-02-02 daily bar came back low=69 against a
+    # ~690 body — a corrupt tick that drew a giant downward wick. The low is
+    # pulled up to the body bottom; open/high/close/volume pass through.
+    bar = make_bar(datetime(2026, 2, 2, tzinfo=timezone.utc), 689.58, 696.93, 69.0, 695.41)
+    candle = AlpacaStockDataProvider._to_candle(bar)
+    assert candle.low == 689.58  # min(open, close) — the spike removed
+    assert (candle.open, candle.high, candle.close) == (689.58, 696.93, 695.41)
+
+
+def test_to_candle_clamps_bad_high_spike():
+    # Symmetric guard: a garbage high far above the body is pulled back in,
+    # while a plausible lower wick on the same bar is left alone.
+    bar = make_bar(datetime(2026, 2, 2, tzinfo=timezone.utc), 100.0, 6900.0, 98.0, 104.0)
+    candle = AlpacaStockDataProvider._to_candle(bar)
+    assert candle.high == 104.0  # max(open, close) — the spike removed
+    assert candle.low == 98.0  # plausible wick untouched
+
+
+def test_to_candle_keeps_steep_but_plausible_wick():
+    # A steep-but-real intraday wick (~-30% here) stays: only spikes past the
+    # body fraction are treated as corrupt, so genuine moves pass through.
+    bar = make_bar(datetime(2026, 6, 18, tzinfo=timezone.utc), 100.0, 108.0, 70.0, 104.0)
+    candle = AlpacaStockDataProvider._to_candle(bar)
+    assert (candle.high, candle.low) == (108.0, 70.0)
+
+
 def test_get_candles_returns_chronological_order():
     # Alpaca is asked for newest-first (sort=DESC); the adapter must reverse it.
     newest = make_bar(datetime(2026, 6, 19, tzinfo=timezone.utc), 110, 111, 108, 109)
