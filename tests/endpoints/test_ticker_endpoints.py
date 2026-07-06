@@ -339,6 +339,7 @@ def _a_page() -> StockSearchPage:
                 sector="technology",
                 industry="semiconductors",
                 market_cap=3e12,
+                pe_ratio=48.2,
                 revenue_growth_yoy=61.6,
                 eps_growth_yoy=587.4,
                 forward_revenue_growth_yoy=52.1,
@@ -366,6 +367,7 @@ def test_search_returns_the_expected_json_shape():
         "sector": "technology",
         "industry": "semiconductors",
         "market_cap": 3e12,
+        "pe_ratio": 48.2,
         "revenue_growth_yoy": 61.6,
         "eps_growth_yoy": 587.4,
         "forward_revenue_growth_yoy": 52.1,
@@ -433,6 +435,15 @@ def test_search_accepts_the_growth_blend_sort():
 
     assert resp.status_code == 200
     assert fake.kwargs["sort"] is StockSort.GROWTH
+
+
+def test_search_accepts_the_pe_sort():
+    # The trailing-P/E sort binds to StockSort.PE like the other sort values.
+    fake = _FakeSearch(page=_a_page())
+    resp = _search_client(search=fake).get("/stocks/ticker", params={"sort": "pe"})
+
+    assert resp.status_code == 200
+    assert fake.kwargs["sort"] is StockSort.PE
 
 
 @pytest.mark.parametrize(

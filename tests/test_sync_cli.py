@@ -55,6 +55,14 @@ def test_index_membership_dispatches_too(monkeypatch):
     assert recorders["index-membership"].calls == [None]
 
 
+def test_etfs_dispatches_too(monkeypatch):
+    # The ETF screen ignores the cap (a single full screen-and-upsert), but the CLI still passes
+    # None (no limit) uniformly.
+    recorders = _patch_runners(monkeypatch)
+    assert cli.main(["etfs"]) == 0
+    assert recorders["etfs"].calls == [None]
+
+
 def test_unknown_slice_is_a_usage_error_and_runs_nothing(monkeypatch):
     recorders = _patch_runners(monkeypatch)
     assert cli.main(["does-not-exist"]) == 2

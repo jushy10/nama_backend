@@ -9,8 +9,8 @@ just the current pair. Both nullable: unset until the annual slice has two *upco
 years cached (Yahoo often publishes only FY1, so this is frequently null). Batch mode so
 the ADD/DROP works on SQLite too.
 
-Revision ID: 0016_stocks_forward_growth
-Revises: 0015_drop_index_constituents
+Revision ID: 0018_stocks_forward_growth
+Revises: 0017_stock_pe
 Create Date: 2026-07-06
 
 """
@@ -21,8 +21,8 @@ import sqlalchemy as sa
 
 # Keep the revision id <= 32 chars: alembic_version.version_num is VARCHAR(32). Postgres
 # enforces it (SQLite doesn't), so a longer id passes local tests but fails the RDS migration.
-revision: str = "0016_stocks_forward_growth"
-down_revision: Union[str, None] = "0015_drop_index_constituents"
+revision: str = "0018_stocks_forward_growth"
+down_revision: Union[str, None] = "0017_stock_pe"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

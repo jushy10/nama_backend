@@ -1,9 +1,13 @@
 name: Sync universe
 run-name: Sync universe
 
-# Weekly (and on-demand). The searchable universe is every US company at/above a $1B market cap
-# (~2,800 names). Membership drifts slowly — a company crossing $1B is a rare event — so weekly
-# is plenty.
+# Daily (and on-demand). The searchable universe is every US company at/above a $1B market cap
+# (~2,800 names). Membership itself drifts slowly — a company crossing $1B is rare — but the
+# screen also refreshes the *price-derived* facts on the anchor (market_cap and the trailing
+# pe_ratio the search sorts on), which we want tracking the market rather than a week stale. Daily
+# is cheap here: the bulk screen is a handful of Yahoo calls, the valuation pass is DB-only, and
+# the per-ticker enrichment is fill-once — at steady state it only re-touches the small tail Yahoo
+# can't classify, so daily doesn't meaningfully raise Yahoo load once the universe is seeded.
 #
 # It launches a one-off ECS Fargate task that runs `python -m app.sync universe 1000` (the
 # SyncUniverse use case) to completion and exits. The use case screens the US market via yfinance
@@ -17,8 +21,8 @@ run-name: Sync universe
 # borrowing the app service's own network config.
 #
 # The market screen always runs in full; only the per-ticker enrichment is capped (SYNC_LIMIT).
-# Since industry is fill-once, successive weekly runs converge — each classifies only what's
-# still unset, up to the cap.
+# Since industry is fill-once, successive runs converge — each classifies only what's still
+# unset, up to the cap — so the daily cadence doesn't re-do finished classification work.
 #
 # FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs on ECS (the
 # enrichment pass makes hundreds-to-thousands of sequential Yahoo calls — minutes) and its result
@@ -34,12 +38,13 @@ run-name: Sync universe
 
 on:
   workflow_dispatch: {}
-  # Weekly, Sundays 06:00 UTC — staggered off the daily recommendations sync (07:30) and the
+  # Daily, 06:00 UTC — before US market open, so each run prices off the prior day's close (the
+  # standard daily-P/E basis) and lands ahead of the daily recommendations sync (07:30) and the
   # Monday earnings syncs (08:00/09:00). Exact timing doesn't matter. Caveats: scheduled
   # workflows run only from the default branch, and GitHub auto-disables the schedule after 60
   # days with no repo activity.
   schedule:
-    - cron: "0 6 * * 0"
+    - cron: "0 6 * * *"
 
 concurrency:
   group: sync-universe
@@ -55,7 +60,7 @@ env:
   SYNC_SLICE: universe
   # Max stocks the enrichment pass classifies this run, via a per-ticker Yahoo call. The bulk
   # screen always runs in full; only enrichment is capped. Since industry is fill-once, a
-  # universe larger than this is classified over successive weekly runs.
+  # universe larger than this is classified over successive runs.
   SYNC_LIMIT: "1000"
 
 jobs:

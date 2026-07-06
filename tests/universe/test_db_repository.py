@@ -5,12 +5,13 @@ has no table of its own). Two suites:
 
 - ``SqlUniverseRepository`` (write side): the additive upsert (insert new / refresh in place /
   never remove an absent member), the fill-but-don't-clobber rule for the anchor's
-  name/exchange/sector, the screen stamp, added-vs-updated counting, and the enrichment pass's
-  read/write of the sector/industry classification.
+  name/exchange/sector, the screen stamp, added-vs-updated counting, the enrichment pass's
+  read/write of the sector/industry classification, and the valuation pass's overwriting
+  ``set_pe_ratios``.
 - ``SqlStockSearchRepository`` (read side): the name-or-ticker substring match, the
-  sector/industry/index-membership filters, the sorts (market cap + trailing growth, nulls
-  last, stable ticker tiebreak), limit/offset paging with a total count, the screened-only
-  gate, and the distinct sector/industry menus.
+  sector/industry/index-membership filters, the sorts (market cap, trailing growth, and
+  trailing P/E — nulls last, stable ticker tiebreak), limit/offset paging with a total count,
+  the screened-only gate, and the distinct sector/industry menus.
 """
 
 from datetime import datetime, timezone
@@ -244,6 +245,48 @@ def test_set_classification_ignores_an_unknown_ticker(session):
     )
 
 
+def test_set_pe_ratios_writes_overwrites_and_returns_the_non_null_count(session):
+    r = repo(session)
+    r.upsert_screen(
+        (
+            _stock("AAPL", market_cap=3e12),
+            _stock("MSFT", market_cap=2e12),
+            _stock("LOSS", market_cap=1e10),
+        )
+    )
+
+    written = r.set_pe_ratios({"AAPL": 30.5, "MSFT": 42.0, "LOSS": None})
+
+    assert written == 2  # AAPL + MSFT; the None (a trailing loss) isn't counted
+    assert _row(session, "AAPL").pe_ratio == 30.5
+    assert _row(session, "MSFT").pe_ratio == 42.0
+    assert _row(session, "LOSS").pe_ratio is None
+
+    # Overwrite, not fill-once: a later sweep replaces the figure in place, and a None clears a
+    # prior one (the stock's trailing year turned a loss, or its quarters aged out).
+    written = r.set_pe_ratios({"AAPL": 28.0, "MSFT": None})
+    assert written == 1
+    assert _row(session, "AAPL").pe_ratio == 28.0
+    assert _row(session, "MSFT").pe_ratio is None  # cleared
+
+
+def test_set_pe_ratios_skips_an_unknown_ticker(session):
+    r = repo(session)
+    r.upsert_screen((_stock("AAPL", market_cap=3e12),))
+
+    # NOPE has no anchor row — it's skipped (not created); AAPL is still written.
+    written = r.set_pe_ratios({"AAPL": 20.0, "NOPE": 15.0})
+
+    assert written == 1
+    assert _row(session, "AAPL").pe_ratio == 20.0
+    assert (
+        session.execute(
+            select(StockRecord).where(StockRecord.ticker == "NOPE")
+        ).scalar_one_or_none()
+        is None
+    )
+
+
 # --- SqlStockSearchRepository (the read side) ----------------------------------------------
 
 
@@ -255,6 +298,7 @@ def _seed(
     sector=None,
     industry=None,
     market_cap=1e10,
+    pe_ratio=None,
     revenue_growth_yoy=None,
     eps_growth_yoy=None,
     forward_revenue_growth_yoy=None,
@@ -272,6 +316,7 @@ def _seed(
             sector=sector,
             industry=industry,
             market_cap=market_cap,
+            pe_ratio=pe_ratio,
             revenue_growth_yoy=revenue_growth_yoy,
             eps_growth_yoy=eps_growth_yoy,
             forward_revenue_growth_yoy=forward_revenue_growth_yoy,
@@ -482,6 +527,26 @@ def test_search_sorts_by_the_forward_growth_blend_nulls_last(session):
     ) == ["AAA", "CCC", "BBB", "DDD"]
 
 
+def test_search_sorts_by_pe_with_nulls_last_either_direction(session):
+    _seed(session, "CHEAP", pe_ratio=12.0)
+    _seed(session, "MID", pe_ratio=25.0)
+    _seed(session, "RICH", pe_ratio=80.0)
+    _seed(session, "NONE", pe_ratio=None)  # unvalued (or a trailing loss) sinks to the bottom
+    r = SqlStockSearchRepository(session)
+
+    # Ascending surfaces the cheapest on earnings first; the null is last.
+    assert _tickers(
+        r.search(_criteria(sort=StockSort.PE, direction=SortDirection.ASC))
+    ) == ["CHEAP", "MID", "RICH", "NONE"]
+    # Descending: priciest first, and the null is STILL last (nulls_last, not just reversed).
+    assert _tickers(r.search(_criteria(sort=StockSort.PE))) == [
+        "RICH",
+        "MID",
+        "CHEAP",
+        "NONE",
+    ]
+
+
 def test_search_breaks_sort_ties_by_ticker_for_stable_paging(session):
     _seed(session, "TWOB", market_cap=1e12)
     _seed(session, "TWOA", market_cap=1e12)  # same cap — ticker decides the order
@@ -527,6 +592,7 @@ def test_search_maps_every_row_field(session):
         sector="technology",
         industry="semiconductors",
         market_cap=3.0e12,
+        pe_ratio=48.2,
         revenue_growth_yoy=61.6,
         eps_growth_yoy=587.4,
         forward_revenue_growth_yoy=52.1,
@@ -543,6 +609,7 @@ def test_search_maps_every_row_field(session):
         "semiconductors",
     )
     assert result.market_cap == 3.0e12
+    assert result.pe_ratio == 48.2
     assert (result.revenue_growth_yoy, result.eps_growth_yoy) == (61.6, 587.4)
     assert (result.forward_revenue_growth_yoy, result.forward_eps_growth_yoy) == (52.1, 48.3)
     assert (result.in_sp500, result.in_nasdaq100) == (True, True)

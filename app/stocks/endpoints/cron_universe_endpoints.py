@@ -15,9 +15,11 @@ safe: the screen upsert and each enrichment write commit independently, and the 
 fill-once, so an interrupted run just resumes on the next trigger.
 
 Wiring lives here, the composition-root way: ``run_universe_sync`` opens a fresh session and
-builds the live yfinance screener + classification adapters and the SQL repository for the use
-case. Yahoo needs no API key, so there's no credential to gate on; the sync is always
-constructable. ``get_sync_runner`` is the DI seam tests override with a fake.
+builds the live yfinance screener + classification adapters, the universe SQL repository, and
+the quarterly-earnings cache repository (the DB-only TTM read the valuation pass pairs with the
+screen-time price to derive each stock's stored P/E) for the use case. Yahoo needs no API key,
+so there's no credential to gate on; the sync is always constructable. ``get_sync_runner`` is
+the DI seam tests override with a fake.
 
 Security: this endpoint is currently **unauthenticated** — it writes the database (and hits
 Yahoo) and is triggered over the public internet by the sync workflow, so an auth token
@@ -35,6 +37,7 @@ from app.stocks.adapters.yfinance_classification_adapter import (
     YfinanceClassificationProvider,
 )
 from app.stocks.adapters.yfinance_screener_adapter import YfinanceScreenerProvider
+from app.stocks.earnings.quarterly.db_repository import SqlQuarterlyEarningsRepository
 from app.stocks.endpoints.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
@@ -60,6 +63,7 @@ def run_universe_sync(limit: int) -> UniverseSyncReport:
             YfinanceScreenerProvider(),
             SqlUniverseRepository(db),
             YfinanceClassificationProvider(),
+            SqlQuarterlyEarningsRepository(db),
         ).execute(limit=limit)
         if report.skipped:
             logger.warning(
@@ -70,12 +74,13 @@ def run_universe_sync(limit: int) -> UniverseSyncReport:
         else:
             logger.info(
                 "universe sync done: screened=%d added=%d updated=%d enriched=%d "
-                "enrich_failed=%d limit=%d",
+                "enrich_failed=%d valued=%d limit=%d",
                 report.screened,
                 report.added,
                 report.updated,
                 report.enriched,
                 report.enrich_failed,
+                report.valued,
                 limit,
             )
         return report

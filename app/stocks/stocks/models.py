@@ -9,8 +9,8 @@ analyst-estimates feature was the first to need the anchor); migration 0009 adde
 ``exchange``, 0010 renamed the ``symbol`` column to ``ticker`` (the domain layers
 still say "symbol" — the rename is a table-vocabulary choice), 0011 added the trailing
 year-over-year growth columns, 0012 the three universe-screen columns, 0013 the
-``industry`` column, and 0014 the ``in_sp500`` / ``in_nasdaq100`` index-membership flags
-(all below).
+``industry`` column, 0014 the ``in_sp500`` / ``in_nasdaq100`` index-membership flags,
+0017 the ``pe_ratio`` column, and 0018 the forward year-over-year growth columns (all below).
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ class StockRecord(Base):
     overwrites both on every refresh from its stored forward years), and both legs sit on
     the consensus basis so neither carries a basis caveat. Nullable and more often unset
     than the trailing pair: they need *two* upcoming years and Yahoo frequently publishes
-    only FY1 (0016).
+    only FY1 (0018).
 
     ``sector`` / ``industry`` / ``market_cap`` / ``screened_at`` are the universe screen's
     facts, filled by the universe sync (the ≥$1B US screen) and deliberately denormalized
@@ -64,6 +64,16 @@ class StockRecord(Base):
     filled once by the sync's enrichment pass from Yahoo's per-ticker ``.info`` — the bulk
     screen carries neither, so they lag the other screen facts until enrichment reaches the
     stock (and stay null for a symbol Yahoo doesn't classify).
+
+    ``pe_ratio`` is the stock's trailing P/E on the analyst-consensus (adjusted) EPS basis —
+    the same figure the ticker card computes live (``TickerValuation.trailing_pe``): a market
+    price over the quarterly slice's TTM consensus EPS. It's written by the universe sync on
+    the same sweep as ``market_cap`` (from the screen-time price the screen already carries),
+    and like ``market_cap`` it's a *drifting, price-derived snapshot* — overwritten every run,
+    not a fill-once fact. Nullable and null until the quarterly cache holds four reported
+    quarters, and whenever the trailing year is a loss (a P/E off negative earnings is
+    meaningless). It exists to make the universe *sortable* by valuation; the card still serves
+    its own live P/E off the quote, so the two share a basis but not a freshness.
 
     ``in_sp500`` / ``in_nasdaq100`` are index-membership flags, reconciled by the
     index-membership sync (Finnhub → this anchor). Unlike the screen facts these are
@@ -89,6 +99,7 @@ class StockRecord(Base):
     screened_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    pe_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
     in_sp500: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=false(), default=False
     )

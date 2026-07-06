@@ -26,6 +26,7 @@ import sys
 from collections.abc import Callable, Sequence
 
 from app.stocks.endpoints.cron_annual_earnings_endpoints import run_annual_earnings_sync
+from app.stocks.endpoints.cron_etf_endpoints import run_etf_sync
 from app.stocks.endpoints.cron_index_membership_endpoints import (
     run_index_membership_sync,
 )
@@ -38,15 +39,17 @@ from app.stocks.endpoints.cron_universe_endpoints import run_universe_sync
 logger = logging.getLogger("app.sync")
 
 # slice name -> the sweep's unit of work. Each takes an optional cap: None means "process every
-# stock" for the earnings/recs sweeps and "enrich the slice's own default cap" for universe
-# (whose market screen always runs in full regardless). index-membership ignores the cap
-# entirely — it's a full mark/clear reconcile against both index lists, not a stalest-N sweep.
+# stock" for the earnings/recs sweeps and "enrich the slice's own default cap" for universe and
+# etfs (whose bulk screen always runs in full regardless; the cap bounds only the per-ticker
+# sector/category enrichment). index-membership ignores the cap entirely — it's a full mark/clear
+# reconcile against both index lists, not a stalest-N sweep.
 RUNNERS: dict[str, Callable[[int | None], object]] = {
     "quarterly-earnings": run_quarterly_earnings_sync,
     "annual-earnings": run_annual_earnings_sync,
     "recommendations": run_recommendations_sync,
     "universe": run_universe_sync,
     "index-membership": run_index_membership_sync,
+    "etfs": run_etf_sync,
 }
 
 
