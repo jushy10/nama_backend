@@ -62,6 +62,7 @@ from app.stocks.endpoints.quarterly_earnings_endpoints import (
     get_quarterly_earnings_provider,
 )
 from app.stocks.entities import StockPerformance
+from app.stocks.etfs.db_repository import SqlEtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AnalystEstimatesProvider,
@@ -135,6 +136,10 @@ def get_ticker_card_use_case(
         repository=SqlTickerRepository(db),
         options=options,
         earnings=earnings,
+        # The card's asset_type is a single indexed membership check against the etfs
+        # table (same request-scoped session as the anchor read) — "etf" for a screened
+        # fund, else "equity".
+        etfs=SqlEtfLookupRepository(db),
     )
 
 
@@ -217,6 +222,7 @@ def _present(card: TickerCard) -> TickerCardResponse:
         ticker=card.quote.symbol,
         name=card.name,
         exchange=card.exchange,
+        asset_type=card.asset_type,
         price=card.quote.price,
         change=card.quote.change,
         change_percent=card.quote.change_percent,

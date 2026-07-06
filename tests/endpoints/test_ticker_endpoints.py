@@ -63,7 +63,9 @@ def _client(fake: _FakeUseCase) -> TestClient:
     return TestClient(app)
 
 
-def _a_card(*, include: frozenset[str] = frozenset()) -> TickerCard:
+def _a_card(
+    *, include: frozenset[str] = frozenset(), asset_type: str = "equity"
+) -> TickerCard:
     """A canned card; the opt-in blocks are populated only when in ``include``,
     the way the use case builds it."""
     return TickerCard(
@@ -76,6 +78,7 @@ def _a_card(*, include: frozenset[str] = frozenset()) -> TickerCard:
             as_of=datetime(2026, 7, 3, tzinfo=timezone.utc),
         ),
         include=include,
+        asset_type=asset_type,
         valuation=(
             TickerValuation(
                 symbol="MU",
@@ -143,6 +146,7 @@ def test_presents_the_core_card_with_null_optin_blocks_by_default():
     assert body["ticker"] == "MU"  # the symbol, in this endpoint's vocabulary
     assert body["name"] == "Micron Technology"  # profile vendor's clean display name
     assert body["exchange"] == "NASDAQ"  # DB-backed, always served
+    assert body["asset_type"] == "equity"  # always present; a stock here
     assert body["price"] == 975.56
     assert body["change"] == 12.3  # vs the previous close, same rule as /quote
     assert body["change_percent"] == 1.28
@@ -156,6 +160,15 @@ def test_presents_the_core_card_with_null_optin_blocks_by_default():
     assert body["metrics"] is None
     assert body["options_metrics"] is None
     assert fake.calls == [("MU", None)]
+
+
+def test_asset_type_is_etf_for_a_fund():
+    # A ticker in the ETF universe carries asset_type "etf" (the presenter passes the card's
+    # value straight through); always present and non-null.
+    fake = _FakeUseCase(result=_a_card(asset_type="etf"))
+    resp = _client(fake).get("/stocks/ticker/VOO")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["asset_type"] == "etf"
 
 
 def test_presents_the_optin_blocks_when_included():

@@ -20,6 +20,7 @@ from app.stocks.etfs.entities import (
     EtfClassification,
     EtfSearchCriteria,
     EtfSearchPage,
+    EtfSearchResult,
     ScreenedEtf,
 )
 
@@ -103,5 +104,39 @@ class EtfSearchRepository(ABC):
 
         One flat, sorted, de-duplicated list (nulls excluded) — the FE's filter menu, which the
         search then accepts back as its ``category`` filter.
+        """
+        raise NotImplementedError
+
+
+class EtfLookupRepository(ABC):
+    """A read-only view over a *single* stored fund, keyed by ticker — the seam for the two
+    per-ticker reads the search surface doesn't cover.
+
+    Split from ``EtfSearchRepository`` (the "one port per capability" rule) so the *ticker* slice
+    can depend on just the membership check — its only question is "is this symbol an ETF?" — and
+    the ETF-detail read on the full row, without pulling in the whole paginated search surface.
+    Both are backed by the same ``etfs`` table and its unique ``ticker`` index.
+    """
+
+    @abstractmethod
+    def is_etf(self, ticker: str) -> bool:
+        """Whether ``ticker`` (already normalized) is in the stored ETF universe.
+
+        A single indexed existence check against the ``etfs`` table's unique ``ticker`` column —
+        cheap enough to run on every ticker-card request to decide the card's ``asset_type``. A
+        miss is not an error: an unknown/equity symbol simply returns ``False``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get(self, ticker: str) -> EtfSearchResult | None:
+        """Return the stored ``etfs``-table facts for ``ticker`` (already normalized), or ``None``
+        when the fund isn't in the universe.
+
+        One indexed row read on the unique ``ticker``: the identity facts (name/exchange) plus the
+        stored figures (net_assets/expense_ratio) and the ``category`` slug — the anchor the
+        ETF-detail endpoint reads before layering the live quote and the best-effort yfinance
+        enrichment. ``None`` (not an error) is how the endpoint learns a symbol is not an ETF, so
+        it can answer 404.
         """
         raise NotImplementedError

@@ -1,6 +1,6 @@
 """Tests for the database-backed ETF repositories.
 
-Offline: an in-memory SQLite database stands in for the real ``etfs`` table. Two suites:
+Offline: an in-memory SQLite database stands in for the real ``etfs`` table. Three suites:
 
 - ``SqlEtfRepository`` (write side): the additive upsert (insert new / refresh in place / never
   remove an absent fund), the fill-but-don't-clobber rule for name/exchange, the screen stamp,
@@ -8,6 +8,8 @@ Offline: an in-memory SQLite database stands in for the real ``etfs`` table. Two
 - ``SqlEtfSearchRepository`` (read side): the name-or-ticker substring match, the category filter,
   the sorts (net assets / expense ratio, nulls last, stable ticker tiebreak), limit/offset paging
   with a total count, and the distinct category menu.
+- ``SqlEtfLookupRepository`` (single-fund read side): the ``is_etf`` membership probe (the ticker
+  card's asset_type) and the ``get`` full-row read (the ETF detail endpoint's stored facts).
 """
 
 from datetime import datetime, timezone
@@ -17,10 +19,15 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.stocks.etfs.db_repository import SqlEtfRepository, SqlEtfSearchRepository
+from app.stocks.etfs.db_repository import (
+    SqlEtfLookupRepository,
+    SqlEtfRepository,
+    SqlEtfSearchRepository,
+)
 from app.stocks.etfs.entities import (
     EtfClassification,
     EtfSearchCriteria,
+    EtfSearchResult,
     EtfSort,
     ScreenedEtf,
     SortDirection,
@@ -367,3 +374,56 @@ def test_categories_are_distinct_sorted_and_null_free(session):
         "large_blend",
         "large_growth",
     )
+
+
+# --- SqlEtfLookupRepository (the single-fund read side) -----------------------------------
+
+
+def test_is_etf_is_true_for_a_stored_fund_and_false_otherwise(session):
+    _seed(session, "VOO", name="Vanguard S&P 500 ETF")
+    r = SqlEtfLookupRepository(session)
+
+    assert r.is_etf("VOO") is True
+    # A symbol not in the etfs universe (an equity, or a bogus ticker) is simply False, not an error.
+    assert r.is_etf("AAPL") is False
+    assert r.is_etf("ZZZZ") is False
+
+
+def test_is_etf_is_exact_not_a_substring_match(session):
+    # The membership check keys on the unique ticker exactly — a prefix of a stored ticker is not
+    # a member.
+    _seed(session, "VOO")
+    r = SqlEtfLookupRepository(session)
+
+    assert r.is_etf("VOO") is True
+    assert r.is_etf("VO") is False
+
+
+def test_get_returns_the_stored_facts(session):
+    _seed(
+        session,
+        "VOO",
+        name="Vanguard S&P 500 ETF",
+        exchange="NYSE",
+        net_assets=1.7e12,
+        expense_ratio=0.03,
+        category="large_blend",
+    )
+    r = SqlEtfLookupRepository(session)
+
+    assert r.get("VOO") == EtfSearchResult(
+        ticker="VOO",
+        name="Vanguard S&P 500 ETF",
+        exchange="NYSE",
+        net_assets=1.7e12,
+        expense_ratio=0.03,
+        category="large_blend",
+    )
+
+
+def test_get_returns_none_for_a_symbol_not_in_the_universe(session):
+    # A miss is None (the detail endpoint's 404 signal), not an error.
+    _seed(session, "VOO")
+    r = SqlEtfLookupRepository(session)
+
+    assert r.get("AAPL") is None

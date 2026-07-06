@@ -23,15 +23,22 @@ from dataclasses import dataclass
 
 from app.stocks.etfs.entities import (
     EtfCategories,
+    EtfDetail,
+    EtfProfile,
     EtfSearchCriteria,
     EtfSearchPage,
     EtfSort,
     SortDirection,
     slugify,
 )
-from app.stocks.etfs.ports import EtfCategoryProvider, EtfScreener
-from app.stocks.etfs.repository import EtfRepository, EtfSearchRepository
+from app.stocks.etfs.ports import EtfCategoryProvider, EtfProfileProvider, EtfScreener
+from app.stocks.etfs.repository import (
+    EtfLookupRepository,
+    EtfRepository,
+    EtfSearchRepository,
+)
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.ports import StockQuoteProvider
 from app.stocks.progress import iter_with_progress
 
 logger = logging.getLogger(__name__)
@@ -208,3 +215,59 @@ class ListEtfCategories:
 
     def execute(self) -> EtfCategories:
         return self._repository.categories()
+
+
+def _normalize_symbol(symbol: str) -> str:
+    """Trim/upper-case the ticker and reject obvious junk, once, at the edge of the use case —
+    the same guard the ticker/stocks slices apply, so ``GET /stocks/etf/{ticker}`` 400s on the
+    same bad input as its siblings."""
+    normalized = (symbol or "").strip().upper()
+    if not normalized:
+        raise ValueError("An ETF symbol is required.")
+    if not normalized.isalpha() or len(normalized) > 5:
+        # Simple guard; ETF tickers are 1-5 letters, like the stock guard.
+        raise ValueError(f"'{symbol}' is not a valid ETF symbol.")
+    return normalized
+
+
+class GetEtfDetail:
+    """Use case: one fund's detail card — the live quote, the stored ``etfs`` facts, and the
+    best-effort Yahoo profile (``GET /stocks/etf/{ticker}``).
+
+    Membership-gated and quote-primary. First the symbol is looked up in the stored ETF universe:
+    a symbol that isn't a screened fund raises ``StockNotFound`` (the endpoint maps it to 404 —
+    "not an ETF"), *before* any quote or Yahoo call, so a stock or a bogus ticker costs nothing
+    upstream. Then the live quote is fetched and is **primary** — a quote failure propagates
+    (the endpoint maps it to the same 502/503 the quote endpoints use), because a detail card with
+    no price isn't worth serving. The Yahoo profile is best-effort enrichment layered last: its
+    provider is total (never raises), so a blocked or uncovered read just leaves the profile empty
+    and the card still returns 200 with the quote + stored facts. The stored net_assets/expense
+    figures win over the profile's where both exist (the detail page must agree with the screener
+    list); the profile only fills the gaps.
+    """
+
+    def __init__(
+        self,
+        lookup: EtfLookupRepository,
+        quotes: StockQuoteProvider,
+        profile: EtfProfileProvider,
+    ) -> None:
+        self._lookup = lookup
+        self._quotes = quotes
+        self._profile = profile
+
+    def execute(self, symbol: str) -> EtfDetail:
+        normalized = _normalize_symbol(symbol)
+        # Membership gate first: not an ETF -> 404, before any upstream call.
+        facts = self._lookup.get(normalized)
+        if facts is None:
+            raise StockNotFound(normalized)
+        # Primary source: a quote failure propagates (mapped to 502/503 at the edge).
+        quote = self._quotes.get_quote(normalized)
+        # Best-effort enrichment: the provider is total, but guard anyway so a contract slip
+        # can never sink a card whose primary data (the quote) is already in hand.
+        try:
+            profile = self._profile.get_profile(normalized)
+        except (StockNotFound, StockDataUnavailable):
+            profile = EtfProfile.empty()
+        return EtfDetail.assemble(normalized, quote, facts, profile)
