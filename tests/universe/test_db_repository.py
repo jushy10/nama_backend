@@ -301,6 +301,8 @@ def _seed(
     pe_ratio=None,
     revenue_growth_yoy=None,
     eps_growth_yoy=None,
+    forward_revenue_growth_yoy=None,
+    forward_eps_growth_yoy=None,
     in_sp500=False,
     in_nasdaq100=False,
 ):
@@ -317,6 +319,8 @@ def _seed(
             pe_ratio=pe_ratio,
             revenue_growth_yoy=revenue_growth_yoy,
             eps_growth_yoy=eps_growth_yoy,
+            forward_revenue_growth_yoy=forward_revenue_growth_yoy,
+            forward_eps_growth_yoy=forward_eps_growth_yoy,
             in_sp500=in_sp500,
             in_nasdaq100=in_nasdaq100,
         )
@@ -479,6 +483,50 @@ def test_search_sorts_by_the_combined_growth_blend_nulls_last(session):
     ) == ["AAA", "CCC", "BBB", "DDD", "EEE"]
 
 
+def test_search_sorts_by_the_forward_growth_figures_nulls_last(session):
+    # The forward (FY1->FY2 consensus) single-metric sorts behave exactly like the trailing
+    # ones: rank by the figure, nulls last, ticker tiebreak. CCC has no forward pair yet
+    # (awaiting a second upcoming year), so it sinks in both.
+    _seed(session, "AAA", forward_revenue_growth_yoy=10.0, forward_eps_growth_yoy=15.0)
+    _seed(session, "BBB", forward_revenue_growth_yoy=30.0, forward_eps_growth_yoy=40.0)
+    _seed(session, "CCC", forward_revenue_growth_yoy=None, forward_eps_growth_yoy=None)
+    _seed(session, "DDD", forward_revenue_growth_yoy=20.0, forward_eps_growth_yoy=25.0)
+    r = SqlStockSearchRepository(session)
+
+    assert _tickers(r.search(_criteria(sort=StockSort.FORWARD_REVENUE_GROWTH))) == [
+        "BBB",
+        "DDD",
+        "AAA",
+        "CCC",
+    ]
+    assert _tickers(r.search(_criteria(sort=StockSort.FORWARD_EPS_GROWTH))) == [
+        "BBB",
+        "DDD",
+        "AAA",
+        "CCC",
+    ]
+
+
+def test_search_sorts_by_the_forward_growth_blend_nulls_last(session):
+    # FORWARD_GROWTH blends the two forward figures the same way GROWTH blends the trailing pair:
+    # a NULL on either leg makes the sum (and blend) NULL, so the stock sorts last either way.
+    _seed(session, "AAA", forward_revenue_growth_yoy=10.0, forward_eps_growth_yoy=10.0)  # 10
+    _seed(session, "BBB", forward_revenue_growth_yoy=40.0, forward_eps_growth_yoy=20.0)  # 30
+    _seed(session, "CCC", forward_revenue_growth_yoy=20.0, forward_eps_growth_yoy=20.0)  # 20
+    _seed(session, "DDD", forward_revenue_growth_yoy=100.0, forward_eps_growth_yoy=None)  # null
+    r = SqlStockSearchRepository(session)
+
+    assert _tickers(r.search(_criteria(sort=StockSort.FORWARD_GROWTH))) == [
+        "BBB",
+        "CCC",
+        "AAA",
+        "DDD",
+    ]
+    assert _tickers(
+        r.search(_criteria(sort=StockSort.FORWARD_GROWTH, direction=SortDirection.ASC))
+    ) == ["AAA", "CCC", "BBB", "DDD"]
+
+
 def test_search_sorts_by_pe_with_nulls_last_either_direction(session):
     _seed(session, "CHEAP", pe_ratio=12.0)
     _seed(session, "MID", pe_ratio=25.0)
@@ -547,6 +595,8 @@ def test_search_maps_every_row_field(session):
         pe_ratio=48.2,
         revenue_growth_yoy=61.6,
         eps_growth_yoy=587.4,
+        forward_revenue_growth_yoy=52.1,
+        forward_eps_growth_yoy=48.3,
         in_sp500=True,
         in_nasdaq100=True,
     )
@@ -561,6 +611,7 @@ def test_search_maps_every_row_field(session):
     assert result.market_cap == 3.0e12
     assert result.pe_ratio == 48.2
     assert (result.revenue_growth_yoy, result.eps_growth_yoy) == (61.6, 587.4)
+    assert (result.forward_revenue_growth_yoy, result.forward_eps_growth_yoy) == (52.1, 48.3)
     assert (result.in_sp500, result.in_nasdaq100) == (True, True)
 
 

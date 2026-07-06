@@ -145,9 +145,11 @@ class SqlUniverseRepository(UniverseRepository):
 # Each domain sort field → the anchor column (or expression) it orders by. The growth figures
 # are nullable (the annual slice may not have filled them yet), so whichever is chosen gets
 # wrapped in nulls_last below — a missing figure sorts to the bottom in either direction.
-# GROWTH is the equal-weight blend of the two trailing-growth columns; in SQL a NULL on either
-# leg makes the sum NULL, so a stock missing *either* figure sorts last (the same nulls-last
-# rule as the single-metric growth sorts) — the blend deliberately ranks only stocks with both.
+# GROWTH / FORWARD_GROWTH are the equal-weight blend of a pair of growth columns (trailing and
+# forward respectively); in SQL a NULL on either leg makes the sum NULL, so a stock missing
+# *either* figure sorts last (the same nulls-last rule as the single-metric growth sorts) — the
+# blend deliberately ranks only stocks with both. The forward figures are more often null (they
+# need two upcoming years), so a forward sort surfaces fewer ranked names than a trailing one.
 # PE is the stored trailing P/E, also nullable (unset until the sync values it, or a trailing
 # loss), so it rides the same nulls-last rule — ascending surfaces the cheapest on earnings.
 _SORT_EXPRESSIONS = {
@@ -155,6 +157,12 @@ _SORT_EXPRESSIONS = {
     StockSort.REVENUE_GROWTH: StockRecord.revenue_growth_yoy,
     StockSort.EPS_GROWTH: StockRecord.eps_growth_yoy,
     StockSort.GROWTH: (StockRecord.revenue_growth_yoy + StockRecord.eps_growth_yoy) / 2.0,
+    StockSort.FORWARD_REVENUE_GROWTH: StockRecord.forward_revenue_growth_yoy,
+    StockSort.FORWARD_EPS_GROWTH: StockRecord.forward_eps_growth_yoy,
+    StockSort.FORWARD_GROWTH: (
+        StockRecord.forward_revenue_growth_yoy + StockRecord.forward_eps_growth_yoy
+    )
+    / 2.0,
     StockSort.PE: StockRecord.pe_ratio,
 }
 
@@ -188,6 +196,8 @@ def _to_result(row: StockRecord) -> StockSearchResult:
         pe_ratio=row.pe_ratio,
         revenue_growth_yoy=row.revenue_growth_yoy,
         eps_growth_yoy=row.eps_growth_yoy,
+        forward_revenue_growth_yoy=row.forward_revenue_growth_yoy,
+        forward_eps_growth_yoy=row.forward_eps_growth_yoy,
         in_sp500=row.in_sp500,
         in_nasdaq100=row.in_nasdaq100,
     )

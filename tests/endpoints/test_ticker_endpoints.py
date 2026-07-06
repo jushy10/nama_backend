@@ -342,6 +342,8 @@ def _a_page() -> StockSearchPage:
                 pe_ratio=48.2,
                 revenue_growth_yoy=61.6,
                 eps_growth_yoy=587.4,
+                forward_revenue_growth_yoy=52.1,
+                forward_eps_growth_yoy=48.3,
                 in_sp500=True,
                 in_nasdaq100=True,
             ),
@@ -368,6 +370,8 @@ def test_search_returns_the_expected_json_shape():
         "pe_ratio": 48.2,
         "revenue_growth_yoy": 61.6,
         "eps_growth_yoy": 587.4,
+        "forward_revenue_growth_yoy": 52.1,
+        "forward_eps_growth_yoy": 48.3,
         "in_sp500": True,
         "in_nasdaq100": True,
     }
@@ -440,6 +444,23 @@ def test_search_accepts_the_pe_sort():
 
     assert resp.status_code == 200
     assert fake.kwargs["sort"] is StockSort.PE
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("forward_revenue_growth", StockSort.FORWARD_REVENUE_GROWTH),
+        ("forward_eps_growth", StockSort.FORWARD_EPS_GROWTH),
+        ("forward_growth", StockSort.FORWARD_GROWTH),
+    ],
+)
+def test_search_accepts_the_forward_growth_sorts(value, expected):
+    # The forward (FY1->FY2 consensus) sort values bind like the trailing ones.
+    fake = _FakeSearch(page=_a_page())
+    resp = _search_client(search=fake).get("/stocks/ticker", params={"sort": value})
+
+    assert resp.status_code == 200
+    assert fake.kwargs["sort"] is expected
 
 
 @pytest.mark.parametrize(

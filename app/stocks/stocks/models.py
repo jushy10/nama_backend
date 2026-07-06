@@ -10,7 +10,7 @@ analyst-estimates feature was the first to need the anchor); migration 0009 adde
 still say "symbol" — the rename is a table-vocabulary choice), 0011 added the trailing
 year-over-year growth columns, 0012 the three universe-screen columns, 0013 the
 ``industry`` column, 0014 the ``in_sp500`` / ``in_nasdaq100`` index-membership flags,
-and 0017 the ``pe_ratio`` column (all below).
+0017 the ``pe_ratio`` column, and 0018 the forward year-over-year growth columns (all below).
 """
 
 from __future__ import annotations
@@ -43,6 +43,14 @@ class StockRecord(Base):
     EPS figure is on the analyst-consensus (adjusted) basis, matching the annual
     slice's ``eps_actual_consensus``. Nullable — unset until the annual slice has two
     reported years cached (and EPS best-effort, since the consensus basis often isn't).
+
+    ``forward_revenue_growth_yoy`` / ``forward_eps_growth_yoy`` are the *forward* mirror
+    of that pair — the analyst-consensus FY1 -> FY2 change (percent), the same figures the
+    ticker card's forward PEG is built on. Written the same way (the annual slice
+    overwrites both on every refresh from its stored forward years), and both legs sit on
+    the consensus basis so neither carries a basis caveat. Nullable and more often unset
+    than the trailing pair: they need *two* upcoming years and Yahoo frequently publishes
+    only FY1 (0018).
 
     ``sector`` / ``industry`` / ``market_cap`` / ``screened_at`` are the universe screen's
     facts, filled by the universe sync (the ≥$1B US screen) and deliberately denormalized
@@ -83,6 +91,8 @@ class StockRecord(Base):
     exchange: Mapped[str | None] = mapped_column(String(32), nullable=True)
     revenue_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
     eps_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    forward_revenue_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    forward_eps_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
     sector: Mapped[str | None] = mapped_column(String(64), nullable=True)
     industry: Mapped[str | None] = mapped_column(String(64), nullable=True)
     market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)

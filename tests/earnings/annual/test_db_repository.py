@@ -288,6 +288,71 @@ def test_eps_growth_snapshot_is_null_off_a_loss_year(session):
     assert rev == 20.0 and eps is None
 
 
+def _stock_forward_growth(session, ticker: str = "AAPL"):
+    """The (forward_revenue_growth_yoy, forward_eps_growth_yoy) snapshot on the anchor."""
+    return session.execute(
+        select(
+            StockRecord.forward_revenue_growth_yoy, StockRecord.forward_eps_growth_yoy
+        ).where(StockRecord.ticker == ticker)
+    ).one()
+
+
+def test_upsert_writes_the_forward_yoy_snapshot(session):
+    # Two upcoming years with EPS + revenue estimates, so both forward legs compute (FY1→FY2) —
+    # the forward mirror of the trailing snapshot, off the consensus estimates.
+    repo(session).upsert(
+        "AAPL",
+        "Apple Inc.",
+        AnnualEarningsTimeline(
+            "AAPL",
+            (
+                _reported(2024, 6.0, revenue_actual=360e9, eps_actual_consensus=6.0),
+                _upcoming(2025, 6.0, 400e9),  # FY1
+                _upcoming(2026, 7.5, 500e9),  # FY2
+            ),
+        ),
+    )
+    rev, eps = _stock_forward_growth(session)
+    # revenue (500-400)/400 = +25%; eps (7.5-6.0)/6.0 = +25%
+    assert rev == 25.0 and eps == 25.0
+
+
+def test_forward_growth_snapshot_is_null_without_two_upcoming_years(session):
+    # Only one upcoming year (Yahoo's common case) — no FY2, so forward growth can't compute,
+    # even though there's plenty of reported history for the trailing snapshot.
+    repo(session).upsert(
+        "AAPL",
+        "Apple Inc.",
+        AnnualEarningsTimeline(
+            "AAPL",
+            (
+                _reported(2023, 5.0, revenue_actual=300e9, eps_actual_consensus=5.0),
+                _reported(2024, 6.0, revenue_actual=360e9, eps_actual_consensus=6.0),
+                _upcoming(2025, 6.5, 400e9),  # lone FY1
+            ),
+        ),
+    )
+    assert _stock_forward_growth(session) == (None, None)
+
+
+def test_forward_eps_growth_snapshot_is_null_off_a_nonpositive_first_year(session):
+    # A non-positive FY1 EPS estimate makes the percentage meaningless (guard: first year > 0).
+    # Revenue still computes off the two positive revenue estimates.
+    repo(session).upsert(
+        "AAPL",
+        "Apple Inc.",
+        AnnualEarningsTimeline(
+            "AAPL",
+            (
+                _upcoming(2025, -0.5, 400e9),  # FY1 expected loss
+                _upcoming(2026, 2.0, 500e9),  # FY2
+            ),
+        ),
+    )
+    rev, eps = _stock_forward_growth(session)
+    assert rev == 25.0 and eps is None
+
+
 def test_refresh_targets_orders_stalest_first_and_carries_the_name(session):
     # refresh_targets wraps the stalest-first query the cron walks; a stock's rows share a
     # fetch stamp, so an older upsert sorts ahead of a newer one, each paired with its name.

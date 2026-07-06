@@ -29,11 +29,11 @@ Beside the card's *item* route live its *collection* and *filter menus*, reading
   free-text ``q`` matched case-insensitively against name *or* ticker (so "NV" surfaces
   Nvidia and NVDA), ``sector``/``industry`` slug filters, the ``in_sp500``/``in_nasdaq100``
   membership flags, a ``market_cap`` tier filter (mega/large/mid/small), and a ``sort`` (market
-  cap default, revenue or EPS growth, their blend, or trailing P/E) with an ``order``. Rows are DB facts only
-  — no live price; a client opens ``{ticker}`` above for
-  the live card. Pure DB read (``SqlStockSearchRepository`` → ``SearchStocks``), no vendor
-  or key, so the only request error is a 400 (a bad ``sort``/``order`` is a 422 from the
-  enum binding).
+  cap default, trailing revenue/EPS growth or their blend, the forward FY1→FY2 consensus
+  counterparts, or trailing P/E) with an ``order``. Rows are DB facts only — no live price; a
+  client opens ``{ticker}`` above for the live card. Pure DB read
+  (``SqlStockSearchRepository`` → ``SearchStocks``), no vendor or key, so the only request
+  error is a 400 (a bad ``sort``/``order`` is a 422 from the enum binding).
 - ``GET /stocks/classifications`` — the distinct sector + industry slugs, for the FE's
   filter menus (``ListClassifications``).
 
@@ -293,6 +293,8 @@ def _present_search(page: StockSearchPage) -> StockSearchResponse:
                 pe_ratio=r.pe_ratio,
                 revenue_growth_yoy=r.revenue_growth_yoy,
                 eps_growth_yoy=r.eps_growth_yoy,
+                forward_revenue_growth_yoy=r.forward_revenue_growth_yoy,
+                forward_eps_growth_yoy=r.forward_eps_growth_yoy,
                 in_sp500=r.in_sp500,
                 in_nasdaq100=r.in_nasdaq100,
             )
@@ -348,9 +350,11 @@ def search_stocks_endpoint(
     sort: StockSort = Query(
         StockSort.MARKET_CAP,
         description=(
-            "Sort field: market_cap (default), revenue_growth, eps_growth, growth "
-            "(the equal-weight blend of the two), or pe (trailing P/E on the consensus "
-            "basis; ascending surfaces the cheapest on earnings). Nulls sort last either way."
+            "Sort field: market_cap (default); the trailing growth figures revenue_growth, "
+            "eps_growth, or growth (their equal-weight blend); their forward (FY1->FY2 "
+            "consensus) counterparts forward_revenue_growth, forward_eps_growth, forward_growth; "
+            "or pe (trailing P/E on the consensus basis; ascending surfaces the cheapest on "
+            "earnings). Stocks missing the chosen figure sort last."
         ),
     ),
     order: SortDirection = Query(

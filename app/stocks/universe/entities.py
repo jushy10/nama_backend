@@ -83,10 +83,12 @@ class StockSort(str, Enum):
     A ``str`` enum so FastAPI binds it straight from the ``?sort=`` query param (an unknown
     value is a 422, like ``StockIndex``/``Timeframe``) and it serialises back as its value.
     ``MARKET_CAP`` is the natural screener default (biggest first); ``REVENUE_GROWTH`` /
-    ``EPS_GROWTH`` are the annual slice's latest trailing year-over-year figures on the anchor;
-    ``GROWTH`` blends the two (their equal-weight average) so one control ranks the fastest
-    all-round growers; ``PE`` orders by the stored trailing P/E (the consensus-basis figure the
-    universe sync writes) — ascending surfaces the cheapest on earnings first. The value → ORM
+    ``EPS_GROWTH`` are the annual slice's latest *trailing* year-over-year figures on the anchor
+    and ``FORWARD_REVENUE_GROWTH`` / ``FORWARD_EPS_GROWTH`` their *forward* (FY1→FY2 consensus)
+    counterparts; ``GROWTH`` / ``FORWARD_GROWTH`` each blend a pair (its equal-weight average) so
+    one control ranks the fastest all-round growers, trailing or expected; ``PE`` orders by the
+    stored trailing P/E (the consensus-basis figure the universe sync writes) — ascending
+    surfaces the cheapest on earnings first. The value → ORM
     column/expression mapping is the adapter's job — the enum just names the choices in domain
     terms.
     """
@@ -95,6 +97,9 @@ class StockSort(str, Enum):
     REVENUE_GROWTH = "revenue_growth"
     EPS_GROWTH = "eps_growth"
     GROWTH = "growth"
+    FORWARD_REVENUE_GROWTH = "forward_revenue_growth"
+    FORWARD_EPS_GROWTH = "forward_eps_growth"
+    FORWARD_GROWTH = "forward_growth"
     PE = "pe"
 
 
@@ -130,10 +135,10 @@ class StockSearchResult:
 
     ``in_sp500`` / ``in_nasdaq100`` are definite yes/no (the anchor stores them ``NOT NULL``);
     everything else is nullable — a screened stock always has a ``market_cap`` (the search
-    only returns screened rows) but may still lack a name, a classification, the trailing
-    growth, or a ``pe_ratio`` until the enriching sync/annual slice reaches it (``pe_ratio``
-    stays null until the quarterly cache holds four reported quarters, and for a trailing-year
-    loss).
+    only returns screened rows) but may still lack a name, a classification, the trailing /
+    forward growth, or a ``pe_ratio`` until the enriching sync/annual slice reaches it (forward
+    growth the most often, since it needs two upcoming years; ``pe_ratio`` stays null until the
+    quarterly cache holds four reported quarters, and for a trailing-year loss).
     """
 
     ticker: str
@@ -144,6 +149,8 @@ class StockSearchResult:
     pe_ratio: float | None
     revenue_growth_yoy: float | None
     eps_growth_yoy: float | None
+    forward_revenue_growth_yoy: float | None
+    forward_eps_growth_yoy: float | None
     in_sp500: bool
     in_nasdaq100: bool
 
