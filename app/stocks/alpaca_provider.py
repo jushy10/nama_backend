@@ -164,6 +164,22 @@ class AlpacaStockDataProvider(
         end: datetime | None,
     ) -> CandleSeries:
         amount, unit = _TIMEFRAME_MAP[timeframe]
+        # Pick the feed by granularity. Intraday bars (minute/hour) back the
+        # short, recent 1D–1M charts, which need IEX's real-time prints and whose
+        # windows IEX carries in full. Daily-and-coarser bars drive the long-range
+        # charts (out to 10Y), where IEX falls short twice over: its history is
+        # gappy and, on this account, only reaches ~mid-2020. SIP has full-market
+        # coverage back to Alpaca's ~2016 inception plus the true consolidated
+        # close, so the coarse timeframes read from it — the same feed the
+        # performance/all-time-high paths use — with `end` held back by the free
+        # plan's SIP-history delay so the request stays inside the allowed window.
+        intraday = unit in (TimeFrameUnit.Minute, TimeFrameUnit.Hour)
+        if intraday:
+            feed = self._feed
+        else:
+            feed = self._HISTORICAL_FEED
+            cutoff = datetime.now(timezone.utc) - self._SIP_FREE_DELAY
+            end = cutoff if end is None else min(end, cutoff)
         try:
             request = StockBarsRequest(
                 symbol_or_symbols=symbol,
@@ -173,7 +189,7 @@ class AlpacaStockDataProvider(
                 limit=_MAX_CANDLES,
                 adjustment=Adjustment.SPLIT,  # keep the line continuous over splits
                 sort=Sort.DESC,  # newest-first so the cap keeps recent bars
-                feed=self._feed,
+                feed=feed,
             )
             barset = self._data.get_stock_bars(request)
         except APIError as exc:
