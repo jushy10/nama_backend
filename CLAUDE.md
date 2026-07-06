@@ -535,6 +535,7 @@ app/
     │   ├── cron_index_membership_endpoints.py    #  POST /internal/index-membership/sync (fire-and-forget)
     │   └── background_sync.py                    #  shared fire-and-forget helper (202 + per-slice single-flight)
     ├── chart_window.py     # ── edge helper: range preset → time window
+    ├── progress.py         # ── shared helper: iter_with_progress logs a cron sweep's % done (CloudWatch)
     ├── schemas.py          # ── HTTP response DTOs (pydantic)
     └── router.py           # ── endpoints + presenters + DI wiring (composition root)
 tests/                      # offline; fakes through the ports (mirrors app: tests/stocks, tests/earnings, tests/recommendations, tests/ticker, tests/adapters, tests/endpoints)

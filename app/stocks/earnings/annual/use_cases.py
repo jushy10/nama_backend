@@ -13,12 +13,16 @@ hand-written fakes and know nothing of yfinance, HTTP, or SQLAlchemy:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.annual.ports import AnnualEarningsProvider
 from app.stocks.earnings.annual.repository import AnnualEarningsRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.progress import iter_with_progress
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -78,7 +82,10 @@ class SyncAnnualEarnings:
         effective = None if limit is None else max(1, limit)
         refreshed = 0
         failed = 0
-        for target in self._repository.refresh_targets(effective):
+        targets = self._repository.refresh_targets(effective)
+        for target in iter_with_progress(
+            targets, logger=logger, label="annual-earnings sync"
+        ):
             try:
                 timeline = self._provider.get_annual_earnings(target.symbol)
             except (StockNotFound, StockDataUnavailable):
