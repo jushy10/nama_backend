@@ -32,7 +32,13 @@ class _FakeRunner:
 
 def _report() -> UniverseSyncReport:
     return UniverseSyncReport(
-        screened=1200, added=30, updated=1170, skipped=False, enriched=40, enrich_failed=2
+        screened=1200,
+        added=30,
+        updated=1170,
+        skipped=False,
+        enriched=40,
+        enrich_failed=2,
+        valued=38,
     )
 
 

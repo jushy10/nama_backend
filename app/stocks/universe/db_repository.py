@@ -16,6 +16,7 @@ table of its own — and are the only layer that touches SQLAlchemy:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from sqlalchemy import func, nulls_last, or_, select
@@ -122,6 +123,24 @@ class SqlUniverseRepository(UniverseRepository):
             stock.sector = classification.sector
         self._session.commit()
 
+    def set_pe_ratios(self, pe_by_ticker: Mapping[str, float | None]) -> int:
+        # Overwrite, not fill-once: the P/E is recomputed from a fresh price each sweep, so a
+        # None legitimately clears a stale figure (a trailing loss, or the quarterly cache
+        # dropping below four quarters). One commit for the whole batch — the pass values the
+        # entire screened set, so per-ticker commits would be needless churn.
+        written = 0
+        for ticker, pe in pe_by_ticker.items():
+            stock = self._session.execute(
+                select(StockRecord).where(StockRecord.ticker == ticker)
+            ).scalar_one_or_none()
+            if stock is None:
+                continue
+            stock.pe_ratio = pe
+            if pe is not None:
+                written += 1
+        self._session.commit()
+        return written
+
 
 # Each domain sort field → the anchor column (or expression) it orders by. The growth figures
 # are nullable (the annual slice may not have filled them yet), so whichever is chosen gets
@@ -129,11 +148,14 @@ class SqlUniverseRepository(UniverseRepository):
 # GROWTH is the equal-weight blend of the two trailing-growth columns; in SQL a NULL on either
 # leg makes the sum NULL, so a stock missing *either* figure sorts last (the same nulls-last
 # rule as the single-metric growth sorts) — the blend deliberately ranks only stocks with both.
+# PE is the stored trailing P/E, also nullable (unset until the sync values it, or a trailing
+# loss), so it rides the same nulls-last rule — ascending surfaces the cheapest on earnings.
 _SORT_EXPRESSIONS = {
     StockSort.MARKET_CAP: StockRecord.market_cap,
     StockSort.REVENUE_GROWTH: StockRecord.revenue_growth_yoy,
     StockSort.EPS_GROWTH: StockRecord.eps_growth_yoy,
     StockSort.GROWTH: (StockRecord.revenue_growth_yoy + StockRecord.eps_growth_yoy) / 2.0,
+    StockSort.PE: StockRecord.pe_ratio,
 }
 
 # Each market-cap tier → its (min_inclusive, max_exclusive) dollar bounds; ``None`` = unbounded
@@ -163,6 +185,7 @@ def _to_result(row: StockRecord) -> StockSearchResult:
         sector=row.sector,
         industry=row.industry,
         market_cap=row.market_cap,
+        pe_ratio=row.pe_ratio,
         revenue_growth_yoy=row.revenue_growth_yoy,
         eps_growth_yoy=row.eps_growth_yoy,
         in_sp500=row.in_sp500,

@@ -2,8 +2,8 @@
 
 No network: the per-page screen fetch is swapped for a fake returning canned pages. Verifies
 quotes map to ``ScreenedStock`` (exchange code -> friendly name, name fallback, sector always
-None), the market-cap floor + bad rows filter, pagination stops at ``total``, and yfinance /
-payload failures become domain errors.
+None, regular-market price kept when positive), the market-cap floor + bad rows filter,
+pagination stops at ``total``, and yfinance / payload failures become domain errors.
 """
 
 import pytest
@@ -42,19 +42,22 @@ def provider(pages=None, **kw) -> YfinanceScreenerProvider:
     return YfinanceScreenerProvider(screen_page=FakePages(pages, **kw))
 
 
-def _q(symbol, *, exchange="NMS", market_cap=1e10, long=None, short=None):
-    return {
+def _q(symbol, *, exchange="NMS", market_cap=1e10, long=None, short=None, price=None):
+    q = {
         "symbol": symbol,
         "exchange": exchange,
         "marketCap": market_cap,
         "longName": long,
         "shortName": short,
     }
+    if price is not None:
+        q["regularMarketPrice"] = price
+    return q
 
 
 def test_maps_a_quote_to_an_entity():
     out = provider(
-        [[_q("AAPL", exchange="NMS", market_cap=3.01e12, long="Apple Inc.")]]
+        [[_q("AAPL", exchange="NMS", market_cap=3.01e12, long="Apple Inc.", price=194.83)]]
     ).screen(min_market_cap=5_000_000_000)
     assert out == (
         ScreenedStock(
@@ -63,8 +66,30 @@ def test_maps_a_quote_to_an_entity():
             exchange="NASDAQ",
             market_cap=3.01e12,
             sector=None,  # yfinance's screen has no sector
+            price=194.83,  # the regular-market price, kept for the P/E derivation
         ),
     )
+
+
+def test_keeps_a_positive_price_and_drops_a_bad_one():
+    out = provider(
+        [
+            [
+                _q("HASP", market_cap=1e10, price=194.83),
+                _q("ZEROP", market_cap=1e10, price=0),  # non-positive -> None
+                _q("NEGP", market_cap=1e10, price=-5.0),  # negative -> None
+                _q("NOP", market_cap=1e10),  # absent -> None
+                _q("STRP", market_cap=1e10, price="abc"),  # non-numeric -> None
+            ]
+        ]
+    ).screen(min_market_cap=5_000_000_000)
+    assert {s.ticker: s.price for s in out} == {
+        "HASP": 194.83,
+        "ZEROP": None,
+        "NEGP": None,
+        "NOP": None,
+        "STRP": None,
+    }
 
 
 def test_maps_exchange_codes_to_friendly_names():

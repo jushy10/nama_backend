@@ -9,6 +9,11 @@ independent of Yahoo or the DB.
 
 import pytest
 
+from app.stocks.earnings.quarterly.entities import (
+    QuarterlyEarnings,
+    QuarterlyEarningsTimeline,
+)
+from app.stocks.earnings.quarterly.repository import QuarterlyEarningsRepository
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.universe.entities import (
     Classifications,
@@ -35,19 +40,65 @@ from app.stocks.universe.use_cases import (
 )
 
 
-def _stock(ticker, *, market_cap=1e10, name=None, exchange=None, sector=None):
+def _stock(ticker, *, market_cap=1e10, name=None, exchange=None, sector=None, price=None):
     return ScreenedStock(
         ticker=ticker,
         name=name,
         exchange=exchange,
         market_cap=market_cap,
         sector=sector,
+        price=price,
     )
 
 
 def _a_screen(n: int) -> tuple[ScreenedStock, ...]:
-    """A plausible screen of ``n`` distinct names, each above the floor."""
+    """A plausible screen of ``n`` distinct names, each above the floor (no price, so the
+    valuation pass skips them — the priced names a valuation test cares about are added on
+    top)."""
     return tuple(_stock(f"T{i:04d}", market_cap=5e9 + i) for i in range(n))
+
+
+def _four_quarter_timeline(symbol: str, ttm_eps: float) -> QuarterlyEarningsTimeline:
+    """A stored timeline whose ``ttm_eps`` is exactly ``ttm_eps`` — four reported quarters
+    each carrying a quarter of it (the shape the valuation pass reads through the port)."""
+    per_q = ttm_eps / 4
+    quarters = tuple(
+        QuarterlyEarnings(
+            fiscal_year=2025,
+            fiscal_quarter=q,
+            period_end=None,
+            report_date=None,
+            eps_actual=per_q,
+            eps_estimate=None,
+            eps_surprise=None,
+            eps_surprise_percent=None,
+            revenue_estimate=None,
+            revenue_actual=None,
+        )
+        for q in range(1, 5)
+    )
+    return QuarterlyEarningsTimeline(symbol=symbol, quarters=quarters)
+
+
+class _FakeQuarterlyRepo(QuarterlyEarningsRepository):
+    """Serves a canned TTM EPS per ticker for the valuation pass; a ticker absent from the map
+    reads as un-cached (``get`` returns ``None``)."""
+
+    def __init__(self, ttm_by_ticker=None) -> None:
+        self._ttm = dict(ttm_by_ticker or {})
+        self.gets: list[str] = []
+
+    def get(self, symbol):
+        self.gets.append(symbol)
+        if symbol not in self._ttm:
+            return None
+        return _four_quarter_timeline(symbol, self._ttm[symbol])
+
+    def upsert(self, symbol, name, timeline):  # unused by the valuation pass
+        raise NotImplementedError
+
+    def refresh_targets(self, limit):  # unused by the valuation pass
+        raise NotImplementedError
 
 
 class _FakeScreener(StockScreener):
@@ -89,6 +140,8 @@ class _FakeRepo(UniverseRepository):
         self.upserted: tuple[ScreenedStock, ...] | None = None
         self.classified: list[tuple[str, CompanyClassification]] = []
         self.missing_limit: int | None = None
+        # The {ticker: pe} map handed to set_pe_ratios — None until the valuation pass runs.
+        self.pe_written: dict[str, float | None] | None = None
 
     def upsert_screen(self, stocks):
         self.upserted = tuple(stocks)
@@ -100,6 +153,10 @@ class _FakeRepo(UniverseRepository):
 
     def set_classification(self, ticker, classification):
         self.classified.append((ticker, classification))
+
+    def set_pe_ratios(self, pe_by_ticker):
+        self.pe_written = dict(pe_by_ticker)
+        return sum(1 for pe in self.pe_written.values() if pe is not None)
 
 
 def test_sync_upserts_a_healthy_screen_and_reports_counts():
@@ -121,16 +178,20 @@ def test_sync_skips_an_empty_screen_without_touching_the_store():
     screener = _FakeScreener(())
     repo = _FakeRepo()
     classifier = _FakeClassifier()
+    quarterly = _FakeQuarterlyRepo()
 
-    report = SyncUniverse(screener, repo, classifier).execute()
+    report = SyncUniverse(screener, repo, classifier, quarterly).execute()
 
     assert report.skipped is True
     assert (report.screened, report.added, report.updated) == (0, 0, 0)
-    assert (report.enriched, report.enrich_failed) == (0, 0)
+    assert (report.enriched, report.enrich_failed, report.valued) == (0, 0, 0)
     assert repo.upserted is None  # upsert never called — the store is left intact
-    # The enrichment pass is skipped too — a blocked bulk screen means blocked .info calls.
+    # The enrichment AND valuation passes are skipped too — a blocked bulk screen means
+    # blocked .info calls, and there's nothing fresh to value.
     assert repo.missing_limit is None
     assert classifier.calls == []
+    assert repo.pe_written is None  # valuation pass never ran
+    assert quarterly.gets == []
 
 
 def test_sync_skips_an_implausibly_small_screen():
@@ -138,11 +199,13 @@ def test_sync_skips_an_implausibly_small_screen():
     screener = _FakeScreener(_a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN - 1))
     repo = _FakeRepo()
 
-    report = SyncUniverse(screener, repo, _FakeClassifier()).execute()
+    report = SyncUniverse(screener, repo, _FakeClassifier(), _FakeQuarterlyRepo()).execute()
 
     assert report.skipped is True
     assert repo.upserted is None
     assert repo.missing_limit is None  # enrichment not reached
+    assert repo.pe_written is None  # valuation not reached either
+    assert report.valued == 0
 
 
 def test_sync_propagates_a_hard_screen_failure():
@@ -218,6 +281,54 @@ def test_enrichment_limit_defaults_then_overrides():
     assert repo.missing_limit == 25
 
 
+def test_sync_values_screened_stocks_with_the_card_pe():
+    # Two priced names on top of a plausible screen: one with four cached quarters (a TTM),
+    # one un-cached. The baseline names carry no price, so the valuation pass skips them.
+    priced = (
+        _stock("AAPL", market_cap=3e12, price=100.0),
+        _stock("MSFT", market_cap=2e12, price=50.0),
+    )
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN) + priced
+    repo = _FakeRepo()
+    quarterly = _FakeQuarterlyRepo({"AAPL": 5.0})  # AAPL TTM 5 -> 100/5 = 20; MSFT un-cached
+
+    report = SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), quarterly).execute()
+
+    # Only the priced names are written; the price-less baseline is skipped, not nulled.
+    assert set(repo.pe_written) == {"AAPL", "MSFT"}
+    assert repo.pe_written["AAPL"] == 20.0  # price / TTM EPS — the card's exact rule
+    assert repo.pe_written["MSFT"] is None  # priced but no cached quarters -> no P/E
+    assert report.valued == 1  # only AAPL got a non-null figure
+
+
+def test_sync_nulls_the_pe_for_a_trailing_loss():
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN) + (
+        _stock("LOSS", market_cap=1e10, price=30.0),
+    )
+    repo = _FakeRepo()
+    quarterly = _FakeQuarterlyRepo({"LOSS": -2.0})  # negative TTM -> a P/E is meaningless
+
+    report = SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), quarterly).execute()
+
+    assert repo.pe_written["LOSS"] is None
+    assert report.valued == 0
+
+
+def test_sync_writes_no_pe_when_no_quarterly_cache_is_wired():
+    # P/E is best-effort enrichment: with no quarterly repo the sync still screens/classifies
+    # but the valuation pass is a no-op — set_pe_ratios is never called.
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN) + (
+        _stock("AAPL", market_cap=3e12, price=100.0),
+    )
+    repo = _FakeRepo()
+
+    report = SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier()).execute()
+
+    assert repo.pe_written is None  # set_pe_ratios never called
+    assert report.valued == 0
+    assert report.skipped is False  # the screen itself still succeeded
+
+
 # --- SearchStocks / ListClassifications (the read side) ------------------------------------
 
 _RESULT = StockSearchResult(
@@ -226,6 +337,7 @@ _RESULT = StockSearchResult(
     sector="technology",
     industry="semiconductors",
     market_cap=3e12,
+    pe_ratio=48.2,
     revenue_growth_yoy=61.6,
     eps_growth_yoy=587.4,
     in_sp500=True,
