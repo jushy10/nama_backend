@@ -68,7 +68,7 @@ def test_upsert_inserts_new_funds_fills_the_row_and_stamps(session):
             _etf(
                 "SPY",
                 name="SPDR S&P 500 ETF Trust",
-                exchange="NYSEARCA",
+                exchange="NYSE",
                 net_assets=5e11,
                 expense_ratio=0.09,
             ),
@@ -81,7 +81,7 @@ def test_upsert_inserts_new_funds_fills_the_row_and_stamps(session):
     spy = _row(session, "SPY")
     assert (spy.name, spy.exchange, spy.net_assets, spy.expense_ratio) == (
         "SPDR S&P 500 ETF Trust",
-        "NYSEARCA",
+        "NYSE",
         5e11,
         0.09,
     )
@@ -130,14 +130,14 @@ def test_upsert_fills_missing_name_and_exchange_but_never_clobbers(session):
     assert (spy.name, spy.exchange) == ("SPDR S&P 500", None)
 
     # A later, nameless screen learns the exchange: the name survives, the exchange fills.
-    r.upsert_screen((_etf("SPY", name=None, exchange="NYSEARCA"),))
+    r.upsert_screen((_etf("SPY", name=None, exchange="NYSE"),))
     spy = _row(session, "SPY")
-    assert (spy.name, spy.exchange) == ("SPDR S&P 500", "NYSEARCA")
+    assert (spy.name, spy.exchange) == ("SPDR S&P 500", "NYSE")
 
     # A different name/exchange never overwrites the settled ones.
-    r.upsert_screen((_etf("SPY", name="Something Else", exchange="NYSE"),))
+    r.upsert_screen((_etf("SPY", name="Something Else", exchange="NASDAQ"),))
     spy = _row(session, "SPY")
-    assert (spy.name, spy.exchange) == ("SPDR S&P 500", "NYSEARCA")
+    assert (spy.name, spy.exchange) == ("SPDR S&P 500", "NYSE")
 
 
 def test_upsert_counts_a_preexisting_unscreened_row_as_added(session):
@@ -335,7 +335,7 @@ def test_search_maps_every_row_field(session):
         session,
         "SPY",
         name="SPDR S&P 500 ETF Trust",
-        exchange="NYSEARCA",
+        exchange="NYSE",
         net_assets=5e11,
         expense_ratio=0.09,
         category="large_blend",
@@ -345,7 +345,7 @@ def test_search_maps_every_row_field(session):
     assert (result.ticker, result.name, result.exchange) == (
         "SPY",
         "SPDR S&P 500 ETF Trust",
-        "NYSEARCA",
+        "NYSE",
     )
     assert (result.net_assets, result.expense_ratio, result.category) == (
         5e11,

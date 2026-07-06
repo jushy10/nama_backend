@@ -101,7 +101,8 @@ async def sync_etfs_endpoint(
         description=(
             "Max funds whose category the background sweep classifies this run, via a per-ticker "
             "Yahoo call. The screen itself always runs in full; only the enrichment pass is "
-            "capped. The default covers the whole top-ETF set (~540) in one run."
+            "capped. Since category is fill-once, the ≥$1B set (~1,000) is classified over "
+            "successive runs."
         ),
     ),
     run: SyncRunner = Depends(get_sync_runner),

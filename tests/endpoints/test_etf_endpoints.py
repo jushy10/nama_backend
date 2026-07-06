@@ -64,7 +64,7 @@ def test_returns_a_page_envelope_with_rows():
             _result(
                 "SPY",
                 name="SPDR S&P 500 ETF Trust",
-                exchange="NYSEARCA",
+                exchange="NYSE",
                 net_assets=5e11,
                 expense_ratio=0.09,
                 category="large_blend",
@@ -84,7 +84,7 @@ def test_returns_a_page_envelope_with_rows():
     assert row == {
         "ticker": "SPY",
         "name": "SPDR S&P 500 ETF Trust",
-        "exchange": "NYSEARCA",
+        "exchange": "NYSE",
         "net_assets": 5e11,
         "expense_ratio": 0.09,
         "category": "large_blend",

@@ -112,7 +112,8 @@ app.include_router(index_membership_cron_router)
 # filter menu), served from the slice's own `etfs` table. See app/stocks/endpoints/etf_endpoints.py.
 app.include_router(etf_router)
 # The ETF refresh cron endpoint (POST /internal/etfs/sync); it drives the SyncEtfs use case out
-# of band (yfinance top_etfs_us screen -> etfs table, then per-ticker category enrichment).
+# of band (yfinance ETF screen, US funds with AUM >= $1B -> etfs table, then per-ticker category
+# enrichment).
 # Fire-and-forget like the other crons (202 + background thread). See
 # app/stocks/endpoints/cron_etf_endpoints.py.
 app.include_router(etf_cron_router)
