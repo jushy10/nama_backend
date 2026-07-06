@@ -10,8 +10,8 @@ would keep that value forever, so this rewrites them in place. No schema change.
 The downgrade can't faithfully restore which ``NYSE`` rows were Arca (the fold is
 lossy), so it's a deliberate no-op.
 
-Revision ID: 0018_etf_arca_nyse
-Revises: 0017_stock_pe
+Revision ID: 0019_etf_arca_nyse
+Revises: 0018_stocks_forward_growth
 Create Date: 2026-07-06
 
 """
@@ -21,8 +21,8 @@ from alembic import op
 
 # Keep the revision id <= 32 chars: alembic_version.version_num is VARCHAR(32). Postgres
 # enforces it (SQLite doesn't), so a longer id passes local tests but fails the RDS migration.
-revision: str = "0018_etf_arca_nyse"
-down_revision: Union[str, None] = "0017_stock_pe"
+revision: str = "0019_etf_arca_nyse"
+down_revision: Union[str, None] = "0018_stocks_forward_growth"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
