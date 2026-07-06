@@ -3,13 +3,15 @@
 Pure orchestration over the ports so each runs offline in tests against hand-written fakes
 and knows nothing of Yahoo, HTTP, or SQLAlchemy:
 
-- ``SyncUniverse`` — the out-of-band populator. Two passes in one run: (1) screen the US
+- ``SyncUniverse`` — the out-of-band populator. Three passes in one run: (1) screen the US
   market at/above the floor and upsert the result onto the ``stocks`` anchor (additive: it
   never removes a stock); (2) enrich up to ``limit`` stored stocks that still lack a
   ``sector`` or ``industry``, classifying each through a per-ticker call and writing its
-  sector/industry slugs. Invoked by the (fire-and-forget) cron endpoint. Guarded so a blocked/truncated
-  screen (empty or implausibly small) skips *both* passes rather than churning a partial set
-  or hammering the same blocked vendor with per-ticker calls.
+  sector/industry slugs; (3) value every screened stock — its trailing P/E from the
+  screen-time price over the quarterly slice's stored TTM consensus EPS — overwriting the
+  anchor's ``pe_ratio``. Invoked by the (fire-and-forget) cron endpoint. Guarded so a
+  blocked/truncated screen (empty or implausibly small) skips *all* passes rather than
+  churning a partial set or hammering the same blocked vendor with per-ticker calls.
 - ``SearchStocks`` — the read side (``GET /stocks/ticker``): normalize a search request at the
   edge and hand the read repository a clean ``StockSearchCriteria``, returning the matched
   page. No live feed — the universe is already on the anchor.
@@ -21,10 +23,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.stocks.earnings.quarterly.repository import QuarterlyEarningsRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.universe.entities import (
     Classifications,
     MarketCapTier,
+    ScreenedStock,
     SortDirection,
     StockSearchCriteria,
     StockSearchPage,
@@ -42,10 +46,12 @@ class UniverseSyncReport:
     ``screened`` is the screen size and ``added`` / ``updated`` the anchors the screen upsert
     inserted / refreshed. ``enriched`` is how many stocks the enrichment pass classified this
     run (wrote a sector/industry for) and ``enrich_failed`` how many per-ticker lookups the
-    source couldn't serve (an outage or block) — both zero when the screen was skipped.
-    ``skipped`` is ``True`` when the screen came back empty or implausibly small (a truncated
-    or blocked fetch) so *nothing* was written; the four counts are then all zero. There is no
-    ``removed`` count: the sync is additive (a shared anchor is never deleted).
+    source couldn't serve (an outage or block). ``valued`` is how many screened stocks the
+    valuation pass wrote a non-null trailing P/E for (a stock with no cached TTM or a trailing
+    loss is recomputed to ``None`` and not counted) — all three zero when the screen was
+    skipped. ``skipped`` is ``True`` when the screen came back empty or implausibly small (a
+    truncated or blocked fetch) so *nothing* was written; the counts are then all zero. There
+    is no ``removed`` count: the sync is additive (a shared anchor is never deleted).
     """
 
     screened: int
@@ -54,11 +60,25 @@ class UniverseSyncReport:
     skipped: bool
     enriched: int
     enrich_failed: int
+    valued: int
+
+
+def _pe_ratio(price: float | None, ttm_eps: float | None) -> float | None:
+    """The ticker card's trailing P/E, materialized for the sortable anchor column.
+
+    The exact figure ``TickerValuation.trailing_pe`` serves — a market price over the quarterly
+    slice's consensus-basis TTM EPS — with the same positive-legs guard: ``None`` off a loss
+    (``ttm_eps <= 0``), a missing/degenerate price, or fewer than four cached quarters (``ttm_eps``
+    is then ``None``). Kept in lockstep with the card by definition, so the sort column and the
+    card read the same P/E on the same basis."""
+    if price is None or ttm_eps is None or price <= 0 or ttm_eps <= 0:
+        return None
+    return round(price / ttm_eps, 2)
 
 
 class SyncUniverse:
-    """Populate/refresh the searchable universe from a live market screen, then classify the
-    stocks that still lack a sector/industry."""
+    """Populate/refresh the searchable universe from a live market screen, classify the stocks
+    that still lack a sector/industry, and value each screened stock with a trailing P/E."""
 
     # The market-cap floor that defines the universe: US companies worth at least $1B.
     MIN_MARKET_CAP = 1_000_000_000.0
@@ -80,22 +100,31 @@ class SyncUniverse:
         screener: StockScreener,
         repository: UniverseRepository,
         classifier: CompanyClassificationProvider,
+        quarterly: QuarterlyEarningsRepository | None = None,
     ) -> None:
         self._screener = screener
         self._repository = repository
         self._classifier = classifier
+        # The DB-only stored-TTM read (no Yahoo call) the valuation pass pairs with the
+        # screen-time price — so valuing the whole universe stays a cheap sweep of DB reads.
+        # Optional because the P/E is best-effort enrichment (like sector/growth), not the
+        # sync's reason to exist: wired without it, the sync still screens and classifies and
+        # simply writes no P/E.
+        self._quarterly = quarterly
 
     def execute(self, *, limit: int | None = None) -> UniverseSyncReport:
-        """Screen the market, upsert the result onto the anchor, then classify up to ``limit``
-        (default ``DEFAULT_LIMIT``) still-unclassified stocks.
+        """Screen the market, upsert the result onto the anchor, classify up to ``limit``
+        (default ``DEFAULT_LIMIT``) still-unclassified stocks, then value every screened stock.
 
         A hard screen failure (``StockDataUnavailable``) propagates to the caller (the
         background runner logs it). A *degraded* screen — fewer than ``MIN_PLAUSIBLE_SCREEN``
-        names — is skipped so a partial/blocked fetch isn't written, and the enrichment pass
-        is skipped too (if the one bulk screen call was blocked, the per-ticker calls would
-        be as well). Otherwise the whole screen is upserted (additive) and the enrichment pass
-        runs. A single symbol's classification failure never aborts the run — it's counted and
-        the sweep continues.
+        names — is skipped so a partial/blocked fetch isn't written, and the enrichment and
+        valuation passes are skipped too (if the one bulk screen call was blocked, the
+        per-ticker calls would be as well). Otherwise the whole screen is upserted (additive),
+        the enrichment pass runs, and the valuation pass recomputes each screened stock's
+        trailing P/E from the screen-time price over the quarterly slice's stored TTM EPS. A
+        single symbol's classification failure never aborts the run — it's counted and the
+        sweep continues.
         """
         capped = self.DEFAULT_LIMIT if limit is None else max(1, limit)
         screened = self._screener.screen(min_market_cap=self.MIN_MARKET_CAP)
@@ -107,9 +136,11 @@ class SyncUniverse:
                 skipped=True,
                 enriched=0,
                 enrich_failed=0,
+                valued=0,
             )
         counts = self._repository.upsert_screen(screened)
         enriched, enrich_failed = self._enrich_missing_classifications(capped)
+        valued = self._value_screened(screened)
         return UniverseSyncReport(
             screened=len(screened),
             added=counts.added,
@@ -117,6 +148,7 @@ class SyncUniverse:
             skipped=False,
             enriched=enriched,
             enrich_failed=enrich_failed,
+            valued=valued,
         )
 
     def _enrich_missing_classifications(self, limit: int) -> tuple[int, int]:
@@ -140,6 +172,29 @@ class SyncUniverse:
             self._repository.set_classification(ticker, classification)
             enriched += 1
         return enriched, failed
+
+    def _value_screened(self, screened: tuple[ScreenedStock, ...]) -> int:
+        """Recompute and persist every screened stock's trailing P/E, returning how many got a
+        non-null figure.
+
+        Values the *whole* screened set every run — it's cheap: the price already rode in on
+        the screen, and the TTM read is DB-only (no Yahoo call). For each stock it pairs the
+        screen-time price with the quarterly slice's stored TTM consensus EPS and applies the
+        card's rule (:func:`_pe_ratio`), overwriting the anchor's ``pe_ratio`` in one commit. A
+        stock with no price this sweep is skipped, so a rare missing price never nulls a good
+        prior figure; a stock with a price but no cached TTM (or a trailing loss) is written
+        ``None`` — genuinely no P/E, the same way the growth pair drops to null. A no-op (0)
+        when no quarterly cache was wired — the P/E is best-effort enrichment."""
+        if self._quarterly is None:
+            return 0
+        pe_by_ticker: dict[str, float | None] = {}
+        for stock in screened:
+            if stock.price is None:
+                continue  # no price this sweep — leave any prior P/E untouched
+            stored = self._quarterly.get(stock.ticker)
+            ttm_eps = stored.ttm_eps if stored is not None else None
+            pe_by_ticker[stock.ticker] = _pe_ratio(stock.price, ttm_eps)
+        return self._repository.set_pe_ratios(pe_by_ticker)
 
 
 class SearchStocks:

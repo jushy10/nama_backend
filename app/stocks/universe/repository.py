@@ -17,6 +17,7 @@ front the same ``stocks`` anchor.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.stocks.universe.entities import (
@@ -96,6 +97,20 @@ class UniverseRepository(ABC):
         a half classification (only one side known) leaves room for the other later. A no-op
         if the ticker has no row. Commits its own write, so a partial enrichment sweep is
         durable.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_pe_ratios(self, pe_by_ticker: Mapping[str, float | None]) -> int:
+        """Overwrite each ticker's trailing ``pe_ratio`` on the anchor in one commit, and
+        return how many were written with a non-null value.
+
+        The valuation counterpart of the screen/classification writes. Unlike the fill-once
+        ``set_classification`` this **overwrites** (like ``market_cap`` and the trailing-growth
+        pair), because the P/E is recomputed from a fresh price every sweep. A ``None`` value
+        clears a prior figure — the trailing year turned a loss, or the quarterly cache fell
+        below four quarters. A ticker with no anchor row is skipped. Commits once, so the
+        valuation pass is durable independent of the request.
         """
         raise NotImplementedError
 

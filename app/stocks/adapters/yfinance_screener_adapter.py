@@ -115,7 +115,9 @@ def _to_stock(quote: object, *, min_market_cap: float) -> ScreenedStock | None:
 
     Dropped: a non-dict row, a blank/oversized/spacey symbol, or a missing / below-floor
     market cap (the server filters the floor, but we re-check defensively). ``sector`` is
-    always ``None`` — Yahoo's screen quote doesn't carry it.
+    always ``None`` — Yahoo's screen quote doesn't carry it. ``price`` is the quote's
+    ``regularMarketPrice`` when present and positive (the sync derives the stored P/E from
+    it), else ``None``.
     """
     if not isinstance(quote, dict):
         return None
@@ -125,12 +127,22 @@ def _to_stock(quote: object, *, min_market_cap: float) -> ScreenedStock | None:
     market_cap = quote.get("marketCap")
     if not isinstance(market_cap, (int, float)) or market_cap < min_market_cap:
         return None
+    # The screen quote also carries the regular-market price; keep it (positive numbers only)
+    # so the sync can derive pe_ratio without a second vendor call — a missing / non-positive
+    # price just rides as None and leaves that stock's P/E unset.
+    raw_price = quote.get("regularMarketPrice")
+    price = (
+        float(raw_price)
+        if isinstance(raw_price, (int, float)) and raw_price > 0
+        else None
+    )
     return ScreenedStock(
         ticker=ticker.upper(),
         name=_clean(quote.get("longName")) or _clean(quote.get("shortName")),
         exchange=_EXCHANGE_NAMES.get(quote.get("exchange")),
         market_cap=float(market_cap),
         sector=None,  # Yahoo's screen quote has no sector
+        price=price,
     )
 
 
