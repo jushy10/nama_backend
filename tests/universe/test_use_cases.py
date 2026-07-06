@@ -399,11 +399,14 @@ def test_search_blank_text_and_filters_become_none():
     assert (c.in_sp500, c.in_nasdaq100) == (None, None)
 
 
-def test_search_defaults_to_market_cap_desc_and_the_default_page():
+def test_search_defaults_to_no_sort_and_the_default_page():
     repo = _FakeSearchRepo()
     SearchStocks(repo).execute()
     c = repo.criteria
-    assert (c.sort, c.direction) == (StockSort.MARKET_CAP, SortDirection.DESC)
+    # No sort by default — the repository orders an unsorted browse by ticker (A→Z). The
+    # direction default (descending) rides along unused until a sort field is chosen.
+    assert c.sort is None
+    assert c.direction is SortDirection.DESC
     assert (c.limit, c.offset) == (SearchStocks.DEFAULT_LIMIT, 0)
     assert c.query is None
     assert c.market_cap_tier is None  # no tier filter unless asked

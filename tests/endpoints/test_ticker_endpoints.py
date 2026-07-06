@@ -421,7 +421,9 @@ def test_search_uses_defaults_when_no_params_given():
         "in_sp500": None,
         "in_nasdaq100": None,
         "market_cap_tier": None,
-        "sort": StockSort.MARKET_CAP,
+        # No ?sort= => no sort (the use case orders an unsorted browse by ticker); the
+        # direction default rides along unused until a sort is chosen.
+        "sort": None,
         "direction": SortDirection.DESC,
         "limit": 25,
         "offset": 0,
