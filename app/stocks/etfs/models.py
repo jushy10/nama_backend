@@ -27,10 +27,13 @@ class EtfRecord(Base):
 
     ``id`` is a surrogate UUID; ``ticker`` is what everything is looked up by (unique). ``name``
     and ``exchange`` are fill-once identity facts (nullable until the first screen that carries
-    them). ``net_assets`` (AUM, whole dollars), ``expense_ratio`` and ``ytd_return`` (percents)
-    are the screen figures — a moving snapshot refreshed on every run; all nullable, since a
-    given screen may omit a figure. ``screened_at`` is when the last screen that included the
-    fund ran (the freshness stamp).
+    them). ``net_assets`` (AUM, whole dollars) and ``expense_ratio`` (percent) are the screen
+    figures — a moving snapshot refreshed on every run; both nullable, since a given screen may
+    omit a figure. ``category`` is the fund's classification as a snake_case slug (e.g.
+    ``large_growth`` / ``commodities_focused``), filled once by the sync's enrichment pass from
+    Yahoo's per-ticker ``.info`` — the bulk screen carries none, so it lags the other facts until
+    enrichment reaches the fund (and stays null for a fund Yahoo doesn't categorise).
+    ``screened_at`` is when the last screen that included the fund ran (the freshness stamp).
     """
 
     __tablename__ = "etfs"
@@ -41,7 +44,7 @@ class EtfRecord(Base):
     exchange: Mapped[str | None] = mapped_column(String(32), nullable=True)
     net_assets: Mapped[float | None] = mapped_column(Float, nullable=True)
     expense_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
-    ytd_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     screened_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -4,10 +4,10 @@ Offline: an in-memory SQLite database stands in for the real ``etfs`` table. Two
 
 - ``SqlEtfRepository`` (write side): the additive upsert (insert new / refresh in place / never
   remove an absent fund), the fill-but-don't-clobber rule for name/exchange, the screen stamp,
-  and added-vs-updated counting.
-- ``SqlEtfSearchRepository`` (read side): the name-or-ticker substring match, the sorts (net
-  assets / YTD return / expense ratio, nulls last, stable ticker tiebreak), and limit/offset
-  paging with a total count.
+  added-vs-updated counting, and the category enrichment pass's read/write.
+- ``SqlEtfSearchRepository`` (read side): the name-or-ticker substring match, the category filter,
+  the sorts (net assets / expense ratio, nulls last, stable ticker tiebreak), limit/offset paging
+  with a total count, and the distinct category menu.
 """
 
 from datetime import datetime, timezone
@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.db import Base
 from app.stocks.etfs.db_repository import SqlEtfRepository, SqlEtfSearchRepository
 from app.stocks.etfs.entities import (
+    EtfClassification,
     EtfSearchCriteria,
     EtfSort,
     ScreenedEtf,
@@ -41,14 +42,13 @@ def repo(session, *, now=_NOW) -> SqlEtfRepository:
     return SqlEtfRepository(session, now=lambda: now)
 
 
-def _etf(ticker, *, name=None, exchange=None, net_assets=1e10, expense_ratio=0.2, ytd_return=5.0):
+def _etf(ticker, *, name=None, exchange=None, net_assets=1e10, expense_ratio=0.2):
     return ScreenedEtf(
         ticker=ticker,
         name=name,
         exchange=exchange,
         net_assets=net_assets,
         expense_ratio=expense_ratio,
-        ytd_return=ytd_return,
     )
 
 
@@ -71,7 +71,6 @@ def test_upsert_inserts_new_funds_fills_the_row_and_stamps(session):
                 exchange="NYSEARCA",
                 net_assets=5e11,
                 expense_ratio=0.09,
-                ytd_return=6.5,
             ),
             _etf("QQQ", name="Invesco QQQ Trust", net_assets=3e11),
         )
@@ -80,28 +79,36 @@ def test_upsert_inserts_new_funds_fills_the_row_and_stamps(session):
     assert (counts.added, counts.updated) == (2, 0)
     assert _count(session) == 2
     spy = _row(session, "SPY")
-    assert (spy.name, spy.exchange, spy.net_assets, spy.expense_ratio, spy.ytd_return) == (
+    assert (spy.name, spy.exchange, spy.net_assets, spy.expense_ratio) == (
         "SPDR S&P 500 ETF Trust",
         "NYSEARCA",
         5e11,
         0.09,
-        6.5,
     )
-    # The screen time is stamped on the row (SQLite hands it back naive).
+    # The screen time is stamped on the row (SQLite hands it back naive); category is untouched
+    # by the screen upsert (the enrichment pass owns it).
     assert spy.screened_at.replace(tzinfo=timezone.utc) == _NOW
-    qqq = _row(session, "QQQ")
-    assert (qqq.name, qqq.exchange) == ("Invesco QQQ Trust", None)
+    assert spy.category is None
 
 
 def test_upsert_refreshes_figures_in_place(session):
     r = repo(session)
-    r.upsert_screen((_etf("SPY", net_assets=5.0e11, ytd_return=3.0),))
-    counts = r.upsert_screen((_etf("SPY", net_assets=5.4e11, ytd_return=7.2),))
+    r.upsert_screen((_etf("SPY", net_assets=5.0e11, expense_ratio=0.09),))
+    counts = r.upsert_screen((_etf("SPY", net_assets=5.4e11, expense_ratio=0.10),))
 
     assert (counts.added, counts.updated) == (0, 1)
     assert _count(session) == 1  # refreshed, not duplicated
     spy = _row(session, "SPY")
-    assert (spy.net_assets, spy.ytd_return) == (5.4e11, 7.2)
+    assert (spy.net_assets, spy.expense_ratio) == (5.4e11, 0.10)
+
+
+def test_upsert_preserves_an_enriched_category(session):
+    r = repo(session)
+    r.upsert_screen((_etf("SPY", net_assets=5e11),))
+    r.set_category("SPY", EtfClassification(category="large_blend"))
+    # A later screen refresh must not wipe the enriched category.
+    r.upsert_screen((_etf("SPY", net_assets=5.1e11),))
+    assert _row(session, "SPY").category == "large_blend"
 
 
 def test_upsert_is_additive_absent_funds_are_kept(session):
@@ -118,7 +125,6 @@ def test_upsert_is_additive_absent_funds_are_kept(session):
 
 def test_upsert_fills_missing_name_and_exchange_but_never_clobbers(session):
     r = repo(session)
-    # First screen knows the name but not the exchange.
     r.upsert_screen((_etf("SPY", name="SPDR S&P 500", exchange=None),))
     spy = _row(session, "SPY")
     assert (spy.name, spy.exchange) == ("SPDR S&P 500", None)
@@ -145,6 +151,51 @@ def test_upsert_counts_a_preexisting_unscreened_row_as_added(session):
     assert _row(session, "SPY").net_assets == 5e11
 
 
+def test_tickers_missing_category_lists_uncategorised_by_net_assets_and_capped(session):
+    r = repo(session)
+    r.upsert_screen(
+        (
+            _etf("SPY", net_assets=5e11),
+            _etf("QQQ", net_assets=3e11),
+            _etf("ARKK", net_assets=8e9),
+        )
+    )
+    # Categorise one so it drops out of the work-list.
+    r.set_category("QQQ", EtfClassification(category="large_growth"))
+
+    # Largest net_assets first (the megafunds before the tail), capped to the limit.
+    assert r.tickers_missing_category(10) == ("SPY", "ARKK")
+    assert r.tickers_missing_category(1) == ("SPY",)
+
+
+def test_set_category_fills_once_and_never_clobbers(session):
+    r = repo(session)
+    r.upsert_screen((_etf("SPY", net_assets=5e11),))
+
+    r.set_category("SPY", EtfClassification(category="large_blend"))
+    assert _row(session, "SPY").category == "large_blend"
+
+    # A later run never overwrites the settled category.
+    r.set_category("SPY", EtfClassification(category="something_else"))
+    assert _row(session, "SPY").category == "large_blend"
+
+
+def test_set_category_ignores_an_empty_classification_and_unknown_ticker(session):
+    r = repo(session)
+    r.upsert_screen((_etf("SPY", net_assets=5e11),))
+    # An empty classification writes nothing.
+    r.set_category("SPY", EtfClassification(category=None))
+    assert _row(session, "SPY").category is None
+    # No row for NOPE — a no-op: nothing is created and nothing raises.
+    r.set_category("NOPE", EtfClassification(category="x"))
+    assert (
+        session.execute(
+            select(EtfRecord).where(EtfRecord.ticker == "NOPE")
+        ).scalar_one_or_none()
+        is None
+    )
+
+
 # --- SqlEtfSearchRepository (the read side) ------------------------------------------------
 
 
@@ -156,7 +207,7 @@ def _seed(
     exchange=None,
     net_assets=1e10,
     expense_ratio=None,
-    ytd_return=None,
+    category=None,
 ):
     """Insert an ``etfs`` row directly — whatever the sync would have written."""
     session.add(
@@ -166,7 +217,7 @@ def _seed(
             exchange=exchange,
             net_assets=net_assets,
             expense_ratio=expense_ratio,
-            ytd_return=ytd_return,
+            category=category,
             screened_at=_NOW,
         )
     )
@@ -176,6 +227,7 @@ def _seed(
 def _criteria(**overrides) -> EtfSearchCriteria:
     base = dict(
         query=None,
+        category=None,
         sort=EtfSort.NET_ASSETS,
         direction=SortDirection.DESC,
         limit=50,
@@ -196,17 +248,29 @@ def test_search_matches_name_or_ticker_substring_case_insensitively(session):
     r = SqlEtfSearchRepository(session)
 
     assert set(_tickers(r.search(_criteria(query="gold")))) == {"GLD", "RING"}
-    # Case-insensitive.
     assert set(_tickers(r.search(_criteria(query="GOLD")))) == {"GLD", "RING"}
-    # Ticker-only match.
     assert _tickers(r.search(_criteria(query="spy"))) == ["SPY"]
 
 
 def test_search_treats_like_metacharacters_literally(session):
     _seed(session, "SPY", name="SPDR S&P 500")
     r = SqlEtfSearchRepository(session)
-    # "%" is escaped, so it matches a literal percent (none here) rather than "everything".
     assert _tickers(r.search(_criteria(query="%"))) == []
+
+
+def test_search_filters_by_category(session):
+    _seed(session, "SPY", category="large_blend")
+    _seed(session, "IVV", category="large_blend")
+    _seed(session, "QQQ", category="large_growth")
+    _seed(session, "GLD", category="commodities_focused")
+    r = SqlEtfSearchRepository(session)
+
+    assert set(_tickers(r.search(_criteria(category="large_blend")))) == {"SPY", "IVV"}
+    assert _tickers(r.search(_criteria(category="commodities_focused"))) == ["GLD"]
+    # The category ANDs with the text filter.
+    assert _tickers(
+        r.search(_criteria(query="qqq", category="large_growth"))
+    ) == ["QQQ"]
 
 
 def test_search_sorts_by_net_assets_both_directions(session):
@@ -221,36 +285,24 @@ def test_search_sorts_by_net_assets_both_directions(session):
     ) == ["SMALL", "MID", "BIG"]
 
 
-def test_search_sorts_by_expense_ratio_cheapest_first(session):
-    _seed(session, "CHEAP", expense_ratio=0.03)
-    _seed(session, "MID", expense_ratio=0.2)
-    _seed(session, "PRICEY", expense_ratio=0.75)
+def test_search_sorts_by_expense_ratio_with_nulls_last_either_direction(session):
+    _seed(session, "AAA", expense_ratio=0.10)
+    _seed(session, "BBB", expense_ratio=0.03)
+    _seed(session, "CCC", expense_ratio=None)  # unfilled figure sinks to the bottom
+    _seed(session, "DDD", expense_ratio=0.75)
     r = SqlEtfSearchRepository(session)
 
-    # order=asc surfaces the cheapest funds first — the natural way to browse expense ratio.
+    # Ascending (cheapest first): 0.03, 0.10, 0.75, then the null.
     assert _tickers(
         r.search(_criteria(sort=EtfSort.EXPENSE_RATIO, direction=SortDirection.ASC))
-    ) == ["CHEAP", "MID", "PRICEY"]
-
-
-def test_search_sorts_with_nulls_last_either_direction(session):
-    _seed(session, "AAA", ytd_return=10.0)
-    _seed(session, "BBB", ytd_return=30.0)
-    _seed(session, "CCC", ytd_return=None)  # unfilled figure sinks to the bottom
-    _seed(session, "DDD", ytd_return=20.0)
-    r = SqlEtfSearchRepository(session)
-
-    # Descending: 30, 20, 10, then the null.
-    assert _tickers(r.search(_criteria(sort=EtfSort.YTD_RETURN))) == [
-        "BBB",
+    ) == ["BBB", "AAA", "DDD", "CCC"]
+    # Descending: 0.75, 0.10, 0.03, and the null is STILL last (nulls_last, not just reversed).
+    assert _tickers(r.search(_criteria(sort=EtfSort.EXPENSE_RATIO))) == [
         "DDD",
         "AAA",
+        "BBB",
         "CCC",
     ]
-    # Ascending: 10, 20, 30, and the null is STILL last (nulls_last, not just reversed).
-    assert _tickers(
-        r.search(_criteria(sort=EtfSort.YTD_RETURN, direction=SortDirection.ASC))
-    ) == ["AAA", "DDD", "BBB", "CCC"]
 
 
 def test_search_breaks_sort_ties_by_ticker(session):
@@ -286,7 +338,7 @@ def test_search_maps_every_row_field(session):
         exchange="NYSEARCA",
         net_assets=5e11,
         expense_ratio=0.09,
-        ytd_return=6.5,
+        category="large_blend",
     )
     (result,) = SqlEtfSearchRepository(session).search(_criteria()).results
 
@@ -295,4 +347,23 @@ def test_search_maps_every_row_field(session):
         "SPDR S&P 500 ETF Trust",
         "NYSEARCA",
     )
-    assert (result.net_assets, result.expense_ratio, result.ytd_return) == (5e11, 0.09, 6.5)
+    assert (result.net_assets, result.expense_ratio, result.category) == (
+        5e11,
+        0.09,
+        "large_blend",
+    )
+
+
+def test_categories_are_distinct_sorted_and_null_free(session):
+    _seed(session, "SPY", category="large_blend")
+    _seed(session, "IVV", category="large_blend")
+    _seed(session, "QQQ", category="large_growth")
+    _seed(session, "GLD", category="commodities_focused")
+    _seed(session, "NEW", category=None)  # uncategorised — contributes nothing
+    r = SqlEtfSearchRepository(session)
+
+    assert r.categories().categories == (
+        "commodities_focused",
+        "large_blend",
+        "large_growth",
+    )

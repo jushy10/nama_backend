@@ -8,14 +8,17 @@ run-name: Sync ETFs
 # It launches a one-off ECS Fargate task that runs `python -m app.sync etfs` (the SyncEtfs use
 # case) to completion and exits. The use case screens the top US ETFs via yfinance (Yahoo) and
 # upserts the result into the `etfs` table (additive — present funds are inserted/refreshed,
-# none removed). It's a single screen-and-upsert (no per-ticker enrichment, unlike the universe
-# sweep), so it's cheap and takes no limit. The sweep runs on its OWN 1 GB task definition
-# (nama-dev-sync), OFF the always-on API task — consistent with the other syncs and safely off
-# the small service. The task reaches the private RDS by borrowing the app service's own network
-# config.
+# none removed), then enriches each still-uncategorised fund's category via a per-ticker Yahoo
+# `.info` call (the bulk screen carries no category, exactly like the universe sweep's sector
+# enrichment). The screen always runs in full; only the category enrichment is capped, and the
+# CLI's default (`SyncEtfs.DEFAULT_LIMIT`, ~600) covers the whole ~540-fund set in one run — so
+# no limit is passed here. Since `category` is fill-once, successive weekly runs converge. The
+# sweep runs on its OWN 1 GB task definition (nama-dev-sync), OFF the always-on API task. The
+# task reaches the private RDS by borrowing the app service's own network config.
 #
-# FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs on ECS and
-# its result — "etf sync done: screened=… added=… updated=…" — lands in the task's CloudWatch
+# FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs on ECS (the
+# enrichment pass makes hundreds of sequential Yahoo calls — minutes) and its result — "etf sync
+# done: screened=… added=… updated=… enriched=… enrich_failed=…" — lands in the task's CloudWatch
 # logs, not here. A green run means the task launched; check CloudWatch for the outcome. yfinance
 # (Yahoo) needs no API key but blocks data-centre IPs intermittently; an empty or implausibly
 # small screen is skipped inside the sync, so nothing is written and the stored (additive) set
@@ -103,5 +106,5 @@ jobs:
           fi
 
           echo "Launched $task_arn"
-          echo "Fire-and-forget: the sweep runs on ECS; its result —"
-          echo "\"etf sync done: screened=… added=… updated=…\" — lands in the task's CloudWatch logs."
+          echo "Fire-and-forget: the sweep runs on ECS (the category enrichment takes minutes); its result —"
+          echo "\"etf sync done: screened=… added=… updated=… enriched=… enrich_failed=…\" — lands in CloudWatch."

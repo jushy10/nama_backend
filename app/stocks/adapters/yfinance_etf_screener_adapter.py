@@ -106,7 +106,9 @@ def _to_etf(quote: object) -> ScreenedEtf | None:
     """Map one Yahoo screen quote to a ``ScreenedEtf``, or ``None`` to drop it.
 
     Dropped: a non-dict row or a blank/oversized/spacey symbol. Every figure is best-effort — a
-    missing or non-numeric value rides in ``None`` rather than dropping the fund.
+    missing or non-numeric value rides in ``None`` rather than dropping the fund. The fund's
+    ``category`` isn't read here — the bulk screen doesn't carry it; the enrichment pass fills it
+    per-ticker.
     """
     if not isinstance(quote, dict):
         return None
@@ -119,7 +121,6 @@ def _to_etf(quote: object) -> ScreenedEtf | None:
         exchange=_EXCHANGE_NAMES.get(quote.get("exchange")),
         net_assets=_number(quote.get("netAssets")),
         expense_ratio=_number(quote.get("netExpenseRatio")),
-        ytd_return=_number(quote.get("ytdReturn")),
     )
 
 

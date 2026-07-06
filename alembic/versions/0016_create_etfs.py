@@ -33,7 +33,7 @@ def upgrade() -> None:
         sa.Column("exchange", sa.String(length=32), nullable=True),
         sa.Column("net_assets", sa.Float(), nullable=True),
         sa.Column("expense_ratio", sa.Float(), nullable=True),
-        sa.Column("ytd_return", sa.Float(), nullable=True),
+        sa.Column("category", sa.String(length=64), nullable=True),
         sa.Column("screened_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("ticker", name="uq_etfs_ticker"),

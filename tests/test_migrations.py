@@ -44,7 +44,7 @@ def test_upgrade_creates_the_etfs_table(alembic):
     inspector = inspect(create_engine(url))
     assert "etfs" in inspector.get_table_names()
     columns = {c["name"] for c in inspector.get_columns("etfs")}
-    assert {"ticker", "net_assets", "expense_ratio", "ytd_return"} <= columns
+    assert {"ticker", "net_assets", "expense_ratio", "category"} <= columns
 
     command.downgrade(config, "base")
     assert "etfs" not in inspect(create_engine(url)).get_table_names()

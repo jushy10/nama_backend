@@ -44,13 +44,12 @@ def provider(pages=None, **kw) -> YfinanceEtfScreenerProvider:
     return YfinanceEtfScreenerProvider(screen_page=FakePages(pages, **kw))
 
 
-def _q(symbol, *, exchange="PCX", net_assets=1e10, expense=0.2, ytd=5.0, long=None, short=None):
+def _q(symbol, *, exchange="PCX", net_assets=1e10, expense=0.2, long=None, short=None):
     return {
         "symbol": symbol,
         "exchange": exchange,
         "netAssets": net_assets,
         "netExpenseRatio": expense,
-        "ytdReturn": ytd,
         "longName": long,
         "shortName": short,
     }
@@ -58,7 +57,7 @@ def _q(symbol, *, exchange="PCX", net_assets=1e10, expense=0.2, ytd=5.0, long=No
 
 def test_maps_a_quote_to_an_entity():
     out = provider(
-        [[_q("SPY", exchange="PCX", net_assets=5e11, expense=0.09, ytd=6.5, long="SPDR S&P 500 ETF Trust")]]
+        [[_q("SPY", exchange="PCX", net_assets=5e11, expense=0.09, long="SPDR S&P 500 ETF Trust")]]
     ).screen()
     assert out == (
         ScreenedEtf(
@@ -67,7 +66,6 @@ def test_maps_a_quote_to_an_entity():
             exchange="NYSEARCA",
             net_assets=5e11,
             expense_ratio=0.09,
-            ytd_return=6.5,
         ),
     )
 
@@ -118,14 +116,13 @@ def test_coerces_missing_or_bad_numbers_to_none():
                     "symbol": "X",
                     "exchange": "PCX",
                     "netAssets": "1e10",  # a string, not a number
-                    "netExpenseRatio": None,  # missing
-                    "ytdReturn": True,  # a bool is not a valid figure
+                    "netExpenseRatio": True,  # a bool is not a valid figure
                 }
             ]
         ]
     ).screen()
     (etf,) = out
-    assert (etf.net_assets, etf.expense_ratio, etf.ytd_return) == (None, None, None)
+    assert (etf.net_assets, etf.expense_ratio) == (None, None)
 
 
 def test_skips_bad_symbols_and_upcases_the_ticker():

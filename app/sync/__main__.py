@@ -39,10 +39,10 @@ from app.stocks.endpoints.cron_universe_endpoints import run_universe_sync
 logger = logging.getLogger("app.sync")
 
 # slice name -> the sweep's unit of work. Each takes an optional cap: None means "process every
-# stock" for the earnings/recs sweeps and "enrich the slice's own default cap" for universe
-# (whose market screen always runs in full regardless). index-membership and etfs ignore the
-# cap entirely — index-membership is a full mark/clear reconcile against both index lists, and
-# etfs is a single screen-and-upsert of the whole top-ETF set — neither is a stalest-N sweep.
+# stock" for the earnings/recs sweeps and "enrich the slice's own default cap" for universe and
+# etfs (whose bulk screen always runs in full regardless; the cap bounds only the per-ticker
+# sector/category enrichment). index-membership ignores the cap entirely — it's a full mark/clear
+# reconcile against both index lists, not a stalest-N sweep.
 RUNNERS: dict[str, Callable[[int | None], object]] = {
     "quarterly-earnings": run_quarterly_earnings_sync,
     "annual-earnings": run_annual_earnings_sync,

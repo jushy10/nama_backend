@@ -4,18 +4,19 @@ The refresh is a use case (``SyncEtfs``) driven over HTTP: a scheduler (a GitHub
 any cron) POSTs here to kick it off.
 
 Like the other ``/internal/*/sync`` endpoints it's **fire-and-forget** — it schedules the sweep
-on a background thread and returns ``202`` at once, so a slow Yahoo screen can't blow API
-Gateway's hard 30s integration timeout. The shared ``background_sync`` helper owns the
-threading, the single-flight guard, and the exception handling (see it for the full rationale
-and the per-process-guard caveat). The ETF sweep is a single screen-and-upsert (no per-ticker
-enrichment, unlike the universe sweep), so it's quick — but it rides the same async machinery
-for consistency and 30s-safety. It takes no ``limit`` (the screen always runs in full), so the
-runner ignores the helper's limit arg and the response carries ``limit: null``.
+on a background thread and returns ``202`` at once, so the sweep can't blow API Gateway's hard
+30s integration timeout. The shared ``background_sync`` helper owns the threading, the
+single-flight guard, and the exception handling (see it for the full rationale and the
+per-process-guard caveat). The ETF sweep is two passes: a bulk screen-and-upsert, then a
+per-ticker category enrichment (a few hundred sequential Yahoo ``.info`` calls — minutes, well
+past 30s), the same shape as the universe sweep. ``limit`` caps only the enrichment pass; the
+screen always runs in full. A partial run is safe — the screen upsert and each category write
+commit independently, and the enrichment is fill-once, so an interrupted run resumes next trigger.
 
 Wiring lives here, the composition-root way: ``run_etf_sync`` opens a fresh session and builds
-the live yfinance screener + the SQL repository for the use case. Yahoo needs no API key, so
-there's no credential to gate on; the sync is always constructable. ``get_sync_runner`` is the
-DI seam tests override with a fake.
+the live yfinance screener + category adapters and the SQL repository for the use case. Yahoo
+needs no API key, so there's no credential to gate on; the sync is always constructable.
+``get_sync_runner`` is the DI seam tests override with a fake.
 
 Security: this endpoint is currently **unauthenticated**, like the other cron endpoints — an
 auth-token guard (planned: a shared ``CRON_SYNC_TOKEN`` bearer) should be added before the
@@ -25,9 +26,12 @@ endpoints are considered hardened.
 import logging
 import threading
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
+from app.stocks.adapters.yfinance_etf_category_adapter import (
+    YfinanceEtfCategoryProvider,
+)
 from app.stocks.adapters.yfinance_etf_screener_adapter import (
     YfinanceEtfScreenerProvider,
 )
@@ -47,16 +51,17 @@ router = APIRouter(tags=["etf-cron"])
 _sync_lock = threading.Lock()
 
 
-def run_etf_sync(limit: int | None = None) -> EtfSyncReport:
-    """Perform one full ETF sync (screen + upsert) with its **own** DB session (the
-    request-scoped ``get_db`` one is closed by the time the background thread runs).
-
-    Accepts the background helper's ``limit`` arg for signature compatibility but ignores it —
-    the ETF screen always runs in full and has no enrichment pass to cap.
-    """
+def run_etf_sync(limit: int | None) -> EtfSyncReport:
+    """Perform one full ETF sync (screen + upsert + category enrichment) with its **own** DB
+    session (the request-scoped ``get_db`` one is closed by the time the background thread runs).
+    ``limit`` caps the enrichment pass only; the screen always runs in full."""
     db = SessionLocal()
     try:
-        report = SyncEtfs(YfinanceEtfScreenerProvider(), SqlEtfRepository(db)).execute()
+        report = SyncEtfs(
+            YfinanceEtfScreenerProvider(),
+            SqlEtfRepository(db),
+            YfinanceEtfCategoryProvider(),
+        ).execute(limit=limit)
         if report.skipped:
             logger.warning(
                 "etf sync skipped: screen came back too small (screened=%d) — nothing "
@@ -65,10 +70,12 @@ def run_etf_sync(limit: int | None = None) -> EtfSyncReport:
             )
         else:
             logger.info(
-                "etf sync done: screened=%d added=%d updated=%d",
+                "etf sync done: screened=%d added=%d updated=%d enriched=%d enrich_failed=%d",
                 report.screened,
                 report.added,
                 report.updated,
+                report.enriched,
+                report.enrich_failed,
             )
         return report
     finally:
@@ -87,9 +94,18 @@ def get_sync_runner() -> SyncRunner:
 )
 async def sync_etfs_endpoint(
     response: Response,
+    limit: int = Query(
+        SyncEtfs.DEFAULT_LIMIT,
+        ge=1,
+        le=2000,
+        description=(
+            "Max funds whose category the background sweep classifies this run, via a per-ticker "
+            "Yahoo call. The screen itself always runs in full; only the enrichment pass is "
+            "capped. The default covers the whole top-ETF set (~540) in one run."
+        ),
+    ),
     run: SyncRunner = Depends(get_sync_runner),
 ) -> SyncTriggerResponse:
     # Fire-and-forget: start the sweep on a guarded background thread and return 202 at once, or
-    # 200 "already_running" if one is already in flight. No limit — the screen runs in full, so
-    # the response carries limit: null. See background_sync.trigger_sync.
-    return trigger_sync(_sync_lock, run, None, response, label="etf sync")
+    # 200 "already_running" if one is already in flight. See background_sync.trigger_sync.
+    return trigger_sync(_sync_lock, run, limit, response, label="etf sync")

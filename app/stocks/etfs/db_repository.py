@@ -4,11 +4,12 @@ Both implement ``repository.py`` against the slice's own ``etfs`` table and are 
 that touches SQLAlchemy:
 
 - ``SqlEtfRepository`` (write side): ``upsert_screen`` writes the screen into ``etfs`` — filling
-  ticker/name/exchange fill-once, refreshing the ``net_assets``/``expense_ratio``/``ytd_return``
-  figures + the screen stamp on every run. Additive (an absent fund is kept, never deleted);
-  commits its own write so a successful sync is durable independent of the request.
-- ``SqlEtfSearchRepository`` (read side): the ``GET /stocks/etfs`` search, reading those same
-  columns back. Read-only.
+  ticker/name/exchange fill-once, refreshing the ``net_assets``/``expense_ratio`` figures + the
+  screen stamp on every run (additive; an absent fund is kept, never deleted). ``set_category``
+  is the enrichment write (fill-once per fund). Each commits its own write so a successful — or
+  partial — sync is durable independent of the request.
+- ``SqlEtfSearchRepository`` (read side): the ``GET /stocks/etfs`` search + the
+  ``.../categories`` menu, reading those same columns back. Read-only.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from sqlalchemy import func, nulls_last, or_, select
 from sqlalchemy.orm import Session
 
 from app.stocks.etfs.entities import (
+    EtfCategories,
+    EtfClassification,
     EtfSearchCriteria,
     EtfSearchPage,
     EtfSearchResult,
@@ -36,8 +39,8 @@ from app.stocks.etfs.repository import (
 
 class SqlEtfRepository(EtfRepository):
     """Writes the screened ETF set through a request-scoped session, into the ``etfs`` table.
-    ``upsert_screen`` commits its own write so a successful sync is durable independent of the
-    surrounding request."""
+    ``upsert_screen`` / ``set_category`` each commit their own write so a successful (or partial)
+    sync is durable independent of the surrounding request."""
 
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
@@ -60,21 +63,49 @@ class SqlEtfRepository(EtfRepository):
             # handled the same way inside get_or_create_etf).
             if etf.exchange and not row.exchange:
                 row.exchange = etf.exchange
-            # Refresh the drifting screen figures + freshness stamp on every run.
+            # Refresh the drifting screen figures + freshness stamp on every run. Category is
+            # left untouched here — the enrichment pass owns it.
             row.net_assets = etf.net_assets
             row.expense_ratio = etf.expense_ratio
-            row.ytd_return = etf.ytd_return
             row.screened_at = now
         self._session.commit()
         return EtfSyncCounts(added=added, updated=updated)
 
+    def tickers_missing_category(self, limit: int) -> tuple[str, ...]:
+        # Largest net_assets first (ticker as a stable tiebreak) so a capped, rate-limited run
+        # spends its scarce successful .info calls on the biggest, most-viewed funds — a
+        # megafund like SPY/VOO is categorised in the first run rather than starved behind the
+        # long tail. A fund with no net_assets (unusual) sorts last.
+        rows = (
+            self._session.execute(
+                select(EtfRecord.ticker)
+                .where(EtfRecord.category.is_(None))
+                .order_by(nulls_last(EtfRecord.net_assets.desc()), EtfRecord.ticker)
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+        return tuple(rows)
 
-# Each domain sort field → the ``etfs`` column it orders by. All three are nullable, so
-# whichever is chosen gets wrapped in nulls_last below — a missing figure sorts to the bottom in
-# either direction.
+    def set_category(self, ticker: str, classification: EtfClassification) -> None:
+        etf = self._session.execute(
+            select(EtfRecord).where(EtfRecord.ticker == ticker)
+        ).scalar_one_or_none()
+        if etf is None:
+            return
+        # Fill-once: write only when the source supplies a category and the column still lacks
+        # one, so a settled value survives.
+        if classification.category and not etf.category:
+            etf.category = classification.category
+        self._session.commit()
+
+
+# Each domain sort field → the ``etfs`` column it orders by. Both are nullable, so whichever is
+# chosen gets wrapped in nulls_last below — a missing figure sorts to the bottom in either
+# direction.
 _SORT_COLUMNS = {
     EtfSort.NET_ASSETS: EtfRecord.net_assets,
-    EtfSort.YTD_RETURN: EtfRecord.ytd_return,
     EtfSort.EXPENSE_RATIO: EtfRecord.expense_ratio,
 }
 
@@ -94,7 +125,7 @@ def _to_result(row: EtfRecord) -> EtfSearchResult:
         exchange=row.exchange,
         net_assets=row.net_assets,
         expense_ratio=row.expense_ratio,
-        ytd_return=row.ytd_return,
+        category=row.category,
     )
 
 
@@ -136,10 +167,23 @@ class SqlEtfSearchRepository(EtfSearchRepository):
             offset=criteria.offset,
         )
 
+    def categories(self) -> EtfCategories:
+        rows = (
+            self._session.execute(
+                select(EtfRecord.category)
+                .where(EtfRecord.category.is_not(None))
+                .distinct()
+                .order_by(EtfRecord.category)
+            )
+            .scalars()
+            .all()
+        )
+        return EtfCategories(categories=tuple(rows))
+
     def _conditions(self, criteria: EtfSearchCriteria) -> list:
-        """The WHERE terms shared by the count and the page query — just the free-text filter
-        when set. There's no 'screened' gate: every row in ``etfs`` came from the screen (unlike
-        the stock anchor, which also holds incidentally-known, unscreened tickers)."""
+        """The WHERE terms shared by the count and the page query — whichever filters the
+        criteria carries (a term is added only when its field is set). There's no 'screened'
+        gate: every row in ``etfs`` came from the screen."""
         conditions: list = []
         if criteria.query:
             like = f"%{_escape_like(criteria.query)}%"
@@ -151,4 +195,6 @@ class SqlEtfSearchRepository(EtfSearchRepository):
                     EtfRecord.ticker.ilike(like, escape="\\"),
                 )
             )
+        if criteria.category:
+            conditions.append(EtfRecord.category == criteria.category)
         return conditions
