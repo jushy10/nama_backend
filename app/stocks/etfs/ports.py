@@ -15,16 +15,16 @@ from app.stocks.etfs.entities import EtfClassification, ScreenedEtf
 
 
 class EtfScreener(ABC):
-    """A gateway for screening the US ETF market (the top funds by the source's ranking)."""
+    """A gateway for screening the US ETF market (every fund at/above an AUM floor)."""
 
     @abstractmethod
-    def screen(self) -> tuple[ScreenedEtf, ...]:
-        """Return the screened set of top US ETFs.
+    def screen(self, *, min_net_assets: float) -> tuple[ScreenedEtf, ...]:
+        """Return every US ETF with net assets (AUM) at/above ``min_net_assets`` (whole dollars).
 
-        One bulk read of the curated set the sync persists — it takes no criteria of its own
-        (the vendor's "top ETFs" screen carries its own filter). Order is unspecified; the read
-        side sorts, so callers must not rely on it. Carries no ``category`` — that's the
-        enrichment pass's job (``EtfCategoryProvider``).
+        One bulk read of the floor-defined set the sync persists — the ETF analogue of the stock
+        universe's market-cap floor. Order is unspecified; the read side sorts, so callers must
+        not rely on it. Carries no ``category`` — that's the enrichment pass's job
+        (``EtfCategoryProvider``).
 
         Raises:
             StockDataUnavailable: the upstream screen failed. The sync treats this as a lost

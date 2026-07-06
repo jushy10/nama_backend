@@ -29,10 +29,10 @@ class EtfSyncCounts:
     """The row-level outcome of one screen upsert: funds newly inserted (``added``) and existing
     rows refreshed in place (``updated``).
 
-    The sync is **additive** — it never removes an ETF. A fund that later drops out of the top
-    screen keeps its last-screened facts rather than being deleted, so there is no ``removed``
-    count. (The set is stable at ~540 names, so lingering staleness is a minor, accepted
-    trade-off for never wiping the table on a bad screen.)
+    The sync is **additive** — it never removes an ETF. A fund that later drops out of the screen
+    (its AUM slips below the floor, say) keeps its last-screened facts rather than being deleted,
+    so there is no ``removed`` count. (The set is stable at ~1,000 names, so lingering staleness
+    is a minor, accepted trade-off for never wiping the table on a bad screen.)
     """
 
     added: int

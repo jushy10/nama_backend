@@ -43,15 +43,17 @@ def _a_screen(n: int) -> tuple[ScreenedEtf, ...]:
 
 
 class _FakeScreener(EtfScreener):
-    """Returns a canned screen, or raises the given error."""
+    """Returns a canned screen, or raises the given error; records the AUM floor it was asked for."""
 
     def __init__(self, etfs=(), *, error=None) -> None:
         self._etfs = tuple(etfs)
         self._error = error
         self.calls = 0
+        self.min_net_assets: float | None = None
 
-    def screen(self):
+    def screen(self, *, min_net_assets):
         self.calls += 1
+        self.min_net_assets = min_net_assets
         if self._error is not None:
             raise self._error
         return self._etfs
@@ -103,6 +105,7 @@ def test_sync_upserts_a_healthy_screen_and_reports_counts():
 
     assert isinstance(report, EtfSyncReport)
     assert screener.calls == 1
+    assert screener.min_net_assets == SyncEtfs.MIN_NET_ASSETS  # the AUM floor is threaded through
     assert repo.upserted == screen  # the whole screen reached the upsert
     assert (report.screened, report.added, report.updated) == (len(screen), 5, 45)
     assert report.skipped is False
@@ -212,7 +215,7 @@ def test_enrichment_limit_defaults_then_overrides():
 _RESULT = EtfSearchResult(
     ticker="SPY",
     name="SPDR S&P 500 ETF Trust",
-    exchange="NYSEARCA",
+    exchange="NYSE",
     net_assets=5e11,
     expense_ratio=0.09,
     category="large_blend",

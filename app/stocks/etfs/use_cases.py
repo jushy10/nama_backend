@@ -57,16 +57,21 @@ class SyncEtfs:
     """Populate/refresh the searchable ETF set from a live top-ETFs screen, then categorise the
     funds that still lack one."""
 
+    # The AUM floor that defines the searchable ETF set: US funds with at least $1B in net
+    # assets. The ETF analogue of the universe's ``MIN_MARKET_CAP`` (and the same value), keeping
+    # the set to large, liquid funds; the screener filters this server-side and ranks by AUM.
+    MIN_NET_ASSETS = 1_000_000_000.0
+
     # Below this many screened funds the result is treated as truncated or blocked (a healthy
-    # top-ETFs screen is ~540), so the upsert is skipped — a bad Yahoo day shouldn't re-stamp
-    # only a partial slice as freshly screened. The screener also raises on a hard failure (which
-    # propagates); this guards a *degraded* success.
-    MIN_PLAUSIBLE_SCREEN = 50
+    # US ≥$1B ETF screen is ~1,000 funds), so the upsert is skipped — a bad Yahoo day shouldn't
+    # re-stamp only a partial slice as freshly screened. The screener also raises on a hard
+    # failure (which propagates); this guards a *degraded* success.
+    MIN_PLAUSIBLE_SCREEN = 100
 
     # Default funds the enrichment pass categorises per run; the caller (the cron endpoint) can
-    # override. The top-ETF set is ~540, so this default covers the whole set in one run while
-    # staying bounded (the sequential per-ticker Yahoo calls are rate-limited); since ``category``
-    # is fill-once, each run only touches the still-uncategorised.
+    # override. Kept modest so the sequential per-ticker Yahoo calls stay gentle on rate limits —
+    # the ≥$1B set (~1,000) is classified over successive runs, and since ``category`` is
+    # fill-once each run only touches the still-uncategorised.
     DEFAULT_LIMIT = 600
 
     def __init__(
@@ -91,7 +96,7 @@ class SyncEtfs:
         fund's classification failure never aborts the run — it's counted and the sweep continues.
         """
         capped = self.DEFAULT_LIMIT if limit is None else max(1, limit)
-        screened = self._screener.screen()
+        screened = self._screener.screen(min_net_assets=self.MIN_NET_ASSETS)
         if len(screened) < self.MIN_PLAUSIBLE_SCREEN:
             return EtfSyncReport(
                 screened=len(screened),

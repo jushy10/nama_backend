@@ -1,15 +1,19 @@
 """Interface Adapter: the top US ETFs screen from Yahoo, via yfinance.
 
-yfinance ships Yahoo's *predefined* screens; ``top_etfs_us`` is the curated US ETF set
-(4-5-star rated, price > $10, ~540 funds). We page through it 250 at a time and map each quote
-onto a ``ScreenedEtf``. It's the only module that knows Yahoo/yfinance backs the ETF screen;
-swap it for another ``EtfScreener`` and only this file changes.
+We screen the US ETF universe with a custom ``ETFQuery`` — ``region == us`` and
+``fundnetassets >= min_net_assets`` (an AUM floor the caller sets, the ETF analogue of the stock
+screener's market-cap floor) — ranked by AUM (``fundnetassets``, largest first) and paged 250 at
+a time. Each quote maps onto a ``ScreenedEtf``. It's the only module that knows Yahoo/yfinance
+backs the ETF screen; swap it for another ``EtfScreener`` and only this file changes.
 
-Why the *predefined* screen rather than a custom ``FundQuery``: yfinance's fund-query builder
-exposes no net-assets field, so it can't rank by AUM the way ``EquityQuery`` ranks stocks by
-market cap. The predefined ``top_etfs_us`` screen carries ``netAssets`` on every row, so we pull
-the curated set and let the read side sort by AUM (or expense / return). Yahoo sorts the
-predefined set by the day's move; we don't rely on that order.
+Why a custom ``ETFQuery`` rather than the predefined ``top_etfs_us`` screen: the predefined
+screen is a fixed, curated ~540-fund list (4-5-star, price > $10) that can't be widened.
+yfinance's ETF query exposes a ``fundnetassets`` field, so we can filter *and* rank the whole US
+ETF universe by AUM ourselves — the way ``EquityQuery`` ranks stocks by ``intradaymarketcap`` —
+giving a floor-defined set of any size instead of Yahoo's fixed top list. (An earlier note here
+claimed the fund query had no net-assets field; that was true of the *mutual-fund* ``FundQuery``,
+but the ETF-specific query does carry it.) Every row still carries ``netAssets`` +
+``netExpenseRatio``, so the read side sorts by AUM (or expense / return).
 
 Yahoo intermittently blocks data-centre IPs; a blocked screen surfaces as
 ``StockDataUnavailable`` (the sync treats it as a lost round), or — if it simply returns nothing
@@ -17,8 +21,12 @@ Yahoo intermittently blocks data-centre IPs; a blocked screen surfaces as
 
 Yahoo's exchange codes are mapped to the same vocabulary the stock screen/anchor use
 (``NMS``/``NGM``/``NCM`` → ``NASDAQ``, ``NYQ`` → ``NYSE``, ``ASE`` → ``AMEX``, ``BTS`` →
-``BATS``), plus ``PCX`` → ``NYSEARCA`` (NYSE Arca, the primary ETF venue, which the stock
-screen never sees).
+``BATS``). ETFs mostly list on NYSE Arca, which Yahoo reports as ``PCX``; we fold that into
+``NYSE`` (Arca is a wholly-owned NYSE venue, the same way the three Nasdaq tiers fold into
+``NASDAQ``) so ``exchange`` stays inside the same four-value vocabulary the stock screen uses.
+
+The broad ``region == us`` ETF screen can occasionally return a stray non-fund row (a
+``quoteType`` other than ``ETF``); those are dropped so the ``etfs`` table holds only funds.
 """
 
 from __future__ import annotations
@@ -31,8 +39,9 @@ from app.stocks.exceptions import StockDataUnavailable
 # sentinel so a screen-wide failure reads sensibly ("'*' is unavailable: …").
 _UNIVERSE = "*"
 
-# The Yahoo predefined screen that returns the curated top US ETF set.
-_SCREEN = "top_etfs_us"
+# The Yahoo ETF-screen field we filter and rank on (net assets = AUM) and the region we scope to.
+_AUM_FIELD = "fundnetassets"
+_US_REGION = "us"
 
 # Yahoo "exchange" codes for the US venues ETFs list on, mapped to the friendly names the stock
 # anchor uses. ETFs list mostly on NYSE Arca (PCX) and Nasdaq / Cboe.
@@ -42,7 +51,7 @@ _EXCHANGE_NAMES: dict[str, str] = {
     "NCM": "NASDAQ",  # Nasdaq Capital Market
     "NYQ": "NYSE",
     "ASE": "AMEX",  # NYSE American (formerly AMEX)
-    "PCX": "NYSEARCA",  # NYSE Arca — the primary ETF venue
+    "PCX": "NYSE",  # NYSE Arca — the primary ETF venue; folded into its parent NYSE
     "BTS": "BATS",  # Cboe BZX
 }
 
@@ -51,26 +60,26 @@ _MAX_RESULTS = 5_000  # backstop so a bad ``total`` can't loop us forever
 
 
 class YfinanceEtfScreenerProvider(EtfScreener):
-    """Screens the top US ETFs via Yahoo's predefined ``top_etfs_us`` screen, keyless."""
+    """Screens the US ETF universe at/above an AUM floor via Yahoo's ETF screener, keyless."""
 
     def __init__(self, *, screen_page=None) -> None:
         # The page fetch is the offline-test seam: inject a fn returning canned pages so a test
         # never calls Yahoo. Default hits the live screener.
         self._screen_page = screen_page or _live_screen_page
 
-    def screen(self) -> tuple[ScreenedEtf, ...]:
+    def screen(self, *, min_net_assets: float) -> tuple[ScreenedEtf, ...]:
         screened: list[ScreenedEtf] = []
         seen: set[str] = set()
         offset = 0
         while offset < _MAX_RESULTS:
-            page = self._fetch_page(offset=offset)
+            page = self._fetch_page(min_net_assets=min_net_assets, offset=offset)
             quotes = page.get("quotes") or []
             if not quotes:
                 break
             for quote in quotes:
                 etf = _to_etf(quote)
-                # Dedupe by ticker: Yahoo's predefined paging can overlap at the seams, and a
-                # duplicate ticker would trip the ``etfs`` unique constraint on upsert.
+                # Dedupe by ticker: Yahoo's paging can overlap at the seams, and a duplicate
+                # ticker would trip the ``etfs`` unique constraint on upsert.
                 if etf is not None and etf.ticker not in seen:
                     seen.add(etf.ticker)
                     screened.append(etf)
@@ -79,11 +88,13 @@ class YfinanceEtfScreenerProvider(EtfScreener):
                 break
         return tuple(screened)
 
-    def _fetch_page(self, *, offset: int) -> dict:
+    def _fetch_page(self, *, min_net_assets: float, offset: int) -> dict:
         """One screen page, translating any yfinance/transport failure into
         ``StockDataUnavailable`` so a blocked or broken screen is a clean domain error."""
         try:
-            page = self._screen_page(offset=offset, size=_PAGE_SIZE)
+            page = self._screen_page(
+                min_net_assets=min_net_assets, offset=offset, size=_PAGE_SIZE
+            )
         except Exception as exc:  # yfinance raises a grab-bag of types on a bad response
             raise StockDataUnavailable(_UNIVERSE, str(exc)) from exc
         if not isinstance(page, dict):
@@ -93,20 +104,32 @@ class YfinanceEtfScreenerProvider(EtfScreener):
         return page
 
 
-def _live_screen_page(*, offset: int, size: int) -> dict:
-    """Call Yahoo's live predefined ETF screen for one page (imports yfinance lazily — the
-    vendor stays inside the adapter). Predefined screens take ``count`` (the ``size`` arg is
-    deprecated for them)."""
+def _live_screen_page(*, min_net_assets: float, offset: int, size: int) -> dict:
+    """Call Yahoo's live ETF screener for one page (imports yfinance lazily — the vendor stays
+    inside the adapter). Filters US ETFs with AUM ≥ ``min_net_assets``, largest AUM first. A
+    custom query takes ``size`` (``count`` is only for the predefined screens)."""
     import yfinance as yf
+    from yfinance.screener.query import ETFQuery
 
-    return yf.screen(_SCREEN, offset=offset, count=size)
+    query = ETFQuery(
+        "and",
+        [
+            ETFQuery("eq", ["region", _US_REGION]),
+            ETFQuery("gte", [_AUM_FIELD, min_net_assets]),
+        ],
+    )
+    return yf.screen(
+        query, offset=offset, size=size, sortField=_AUM_FIELD, sortAsc=False
+    )
 
 
 def _to_etf(quote: object) -> ScreenedEtf | None:
     """Map one Yahoo screen quote to a ``ScreenedEtf``, or ``None`` to drop it.
 
-    Dropped: a non-dict row or a blank/oversized/spacey symbol. Every figure is best-effort — a
-    missing or non-numeric value rides in ``None`` rather than dropping the fund. The fund's
+    Dropped: a non-dict row, a blank/oversized/spacey symbol, or a non-fund row (a ``quoteType``
+    the broad ``region == us`` screen occasionally returns that isn't ``ETF`` — kept only when the
+    field is absent, so a fund without the tag still rides through). Every figure is best-effort —
+    a missing or non-numeric value rides in ``None`` rather than dropping the fund. The fund's
     ``category`` isn't read here — the bulk screen doesn't carry it; the enrichment pass fills it
     per-ticker.
     """
@@ -115,6 +138,9 @@ def _to_etf(quote: object) -> ScreenedEtf | None:
     ticker = _clean(quote.get("symbol"))
     if not ticker or " " in ticker or len(ticker) > 16:
         return None
+    quote_type = quote.get("quoteType")
+    if quote_type is not None and quote_type != "ETF":
+        return None  # a stray non-fund row in the broad US screen
     return ScreenedEtf(
         ticker=ticker.upper(),
         name=_clean(quote.get("longName")) or _clean(quote.get("shortName")),
