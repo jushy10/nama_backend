@@ -1,0 +1,107 @@
+name: Sync ETFs
+run-name: Sync ETFs
+
+# Weekly (and on-demand). The searchable ETF set is Yahoo's curated "top US ETFs" screen
+# (~540 funds). Membership + assets under management drift slowly, so weekly is plenty (the same
+# cadence as the stock universe).
+#
+# It launches a one-off ECS Fargate task that runs `python -m app.sync etfs` (the SyncEtfs use
+# case) to completion and exits. The use case screens the top US ETFs via yfinance (Yahoo) and
+# upserts the result into the `etfs` table (additive — present funds are inserted/refreshed,
+# none removed). It's a single screen-and-upsert (no per-ticker enrichment, unlike the universe
+# sweep), so it's cheap and takes no limit. The sweep runs on its OWN 1 GB task definition
+# (nama-dev-sync), OFF the always-on API task — consistent with the other syncs and safely off
+# the small service. The task reaches the private RDS by borrowing the app service's own network
+# config.
+#
+# FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs on ECS and
+# its result — "etf sync done: screened=… added=… updated=…" — lands in the task's CloudWatch
+# logs, not here. A green run means the task launched; check CloudWatch for the outcome. yfinance
+# (Yahoo) needs no API key but blocks data-centre IPs intermittently; an empty or implausibly
+# small screen is skipped inside the sync, so nothing is written and the stored (additive) set
+# stays put.
+#
+# Manual run: Actions → "Sync ETFs" → Run workflow (same trigger, off-schedule).
+#
+# Auth: the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var — the same
+# identity the deploy + migrate jobs already use to run one-off ECS tasks.
+
+on:
+  workflow_dispatch: {}
+  # Weekly, Sundays 07:00 UTC — staggered off the universe (06:00) and index-membership (06:30)
+  # Sunday syncs and the daily recommendations sync (07:30) so the app isn't hammering Yahoo from
+  # the same host at once. Exact timing doesn't matter. Caveats: scheduled workflows run only from
+  # the default branch, and GitHub auto-disables the schedule after 60 days with no repo activity.
+  schedule:
+    - cron: "0 7 * * 0"
+
+concurrency:
+  group: sync-etfs
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # These match module "app" { name = "nama-dev" } in infra/environments/dev; the sync task
+  # def is that name + "-sync" (aws_ecs_task_definition.sync in the ecs-fargate-service module).
+  ECS_CLUSTER: nama-dev
+  ECS_SERVICE: nama-dev
+  SYNC_TASK_DEF: nama-dev-sync
+  SYNC_SLICE: etfs
+
+jobs:
+  sync:
+    name: Sync ETFs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Launch the sync task
+        run: |
+          set -euo pipefail
+
+          # The sync task runs INSIDE the VPC (the private RDS is unreachable from the runner).
+          # Borrow the app service's own network config — subnets + security groups, including
+          # the DB SG — so there's nothing to hardcode. Same approach the migrate job uses.
+          status=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" != "ACTIVE" ]; then
+            echo "::error::ECS service '$ECS_SERVICE' is not ACTIVE (status: $status) — deploy the app first."
+            exit 1
+          fi
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' --output json)
+
+          # Container command override: python -m app.sync etfs (no limit — the screen runs in full).
+          overrides=$(jq -cn --arg slice "$SYNC_SLICE" '
+            {containerOverrides: [{
+              name: "app",
+              command: ["python", "-m", "app.sync", $slice]
+            }]}')
+
+          echo "Launching one-off sync task: app.sync $SYNC_SLICE"
+          run=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$SYNC_TASK_DEF" \
+            --launch-type FARGATE \
+            --network-configuration "$netcfg" \
+            --started-by "gha-sync-${GITHUB_SHA::7}" \
+            --overrides "$overrides")
+
+          # run-task exits 0 even when it places no task (capacity/throttle land in .failures),
+          # so check explicitly — this is what makes a green run mean "the task launched".
+          task_arn=$(echo "$run" | jq -r '.tasks[0].taskArn // empty')
+          if [ -z "$task_arn" ]; then
+            echo "::error::run-task launched no task: $(echo "$run" | jq -c '.failures')"
+            exit 1
+          fi
+
+          echo "Launched $task_arn"
+          echo "Fire-and-forget: the sweep runs on ECS; its result —"
+          echo "\"etf sync done: screened=… added=… updated=…\" — lands in the task's CloudWatch logs."

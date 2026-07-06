@@ -34,3 +34,17 @@ def test_upgrade_adds_index_membership_flags_to_stocks(alembic):
 
     command.downgrade(config, "base")
     assert "stocks" not in inspect(create_engine(url)).get_table_names()
+
+
+def test_upgrade_creates_the_etfs_table(alembic):
+    # 0016 adds the standalone `etfs` table backing the top-ETFs slice.
+    config, url = alembic
+
+    command.upgrade(config, "head")
+    inspector = inspect(create_engine(url))
+    assert "etfs" in inspector.get_table_names()
+    columns = {c["name"] for c in inspector.get_columns("etfs")}
+    assert {"ticker", "net_assets", "expense_ratio", "ytd_return"} <= columns
+
+    command.downgrade(config, "base")
+    assert "etfs" not in inspect(create_engine(url)).get_table_names()
