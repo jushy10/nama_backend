@@ -10,7 +10,7 @@ analyst-estimates feature was the first to need the anchor); migration 0009 adde
 still say "symbol" — the rename is a table-vocabulary choice), 0011 added the trailing
 year-over-year growth columns, 0012 the three universe-screen columns, 0013 the
 ``industry`` column, 0014 the ``in_sp500`` / ``in_nasdaq100`` index-membership flags,
-and 0016 the ``pe_ratio`` column (all below).
+and 0017 the ``pe_ratio`` column (all below).
 """
 
 from __future__ import annotations

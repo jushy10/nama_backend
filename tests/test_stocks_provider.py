@@ -5,7 +5,7 @@ mapping is tested directly. Verifies an adapter's two jobs — translate
 Alpaca models -> Stock entity, and Alpaca failures -> domain exceptions.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -367,6 +367,43 @@ def test_get_candles_returns_chronological_order():
     times = [c.timestamp for c in series.candles]
     assert times == sorted(times)  # oldest first
     assert series.timeframe is Timeframe.DAY_1
+
+
+def _aware(dt):
+    """Alpaca's request model stores datetimes tz-naive (UTC); re-attach it."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def test_get_candles_daily_reads_consolidated_feed_with_delayed_end():
+    # Long-range charts (daily/weekly/monthly) must read SIP: IEX's history is
+    # gappy and, on the free plan, only reaches ~mid-2020, so a 10Y window comes
+    # up short. SIP-on-free requires the query to end >15 min in the past, so
+    # `end` is held back from now even when the caller passes none.
+    client = FakeBarsClient(
+        bars_by_symbol={"AAPL": [make_bar(datetime(2016, 1, 4, tzinfo=timezone.utc), 90, 100, 88, 95)]}
+    )
+    p = bars_provider(client)
+    p.get_candles("AAPL", Timeframe.WEEK_1, start=None, end=None)
+    req = client.last_request
+    assert req.feed == DataFeed.SIP
+    assert req.adjustment == Adjustment.SPLIT
+    assert req.end is not None
+    assert _aware(req.end) <= datetime.now(timezone.utc) - timedelta(minutes=15)
+
+
+def test_get_candles_intraday_reads_realtime_feed_without_delay():
+    # Intraday charts (1D/5D/1M) need real-time IEX prints, and the window is
+    # recent enough that IEX carries it — so the feed stays IEX and `end` passes
+    # through untouched (no SIP-history hold-back).
+    client = FakeBarsClient(
+        bars_by_symbol={"AAPL": [make_bar(datetime(2026, 6, 19, 15, tzinfo=timezone.utc), 1, 2, 1, 2)]}
+    )
+    p = bars_provider(client)
+    end = datetime(2026, 6, 19, 20, tzinfo=timezone.utc)
+    p.get_candles("AAPL", Timeframe.HOUR_4, start=None, end=end)
+    req = client.last_request
+    assert req.feed == DataFeed.IEX
+    assert _aware(req.end) == end  # passed through, not clamped
 
 
 def test_get_candles_empty_raises_not_found():
