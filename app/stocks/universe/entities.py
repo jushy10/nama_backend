@@ -82,7 +82,9 @@ class StockSort(str, Enum):
 
     A ``str`` enum so FastAPI binds it straight from the ``?sort=`` query param (an unknown
     value is a 422, like ``StockIndex``/``Timeframe``) and it serialises back as its value.
-    ``MARKET_CAP`` is the natural screener default (biggest first); ``REVENUE_GROWTH`` /
+    These name the sortable *columns*; the search applies none of them unless one is asked for
+    (omitting ``?sort=`` is a neutral, unsorted ticker order — see ``StockSearchCriteria.sort``),
+    so there is no default member. ``MARKET_CAP`` orders biggest-first; ``REVENUE_GROWTH`` /
     ``EPS_GROWTH`` are the annual slice's latest *trailing* year-over-year figures on the anchor
     and ``FORWARD_REVENUE_GROWTH`` / ``FORWARD_EPS_GROWTH`` their *forward* (FY1→FY2 consensus)
     counterparts; ``GROWTH`` / ``FORWARD_GROWTH`` each blend a pair (its equal-weight average) so
@@ -165,6 +167,11 @@ class StockSearchCriteria:
     are tri-state (``None`` = don't filter, else match the boolean); ``market_cap_tier`` narrows
     to one cap bucket (``None`` = every size); ``limit`` is clamped to a sane page and ``offset``
     floored at zero. The adapter turns this into one SQL query.
+
+    ``sort`` is ``None`` for an unsorted search — the adapter then orders by ticker alone (a
+    neutral, stable A→Z), the default when a client omits ``?sort=``; a ``StockSort`` value picks
+    a column to order by. ``direction`` only bites once a ``sort`` is chosen (an unsorted page is
+    always ascending by ticker).
     """
 
     query: str | None
@@ -172,7 +179,7 @@ class StockSearchCriteria:
     industry: str | None
     in_sp500: bool | None
     in_nasdaq100: bool | None
-    sort: StockSort
+    sort: StockSort | None
     direction: SortDirection
     limit: int
     offset: int

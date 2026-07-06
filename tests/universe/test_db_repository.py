@@ -547,6 +547,21 @@ def test_search_sorts_by_pe_with_nulls_last_either_direction(session):
     ]
 
 
+def test_search_with_no_sort_orders_by_ticker_ignoring_direction(session):
+    # No sort chosen (sort=None): a neutral A→Z by ticker, independent of market cap — so an
+    # unsorted browse isn't secretly market-cap ordered, yet still pages deterministically.
+    _seed(session, "CCC", market_cap=3e12)  # biggest, but sorts last by ticker
+    _seed(session, "AAA", market_cap=1e12)
+    _seed(session, "BBB", market_cap=2e12)
+    r = SqlStockSearchRepository(session)
+
+    assert _tickers(r.search(_criteria(sort=None))) == ["AAA", "BBB", "CCC"]
+    # Direction doesn't apply without a sort field — still A→Z, not reversed.
+    assert _tickers(
+        r.search(_criteria(sort=None, direction=SortDirection.ASC))
+    ) == ["AAA", "BBB", "CCC"]
+
+
 def test_search_breaks_sort_ties_by_ticker_for_stable_paging(session):
     _seed(session, "TWOB", market_cap=1e12)
     _seed(session, "TWOA", market_cap=1e12)  # same cap — ticker decides the order

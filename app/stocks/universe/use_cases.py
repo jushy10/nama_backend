@@ -223,7 +223,7 @@ class SearchStocks:
         in_sp500: bool | None = None,
         in_nasdaq100: bool | None = None,
         market_cap_tier: MarketCapTier | None = None,
-        sort: StockSort = StockSort.MARKET_CAP,
+        sort: StockSort | None = None,
         direction: SortDirection = SortDirection.DESC,
         limit: int | None = None,
         offset: int = 0,
@@ -235,7 +235,9 @@ class SearchStocks:
         match, and blank → no filter); ``limit`` defaults to ``DEFAULT_LIMIT`` and is clamped to
         ``[1, MAX_LIMIT]``, ``offset`` floored at 0. The index flags and ``market_cap_tier`` pass
         through as-is (already validated enums / tri-state booleans, ``None`` = don't filter).
-        The repository does the rest.
+        ``sort`` defaults to ``None`` — an unsorted browse the repository orders by ticker (A→Z);
+        a ``StockSort`` value sorts by that column, ``direction`` (default descending) then
+        applying. The repository does the rest.
         """
         text = (query or "").strip()
         capped = self.DEFAULT_LIMIT if limit is None else min(max(1, limit), self.MAX_LIMIT)

@@ -219,20 +219,11 @@ class SqlStockSearchRepository(StockSearchRepository):
         total = self._session.execute(
             select(func.count()).select_from(StockRecord).where(*conditions)
         ).scalar_one()
-        expression = _SORT_EXPRESSIONS[criteria.sort]
-        ordering = (
-            expression.desc()
-            if criteria.direction is SortDirection.DESC
-            else expression.asc()
-        )
         rows = (
             self._session.execute(
                 select(StockRecord)
                 .where(*conditions)
-                # nulls_last so a stock still missing the sort figure sinks to the bottom
-                # (either direction); ticker as a stable tiebreak so offset paging over equal
-                # values never skips or repeats a row.
-                .order_by(nulls_last(ordering), StockRecord.ticker.asc())
+                .order_by(*self._ordering(criteria))
                 .limit(criteria.limit)
                 .offset(criteria.offset)
             )
@@ -245,6 +236,26 @@ class SqlStockSearchRepository(StockSearchRepository):
             limit=criteria.limit,
             offset=criteria.offset,
         )
+
+    @staticmethod
+    def _ordering(criteria: StockSearchCriteria) -> list:
+        """The ORDER BY terms for a search.
+
+        With no sort chosen (``criteria.sort is None``) the page is ordered by ticker alone — a
+        neutral, stable A→Z, the same tiebreak every metric sort already ends on — so an unsorted
+        browse still pages deterministically (``direction`` doesn't apply). With a sort, order by
+        its column/expression wrapped in ``nulls_last`` (a stock still missing the figure sinks to
+        the bottom in either direction), then ticker as the stable tiebreak so offset paging over
+        equal values never skips or repeats a row."""
+        if criteria.sort is None:
+            return [StockRecord.ticker.asc()]
+        expression = _SORT_EXPRESSIONS[criteria.sort]
+        ordering = (
+            expression.desc()
+            if criteria.direction is SortDirection.DESC
+            else expression.asc()
+        )
+        return [nulls_last(ordering), StockRecord.ticker.asc()]
 
     def classifications(self) -> Classifications:
         return Classifications(
