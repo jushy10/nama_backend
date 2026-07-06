@@ -1,36 +1,47 @@
-"""Tests for the ETF use cases: SyncEtfs (write side) + SearchEtfs / ListEtfCategories (read).
+"""Tests for the ETF use cases: SyncEtfs (write side) + SearchEtfs / ListEtfCategories /
+GetEtfDetail (read).
 
-Offline: hand-written fakes for the screener, classifier, and repository ports, so this exercises
-only the orchestration — the upsert-vs-skip decision and the category enrichment pass for the
-sync, and the edge normalization (trim/slug/clamp) and criteria pass-through for the search —
-independent of Yahoo or the DB.
+Offline: hand-written fakes for the screener, classifier, quote, profile, and repository ports, so
+this exercises only the orchestration — the upsert-vs-skip decision and the category enrichment
+pass for the sync, the edge normalization (trim/slug/clamp) and criteria pass-through for the
+search, and for the detail: the membership gate (404 before any upstream call), the quote-primary
+propagation, and the best-effort profile degradation — independent of Yahoo, Alpaca, or the DB.
 """
+
+from datetime import datetime, timezone
 
 import pytest
 
+from app.stocks.entities import Quote
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfClassification,
+    EtfHolding,
+    EtfProfile,
     EtfSearchCriteria,
     EtfSearchPage,
     EtfSearchResult,
+    EtfSectorWeight,
     EtfSort,
     ScreenedEtf,
     SortDirection,
 )
-from app.stocks.etfs.ports import EtfCategoryProvider, EtfScreener
+from app.stocks.etfs.ports import EtfCategoryProvider, EtfProfileProvider, EtfScreener
 from app.stocks.etfs.repository import (
+    EtfLookupRepository,
     EtfRepository,
     EtfSearchRepository,
     EtfSyncCounts,
 )
 from app.stocks.etfs.use_cases import (
     EtfSyncReport,
+    GetEtfDetail,
     ListEtfCategories,
     SearchEtfs,
     SyncEtfs,
 )
-from app.stocks.exceptions import StockDataUnavailable
+from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.ports import StockQuoteProvider
 
 
 def _etf(ticker, *, net_assets=1e10):
@@ -312,3 +323,186 @@ def test_list_categories_passes_through():
 
     assert result is categories
     assert repo.categories_calls == 1
+
+
+# --- GetEtfDetail -------------------------------------------------------------------------
+
+
+def _facts(ticker="VOO", **overrides) -> EtfSearchResult:
+    base = dict(
+        name="Vanguard S&P 500 ETF",
+        exchange="NYSE",
+        net_assets=1.7e12,
+        expense_ratio=0.03,
+        category="large_blend",
+    )
+    base.update(overrides)
+    return EtfSearchResult(ticker=ticker, **base)
+
+
+def _quote(symbol="VOO", price=685.28, previous_close=682.07) -> Quote:
+    return Quote(
+        symbol=symbol,
+        price=price,
+        previous_close=previous_close,
+        bid=None,
+        ask=None,
+        as_of=datetime(2026, 7, 6, 20, 0, tzinfo=timezone.utc),
+    )
+
+
+def _a_profile() -> EtfProfile:
+    return EtfProfile(
+        fund_family="Vanguard",
+        net_assets=1.8e12,  # a wrong-answer sentinel: the table's net_assets must win
+        expense_ratio=0.05,  # sentinel: the table's expense_ratio must win
+        nav=685.28,
+        dividend_yield=1.03,
+        ytd_return=11.25,
+        three_year_return=20.41,
+        five_year_return=13.01,
+        description="An S&P 500 index fund.",
+        top_holdings=(EtfHolding(ticker="NVDA", name="NVIDIA Corp", weight=7.89),),
+        sector_weightings=(EtfSectorWeight(sector="technology", weight=39.13),),
+    )
+
+
+class _FakeLookup(EtfLookupRepository):
+    """In-memory single-fund lookup; records the get/is_etf calls."""
+
+    def __init__(self, facts: EtfSearchResult | None) -> None:
+        self._facts = facts
+        self.get_calls: list[str] = []
+
+    def is_etf(self, ticker: str) -> bool:
+        return self._facts is not None
+
+    def get(self, ticker: str) -> EtfSearchResult | None:
+        self.get_calls.append(ticker)
+        return self._facts
+
+
+class _FakeQuotes(StockQuoteProvider):
+    def __init__(self, quote: Quote | None = None, error: Exception | None = None) -> None:
+        self._quote = quote
+        self._error = error
+        self.calls: list[str] = []
+
+    def get_quote(self, symbol: str) -> Quote:
+        self.calls.append(symbol)
+        if self._error is not None:
+            raise self._error
+        return self._quote or _quote(symbol)
+
+
+class _FakeProfileProvider(EtfProfileProvider):
+    def __init__(self, profile: EtfProfile | None = None, error: Exception | None = None) -> None:
+        self._profile = profile if profile is not None else EtfProfile.empty()
+        self._error = error
+        self.calls: list[str] = []
+
+    def get_profile(self, symbol: str) -> EtfProfile:
+        self.calls.append(symbol)
+        if self._error is not None:
+            raise self._error
+        return self._profile
+
+
+_UNSET = object()  # sentinel so an explicit facts=None (non-ETF) differs from "not passed"
+
+
+def _detail_use_case(
+    *, facts=_UNSET, quote=None, quote_error=None, profile=None, profile_error=None
+):
+    lookup = _FakeLookup(_facts() if facts is _UNSET else facts)
+    quotes = _FakeQuotes(quote, quote_error)
+    prof = _FakeProfileProvider(profile, profile_error)
+    return GetEtfDetail(lookup, quotes, prof), lookup, quotes, prof
+
+
+def test_detail_assembles_quote_stored_facts_and_profile():
+    use_case, _, quotes, prof = _detail_use_case(
+        quote=_quote(), profile=_a_profile()
+    )
+
+    detail = use_case.execute("voo")  # lower-case in -> normalized
+
+    assert detail.ticker == "VOO"
+    # Quote-derived fields (primary source), the same change rules as every price view.
+    assert detail.quote.price == 685.28
+    assert detail.quote.change == pytest.approx(3.21)
+    assert detail.quote.change_percent == pytest.approx(0.47, abs=0.01)
+    # Stored etfs-table facts.
+    assert detail.name == "Vanguard S&P 500 ETF"
+    assert detail.exchange == "NYSE"
+    assert detail.category == "large_blend"
+    # The table's net_assets / expense_ratio win over the profile's (the detail page must agree
+    # with the screener list).
+    assert detail.net_assets == 1.7e12
+    assert detail.expense_ratio == 0.03
+    # Best-effort profile enrichment rides along.
+    assert detail.profile.fund_family == "Vanguard"
+    assert detail.profile.top_holdings[0].ticker == "NVDA"
+    assert quotes.calls == ["VOO"]
+    assert prof.calls == ["VOO"]
+
+
+def test_detail_falls_back_to_profile_figures_when_the_table_lacks_them():
+    # A fund the table has no net_assets/expense_ratio for yet: the profile fills the gap.
+    use_case, *_ = _detail_use_case(
+        facts=_facts(net_assets=None, expense_ratio=None),
+        profile=_a_profile(),  # carries net_assets=1.8e12, expense_ratio=0.05
+    )
+
+    detail = use_case.execute("VOO")
+
+    assert detail.net_assets == 1.8e12
+    assert detail.expense_ratio == 0.05
+
+
+def test_detail_404s_before_any_upstream_call_for_a_non_etf():
+    use_case, lookup, quotes, prof = _detail_use_case(facts=None)  # not in the universe
+
+    with pytest.raises(StockNotFound):
+        use_case.execute("AAPL")
+
+    # The membership gate short-circuits: neither the quote nor the profile was fetched.
+    assert lookup.get_calls == ["AAPL"]
+    assert quotes.calls == []
+    assert prof.calls == []
+
+
+def test_detail_propagates_a_quote_failure():
+    # The quote is primary — its failure propagates (mapped to 502 at the edge), not degraded.
+    use_case, _, _, prof = _detail_use_case(
+        quote_error=StockDataUnavailable("VOO", "alpaca down")
+    )
+
+    with pytest.raises(StockDataUnavailable):
+        use_case.execute("VOO")
+
+    # The profile is never reached once the primary source has failed.
+    assert prof.calls == []
+
+
+def test_detail_degrades_to_an_empty_profile_when_yahoo_is_unavailable():
+    # Best-effort enrichment: even a (contract-breaking) raising profile provider never sinks the
+    # card — the quote + stored facts still serve on a 200-worthy result with an empty profile.
+    use_case, *_ = _detail_use_case(
+        quote=_quote(),
+        profile_error=StockDataUnavailable("VOO", "yahoo blocked"),
+    )
+
+    detail = use_case.execute("VOO")
+
+    assert detail.profile == EtfProfile.empty()
+    assert detail.name == "Vanguard S&P 500 ETF"  # stored facts still serve
+    assert detail.quote.price == 685.28  # quote still serves
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "TOOLONG", "12X", "BR.K"])
+def test_detail_rejects_an_invalid_symbol_before_the_lookup(bad):
+    use_case, lookup, *_ = _detail_use_case()
+    with pytest.raises(ValueError):
+        use_case.execute(bad)
+    assert lookup.get_calls == []  # rejected at the edge, before touching the repository

@@ -11,7 +11,7 @@ against hand-written fakes. The *persistence* seam is separate — the repositor
 
 from abc import ABC, abstractmethod
 
-from app.stocks.etfs.entities import EtfClassification, ScreenedEtf
+from app.stocks.etfs.entities import EtfClassification, EtfProfile, ScreenedEtf
 
 
 class EtfScreener(ABC):
@@ -55,5 +55,33 @@ class EtfCategoryProvider(ABC):
             StockDataUnavailable: the upstream lookup failed (an outage or a data-centre-IP
                 block). The sync counts it as a lost fund for the run and moves on; the next run
                 retries it.
+        """
+        raise NotImplementedError
+
+
+class EtfProfileProvider(ABC):
+    """A gateway for one fund's rich profile — the enrichment the ETF *detail* endpoint layers on
+    top of the live quote and the stored ``etfs`` facts.
+
+    Reads the fund facts that live only on Yahoo's per-ticker surfaces (fund family, NAV, trailing
+    returns, description, holdings, sector weightings) — the ones the bulk screen and the ``etfs``
+    table don't keep. Separate from ``EtfCategoryProvider`` (which reads just the one category slug
+    the sync persists): the detail view wants the whole profile, live per request, not a single
+    stored column. Dependency Inversion as ever — the core asks for a profile in domain terms and
+    the yfinance adapter is the only thing that knows Yahoo backs it.
+
+    Deliberately **total**, unlike the other ports: this is best-effort enrichment on a view whose
+    primary source is the quote, so a blocked/failed Yahoo read must not sink the request. The
+    contract is therefore to *never raise* — an outage, an IP block, or an uncovered fund all come
+    back as an empty ``EtfProfile`` (all ``None`` / empty lists), which the endpoint serves around.
+    """
+
+    @abstractmethod
+    def get_profile(self, symbol: str) -> EtfProfile:
+        """Return ``symbol``'s (already-normalized) fund profile, best-effort.
+
+        Never raises: any vendor failure or missing field degrades to an empty ``EtfProfile``
+        rather than an error, so the detail endpoint still returns 200 with the quote + stored
+        facts. Percent figures on the returned profile are already normalized to human percent.
         """
         raise NotImplementedError

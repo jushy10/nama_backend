@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, nulls_last, or_, select
+from sqlalchemy import func, literal, nulls_last, or_, select
 from sqlalchemy.orm import Session
 
 from app.stocks.etfs.entities import (
@@ -31,6 +31,7 @@ from app.stocks.etfs.entities import (
 )
 from app.stocks.etfs.models import EtfRecord, get_or_create_etf
 from app.stocks.etfs.repository import (
+    EtfLookupRepository,
     EtfRepository,
     EtfSearchRepository,
     EtfSyncCounts,
@@ -198,3 +199,26 @@ class SqlEtfSearchRepository(EtfSearchRepository):
         if criteria.category:
             conditions.append(EtfRecord.category == criteria.category)
         return conditions
+
+
+class SqlEtfLookupRepository(EtfLookupRepository):
+    """Reads a single stored fund off the ``etfs`` table by its unique ``ticker``, through a
+    request-scoped session. Read-only — like the search repository, it never writes."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def is_etf(self, ticker: str) -> bool:
+        # A single indexed existence probe on the unique ``ticker``: select a literal and cap at
+        # one row so the DB stops at the first hit and never materialises the record — cheap
+        # enough to run on every ticker-card request to set its ``asset_type``.
+        hit = self._session.execute(
+            select(literal(True)).where(EtfRecord.ticker == ticker).limit(1)
+        ).scalar_one_or_none()
+        return hit is not None
+
+    def get(self, ticker: str) -> EtfSearchResult | None:
+        row = self._session.execute(
+            select(EtfRecord).where(EtfRecord.ticker == ticker)
+        ).scalar_one_or_none()
+        return None if row is None else _to_result(row)

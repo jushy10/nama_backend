@@ -24,8 +24,15 @@ normalization in the use case.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 from enum import Enum
+
+if TYPE_CHECKING:
+    # Only for the ``EtfDetail`` annotation — the shared ``Quote`` is itself a pure domain entity,
+    # but the annotation is stringized (``from __future__ import annotations``) so nothing is
+    # imported at runtime, keeping this module import-light.
+    from app.stocks.entities import Quote
 
 
 @dataclass(frozen=True)
@@ -157,6 +164,126 @@ class EtfCategories:
     """
 
     categories: tuple[str, ...]
+
+
+# --- The ETF detail view (GET /stocks/etf/{ticker}) ---------------------------------------------
+#
+# A single fund's full card: the live quote (primary), the stored ``etfs``-table facts, and the
+# best-effort profile enrichment. Unlike the search list this is a per-ticker read, so it carries
+# the richer fund facts a detail page shows (fund family, NAV, trailing returns, holdings) that the
+# bulk screen/table doesn't keep.
+
+
+@dataclass(frozen=True)
+class EtfHolding:
+    """One of a fund's top holdings — the underlying position and its weight.
+
+    ``weight`` is a percent of the fund (e.g. ``7.89`` for 7.89%), normalized from the vendor's
+    fraction at the adapter. ``name`` is the holding's display name; ``ticker`` its symbol (either
+    may be absent for an odd row, though the top holdings almost always carry both)."""
+
+    ticker: str | None
+    name: str | None
+    weight: float | None  # percent of fund
+
+
+@dataclass(frozen=True)
+class EtfSectorWeight:
+    """A fund's exposure to one market sector, as a percent of the fund.
+
+    ``sector`` is the vendor's sector key (already a snake_case-ish slug, e.g. ``technology`` /
+    ``consumer_cyclical``); ``weight`` is a percent (e.g. ``39.13``), normalized from the vendor's
+    fraction at the adapter."""
+
+    sector: str
+    weight: float  # percent of fund
+
+
+@dataclass(frozen=True)
+class EtfProfile:
+    """The best-effort profile enrichment for one fund, sourced from Yahoo (yfinance).
+
+    Everything here rides Yahoo's per-ticker ``.info`` / ``funds_data`` surfaces — not the price
+    feed or the ``etfs`` table — so the whole block is best-effort: any field the vendor doesn't
+    carry (or a blocked call) simply stays ``None`` / empty and the detail endpoint still serves
+    the quote + stored facts. All the percent figures are normalized to human percent here in the
+    domain's vocabulary (the adapter owns the vendor's unit quirks): ``dividend_yield``,
+    ``ytd_return``, ``three_year_return`` and ``five_year_return`` are percents;
+    ``expense_ratio`` is a percent too (a fallback for the stored one). ``net_assets`` (AUM) and
+    ``nav`` are raw figures. ``top_holdings`` is capped and ordered by the vendor (largest first);
+    ``sector_weightings`` is sorted by weight descending. Empty lists mean "unavailable", never
+    "the fund holds nothing"."""
+
+    fund_family: str | None = None
+    net_assets: float | None = None  # AUM (raw), Yahoo's totalAssets — a fallback for the table's
+    expense_ratio: float | None = None  # percent — a fallback for the table's
+    nav: float | None = None  # net asset value per share (raw price)
+    dividend_yield: float | None = None  # percent
+    ytd_return: float | None = None  # percent
+    three_year_return: float | None = None  # percent (annualized)
+    five_year_return: float | None = None  # percent (annualized)
+    description: str | None = None
+    top_holdings: tuple[EtfHolding, ...] = ()
+    sector_weightings: tuple[EtfSectorWeight, ...] = ()
+
+    @classmethod
+    def empty(cls) -> "EtfProfile":
+        """The all-null profile — what a blocked or uncovered Yahoo read degrades to, so the
+        detail endpoint still serves the quote + stored facts around it."""
+        return cls()
+
+
+@dataclass(frozen=True)
+class EtfDetail:
+    """Everything ``GET /stocks/etf/{ticker}`` serves for one fund, assembled from the three
+    sources: the live quote (primary — Alpaca), the stored ``etfs``-table facts (name, exchange,
+    category, net_assets, expense_ratio), and the best-effort Yahoo ``profile``.
+
+    A composition of the three, assembled by the use case (like the ticker slice's ``TickerCard``
+    bundles the quote and enrichment), so it lives here beside the entities it draws on rather than
+    a separate concept. ``asset_type`` is always ``"etf"`` — this endpoint only serves funds (a
+    non-ETF symbol is a 404 before this is built). The table facts win over the profile where both
+    carry the same figure (net_assets, expense_ratio): the stored value is what the screener list
+    shows, so the detail page must agree with it — the profile only fills the *gap* when the table
+    lacks one. ``price``/``change``/``change_percent``/``previous_close``/``as_of`` are read off
+    the live ``quote`` (its own change rules), so the fund's move never disagrees with the shared
+    quote endpoint."""
+
+    ticker: str
+    quote: "Quote"  # live price + the day's move (primary source)
+    name: str | None  # from the etfs table
+    exchange: str | None  # from the etfs table
+    category: str | None  # slug, from the etfs table
+    net_assets: float | None  # AUM (raw): the table's, falling back to the profile's
+    expense_ratio: float | None  # percent: the table's, falling back to the profile's
+    profile: EtfProfile = field(default_factory=EtfProfile.empty)
+
+    @classmethod
+    def assemble(
+        cls,
+        ticker: str,
+        quote: "Quote",
+        facts: "EtfSearchResult",
+        profile: EtfProfile,
+    ) -> "EtfDetail":
+        """Compose the detail from the live quote, the stored ``etfs`` facts, and the Yahoo
+        profile — resolving net_assets/expense_ratio table-first, profile-as-fallback (so the
+        detail page never contradicts the screener list, but a gap the table hasn't filled still
+        gets a value when Yahoo has one)."""
+        return cls(
+            ticker=ticker,
+            quote=quote,
+            name=facts.name,
+            exchange=facts.exchange,
+            category=facts.category,
+            net_assets=facts.net_assets if facts.net_assets is not None else profile.net_assets,
+            expense_ratio=(
+                facts.expense_ratio
+                if facts.expense_ratio is not None
+                else profile.expense_ratio
+            ),
+            profile=profile,
+        )
 
 
 def slugify(label: object) -> str | None:

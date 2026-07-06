@@ -44,6 +44,7 @@ from app.stocks.entities import (
     StockFundamentals,
     StockPerformance,
 )
+from app.stocks.etfs.repository import EtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AnalystEstimatesProvider,
@@ -56,6 +57,11 @@ from app.stocks.ports import (
 from app.stocks.ticker.entities import TickerOptionsMetrics, TickerValuation
 from app.stocks.ticker.ports import OptionChainProvider
 from app.stocks.ticker.repository import StoredTickerFacts, TickerRepository
+
+# The card's asset-type discriminator: an ETF (in the stored ETF universe) or a plain equity.
+# Always one of these two — never null — so the FE can branch on it unconditionally.
+ASSET_TYPE_ETF = "etf"
+ASSET_TYPE_EQUITY = "equity"
 
 # The blocks a caller may opt into. Everything else on the card (ticker, name,
 # price + day move, market cap) is always served.
@@ -121,6 +127,9 @@ class TickerCard:
     valuation: TickerValuation | None  # the forward-PEG read; only with 'metrics'
     fundamentals: StockFundamentals | None  # dividend + trailing metrics (best-effort; only with 'dividend'/'metrics')
     performance: StockPerformance | None  # trailing windows; only with 'performance'
+    # Always served (never null): "etf" when the symbol is in the stored ETF universe, else
+    # "equity" — a single indexed lookup off the etfs table, so the FE can branch the card.
+    asset_type: str = ASSET_TYPE_EQUITY
     name: str | None = None  # display name; DB-first, filled once from the profile
     exchange: str | None = None  # listing venue; DB-first, filled once from the feed
     # The rest ride the same anchor read, served straight from the DB (never a
@@ -165,6 +174,7 @@ class GetTickerCard:
         repository: TickerRepository | None = None,
         options: OptionChainProvider | None = None,
         earnings: QuarterlyEarningsProvider | None = None,
+        etfs: EtfLookupRepository | None = None,
         today: Callable[[], date] | None = None,
     ) -> None:
         self._quotes = quotes
@@ -176,6 +186,7 @@ class GetTickerCard:
         self._repository = repository
         self._options = options
         self._earnings = earnings
+        self._etfs = etfs
         # Injectable clock: the expiry windows are anchored on "today", and the
         # tests pin it the way the yfinance adapters pin theirs.
         self._today = today or date.today
@@ -198,6 +209,7 @@ class GetTickerCard:
         return TickerCard(
             quote=quote,
             include=wanted,
+            asset_type=self._get_asset_type(normalized),
             valuation=(
                 self._get_valuation(normalized, quote) if "metrics" in wanted else None
             ),
@@ -225,6 +237,15 @@ class GetTickerCard:
                 else None
             ),
         )
+
+    def _get_asset_type(self, symbol: str) -> str:
+        # A single indexed membership check against the stored ETF universe: "etf" when the
+        # symbol is one of the screened funds, else "equity". Always resolves to one of the two
+        # (never null) so the FE can branch unconditionally — with no etfs repository wired
+        # (a bare use case in a test) it just reads as an equity.
+        if self._etfs is not None and self._etfs.is_etf(symbol):
+            return ASSET_TYPE_ETF
+        return ASSET_TYPE_EQUITY
 
     def _get_valuation(self, symbol: str, quote: Quote) -> TickerValuation:
         # Primary when requested: the metrics block exists to price the forward

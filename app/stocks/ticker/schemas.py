@@ -95,14 +95,17 @@ class TickerCardResponse(BaseModel):
     ``industry`` the universe-screen facts — all served straight from the ``stocks``
     row (``name``/``exchange`` learned once, the rest written by the universe sync),
     each best-effort and ``null`` until the row carries it (e.g. a stock not yet
-    screened has no market cap). ``dividend``, ``performance``, ``metrics`` and
-    ``options_metrics`` appear only when asked for via ``?include=`` — ``null``
-    otherwise, and ``null`` for the best-effort ones even when requested if their
-    source is down or keyless."""
+    screened has no market cap). ``asset_type`` is the one non-null discriminator —
+    ``"etf"`` when the symbol is in the stored ETF universe, else ``"equity"`` — so a
+    client can branch the card (and reach for ``GET /stocks/etf/{ticker}`` on a fund).
+    ``dividend``, ``performance``, ``metrics`` and ``options_metrics`` appear only when
+    asked for via ``?include=`` — ``null`` otherwise, and ``null`` for the best-effort
+    ones even when requested if their source is down or keyless."""
 
     ticker: str
     name: str | None = None  # clean display name ("Micron Technology")
     exchange: str | None = None  # listing venue (e.g. "NASDAQ"); DB-backed
+    asset_type: str  # "etf" if in the ETF universe, else "equity" — always present
     price: float
     change: float | None = None  # absolute move vs the previous close
     change_percent: float | None = None  # percent move vs the previous close

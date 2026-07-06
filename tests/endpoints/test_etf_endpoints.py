@@ -1,24 +1,35 @@
-"""Tests for the ETF read endpoints (GET /stocks/etfs + GET /stocks/etfs/categories).
+"""Tests for the ETF read endpoints (GET /stocks/etfs, GET /stocks/etfs/categories, and
+GET /stocks/etf/{ticker}).
 
-Offline: the use cases are built over in-memory fake repositories and injected through
-dependency_overrides, so this checks the controller + presenter + query binding — the response
-envelope, the q/category/sort/order/paging params reaching the use case, the enum validation, and
-the categories menu — with no database.
+Offline: the use cases are built over in-memory fakes and injected through dependency_overrides, so
+this checks the controllers + presenters + query binding — the search response envelope, the
+q/category/sort/order/paging params reaching the use case, the enum validation, the categories
+menu, and for the detail card: the JSON shape (quote + stored facts + best-effort profile), the
+404-for-non-ETF, the 502-on-quote-failure, the best-effort degradation, and the cache header — with
+no database, Alpaca, or Yahoo.
 """
+
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import etf_endpoints as endpoints
+from app.stocks.entities import Quote
 from app.stocks.etfs.entities import (
     EtfCategories,
+    EtfDetail,
+    EtfHolding,
+    EtfProfile,
     EtfSearchPage,
     EtfSearchResult,
+    EtfSectorWeight,
     EtfSort,
     SortDirection,
 )
 from app.stocks.etfs.repository import EtfSearchRepository
 from app.stocks.etfs.use_cases import ListEtfCategories, SearchEtfs
+from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 
 
 class _FakeSearchRepo(EtfSearchRepository):
@@ -134,3 +145,137 @@ def test_categories_endpoint_returns_the_slugs():
         "categories": ["commodities_focused", "large_blend", "large_growth"]
     }
     assert resp.headers["cache-control"] == "public, max-age=300"
+
+
+# --- GET /stocks/etf/{ticker} (the detail card) -------------------------------------------
+
+
+class _FakeDetailUseCase:
+    """Stands in for GetEtfDetail; returns a canned detail or raises."""
+
+    def __init__(self, *, result=None, error=None) -> None:
+        self._result = result
+        self._error = error
+        self.calls: list[str] = []
+
+    def execute(self, ticker: str) -> EtfDetail:
+        self.calls.append(ticker)
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def _detail_client(fake: _FakeDetailUseCase) -> TestClient:
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    app.dependency_overrides[endpoints.get_etf_detail_use_case] = lambda: fake
+    return TestClient(app)
+
+
+def _a_detail(*, profile: EtfProfile | None = None) -> EtfDetail:
+    quote = Quote(
+        symbol="VOO",
+        price=685.28,
+        previous_close=682.07,
+        bid=None,
+        ask=None,
+        as_of=datetime(2026, 7, 6, 20, 0, tzinfo=timezone.utc),
+    )
+    facts = EtfSearchResult(
+        ticker="VOO",
+        name="Vanguard S&P 500 ETF",
+        exchange="NYSE",
+        net_assets=1_701_513_003_008.0,
+        expense_ratio=0.03,
+        category="large_blend",
+    )
+    if profile is None:
+        profile = EtfProfile(
+            fund_family="Vanguard",
+            nav=685.28,
+            dividend_yield=1.03,
+            ytd_return=11.25,
+            three_year_return=20.41,
+            five_year_return=13.01,
+            description="The fund employs an indexing investment approach.",
+            top_holdings=(EtfHolding(ticker="NVDA", name="NVIDIA Corp", weight=7.89),),
+            sector_weightings=(EtfSectorWeight(sector="technology", weight=39.13),),
+        )
+    return EtfDetail.assemble("VOO", quote, facts, profile)
+
+
+def test_detail_returns_the_full_json_shape():
+    fake = _FakeDetailUseCase(result=_a_detail())
+    resp = _detail_client(fake).get("/stocks/etf/VOO")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "ticker": "VOO",
+        "name": "Vanguard S&P 500 ETF",
+        "exchange": "NYSE",
+        "asset_type": "etf",
+        "price": 685.28,
+        "change": 3.21,  # 685.28 - 682.07, the quote's derived move
+        "change_percent": 0.47,  # vs the previous close
+        "previous_close": 682.07,
+        "as_of": "2026-07-06T20:00:00Z",
+        "category": "large_blend",
+        "net_assets": 1_701_513_003_008.0,
+        "expense_ratio": 0.03,
+        "fund_family": "Vanguard",
+        "nav": 685.28,
+        "dividend_yield": 1.03,
+        "ytd_return": 11.25,
+        "three_year_return": 20.41,
+        "five_year_return": 13.01,
+        "description": "The fund employs an indexing investment approach.",
+        "top_holdings": [{"ticker": "NVDA", "name": "NVIDIA Corp", "weight": 7.89}],
+        "sector_weightings": [{"sector": "technology", "weight": 39.13}],
+    }
+    assert fake.calls == ["VOO"]
+
+
+def test_detail_serves_null_and_empty_enrichment_when_the_profile_is_empty():
+    # Best-effort: a blocked Yahoo read leaves the profile empty — the quote + stored facts still
+    # serve on a 200, with the enrichment fields null and the lists empty.
+    fake = _FakeDetailUseCase(result=_a_detail(profile=EtfProfile.empty()))
+    resp = _detail_client(fake).get("/stocks/etf/VOO")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["price"] == 685.28  # quote still serves
+    assert body["name"] == "Vanguard S&P 500 ETF"  # stored facts still serve
+    assert body["expense_ratio"] == 0.03  # stored fact
+    assert body["fund_family"] is None
+    assert body["nav"] is None
+    assert body["dividend_yield"] is None
+    assert body["ytd_return"] is None
+    assert body["description"] is None
+    assert body["top_holdings"] == []
+    assert body["sector_weightings"] == []
+
+
+def test_detail_sets_the_cache_header():
+    fake = _FakeDetailUseCase(result=_a_detail())
+    resp = _detail_client(fake).get("/stocks/etf/VOO")
+    assert resp.headers["cache-control"] == "public, max-age=300"
+
+
+def test_detail_non_etf_is_a_404():
+    # Not in the stored ETF universe -> "not an ETF".
+    fake = _FakeDetailUseCase(error=StockNotFound("AAPL"))
+    resp = _detail_client(fake).get("/stocks/etf/AAPL")
+    assert resp.status_code == 404
+
+
+def test_detail_invalid_symbol_is_a_400():
+    fake = _FakeDetailUseCase(error=ValueError("'123' is not a valid ETF symbol."))
+    resp = _detail_client(fake).get("/stocks/etf/123")
+    assert resp.status_code == 400
+
+
+def test_detail_quote_failure_is_a_502():
+    # The quote is primary — its failure surfaces as the same 502 the quote/ticker endpoints use.
+    fake = _FakeDetailUseCase(error=StockDataUnavailable("VOO", "alpaca down"))
+    resp = _detail_client(fake).get("/stocks/etf/VOO")
+    assert resp.status_code == 502

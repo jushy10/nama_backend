@@ -35,6 +35,7 @@ from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,
 )
+from app.stocks.etfs.repository import EtfLookupRepository
 from app.stocks.ticker.entities import (
     OptionContract,
     TickerOptionsMetrics,
@@ -42,7 +43,11 @@ from app.stocks.ticker.entities import (
 )
 from app.stocks.ticker.ports import OptionChainProvider
 from app.stocks.ticker.repository import StoredTickerFacts, TickerRepository
-from app.stocks.ticker.use_cases import GetTickerCard
+from app.stocks.ticker.use_cases import (
+    ASSET_TYPE_EQUITY,
+    ASSET_TYPE_ETF,
+    GetTickerCard,
+)
 
 _EMPTY = AnalystEstimates(
     fiscal_year=None, period_end=None, eps_avg=None, revenue_avg=None
@@ -218,6 +223,21 @@ class _FakeRepo(TickerRepository):
     def save_exchange(self, symbol: str, exchange: str) -> None:
         self.exchange_saves.append((symbol, exchange))
         self._exchange = exchange
+
+
+class _FakeEtfs(EtfLookupRepository):
+    """In-memory ETF-membership lookup for the card's asset_type; records the checks."""
+
+    def __init__(self, is_member: bool = False) -> None:
+        self._is_member = is_member
+        self.calls: list[str] = []
+
+    def is_etf(self, ticker: str) -> bool:
+        self.calls.append(ticker)
+        return self._is_member
+
+    def get(self, ticker: str):
+        return None  # unused by the card (it only asks is_etf)
 
 
 def _a_reported_quarter(year: int, quarter: int, eps: float) -> QuarterlyEarnings:
@@ -516,6 +536,29 @@ def test_stored_anchor_facts_flow_onto_the_card():
     assert card.industry == "semiconductors"
     assert card.revenue_growth_yoy == 61.6
     assert card.eps_growth_yoy == 587.4
+
+
+def test_asset_type_is_etf_when_the_symbol_is_in_the_etf_universe():
+    etfs = _FakeEtfs(is_member=True)
+
+    card = GetTickerCard(_FakeQuotes(), _FakeEstimates(), etfs=etfs).execute("VOO")
+
+    assert card.asset_type == ASSET_TYPE_ETF
+    assert etfs.calls == ["VOO"]  # a single membership check on the normalized symbol
+
+
+def test_asset_type_is_equity_for_a_stock():
+    etfs = _FakeEtfs(is_member=False)
+
+    card = GetTickerCard(_FakeQuotes(), _FakeEstimates(), etfs=etfs).execute("MU")
+
+    assert card.asset_type == ASSET_TYPE_EQUITY
+
+
+def test_asset_type_defaults_to_equity_without_an_etfs_lookup():
+    # No etfs repository wired (a bare use case): the card still resolves a non-null asset_type.
+    card = GetTickerCard(_FakeQuotes(), _FakeEstimates()).execute("MU")
+    assert card.asset_type == ASSET_TYPE_EQUITY
 
 
 def test_includes_accept_comma_separated_and_mixed_case_values():
