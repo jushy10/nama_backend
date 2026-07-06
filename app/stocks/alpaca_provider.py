@@ -122,6 +122,18 @@ class AlpacaStockDataProvider(
         "one_year": 365,
     }
 
+    # Alpaca's SIP history occasionally carries a "bad tick": a single OHLC field
+    # is a garbage value while the rest of the bar is normal. Observed: SPY's
+    # daily bar for 2026-02-02 came back with low=$69 against an open/close near
+    # $690, which drew a ~90% downward wick on the chart. The bar still satisfies
+    # the low <= open/close <= high ordering, so nothing structural flags it —
+    # only an outlier check does. No liquid security prints a wick this far from
+    # its body (a real 50% intraday move drags the open/close with it, it doesn't
+    # leave a lone spike), so a low/high stranded past this fraction of the body
+    # is treated as corrupt and clamped back to the body. Deliberately loose:
+    # real moves — even flash-crash wicks — stay well inside it and pass through.
+    _MAX_WICK_FRACTION = 0.5
+
     def __init__(
         self,
         api_key: str,
@@ -322,16 +334,38 @@ class AlpacaStockDataProvider(
 
     # --- Mapping: Alpaca SDK models -> domain entity ---
 
-    @staticmethod
-    def _to_candle(bar) -> Candle:
+    @classmethod
+    def _to_candle(cls, bar) -> Candle:
+        # Repair an implausible wick (a bad tick from the feed) before it reaches
+        # the chart, leaving the rest of the bar untouched. See _repair_bad_tick.
+        high, low = cls._repair_bad_tick(bar.open, bar.high, bar.low, bar.close)
         return Candle(
             timestamp=bar.timestamp,
             open=bar.open,
-            high=bar.high,
-            low=bar.low,
+            high=high,
+            low=low,
             close=bar.close,
             volume=int(bar.volume) if bar.volume is not None else None,
         )
+
+    @classmethod
+    def _repair_bad_tick(
+        cls, open_: float, high: float, low: float, close: float
+    ) -> tuple[float, float]:
+        """Clamp an implausible wick (a bad tick) back to the candle body.
+
+        Returns the repaired ``(high, low)``. A ``low`` stranded more than
+        ``_MAX_WICK_FRACTION`` below the body — or a ``high`` that far above it —
+        is a corrupt print rather than a real move, so it's pulled in to the body
+        edge; a clean bar passes through unchanged.
+        """
+        body_low = min(open_, close)
+        body_high = max(open_, close)
+        if body_low > 0 and low < body_low * (1 - cls._MAX_WICK_FRACTION):
+            low = body_low
+        if body_high > 0 and high > body_high * (1 + cls._MAX_WICK_FRACTION):
+            high = body_high
+        return high, low
 
     @staticmethod
     def _to_quote(symbol, snapshot) -> Quote:
