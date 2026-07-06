@@ -74,14 +74,17 @@ class SqlAnnualEarningsRepository(AnnualEarningsRepository):
     ) -> None:
         stock = models.get_or_create_stock(self._session, symbol, name)
 
-        # Persist the latest trailing YoY snapshot on the shared anchor. Unlike the
-        # fill-once name/exchange, this is *overwritten* every refresh — the newest
-        # reported year rolls forward, so the snapshot is meant to move (and drops back
-        # to None if a degraded window leaves fewer than two reported years). The entity
-        # owns the calc; this layer just lands it on the row. Every write path (cron
-        # sync + lazy fill) funnels through here, so both keep it current.
+        # Persist the latest trailing + forward YoY snapshots on the shared anchor. Unlike
+        # the fill-once name/exchange, these are *overwritten* every refresh — the reported
+        # window and the forward consensus both roll forward, so the snapshots are meant to
+        # move (each drops back to None when the window can't support it: fewer than two
+        # reported years for trailing, fewer than two upcoming for forward). The entity owns
+        # every calc; this layer just lands them on the row. Every write path (cron sync +
+        # lazy fill) funnels through here, so both keep them current.
         stock.revenue_growth_yoy = timeline.latest_revenue_growth_yoy
         stock.eps_growth_yoy = timeline.latest_eps_growth_yoy
+        stock.forward_revenue_growth_yoy = timeline.forward_revenue_growth_yoy
+        stock.forward_eps_growth_yoy = timeline.forward_eps_growth_yoy
 
         # Rewrite the whole window: clear the stock's rows, then insert the new set.
         # Simpler and correct for a variable-length set of years than diffing.

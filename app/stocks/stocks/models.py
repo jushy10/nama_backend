@@ -44,6 +44,14 @@ class StockRecord(Base):
     slice's ``eps_actual_consensus``. Nullable — unset until the annual slice has two
     reported years cached (and EPS best-effort, since the consensus basis often isn't).
 
+    ``forward_revenue_growth_yoy`` / ``forward_eps_growth_yoy`` are the *forward* mirror
+    of that pair — the analyst-consensus FY1 -> FY2 change (percent), the same figures the
+    ticker card's forward PEG is built on. Written the same way (the annual slice
+    overwrites both on every refresh from its stored forward years), and both legs sit on
+    the consensus basis so neither carries a basis caveat. Nullable and more often unset
+    than the trailing pair: they need *two* upcoming years and Yahoo frequently publishes
+    only FY1 (0016).
+
     ``sector`` / ``industry`` / ``market_cap`` / ``screened_at`` are the universe screen's
     facts, filled by the universe sync (the ≥$1B US screen) and deliberately denormalized
     onto the anchor so search is a single-table read. All four are nullable: a ticker that
@@ -73,6 +81,8 @@ class StockRecord(Base):
     exchange: Mapped[str | None] = mapped_column(String(32), nullable=True)
     revenue_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
     eps_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    forward_revenue_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    forward_eps_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
     sector: Mapped[str | None] = mapped_column(String(64), nullable=True)
     industry: Mapped[str | None] = mapped_column(String(64), nullable=True)
     market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)

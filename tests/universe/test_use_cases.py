@@ -228,6 +228,8 @@ _RESULT = StockSearchResult(
     market_cap=3e12,
     revenue_growth_yoy=61.6,
     eps_growth_yoy=587.4,
+    forward_revenue_growth_yoy=52.1,
+    forward_eps_growth_yoy=48.3,
     in_sp500=True,
     in_nasdaq100=True,
 )

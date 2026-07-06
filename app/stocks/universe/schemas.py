@@ -13,10 +13,13 @@ class StockSearchItemResponse(BaseModel):
     """One row of a universe search — anchor facts only, no live price.
 
     ``market_cap`` is raw USD; ``revenue_growth_yoy`` / ``eps_growth_yoy`` are the annual
-    slice's latest trailing year-over-year growth (percent, EPS on the analyst-consensus
-    basis); ``in_sp500`` / ``in_nasdaq100`` are definite booleans. Everything but the flags and
-    the ticker can be ``null`` until the enriching sync / annual slice reaches the stock. The FE
-    fetches a live quote or the full card per row on demand via ``GET /stocks/ticker/{ticker}``.
+    slice's latest trailing year-over-year growth and ``forward_revenue_growth_yoy`` /
+    ``forward_eps_growth_yoy`` its forward (FY1→FY2 consensus) counterparts (all percent, EPS
+    on the analyst-consensus basis); ``in_sp500`` / ``in_nasdaq100`` are definite booleans.
+    Everything but the flags and the ticker can be ``null`` until the enriching sync / annual
+    slice reaches the stock (the forward pair the most often, since it needs two upcoming
+    years). The FE fetches a live quote or the full card per row on demand via
+    ``GET /stocks/ticker/{ticker}``.
     """
 
     ticker: str
@@ -26,6 +29,8 @@ class StockSearchItemResponse(BaseModel):
     market_cap: float | None = None  # raw USD
     revenue_growth_yoy: float | None = None  # percent, latest trailing YoY
     eps_growth_yoy: float | None = None  # percent, latest trailing YoY, consensus basis
+    forward_revenue_growth_yoy: float | None = None  # percent, forward FY1→FY2 consensus
+    forward_eps_growth_yoy: float | None = None  # percent, forward FY1→FY2 consensus
     in_sp500: bool
     in_nasdaq100: bool
 
