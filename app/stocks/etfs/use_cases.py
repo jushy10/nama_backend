@@ -18,6 +18,7 @@ knows nothing of Yahoo, HTTP, or SQLAlchemy:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from app.stocks.etfs.entities import (
@@ -31,6 +32,9 @@ from app.stocks.etfs.entities import (
 from app.stocks.etfs.ports import EtfCategoryProvider, EtfScreener
 from app.stocks.etfs.repository import EtfRepository, EtfSearchRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.progress import iter_with_progress
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -125,7 +129,10 @@ class SyncEtfs:
         nothing went wrong."""
         enriched = 0
         failed = 0
-        for ticker in self._repository.tickers_missing_category(limit):
+        tickers = self._repository.tickers_missing_category(limit)
+        for ticker in iter_with_progress(
+            tickers, logger=logger, label="etf sync (categorization)"
+        ):
             try:
                 classification = self._classifier.get_category(ticker)
             except (StockNotFound, StockDataUnavailable):

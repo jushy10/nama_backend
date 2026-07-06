@@ -21,10 +21,12 @@ and knows nothing of Yahoo, HTTP, or SQLAlchemy:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from app.stocks.earnings.quarterly.repository import QuarterlyEarningsRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.progress import iter_with_progress
 from app.stocks.universe.entities import (
     Classifications,
     MarketCapTier,
@@ -37,6 +39,8 @@ from app.stocks.universe.entities import (
 )
 from app.stocks.universe.ports import CompanyClassificationProvider, StockScreener
 from app.stocks.universe.repository import StockSearchRepository, UniverseRepository
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -159,7 +163,10 @@ class SyncUniverse:
         counted, since nothing was written and nothing went wrong."""
         enriched = 0
         failed = 0
-        for ticker in self._repository.tickers_missing_classification(limit):
+        tickers = self._repository.tickers_missing_classification(limit)
+        for ticker in iter_with_progress(
+            tickers, logger=logger, label="universe sync (classification)"
+        ):
             try:
                 classification = self._classifier.get_classification(ticker)
             except (StockNotFound, StockDataUnavailable):
