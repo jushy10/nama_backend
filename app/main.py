@@ -30,6 +30,8 @@ from app.stocks.endpoints.cron_universe_endpoints import (
 from app.stocks.endpoints.cron_index_membership_endpoints import (
     router as index_membership_cron_router,
 )
+from app.stocks.endpoints.cron_etf_endpoints import router as etf_cron_router
+from app.stocks.endpoints.etf_endpoints import router as etf_router
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.router import router as stocks_router
 
@@ -104,6 +106,16 @@ app.include_router(universe_cron_router)
 # in_sp500 / in_nasdaq100 membership flags. See
 # app/stocks/endpoints/cron_index_membership_endpoints.py.
 app.include_router(index_membership_cron_router)
+# The ETF read endpoints (GET /stocks/etfs — a paginated search/filter/sort over the screened
+# top-US-ETF set: name/ticker substring, a category/type filter, sort by net assets/AUM or
+# expense ratio; and GET /stocks/etfs/categories — the distinct category slugs for the FE's
+# filter menu), served from the slice's own `etfs` table. See app/stocks/endpoints/etf_endpoints.py.
+app.include_router(etf_router)
+# The ETF refresh cron endpoint (POST /internal/etfs/sync); it drives the SyncEtfs use case out
+# of band (yfinance top_etfs_us screen -> etfs table, then per-ticker category enrichment).
+# Fire-and-forget like the other crons (202 + background thread). See
+# app/stocks/endpoints/cron_etf_endpoints.py.
+app.include_router(etf_cron_router)
 
 
 @app.get("/healthz")
