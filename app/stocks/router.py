@@ -651,6 +651,16 @@ def get_stock_resistance_levels_endpoint(
     ),
     use_case: GetStockResistanceLevels = Depends(get_stock_resistance_levels),
 ) -> ResistanceLevelsResponse:
+    """Horizontal resistance levels (clustered swing highs) at or above the latest
+    close, nearest-first — the ceilings to plan an exit against.
+
+    A stock at (or near) an all-time high returns an **empty** series (`count: 0`,
+    `200` — not an error): every prior swing high sits below the quote, so there's
+    no overhead resistance to draw. That's the correct read — a blue-sky breakout
+    has nothing above to sell into — but it means this endpoint is silent exactly
+    when a stock is running; pair it with a trailing stop or the ticker card's
+    `options_metrics` (expected move) for an exit target above the highs.
+    """
     start, end = _as_utc(start), _as_utc(end)
     # Explicit start/end win; otherwise derive the window from the range preset.
     if start is None and end is None:
