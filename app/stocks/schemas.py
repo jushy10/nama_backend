@@ -127,6 +127,37 @@ class SupportLevelsResponse(BaseModel):
     levels: list[SupportLevelResponse]
 
 
+class ResistanceLevelResponse(BaseModel):
+    """One horizontal resistance level — a price zone where the stock has
+    repeatedly run into sellers (clustered swing highs).
+
+    `strength` is "weak"/"moderate"/"strong" by how many swing highs formed it
+    (`touches`); `last_touched` dates the most recent; `distance_percent` is how
+    far the level sits above `reference_price` (``>= 0`` — resistance is over the
+    current price)."""
+
+    price: float
+    touches: int
+    last_touched: date
+    strength: str  # "weak" | "moderate" | "strong"
+    distance_percent: float
+
+
+class ResistanceLevelsResponse(BaseModel):
+    """Resistance levels detected for a symbol, strongest-ranked and returned
+    nearest-first (just over the quote).
+
+    `reference_price` is the latest close the levels were measured against — what
+    "above the current price" means here. `levels` can be empty when there isn't
+    enough history, or no swing high sits above the price, to find any."""
+
+    symbol: str
+    timeframe: str
+    reference_price: float
+    count: int
+    levels: list[ResistanceLevelResponse]
+
+
 class SectorPerformanceResponse(BaseModel):
     """One market sector's move on the day.
 
