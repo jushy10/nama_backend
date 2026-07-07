@@ -15,7 +15,7 @@ from app.stocks.adapters.yfinance_etf_screener_adapter import (
 from app.stocks.etfs.entities import ScreenedEtf
 from app.stocks.exceptions import StockDataUnavailable
 
-_FLOOR = 1_000_000_000.0  # the AUM floor the sync passes; the fake pages ignore it but record it
+_FLOOR = 500_000_000.0  # the AUM floor the sync passes; the fake pages ignore it but record it
 
 
 class FakePages:
