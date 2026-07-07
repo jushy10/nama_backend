@@ -68,20 +68,20 @@ class SyncEtfs:
     """Populate/refresh the searchable ETF set from a live top-ETFs screen, then categorise the
     funds that still lack one."""
 
-    # The AUM floor that defines the searchable ETF set: US funds with at least $1B in net
-    # assets. The ETF analogue of the universe's ``MIN_MARKET_CAP`` (and the same value), keeping
-    # the set to large, liquid funds; the screener filters this server-side and ranks by AUM.
-    MIN_NET_ASSETS = 1_000_000_000.0
+    # The AUM floor that defines the searchable ETF set: US funds with at least $500M in net
+    # assets. The ETF analogue of the universe's ``MIN_MARKET_CAP``, keeping the set to large,
+    # liquid funds; the screener filters this server-side and ranks by AUM.
+    MIN_NET_ASSETS = 500_000_000.0
 
     # Below this many screened funds the result is treated as truncated or blocked (a healthy
-    # US ≥$1B ETF screen is ~1,000 funds), so the upsert is skipped — a bad Yahoo day shouldn't
+    # US ≥$500M ETF screen is well over 1,000 funds), so the upsert is skipped — a bad Yahoo day shouldn't
     # re-stamp only a partial slice as freshly screened. The screener also raises on a hard
     # failure (which propagates); this guards a *degraded* success.
     MIN_PLAUSIBLE_SCREEN = 100
 
     # Default funds the enrichment pass categorises per run; the caller (the cron endpoint) can
     # override. Kept modest so the sequential per-ticker Yahoo calls stay gentle on rate limits —
-    # the ≥$1B set (~1,000) is classified over successive runs, and since ``category`` is
+    # the ≥$500M set (well over 1,000) is classified over successive runs, and since ``category`` is
     # fill-once each run only touches the still-uncategorised.
     DEFAULT_LIMIT = 600
 
