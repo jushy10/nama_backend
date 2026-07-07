@@ -354,3 +354,34 @@ class GetTickerCard:
             return TickerOptionsMetrics.from_chains(quote.price, near_chain, far_chain)
         except (StockNotFound, StockDataUnavailable):
             return None  # best-effort: a Yahoo-blocked read never sinks the card
+
+
+@dataclass(frozen=True)
+class TickerClassification:
+    """The ``ClassifyTicker`` result: the normalized ticker and its asset type."""
+
+    ticker: str
+    asset_type: str
+
+
+class ClassifyTicker:
+    """Classify a ticker as an ETF or an equity — the lightweight counterpart to
+    ``GetTickerCard``'s ``asset_type``.
+
+    A single indexed ETF-universe membership check, with no quote or fundamentals
+    call, so it stays one cheap DB read (for a caller that only needs to know
+    which kind a symbol is, not its whole card). Any *valid* symbol resolves to
+    one of the two — ``"equity"`` for a symbol outside the screened ETF set — so
+    it never 404s; only a malformed symbol raises ``ValueError`` (a 400 at the
+    edge), exactly as the card's normalization does.
+    """
+
+    def __init__(self, etfs: EtfLookupRepository) -> None:
+        self._etfs = etfs
+
+    def classify(self, symbol: str) -> TickerClassification:
+        normalized = _normalize_symbol(symbol)
+        asset_type = (
+            ASSET_TYPE_ETF if self._etfs.is_etf(normalized) else ASSET_TYPE_EQUITY
+        )
+        return TickerClassification(ticker=normalized, asset_type=asset_type)

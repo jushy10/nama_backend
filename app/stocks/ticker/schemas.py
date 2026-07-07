@@ -116,3 +116,17 @@ class TickerCardResponse(BaseModel):
     performance: StockPerformanceResponse | None = None  # opt-in: ?include=performance
     metrics: TickerMetricsResponse | None = None  # opt-in: ?include=metrics
     options_metrics: OptionsMetricsResponse | None = None  # opt-in: ?include=options_metrics
+
+
+class TickerTypeResponse(BaseModel):
+    """A ticker's asset type, from a single ETF-universe membership check.
+
+    The lightweight classifier behind ``GET /stocks/type/{ticker}``: ``ticker``
+    echoes the normalized symbol and ``asset_type`` is ``"etf"`` when it's one of
+    the screened funds, else ``"equity"``. No quote, no fundamentals — one indexed
+    DB read. Always resolves to one of the two, so it never 404s (only a malformed
+    symbol is a 400). The same discriminator the ticker card carries, served on
+    its own for a caller that only needs the type."""
+
+    ticker: str
+    asset_type: str  # "etf" if in the ETF universe, else "equity"

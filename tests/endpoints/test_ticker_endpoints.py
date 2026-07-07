@@ -30,7 +30,7 @@ from app.stocks.entities import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ticker.entities import TickerOptionsMetrics, TickerValuation
-from app.stocks.ticker.use_cases import TickerCard
+from app.stocks.ticker.use_cases import TickerCard, TickerClassification
 from app.stocks.universe.entities import (
     Classifications,
     MarketCapTier,
@@ -301,6 +301,58 @@ def test_unknown_symbol_is_a_404():
 def test_upstream_failure_is_a_502():
     fake = _FakeUseCase(error=StockDataUnavailable("MU", "boom"))
     assert _client(fake).get("/stocks/ticker/MU").status_code == 502
+
+
+# --- The lightweight type classifier (GET /stocks/type/{ticker}) -------------------
+
+
+class _FakeClassify:
+    """Stands in for ClassifyTicker; echoes a canned classification or raises."""
+
+    def __init__(self, *, result=None, error=None) -> None:
+        self._result = result
+        self._error = error
+        self.calls: list[str] = []
+
+    def classify(self, symbol: str) -> TickerClassification:
+        self.calls.append(symbol)
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def _type_client(fake: _FakeClassify) -> TestClient:
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    app.dependency_overrides[endpoints.get_classify_ticker_use_case] = lambda: fake
+    return TestClient(app)
+
+
+def test_type_endpoint_classifies_an_etf():
+    fake = _FakeClassify(result=TickerClassification(ticker="VOO", asset_type="etf"))
+
+    res = _type_client(fake).get("/stocks/type/voo")
+
+    assert res.status_code == 200
+    assert res.json() == {"ticker": "VOO", "asset_type": "etf"}
+    # The raw path symbol reaches the use case (which normalizes it).
+    assert fake.calls == ["voo"]
+    assert res.headers["Cache-Control"] == "public, max-age=3600"
+
+
+def test_type_endpoint_classifies_an_equity():
+    fake = _FakeClassify(result=TickerClassification(ticker="AAPL", asset_type="equity"))
+
+    res = _type_client(fake).get("/stocks/type/AAPL")
+
+    assert res.status_code == 200
+    assert res.json() == {"ticker": "AAPL", "asset_type": "equity"}
+
+
+def test_type_endpoint_bad_symbol_is_a_400():
+    fake = _FakeClassify(error=ValueError("A stock symbol is required."))
+
+    assert _type_client(fake).get("/stocks/type/123").status_code == 400
 
 
 # --- The universe search + filter menus (GET /stocks/ticker, GET /stocks/classifications) ---
