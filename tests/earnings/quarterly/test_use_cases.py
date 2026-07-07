@@ -191,8 +191,10 @@ def test_sync_refreshes_every_target_and_reports_counts():
 
     assert isinstance(report, QuarterlyEarningsSyncReport)
     assert (report.refreshed, report.failed, report.limit) == (2, 0, 10)
-    assert provider.calls == ["AAPL", "MSFT"]  # stalest-first order
-    assert repo.upserts == [("AAPL", "Apple Inc."), ("MSFT", None)]
+    # Fetches fan out across a thread pool, so their execution order is concurrent — assert
+    # both were fetched, not the order. The serial writes stay stalest-first.
+    assert sorted(provider.calls) == ["AAPL", "MSFT"]
+    assert repo.upserts == [("AAPL", "Apple Inc."), ("MSFT", None)]  # writes stalest-first
 
 
 def test_sync_carries_the_stored_name_through_to_upsert():
