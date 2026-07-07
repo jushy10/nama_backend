@@ -25,7 +25,12 @@ from app.stocks.entities import (
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.indicators import RsiSeries, rsi_series
+from app.stocks.indicators import (
+    RsiSeries,
+    SupportLevelSeries,
+    rsi_series,
+    support_levels,
+)
 from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
@@ -228,6 +233,42 @@ class GetStockRsi:
             _normalize_symbol(symbol), timeframe, start=start, end=end
         )
         return rsi_series(series, period)
+
+
+class GetStockSupportLevels:
+    """Use case: detect horizontal support levels for a symbol from its price
+    history.
+
+    Reuses the CandleProvider port — support is read from the same OHLC bars the
+    chart endpoint uses, so no extra data source is needed. The detection math is
+    pure domain logic (``support_levels``); this use case only fetches the window
+    and delegates. Too little history (or no swing low below the current price)
+    yields an empty series rather than an error: the symbol exists, there just
+    isn't a level to draw.
+    """
+
+    def __init__(self, provider: CandleProvider) -> None:
+        self._provider = provider
+
+    def execute(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        window: int = 5,
+        tolerance: float = 0.02,
+        max_levels: int = 5,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> SupportLevelSeries:
+        if start is not None and end is not None and start >= end:
+            raise ValueError("'start' must be earlier than 'end'.")
+        series = self._provider.get_candles(
+            _normalize_symbol(symbol), timeframe, start=start, end=end
+        )
+        return support_levels(
+            series, window=window, tolerance=tolerance, max_levels=max_levels
+        )
 
 
 class GetStockAnalysis:
