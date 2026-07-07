@@ -339,3 +339,71 @@ def test_sync_limit_is_passed_through_and_floored_at_one():
 
     SyncQuarterlyEarnings(_FakeSyncProvider(), repo).execute(limit=0)
     assert repo.refresh_limit == 1  # a non-positive cap is floored to one
+
+
+# ──────────────────── SyncQuarterlyEarnings — transient-failure retries ────────────────────
+
+
+class _FlakyProvider(QuarterlyEarningsProvider):
+    """Fails each symbol its configured number of times with ``StockDataUnavailable`` (the
+    transient/retryable class), then serves a good timeline. A count of ``None`` never
+    succeeds — a symbol Yahoo blocks for the whole run."""
+
+    def __init__(self, fail_counts: dict[str, int | None]) -> None:
+        self._fail_counts = dict(fail_counts)
+        self.calls: list[str] = []
+
+    def get_quarterly_earnings(self, symbol: str) -> QuarterlyEarningsTimeline:
+        self.calls.append(symbol)
+        remaining = self._fail_counts.get(symbol, 0)
+        if remaining is None:
+            raise StockDataUnavailable(symbol, "blocked all run")
+        if remaining > 0:
+            self._fail_counts[symbol] = remaining - 1
+            raise StockDataUnavailable(symbol, "transient block")
+        return _a_timeline(symbol)
+
+
+def test_sync_retries_a_transient_failure_and_recovers_it():
+    # A symbol Yahoo blocks on the first pass but serves on the next is recovered within the
+    # same run — not surrendered to the next scheduled sync (a week away) — because another
+    # symbol succeeding proves the gate is intermittent, so the retry pass runs.
+    repo = _FakeRepo([RefreshTarget("GOOD", None), RefreshTarget("FLAKY", None)])
+    provider = _FlakyProvider({"FLAKY": 1})  # fails once, then succeeds
+
+    report = SyncQuarterlyEarnings(provider, repo).execute(limit=10)
+
+    assert (report.refreshed, report.failed) == (2, 0)  # FLAKY recovered on the retry pass
+    assert provider.calls.count("FLAKY") == 2  # first pass + one retry
+    assert set(repo.saved) == {"GOOD", "FLAKY"}
+
+
+def test_sync_retryable_failure_gives_up_after_max_attempts():
+    # A persistently blocked symbol is retried only while the run keeps making progress, then
+    # counted a failure — capped at max_attempts (3), never retried forever.
+    repo = _FakeRepo(
+        [RefreshTarget("R1", None), RefreshTarget("R2", None), RefreshTarget("DOWN", None)]
+    )
+    # R1 recovers on pass 1, R2 on pass 2, DOWN never — so every pass through the third makes
+    # progress, giving DOWN the full max_attempts=3 budget before it's abandoned.
+    provider = _FlakyProvider({"R1": 0, "R2": 1, "DOWN": None})
+
+    report = SyncQuarterlyEarnings(provider, repo).execute(limit=10)
+
+    assert (report.refreshed, report.failed) == (2, 1)  # R1 + R2 recovered, DOWN failed
+    assert provider.calls.count("DOWN") == 3  # attempted max_attempts times, no more
+    assert set(repo.saved) == {"R1", "R2"}
+
+
+def test_sync_does_not_retry_when_a_whole_pass_recovers_nothing():
+    # If the first pass gets nothing through, Yahoo is blocking persistently this run, not
+    # intermittently — retrying would only hammer a blocked IP, so the sync stops after one
+    # pass and leaves the stragglers to the next scheduled run. This zero-progress guard is
+    # what keeps the retry logic from adding load during a total block.
+    repo = _FakeRepo([RefreshTarget("A", None), RefreshTarget("B", None)])
+    provider = _FlakyProvider({"A": None, "B": None})  # both blocked all run
+
+    report = SyncQuarterlyEarnings(provider, repo).execute(limit=10)
+
+    assert (report.refreshed, report.failed) == (0, 2)
+    assert provider.calls.count("A") == 1 and provider.calls.count("B") == 1  # no retry

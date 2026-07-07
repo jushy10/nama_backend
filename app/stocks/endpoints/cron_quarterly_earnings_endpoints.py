@@ -49,6 +49,12 @@ router = APIRouter(tags=["quarterly-earnings-cron"])
 # which may run at the same time (a lock only stops a sweep overlapping itself).
 _sync_lock = threading.Lock()
 
+# Pause between the sync's retry passes in production. The use case defaults this to 0 (so the
+# offline tests never sleep); here — the composition root — we dial it up so an intermittent
+# Yahoo block has ~30s to lift before a blocked symbol is re-attempted. A batch run isn't behind
+# the API Gateway's 30s clock (it's a one-off ECS task), so the added seconds are free.
+_RETRY_BACKOFF_SECONDS = 30.0
+
 
 def run_quarterly_earnings_sync(limit: int | None) -> QuarterlyEarningsSyncReport:
     """Perform one full refresh run with its **own** DB session (the request-scoped
@@ -56,7 +62,9 @@ def run_quarterly_earnings_sync(limit: int | None) -> QuarterlyEarningsSyncRepor
     db = SessionLocal()
     try:
         report = SyncQuarterlyEarnings(
-            YfinanceQuarterlyEarningsProvider(), SqlQuarterlyEarningsRepository(db)
+            YfinanceQuarterlyEarningsProvider(),
+            SqlQuarterlyEarningsRepository(db),
+            retry_backoff_seconds=_RETRY_BACKOFF_SECONDS,
         ).execute(limit=limit)
         logger.info(
             "quarterly-earnings sync done: refreshed=%d failed=%d limit=%s",
