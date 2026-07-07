@@ -86,8 +86,9 @@ from app.stocks.ticker.schemas import (
     OptionsMetricsResponse,
     TickerCardResponse,
     TickerMetricsResponse,
+    TickerTypeResponse,
 )
-from app.stocks.ticker.use_cases import GetTickerCard, TickerCard
+from app.stocks.ticker.use_cases import ClassifyTicker, GetTickerCard, TickerCard
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.universe.entities import (
     Classifications,
@@ -264,6 +265,30 @@ def get_ticker_card_endpoint(
     # a burst of viewers collapses onto one response.
     response.headers["Cache-Control"] = "public, max-age=300"
     return _present(card)
+
+
+def get_classify_ticker_use_case(db: Session = Depends(get_db)) -> ClassifyTicker:
+    # Pure DB read: a single indexed membership check against the etfs table — no
+    # vendor, no key, request-scoped session — so it's always constructable.
+    return ClassifyTicker(SqlEtfLookupRepository(db))
+
+
+@router.get("/stocks/type/{ticker}", response_model=TickerTypeResponse)
+def get_ticker_type_endpoint(
+    ticker: str,
+    response: Response,
+    use_case: ClassifyTicker = Depends(get_classify_ticker_use_case),
+) -> TickerTypeResponse:
+    """Classify a ticker as an ETF or an equity — the cheap, quote-free counterpart
+    to the ticker card's ``asset_type`` (one indexed ETF-universe membership check)."""
+    try:
+        result = use_case.classify(ticker)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    # ETF-universe membership only shifts when the screen re-syncs (rare), so cache
+    # generously — a burst of classifier calls collapses onto one read.
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return TickerTypeResponse(ticker=result.ticker, asset_type=result.asset_type)
 
 
 # --- The universe search + filter menus (the /stocks/ticker collection) -------------------

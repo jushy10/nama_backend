@@ -46,7 +46,9 @@ from app.stocks.ticker.repository import StoredTickerFacts, TickerRepository
 from app.stocks.ticker.use_cases import (
     ASSET_TYPE_EQUITY,
     ASSET_TYPE_ETF,
+    ClassifyTicker,
     GetTickerCard,
+    TickerClassification,
 )
 
 _EMPTY = AnalystEstimates(
@@ -553,6 +555,33 @@ def test_asset_type_is_equity_for_a_stock():
     card = GetTickerCard(_FakeQuotes(), _FakeEstimates(), etfs=etfs).execute("MU")
 
     assert card.asset_type == ASSET_TYPE_EQUITY
+
+
+# ───────────────────────────── ClassifyTicker ─────────────────────────────
+
+
+def test_classify_ticker_is_etf_for_a_fund():
+    etfs = _FakeEtfs(is_member=True)
+
+    result = ClassifyTicker(etfs).classify("voo")
+
+    assert result == TickerClassification(ticker="VOO", asset_type=ASSET_TYPE_ETF)
+    # Normalizes to upper-case, then a single membership check on it — no quote.
+    assert etfs.calls == ["VOO"]
+
+
+def test_classify_ticker_is_equity_for_a_stock():
+    etfs = _FakeEtfs(is_member=False)
+
+    result = ClassifyTicker(etfs).classify("AAPL")
+
+    assert result == TickerClassification(ticker="AAPL", asset_type=ASSET_TYPE_EQUITY)
+
+
+def test_classify_ticker_rejects_a_malformed_symbol():
+    # Same normalization guard as the card: empty / non-alpha / too long is a ValueError.
+    with pytest.raises(ValueError):
+        ClassifyTicker(_FakeEtfs()).classify("")
 
 
 def test_asset_type_defaults_to_equity_without_an_etfs_lookup():
