@@ -48,8 +48,10 @@ class TickerMetricsResponse(BaseModel):
     *already-reported* EPS growth — which a cyclical rebound can inflate and pin
     the ratio near zero), ``forward_peg`` the honest forward cousin (forward P/E
     over the FY1→FY2 growth analysts *expect*); ``forward_peg`` is ``null`` when
-    no forward consensus is stored for the symbol yet, or a leg is
-    non-positive. The margins are the trailing profitability ladder (percent),
+    no forward consensus is stored for the symbol yet, a leg is
+    non-positive, or expected growth is so near zero that the ratio would explode
+    (a boom current year can leave the next single-year leg ~flat). The margins
+    are the trailing profitability ladder (percent),
     off the fundamentals call. ``revenue_growth_yoy`` / ``eps_growth_yoy`` are the
     stock's *latest trailing* year-over-year growth (percent) — the newest reported
     fiscal year over the prior one, served straight off the ``stocks`` anchor where

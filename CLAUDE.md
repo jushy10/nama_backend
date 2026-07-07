@@ -321,9 +321,13 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > freshness rides entirely on the annual slice (lazy fill + `sync-annual-earnings` cron);
 > an uncached symbol is a **200 with a null `metrics.forward_peg`**, not a 404 — no data ≠
 > error. Caveats: the growth denominator is a single FY1→FY2 leg (Yahoo's forward ceiling),
-> not the classic five-year rate, so one boom-year estimate can still flatter the ratio;
-> and the `put_call_ratio` pools only the two sampled expiries (not the whole board), so
-> thin sessions read noisier than a market-wide ratio.
+> not the classic five-year rate, so one boom-year estimate can distort the ratio — and
+> because a boom *current* year (the `0y` the forward P/E anchors on) can leave that leg
+> near zero and blow the ratio up (GOOGL mid-2026: a 25.8 forward P/E over 2.1% growth is
+> an arithmetically-correct-but-useless PEG of ~12), `forward_peg` is **suppressed to
+> `null` below a growth floor** (`_MIN_FORWARD_EPS_GROWTH`, 5%) where the division is too
+> unstable to inform; and the `put_call_ratio` pools only the two sampled expiries (not the
+> whole board), so thin sessions read noisier than a market-wide ratio.
 
 ### 5. DTOs — `app/stocks/schemas.py`
 Pydantic `BaseModel`s for HTTP responses. Pydantic is a serialization detail, so
