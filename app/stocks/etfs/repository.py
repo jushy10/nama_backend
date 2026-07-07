@@ -56,9 +56,9 @@ class EtfRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def tickers_missing_category(self, limit: int) -> tuple[str, ...]:
-        """Return up to ``limit`` tickers still missing a ``category`` — the enrichment pass's
-        work-list.
+    def tickers_missing_category(self, limit: int | None) -> tuple[str, ...]:
+        """Return the tickers still missing a ``category`` — the enrichment pass's work-list — up
+        to ``limit`` of them, or **all** of them when ``limit`` is ``None``.
 
         Ordered **largest net_assets first** (ticker as a stable tiebreak), so a capped run
         spends its budget classifying the biggest, most-viewed funds before the long tail — the

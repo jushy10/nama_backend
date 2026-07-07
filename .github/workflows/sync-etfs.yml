@@ -1,18 +1,18 @@
 name: Sync ETFs
 run-name: Sync ETFs
 
-# Weekly (and on-demand). The searchable ETF set is Yahoo's curated "top US ETFs" screen
-# (~540 funds). Membership + assets under management drift slowly, so weekly is plenty (the same
-# cadence as the stock universe).
+# Weekly (and on-demand). The searchable ETF set is the US ETF universe at/above a $1M-AUM floor
+# (several thousand funds), screened from Yahoo. Membership + assets under management drift
+# slowly, so weekly is plenty (the same cadence as the stock universe).
 #
 # It launches a one-off ECS Fargate task that runs `python -m app.sync etfs` (the SyncEtfs use
-# case) to completion and exits. The use case screens the top US ETFs via yfinance (Yahoo) and
+# case) to completion and exits. The use case screens the US ETF universe via yfinance (Yahoo) and
 # upserts the result into the `etfs` table (additive — present funds are inserted/refreshed,
 # none removed), then enriches each still-uncategorised fund's category via a per-ticker Yahoo
 # `.info` call (the bulk screen carries no category, exactly like the universe sweep's sector
-# enrichment). The screen always runs in full; only the category enrichment is capped, and the
-# CLI's default (`SyncEtfs.DEFAULT_LIMIT`, ~600) covers the whole ~540-fund set in one run — so
-# no limit is passed here. Since `category` is fill-once, successive weekly runs converge. The
+# enrichment). The screen always runs in full; the category enrichment is uncapped by default —
+# passing no limit here classifies EVERY still-uncategorised fund in the one run. Since `category`
+# is fill-once, a run only touches funds a prior run hasn't yet categorised, so runs converge. The
 # sweep runs on its OWN 1 GB task definition (nama-dev-sync), OFF the always-on API task. The
 # task reaches the private RDS by borrowing the app service's own network config.
 #

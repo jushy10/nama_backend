@@ -173,6 +173,8 @@ def test_tickers_missing_category_lists_uncategorised_by_net_assets_and_capped(s
     # Largest net_assets first (the megafunds before the tail), capped to the limit.
     assert r.tickers_missing_category(10) == ("SPY", "ARKK")
     assert r.tickers_missing_category(1) == ("SPY",)
+    # None lifts the cap — the whole uncategorised set, still largest-first.
+    assert r.tickers_missing_category(None) == ("SPY", "ARKK")
 
 
 def test_set_category_fills_once_and_never_clobbers(session):

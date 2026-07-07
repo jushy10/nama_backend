@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import cron_etf_endpoints as cron
-from app.stocks.etfs.use_cases import EtfSyncReport, SyncEtfs
+from app.stocks.etfs.use_cases import EtfSyncReport
 
 
 class _FakeRunner:
@@ -58,14 +58,14 @@ def test_accepts_the_trigger_and_runs_the_sweep_with_the_limit():
     assert fake.calls == [50]  # the query limit reached the runner
 
 
-def test_defaults_the_limit_when_omitted():
-    default = SyncEtfs.DEFAULT_LIMIT
+def test_defaults_to_no_limit_when_omitted():
     fake = _FakeRunner(_report())
     resp = _client(fake).post("/internal/etfs/sync")
     assert resp.status_code == 202
-    assert resp.json() == {"status": "accepted", "limit": default}
+    # Omitted => uncapped: the runner is asked to categorise every fund (limit null).
+    assert resp.json() == {"status": "accepted", "limit": None}
     _drain()
-    assert fake.calls == [default]
+    assert fake.calls == [None]
 
 
 def test_a_trigger_while_a_sweep_runs_is_a_noop():

@@ -13,7 +13,8 @@ so both entrypoints share one tested implementation.
 
 ``limit`` is optional and mirrors the cron endpoints' ``limit`` query param: omit it to process
 every stock (the default — earnings/recs seed the whole anchor un-cached-first; universe screens
-in full and enriches its own default cap), or pass a value to cap a single run.
+in full and enriches its own default cap; etfs screens in full and categorises every
+still-uncategorised fund), or pass a value to cap a single run.
 
     python -m app.sync universe
     python -m app.sync quarterly-earnings 500
@@ -39,10 +40,11 @@ from app.stocks.endpoints.cron_universe_endpoints import run_universe_sync
 logger = logging.getLogger("app.sync")
 
 # slice name -> the sweep's unit of work. Each takes an optional cap: None means "process every
-# stock" for the earnings/recs sweeps and "enrich the slice's own default cap" for universe and
-# etfs (whose bulk screen always runs in full regardless; the cap bounds only the per-ticker
-# sector/category enrichment). index-membership ignores the cap entirely — it's a full mark/clear
-# reconcile against both index lists, not a stalest-N sweep.
+# stock" for the earnings/recs sweeps, "enrich the slice's own default cap" for universe, and
+# "categorise every still-uncategorised fund" for etfs (both universe and etfs screen in full
+# regardless; the cap bounds only the per-ticker sector/category enrichment). index-membership
+# ignores the cap entirely — it's a full mark/clear reconcile against both index lists, not a
+# stalest-N sweep.
 RUNNERS: dict[str, Callable[[int | None], object]] = {
     "quarterly-earnings": run_quarterly_earnings_sync,
     "annual-earnings": run_annual_earnings_sync,

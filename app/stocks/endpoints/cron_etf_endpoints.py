@@ -94,15 +94,15 @@ def get_sync_runner() -> SyncRunner:
 )
 async def sync_etfs_endpoint(
     response: Response,
-    limit: int = Query(
-        SyncEtfs.DEFAULT_LIMIT,
+    limit: int | None = Query(
+        None,
         ge=1,
         le=2000,
         description=(
             "Max funds whose category the background sweep classifies this run, via a per-ticker "
-            "Yahoo call. The screen itself always runs in full; only the enrichment pass is "
-            "capped. Since category is fill-once, the ≥$1M set (several thousand) is classified over "
-            "successive runs."
+            "Yahoo call. Omit to classify EVERY still-uncategorised fund in one run (the default); "
+            "pass a value only to throttle a run if Yahoo starts rate-limiting. The screen itself "
+            "always runs in full regardless."
         ),
     ),
     run: SyncRunner = Depends(get_sync_runner),

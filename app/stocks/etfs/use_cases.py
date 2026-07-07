@@ -5,10 +5,11 @@ knows nothing of Yahoo, HTTP, or SQLAlchemy:
 
 - ``SyncEtfs`` — the out-of-band populator. Two passes in one run: (1) screen the top US ETFs
   and upsert the result into the ``etfs`` table (additive: it never removes a fund); (2) enrich
-  up to ``limit`` stored funds that still lack a ``category``, classifying each through a
-  per-ticker call and writing its slug. Invoked by the (fire-and-forget) cron endpoint. Guarded
-  so a blocked/truncated screen (empty or implausibly small) skips *both* passes rather than
-  churning a partial set or hammering the same blocked vendor with per-ticker calls.
+  the stored funds that still lack a ``category`` — **all** of them by default, or up to ``limit``
+  when the caller throttles — classifying each through a per-ticker call and writing its slug.
+  Invoked by the (fire-and-forget) cron endpoint. Guarded so a blocked/truncated screen (empty or
+  implausibly small) skips *both* passes rather than churning a partial set or hammering the same
+  blocked vendor with per-ticker calls.
 - ``SearchEtfs`` — the read side (``GET /stocks/etfs``): normalize a search request at the edge
   and hand the read repository a clean ``EtfSearchCriteria``, returning the matched page. No live
   feed — the set is already in the table.
@@ -79,12 +80,6 @@ class SyncEtfs:
     # failure (which propagates); this guards a *degraded* success.
     MIN_PLAUSIBLE_SCREEN = 100
 
-    # Default funds the enrichment pass categorises per run; the caller (the cron endpoint) can
-    # override. Kept modest so the sequential per-ticker Yahoo calls stay gentle on rate limits —
-    # the ≥$1M set (several thousand) is classified over successive runs, and since ``category`` is
-    # fill-once each run only touches the still-uncategorised.
-    DEFAULT_LIMIT = 600
-
     def __init__(
         self,
         screener: EtfScreener,
@@ -96,8 +91,12 @@ class SyncEtfs:
         self._classifier = classifier
 
     def execute(self, *, limit: int | None = None) -> EtfSyncReport:
-        """Screen the top ETFs, upsert the result, then categorise up to ``limit`` (default
-        ``DEFAULT_LIMIT``) still-uncategorised funds.
+        """Screen the top ETFs, upsert the result, then categorise the still-uncategorised funds.
+
+        ``limit`` caps how many funds the enrichment pass classifies this run; ``None`` (the
+        default) categorises **every** still-uncategorised fund in the one run. A caller (the cron
+        endpoint) passes a value only to throttle a run — e.g. if Yahoo starts rate-limiting the
+        per-ticker calls.
 
         A hard screen failure (``StockDataUnavailable``) propagates to the caller (the background
         runner logs it). A *degraded* screen — fewer than ``MIN_PLAUSIBLE_SCREEN`` funds — is
@@ -106,7 +105,7 @@ class SyncEtfs:
         Otherwise the whole screen is upserted (additive) and the enrichment pass runs. A single
         fund's classification failure never aborts the run — it's counted and the sweep continues.
         """
-        capped = self.DEFAULT_LIMIT if limit is None else max(1, limit)
+        capped = None if limit is None else max(1, limit)
         screened = self._screener.screen(min_net_assets=self.MIN_NET_ASSETS)
         if len(screened) < self.MIN_PLAUSIBLE_SCREEN:
             return EtfSyncReport(
@@ -128,12 +127,13 @@ class SyncEtfs:
             enrich_failed=enrich_failed,
         )
 
-    def _enrich_missing_categories(self, limit: int) -> tuple[int, int]:
-        """Categorise up to ``limit`` stored funds still missing a category, writing each one's
-        slug. Returns ``(enriched, failed)``: ``enriched`` wrote a category, ``failed`` couldn't
-        reach the source. A fund the source reaches but doesn't categorise (``category`` None) is
-        neither — it's left for a later run rather than counted, since nothing was written and
-        nothing went wrong."""
+    def _enrich_missing_categories(self, limit: int | None) -> tuple[int, int]:
+        """Categorise the stored funds still missing a category, writing each one's slug — up to
+        ``limit`` of them, or **all** of them when ``limit`` is ``None``. Returns
+        ``(enriched, failed)``: ``enriched`` wrote a category, ``failed`` couldn't reach the
+        source. A fund the source reaches but doesn't categorise (``category`` None) is neither —
+        it's left for a later run rather than counted, since nothing was written and nothing went
+        wrong."""
         enriched = 0
         failed = 0
         tickers = self._repository.tickers_missing_category(limit)
