@@ -36,6 +36,7 @@ from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import (
     RSI_OVERBOUGHT,
     RSI_OVERSOLD,
+    ResistanceLevelSeries,
     RsiSeries,
     SupportLevelSeries,
 )
@@ -63,6 +64,8 @@ from app.stocks.schemas import (
     CandleSeriesResponse,
     InvestmentAnalysisResponse,
     QuoteResponse,
+    ResistanceLevelResponse,
+    ResistanceLevelsResponse,
     RsiPointResponse,
     RsiResponse,
     SectorBoardResponse,
@@ -78,6 +81,7 @@ from app.stocks.use_cases import (
     GetStockInfo,
     GetStockLogo,
     GetStockQuote,
+    GetStockResistanceLevels,
     GetStockRsi,
     GetStockSupportLevels,
 )
@@ -186,6 +190,14 @@ def get_stock_support_levels(
     provider: AlpacaStockDataProvider = Depends(get_provider),
 ) -> GetStockSupportLevels:
     return GetStockSupportLevels(provider)
+
+
+def get_stock_resistance_levels(
+    # Resistance levels ride on the same CandleProvider as support and RSI —
+    # detected from the OHLC bars, so the Alpaca instance backs this endpoint too.
+    provider: AlpacaStockDataProvider = Depends(get_provider),
+) -> GetStockResistanceLevels:
+    return GetStockResistanceLevels(provider)
 
 
 def get_sector_performance(
@@ -356,6 +368,28 @@ def _present_support_levels(series: SupportLevelSeries) -> SupportLevelsResponse
         count=len(series.levels),
         levels=[
             SupportLevelResponse(
+                price=level.price,
+                touches=level.touches,
+                last_touched=level.last_touched,
+                strength=level.strength.value,
+                distance_percent=level.distance_percent,
+            )
+            for level in series.levels
+        ],
+    )
+
+
+def _present_resistance_levels(
+    series: ResistanceLevelSeries,
+) -> ResistanceLevelsResponse:
+    """Presenter: resistance-level series entity -> HTTP response DTO."""
+    return ResistanceLevelsResponse(
+        symbol=series.symbol,
+        timeframe=series.timeframe.value,
+        reference_price=series.reference_price,
+        count=len(series.levels),
+        levels=[
+            ResistanceLevelResponse(
                 price=level.price,
                 touches=level.touches,
                 last_touched=level.last_touched,
@@ -575,6 +609,72 @@ def get_stock_support_levels_endpoint(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present_support_levels(series)
+
+
+@router.get(
+    "/stocks/{symbol}/resistance-levels", response_model=ResistanceLevelsResponse
+)
+def get_stock_resistance_levels_endpoint(
+    symbol: str,
+    timeframe: Timeframe = Query(
+        Timeframe.DAY_1, description="Granularity of the candles the levels are detected from."
+    ),
+    range_: ChartRange = Query(
+        ChartRange.YEAR_1,
+        alias="range",
+        description=(
+            "How far back to scan for swing highs. Defaults to 1Y so levels stay "
+            "meaningful independently of the chart's zoom. Ignored when an explicit "
+            "`start`/`end` is given."
+        ),
+    ),
+    window: int = Query(
+        5,
+        ge=2,
+        le=50,
+        description="Swing-high lookback in candles on each side (a pivot high is the highest within this many bars).",
+    ),
+    tolerance: float = Query(
+        0.02,
+        gt=0.0,
+        lt=1.0,
+        description="Price band that merges nearby highs into one level, as a fraction (0.02 = 2%).",
+    ),
+    max_levels: int = Query(
+        5, ge=1, le=20, description="Maximum number of levels to return."
+    ),
+    start: datetime | None = Query(
+        None, description="Explicit window start (ISO 8601, UTC). Overrides `range`."
+    ),
+    end: datetime | None = Query(
+        None, description="Explicit window end (ISO 8601, UTC). Defaults to now."
+    ),
+    use_case: GetStockResistanceLevels = Depends(get_stock_resistance_levels),
+) -> ResistanceLevelsResponse:
+    start, end = _as_utc(start), _as_utc(end)
+    # Explicit start/end win; otherwise derive the window from the range preset.
+    if start is None and end is None:
+        start, end = resolve_window(range_, now=datetime.now(timezone.utc))
+    elif end is None:
+        end = datetime.now(timezone.utc)
+
+    try:
+        series = use_case.execute(
+            symbol,
+            timeframe,
+            window=window,
+            tolerance=tolerance,
+            max_levels=max_levels,
+            start=start,
+            end=end,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return _present_resistance_levels(series)
 
 
 @router.get("/stocks/{symbol}/analysis", response_model=InvestmentAnalysisResponse)

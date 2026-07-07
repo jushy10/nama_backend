@@ -26,8 +26,10 @@ from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import (
+    ResistanceLevelSeries,
     RsiSeries,
     SupportLevelSeries,
+    resistance_levels,
     rsi_series,
     support_levels,
 )
@@ -267,6 +269,43 @@ class GetStockSupportLevels:
             _normalize_symbol(symbol), timeframe, start=start, end=end
         )
         return support_levels(
+            series, window=window, tolerance=tolerance, max_levels=max_levels
+        )
+
+
+class GetStockResistanceLevels:
+    """Use case: detect horizontal resistance levels for a symbol from its price
+    history. The mirror of ``GetStockSupportLevels`` — where support is the floor
+    to plan an entry against, resistance is the ceiling to plan an exit against.
+
+    Reuses the CandleProvider port — resistance is read from the same OHLC bars
+    the chart endpoint uses, so no extra data source is needed. The detection math
+    is pure domain logic (``resistance_levels``); this use case only fetches the
+    window and delegates. Too little history (or no swing high above the current
+    price) yields an empty series rather than an error: the symbol exists, there
+    just isn't a level to draw.
+    """
+
+    def __init__(self, provider: CandleProvider) -> None:
+        self._provider = provider
+
+    def execute(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        window: int = 5,
+        tolerance: float = 0.02,
+        max_levels: int = 5,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> ResistanceLevelSeries:
+        if start is not None and end is not None and start >= end:
+            raise ValueError("'start' must be earlier than 'end'.")
+        series = self._provider.get_candles(
+            _normalize_symbol(symbol), timeframe, start=start, end=end
+        )
+        return resistance_levels(
             series, window=window, tolerance=tolerance, max_levels=max_levels
         )
 
