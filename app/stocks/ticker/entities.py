@@ -31,6 +31,16 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Sequence
 
+# Below this forward EPS-growth rate (percent) the forward PEG stops being a stable
+# read and is suppressed. PEG = P/E ÷ growth, so as growth approaches zero the ratio
+# explodes and swings wildly on tiny estimate revisions (d(PEG)/dg = −P/E ÷ g²). The
+# trap is a boom *current* year: Yahoo anchors the forward P/E on ``0y`` (the year in
+# progress), so when this year's consensus has already surged, the next single-year
+# leg (``0y``→``+1y``) can sit near zero even for a healthy grower — GOOGL mid-2026 is
+# a 25.8 forward P/E over 2.1% expected growth, an arithmetically-correct-but-useless
+# PEG of 12.2 that reads as "wildly overvalued". Better to serve nothing than that.
+_MIN_FORWARD_EPS_GROWTH = 5.0  # percent
+
 
 @dataclass(frozen=True)
 class TickerValuation:
@@ -74,15 +84,21 @@ class TickerValuation:
         """Forward PEG: forward P/E divided by expected EPS growth (percent).
 
         The forward cousin of ``KeyMetrics.peg`` with the same reading (near 1.0
-        means the price roughly matches growth) and the same guard: ``None``
-        unless both legs are present and positive — a non-positive multiple or
-        expected shrinkage makes the ratio meaningless. The denominator is a
-        single FY1→FY2 leg (Yahoo's forward ceiling), not the classic five-year
-        rate, so one boom-year estimate can still flatter it.
+        means the price roughly matches growth) and the same positive-legs guard:
+        ``None`` unless both legs are present and the multiple is positive — a
+        non-positive multiple or expected shrinkage makes the ratio meaningless.
+
+        Plus one guard the trailing PEG doesn't need: the growth leg must clear
+        ``_MIN_FORWARD_EPS_GROWTH``. The denominator is a single FY1→FY2 leg
+        (Yahoo's forward ceiling), not the classic five-year rate, so a boom
+        *current* year (the ``0y`` the forward P/E is anchored on) can leave the
+        next leg near zero and blow the ratio up — a division so unstable near
+        zero growth that the number misleads more than it informs. Below the
+        floor we serve ``None`` rather than that.
         """
         if self.forward_pe is None or self.forward_eps_growth is None:
             return None
-        if self.forward_pe <= 0 or self.forward_eps_growth <= 0:
+        if self.forward_pe <= 0 or self.forward_eps_growth < _MIN_FORWARD_EPS_GROWTH:
             return None
         return round(self.forward_pe / self.forward_eps_growth, 2)
 

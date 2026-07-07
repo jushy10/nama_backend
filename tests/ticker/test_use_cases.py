@@ -363,6 +363,21 @@ def test_forward_peg_is_none_without_two_positive_legs(pe, growth):
     assert _a_valuation(pe, growth).forward_peg is None
 
 
+def test_forward_peg_is_suppressed_when_growth_is_below_the_floor():
+    # The GOOGL mid-2026 shape: a healthy 25.8 forward multiple, but a boom current
+    # year (0y) leaves the 0y->+1y leg at ~2% growth. The raw ratio would be a
+    # misleading 12.15 ("wildly overvalued"), so a near-zero denominator is suppressed.
+    v = _a_valuation(25.76, 2.12)
+    assert v.forward_pe == 25.76  # the legs are still exposed
+    assert v.forward_eps_growth == 2.12
+    assert v.forward_peg is None  # the unstable ratio is not
+
+
+def test_forward_peg_computes_at_the_growth_floor():
+    # At (and above) the floor the denominator is stable enough to serve.
+    assert _a_valuation(20.0, 5.0).forward_peg == 4.0  # 20 / 5
+
+
 def test_trailing_pe_divides_price_by_the_consensus_ttm():
     v = TickerValuation(
         symbol="MU", price=100.0, forward_pe=None, forward_eps_growth=None, ttm_eps=8.0
