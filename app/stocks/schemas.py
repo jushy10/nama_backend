@@ -4,7 +4,7 @@ Pydantic is a web/serialization detail, so these DTOs live at the edge —
 deliberately separate from the entities so the core stays framework-agnostic.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -94,6 +94,37 @@ class RsiResponse(BaseModel):
     overbought: float
     oversold: float
     points: list[RsiPointResponse]
+
+
+class SupportLevelResponse(BaseModel):
+    """One horizontal support level — a price zone where the stock has repeatedly
+    found buyers (clustered swing lows).
+
+    `strength` is "weak"/"moderate"/"strong" by how many swing lows formed it
+    (`touches`); `last_touched` dates the most recent; `distance_percent` is how
+    far the level sits below `reference_price` (``<= 0`` — support is under the
+    current price)."""
+
+    price: float
+    touches: int
+    last_touched: date
+    strength: str  # "weak" | "moderate" | "strong"
+    distance_percent: float
+
+
+class SupportLevelsResponse(BaseModel):
+    """Support levels detected for a symbol, strongest-ranked and returned
+    nearest-first (just under the quote).
+
+    `reference_price` is the latest close the levels were measured against — what
+    "below the current price" means here. `levels` can be empty when there isn't
+    enough history, or no swing low sits below the price, to find any."""
+
+    symbol: str
+    timeframe: str
+    reference_price: float
+    count: int
+    levels: list[SupportLevelResponse]
 
 
 class SectorPerformanceResponse(BaseModel):

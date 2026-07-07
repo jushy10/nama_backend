@@ -5,12 +5,13 @@ indicator is a fact about a price series, so it lives in the domain next to the
 Candle it's computed from. Outer layers fetch the candles (through a port) and
 hand them here; nothing in this module reaches out for data.
 
-Currently: RSI (Relative Strength Index), Wilder's original formulation.
+Currently: RSI (Relative Strength Index, Wilder's original formulation) and
+swing-low support levels.
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
 from app.stocks.entities import CandleSeries, Timeframe
@@ -143,4 +144,205 @@ def rsi_series(series: CandleSeries, period: int = 14) -> RsiSeries:
         timeframe=series.timeframe,
         period=period,
         points=points,
+    )
+
+
+# --------------------------- Support levels (swing-low zones) ---------------------------
+
+# Strength is read straight off how many separate swing lows formed a level: a
+# price the market has repeatedly turned up from is stickier than a one-off dip.
+_STRONG_MIN_TOUCHES = 3
+_MODERATE_MIN_TOUCHES = 2
+
+
+class SupportStrength(str, Enum):
+    """How firmly a support level has held, by the number of swing lows that
+    formed it. String values double as the API's JSON values (like RsiSignal)."""
+
+    WEAK = "weak"  # a single swing low
+    MODERATE = "moderate"  # two
+    STRONG = "strong"  # three or more
+
+
+@dataclass(frozen=True)
+class SupportLevel:
+    """One horizontal support level — a price zone where the stock has repeatedly
+    found buyers.
+
+    Built by clustering nearby *swing lows* (pivot lows): the level is the mean of
+    the lows that formed it. ``touches`` is how many did (the strength signal),
+    ``last_touched`` dates the most recent, and ``distance_percent`` is how far the
+    level sits below the reference price it was measured against (``<= 0`` —
+    support is at or below the current price).
+    """
+
+    price: float
+    touches: int
+    last_touched: date
+    strength: SupportStrength
+    distance_percent: float
+
+
+@dataclass(frozen=True)
+class SupportLevelSeries:
+    """The support levels detected for one symbol at one timeframe.
+
+    ``reference_price`` is the latest close the levels were measured against (what
+    "below the current price" means here); ``levels`` are strongest-first and can
+    be empty when there isn't enough history — or no swing low sits below the
+    current price — to find any.
+    """
+
+    symbol: str
+    timeframe: Timeframe
+    reference_price: float
+    levels: tuple[SupportLevel, ...]
+
+
+def _strength_for(touches: int) -> SupportStrength:
+    """Map a level's swing-low count onto its strength band."""
+    if touches >= _STRONG_MIN_TOUCHES:
+        return SupportStrength.STRONG
+    if touches >= _MODERATE_MIN_TOUCHES:
+        return SupportStrength.MODERATE
+    return SupportStrength.WEAK
+
+
+def _pivot_low_indices(lows: Sequence[float], window: int) -> list[int]:
+    """Indices of the swing lows in ``lows`` — each a bar whose low is at or below
+    every low within ``window`` bars on both sides (a *pivot low* / fractal).
+
+    The first and last ``window`` bars are skipped: a swing low isn't confirmed
+    until ``window`` bars have printed on each side, so the edges can't form one.
+    A flat trough (consecutive equal lows) collapses to its first bar, so one
+    V-shaped turn counts as a single touch rather than several.
+    """
+    n = len(lows)
+    pivots: list[int] = []
+    for i in range(window, n - window):
+        low = lows[i]
+        if low > min(lows[i - window : i + window + 1]):
+            continue
+        # A flat bottom flags every equal bar in the run; keep only the first.
+        if pivots and i - pivots[-1] <= window and lows[pivots[-1]] == low:
+            continue
+        pivots.append(i)
+    return pivots
+
+
+def compute_support_levels(
+    lows: Sequence[float],
+    timestamps: Sequence[datetime],
+    reference_price: float,
+    *,
+    window: int = 5,
+    tolerance: float = 0.02,
+    max_levels: int = 5,
+) -> list[SupportLevel]:
+    """Detect horizontal support levels from a chronological (oldest-first) low
+    series and the timestamps those lows fall on.
+
+    Swing lows (``_pivot_low_indices``) are clustered by price — a low within
+    ``tolerance`` (a fraction, e.g. ``0.02`` = 2%) above a cluster's base low joins
+    it — and each cluster becomes a level at the mean of its lows. Only levels at
+    or below ``reference_price`` (the latest close) are kept: support sits under
+    the current price. Levels are ranked by strength (touch count, then recency),
+    the top ``max_levels`` are taken, and they're returned nearest-first (highest
+    price first — just under the quote).
+
+    Returns ``[]`` when there isn't enough history (fewer than ``2 * window + 1``
+    lows), when no swing low sits at or below the price, or when
+    ``reference_price`` is non-positive — "couldn't find any" is not an error.
+
+    Raises:
+        ValueError: ``window < 2``, ``tolerance`` outside ``(0, 1)``,
+            ``max_levels < 1``, or ``lows`` and ``timestamps`` differ in length.
+    """
+    if window < 2:
+        raise ValueError("window must be at least 2.")
+    if not 0.0 < tolerance < 1.0:
+        raise ValueError("tolerance must be between 0 and 1 (exclusive).")
+    if max_levels < 1:
+        raise ValueError("max_levels must be at least 1.")
+    if len(lows) != len(timestamps):
+        raise ValueError("lows and timestamps must be the same length.")
+
+    n = len(lows)
+    if reference_price <= 0 or n < 2 * window + 1:
+        return []
+
+    pivots = _pivot_low_indices(lows, window)
+    if not pivots:
+        return []
+
+    span_start, span_end = timestamps[0], timestamps[-1]
+    span_seconds = (span_end - span_start).total_seconds() or 1.0
+
+    # Agglomerate swing lows into zones: walk them in ascending price order and
+    # keep extending a cluster while the next low is within `tolerance` of the
+    # cluster's base (lowest) low — anchoring to the base bounds each zone's width
+    # so a gentle up-drift can't chain unrelated lows into one runaway level.
+    members = sorted(((lows[i], timestamps[i]) for i in pivots), key=lambda m: m[0])
+    clusters: list[list[tuple[float, datetime]]] = []
+    for price, ts in members:
+        if clusters and (price - clusters[-1][0][0]) / clusters[-1][0][0] <= tolerance:
+            clusters[-1].append((price, ts))
+        else:
+            clusters.append([(price, ts)])
+
+    ranked: list[tuple[float, SupportLevel]] = []
+    for cluster in clusters:
+        price = round(sum(p for p, _ in cluster) / len(cluster), 2)
+        if price > reference_price:  # at/above the quote — not support
+            continue
+        touches = len(cluster)
+        latest_ts = max(ts for _, ts in cluster)
+        recency = (latest_ts - span_start).total_seconds() / span_seconds  # 0..1
+        level = SupportLevel(
+            price=price,
+            touches=touches,
+            last_touched=latest_ts.date(),
+            strength=_strength_for(touches),
+            distance_percent=round((price - reference_price) / reference_price * 100, 2),
+        )
+        # Touch count dominates; recency (0..1) breaks ties toward fresher levels.
+        ranked.append((touches + recency, level))
+
+    # Strongest first (nearest the price on a tie), keep the top N, then present
+    # them nearest-support-first — the highest price, just under the quote.
+    ranked.sort(key=lambda item: (item[0], item[1].distance_percent), reverse=True)
+    top = [level for _, level in ranked[:max_levels]]
+    top.sort(key=lambda level: level.price, reverse=True)
+    return top
+
+
+def support_levels(
+    series: CandleSeries,
+    *,
+    window: int = 5,
+    tolerance: float = 0.02,
+    max_levels: int = 5,
+) -> SupportLevelSeries:
+    """Detect support levels for a candle series, measured against its latest close.
+
+    Pure: the detection (``compute_support_levels``) runs on the candles' lows and
+    their timestamps, with the final close as the reference price the levels sit
+    below. Given the same series it always returns the same result.
+    """
+    lows = [candle.low for candle in series.candles]
+    timestamps = [candle.timestamp for candle in series.candles]
+    reference_price = series.candles[-1].close if series.candles else 0.0
+    levels = compute_support_levels(
+        lows,
+        timestamps,
+        reference_price,
+        window=window,
+        tolerance=tolerance,
+        max_levels=max_levels,
+    )
+    return SupportLevelSeries(
+        symbol=series.symbol,
+        timeframe=series.timeframe,
+        reference_price=round(reference_price, 2),
+        levels=tuple(levels),
     )
