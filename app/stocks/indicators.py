@@ -230,11 +230,31 @@ def _pivot_low_indices(lows: Sequence[float], window: int) -> list[int]:
     return pivots
 
 
+def _is_taken_out(
+    price: float,
+    formed_at: datetime,
+    closes: Sequence[float],
+    timestamps: Sequence[datetime],
+) -> bool:
+    """True if a candle *after* ``formed_at`` closed below ``price`` — the level
+    was broken and is no longer support.
+
+    Only the close counts: a candle that wicked below the level but closed back
+    above did not take it out. Only bars strictly after the level's most recent
+    swing low count, so an earlier dip through the level that a later touch
+    reclaimed (re-forming the support) is not treated as a break.
+    """
+    return any(
+        ts > formed_at and close < price for close, ts in zip(closes, timestamps)
+    )
+
+
 def compute_support_levels(
     lows: Sequence[float],
     timestamps: Sequence[datetime],
     reference_price: float,
     *,
+    closes: Sequence[float] | None = None,
     window: int = 5,
     tolerance: float = 0.02,
     max_levels: int = 5,
@@ -250,13 +270,23 @@ def compute_support_levels(
     the top ``max_levels`` are taken, and they're returned nearest-first (highest
     price first — just under the quote).
 
+    ``closes`` (index-aligned with ``lows``) drops **broken** levels: a support
+    that a later candle *closed below* has been taken out and is no longer support
+    (it flips to resistance), so it isn't returned. See ``_is_taken_out`` for the
+    rule — closes only (a wick that pierced but closed back above does not break
+    it), and only bars strictly after the level's most recent swing low, so a dip
+    that a fresh touch later reclaimed still counts. When ``closes`` is omitted the
+    break filter is skipped and levels are reported as-formed.
+
     Returns ``[]`` when there isn't enough history (fewer than ``2 * window + 1``
-    lows), when no swing low sits at or below the price, or when
-    ``reference_price`` is non-positive — "couldn't find any" is not an error.
+    lows), when no swing low sits at or below the price (or every candidate has
+    been taken out), or when ``reference_price`` is non-positive — "couldn't find
+    any" is not an error.
 
     Raises:
         ValueError: ``window < 2``, ``tolerance`` outside ``(0, 1)``,
-            ``max_levels < 1``, or ``lows`` and ``timestamps`` differ in length.
+            ``max_levels < 1``, or ``lows``/``timestamps``/``closes`` (when given)
+            differ in length.
     """
     if window < 2:
         raise ValueError("window must be at least 2.")
@@ -266,6 +296,8 @@ def compute_support_levels(
         raise ValueError("max_levels must be at least 1.")
     if len(lows) != len(timestamps):
         raise ValueError("lows and timestamps must be the same length.")
+    if closes is not None and len(closes) != len(lows):
+        raise ValueError("closes and lows must be the same length.")
 
     n = len(lows)
     if reference_price <= 0 or n < 2 * window + 1:
@@ -297,6 +329,9 @@ def compute_support_levels(
             continue
         touches = len(cluster)
         latest_ts = max(ts for _, ts in cluster)
+        # A later close below the level means it was taken out — drop it.
+        if closes is not None and _is_taken_out(price, latest_ts, closes, timestamps):
+            continue
         recency = (latest_ts - span_start).total_seconds() / span_seconds  # 0..1
         level = SupportLevel(
             price=price,
@@ -327,15 +362,19 @@ def support_levels(
 
     Pure: the detection (``compute_support_levels``) runs on the candles' lows and
     their timestamps, with the final close as the reference price the levels sit
-    below. Given the same series it always returns the same result.
+    below. The candles' closes are passed too, so a level a later candle closed
+    below (taken out) is dropped. Given the same series it always returns the same
+    result.
     """
     lows = [candle.low for candle in series.candles]
+    closes = [candle.close for candle in series.candles]
     timestamps = [candle.timestamp for candle in series.candles]
     reference_price = series.candles[-1].close if series.candles else 0.0
     levels = compute_support_levels(
         lows,
         timestamps,
         reference_price,
+        closes=closes,
         window=window,
         tolerance=tolerance,
         max_levels=max_levels,

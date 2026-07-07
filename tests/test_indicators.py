@@ -184,6 +184,43 @@ def test_support_excludes_levels_at_or_above_the_reference_price():
     assert [level.price for level in levels] == [6.0]  # the 10.0 trough is dropped
 
 
+def test_support_drops_a_level_a_later_candle_closed_below():
+    # Double bottom at 3.0 (idx 2 & 6), but a later bar (idx 7) closed at 2.5 —
+    # below the level and after its most recent touch. Support taken out -> gone.
+    closes = [5.0, 4.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.5, 5.0]
+    levels = compute_support_levels(
+        W_LOWS, _times(len(W_LOWS)), 5.0, closes=closes, window=2
+    )
+    assert levels == []
+
+
+def test_support_keeps_a_level_only_wicked_below_but_closed_above():
+    # Same double bottom; a later bar dipped (its low pierced the level) but closed
+    # back above at 3.5. A wick is not a break — the level holds.
+    closes = [5.0, 4.0, 3.0, 4.0, 5.0, 4.0, 3.0, 3.5, 5.0]
+    levels = compute_support_levels(
+        W_LOWS, _times(len(W_LOWS)), 5.0, closes=closes, window=2
+    )
+    assert [level.price for level in levels] == [3.0]
+
+
+def test_support_keeps_a_level_reclaimed_after_an_earlier_close_below():
+    # A close below the level at idx 3 sits *before* the level's most recent touch
+    # (idx 6), so the later touch reclaimed it — not a break. The level survives.
+    closes = [5.0, 4.0, 3.0, 2.5, 3.0, 4.0, 3.0, 4.0, 5.0]
+    levels = compute_support_levels(
+        W_LOWS, _times(len(W_LOWS)), 5.0, closes=closes, window=2
+    )
+    assert [level.price for level in levels] == [3.0]
+
+
+def test_support_rejects_closes_length_mismatch():
+    with pytest.raises(ValueError):
+        compute_support_levels(
+            W_LOWS, _times(len(W_LOWS)), 5.0, closes=[1.0, 2.0], window=2
+        )
+
+
 def test_support_merges_lows_within_tolerance():
     lows = [5.0, 4.0, 3.00, 4.0, 5.0, 4.0, 3.05, 4.0, 5.0]  # 3.00 & 3.05 ~1.7% apart
     levels = compute_support_levels(lows, _times(len(lows)), 5.0, window=2, tolerance=0.02)
@@ -260,6 +297,44 @@ def test_support_levels_uses_the_latest_close_as_reference():
     assert result.reference_price == 5.0
     assert [level.price for level in result.levels] == [3.0]
     assert result.levels[0].touches == 2
+
+
+def _series_with_lows_and_closes(bars: list[tuple[float, float]]) -> CandleSeries:
+    """A daily series from explicit (low, close) pairs — for asserting the break
+    rule, where a bar's close diverges from its low (a wick vs. a close-below)."""
+    base = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    candles = tuple(
+        Candle(
+            timestamp=base + timedelta(days=i),
+            open=low,
+            high=max(low, close) + 0.5,
+            low=low,
+            close=close,
+            volume=1000,
+        )
+        for i, (low, close) in enumerate(bars)
+    )
+    return CandleSeries(symbol="AAPL", timeframe=Timeframe.DAY_1, candles=candles)
+
+
+# Double bottom at 10.0 (swing lows at idx 2 & 6); price then recovers.
+_DOUBLE_BOTTOM_LOWS = [12.0, 11.0, 10.0, 11.0, 12.0, 11.0, 10.0, 11.0, 12.0, 12.0]
+
+
+def test_support_levels_drops_a_level_a_candle_closed_below():
+    # A later bar closes at 9.0, below the 10.0 support and after its last touch,
+    # then price recovers to 11.0. The support was taken out -> not returned.
+    bars = [(low, low) for low in _DOUBLE_BOTTOM_LOWS] + [(9.0, 9.0), (11.0, 11.0)]
+    result = support_levels(_series_with_lows_and_closes(bars), window=2)
+    assert result.levels == ()
+
+
+def test_support_levels_keeps_a_level_only_wicked_through():
+    # Same shape, but the intruding bar only *wicks* to 9.0 and closes back at 11.0.
+    # A wick is not a break — the 10.0 support still stands.
+    bars = [(low, low) for low in _DOUBLE_BOTTOM_LOWS] + [(9.0, 11.0), (11.0, 11.0)]
+    result = support_levels(_series_with_lows_and_closes(bars), window=2)
+    assert [level.price for level in result.levels] == [10.0]
 
 
 def test_support_levels_empty_series_is_graceful():
