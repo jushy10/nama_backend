@@ -72,11 +72,12 @@ class SqlEtfRepository(EtfRepository):
         self._session.commit()
         return EtfSyncCounts(added=added, updated=updated)
 
-    def tickers_missing_category(self, limit: int) -> tuple[str, ...]:
+    def tickers_missing_category(self, limit: int | None) -> tuple[str, ...]:
         # Largest net_assets first (ticker as a stable tiebreak) so a capped, rate-limited run
         # spends its scarce successful .info calls on the biggest, most-viewed funds — a
         # megafund like SPY/VOO is categorised in the first run rather than starved behind the
-        # long tail. A fund with no net_assets (unusual) sorts last.
+        # long tail. A fund with no net_assets (unusual) sorts last. ``limit=None`` lifts the cap
+        # entirely — SQLAlchemy's ``.limit(None)`` renders no LIMIT — so a run sweeps the whole set.
         rows = (
             self._session.execute(
                 select(EtfRecord.ticker)

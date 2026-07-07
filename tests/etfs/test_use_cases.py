@@ -209,13 +209,15 @@ def test_enrichment_leaves_an_uncategorisable_fund_for_later():
     assert (report.enriched, report.enrich_failed) == (0, 0)
 
 
-def test_enrichment_limit_defaults_then_overrides():
+def test_enrichment_defaults_to_no_limit_then_overrides():
     screen = _a_screen(SyncEtfs.MIN_PLAUSIBLE_SCREEN)
 
+    # Default: uncapped — the enrichment pass asks the repo for every uncategorised fund.
     repo = _FakeRepo()
     SyncEtfs(_FakeScreener(screen), repo, _FakeClassifier()).execute()
-    assert repo.missing_limit == SyncEtfs.DEFAULT_LIMIT
+    assert repo.missing_limit is None
 
+    # An explicit limit still caps a run — the throttle escape hatch.
     repo = _FakeRepo()
     SyncEtfs(_FakeScreener(screen), repo, _FakeClassifier()).execute(limit=25)
     assert repo.missing_limit == 25
