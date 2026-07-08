@@ -522,3 +522,58 @@ class InvestmentAnalysis:
     risks: tuple[str, ...]
     model: str
     generated_at: datetime
+
+
+class MarketTone(str, Enum):
+    """The risk posture the day's sector rotation implies.
+
+    A day where cyclical/growth sectors (tech, discretionary) lead is ``risk_on``
+    (appetite for risk); one where defensives (staples, utilities, health care)
+    lead is ``risk_off`` (a flight to safety); no clear rotation is ``mixed``. The
+    string values double as the JSON the model returns and the API serves, the
+    same convention as ``Recommendation``.
+    """
+
+    RISK_ON = "risk_on"
+    RISK_OFF = "risk_off"
+    MIXED = "mixed"
+
+
+@dataclass(frozen=True)
+class SectorHighlight:
+    """One sector called out in a market analysis, with the model's plain note.
+
+    ``change_percent`` is *not* authored by the model — it's joined back from the
+    day's board (matched to the sector the model named) so the number on the card
+    stays a real quote, never a figure the model invented. ``note`` is the model's
+    one-line, plain-language read on why the sector is leading or lagging.
+    """
+
+    sector: str
+    symbol: str  # the proxy ETF ticker, carried through from the board
+    change_percent: float | None
+    note: str
+
+
+@dataclass(frozen=True)
+class SectorAnalysis:
+    """An AI-generated read on how the market's sectors are moving today.
+
+    The market-wide sibling of ``InvestmentAnalysis``: produced by a language
+    model from the day's ranked sector board (each sector's move + trailing
+    returns) and nothing else — never outside data the model happens to recall.
+    ``summary`` is the plain-language headline of which corners of the market are
+    leading and lagging; ``tone`` is the risk posture that rotation implies;
+    ``leaders`` and ``laggards`` name the standout sectors with a short note each
+    (their ``change_percent`` joined back from the board, not authored). It is
+    informational, not personalized advice — the model fills in the substance and
+    the presenter attaches the disclaimer. ``model``/``generated_at`` keep a
+    cached read traceable, as with ``InvestmentAnalysis``.
+    """
+
+    summary: str
+    tone: MarketTone
+    leaders: tuple[SectorHighlight, ...]
+    laggards: tuple[SectorHighlight, ...]
+    model: str
+    generated_at: datetime

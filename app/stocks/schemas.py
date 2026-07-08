@@ -182,6 +182,39 @@ class SectorBoardResponse(BaseModel):
     sectors: list[SectorPerformanceResponse]
 
 
+class SectorHighlightResponse(BaseModel):
+    """One standout sector in a market analysis, with the AI's plain note.
+
+    `symbol` is the proxy ETF the sector is read through; `change_percent` is that
+    proxy's real move on the day (joined from the board, not authored by the model),
+    and `note` is the model's one-line read on why it stands out."""
+
+    sector: str
+    symbol: str
+    change_percent: float | None = None
+    note: str
+
+
+class SectorAnalysisResponse(BaseModel):
+    """An AI-generated read of how the market's sectors are moving today.
+
+    `summary` is the plain-language headline of which corners of the market are
+    leading and lagging; `tone` is the risk posture the day's rotation implies
+    ("risk_on"/"risk_off"/"mixed"); `leaders` and `laggards` are the standout
+    sectors with a short note each. `disclaimer` is a fixed reminder that this is
+    informational, not financial advice — authored by the service, not the model.
+    `model` and `generated_at` record what produced the analysis and when. Reasoned
+    only over the day's sector board; descriptive, not advice."""
+
+    summary: str
+    tone: str  # "risk_on" | "risk_off" | "mixed"
+    leaders: list[SectorHighlightResponse]
+    laggards: list[SectorHighlightResponse]
+    disclaimer: str
+    model: str  # the model that produced the analysis
+    generated_at: datetime
+
+
 class InvestmentAnalysisResponse(BaseModel):
     """An AI-generated, balanced buy/hold/sell read on a stock.
 

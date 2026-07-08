@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
+from app.stocks.bedrock_sector_analysis_provider import BedrockSectorAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     AllTimeHigh,
@@ -24,8 +25,11 @@ from app.stocks.entities import (
     InvestmentAnalysis,
     KeyMetrics,
     Logo,
+    MarketTone,
     Quote,
     Recommendation,
+    SectorAnalysis,
+    SectorHighlight,
     SectorPerformance,
     Stock,
     StockFundamentals,
@@ -51,6 +55,7 @@ from app.stocks.ports import (
     CompanyProfileProvider,
     InvestmentAnalysisProvider,
     LogoProvider,
+    SectorAnalysisProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockFundamentalsProvider,
@@ -65,6 +70,7 @@ from app.stocks.recommendations.ports import RecommendationProvider
 from app.stocks.universe.entities import IndustryValuation
 from app.stocks.universe.repository import StockSearchRepository
 from app.stocks.router import (
+    get_sector_analysis,
     get_sector_performance,
     get_stock_analysis,
     get_stock_candles,
@@ -75,6 +81,7 @@ from app.stocks.router import (
     get_stock_support_levels,
 )
 from app.stocks.use_cases import (
+    GetSectorAnalysis,
     GetSectorPerformance,
     GetStockAnalysis,
     GetStockCandles,
@@ -374,6 +381,44 @@ def an_analysis(**overrides) -> InvestmentAnalysis:
     )
     base.update(overrides)
     return InvestmentAnalysis(**base)
+
+
+class FakeSectorAnalysisProvider(SectorAnalysisProvider):
+    """Returns/raises whatever the test configured; stashes the board it received
+    (so a test can assert the use case handed over a *ranked* board)."""
+
+    def __init__(
+        self,
+        analysis: SectorAnalysis | None = None,
+        raises: Exception | None = None,
+    ):
+        self._analysis = analysis
+        self._raises = raises
+        self.received: list[SectorPerformance] | None = None
+
+    def analyze(self, sectors) -> SectorAnalysis:
+        self.received = list(sectors)
+        if self._raises is not None:
+            raise self._raises
+        assert self._analysis is not None
+        return self._analysis
+
+
+def a_sector_analysis(**overrides) -> SectorAnalysis:
+    base = dict(
+        summary="Growth-sensitive corners led while defensives lagged.",
+        tone=MarketTone.RISK_ON,
+        leaders=(
+            SectorHighlight("Technology", "XLK", 1.8, "Chipmakers powered the tape."),
+        ),
+        laggards=(
+            SectorHighlight("Utilities", "XLU", -0.9, "Money left the safe corners."),
+        ),
+        model="claude-opus-4-8",
+        generated_at=datetime(2026, 6, 18, 20, 0, tzinfo=timezone.utc),
+    )
+    base.update(overrides)
+    return SectorAnalysis(**base)
 
 
 def a_logo(content: bytes = b"\x89PNG\r\n", media_type: str = "image/png") -> Logo:
@@ -1183,6 +1228,7 @@ def make_client():
         quote_provider: StockQuoteProvider | None = None,
         analysis_provider: InvestmentAnalysisProvider | None = None,
         industry_repository: StockSearchRepository | None = None,
+        sector_analysis_provider: SectorAnalysisProvider | None = None,
     ) -> TestClient:
         if quote_provider is not None:
             app.dependency_overrides[get_stock_quote] = (
@@ -1223,6 +1269,15 @@ def make_client():
                 annual_earnings_provider,
                 recommendations_provider,
                 industry_repository,
+            )
+        if sector_analysis_provider is not None:
+            # Wire the sector-analysis use case with its board provider (the same
+            # GetSectorPerformance the /sectors endpoint uses) and the analyzer.
+            board = sector_provider or FakeSectorProvider([a_sector()])
+            app.dependency_overrides[get_sector_analysis] = (
+                lambda: GetSectorAnalysis(
+                    GetSectorPerformance(board), sector_analysis_provider
+                )
             )
         return TestClient(app)
 
@@ -2150,6 +2205,172 @@ def test_get_sectors_upstream_failure_502(make_client):
     fake = FakeSectorProvider(raises=StockDataUnavailable("sectors", "boom"))
     client = make_client(sector_provider=fake)
     assert client.get("/sectors").status_code == 502
+
+
+# --------------------------- sector AI analysis ---------------------------
+
+# Reuses the Bedrock stub client defined in the AI-analysis section above, but
+# forces the sector tool (submit_sector_analysis) instead of submit_analysis.
+def _sector_tool_message(**input_overrides) -> _StubMessage:
+    payload = dict(
+        summary="Growth-sensitive sectors led; defensives lagged.",
+        tone="risk_on",
+        leaders=[{"sector": "Technology", "note": "Chipmakers rallied."}],
+        laggards=[{"sector": "Energy", "note": "Crude slipped."}],
+    )
+    payload.update(input_overrides)
+    return _StubMessage(
+        [_StubBlock("tool_use", name="submit_sector_analysis", input=payload)]
+    )
+
+
+def _a_board() -> list[SectorPerformance]:
+    # Two sectors with known day moves: Technology +10%, Energy -5%.
+    return [
+        a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0),
+        a_sector(sector="Energy", symbol="XLE", price=95.0, previous_close=100.0),
+    ]
+
+
+def test_sector_analysis_parses_tool_call_into_entity():
+    client = _StubClient(_sector_tool_message())
+    provider = BedrockSectorAnalysisProvider(client=client, model_id="test-model")
+
+    analysis = provider.analyze(_a_board())
+
+    assert analysis.summary.startswith("Growth-sensitive")
+    assert analysis.tone is MarketTone.RISK_ON
+    # Leader/laggard notes are joined back to the board for the real day move.
+    assert analysis.leaders[0].sector == "Technology"
+    assert analysis.leaders[0].symbol == "XLK"
+    assert analysis.leaders[0].change_percent == 10.0  # from the board, not the model
+    assert analysis.leaders[0].note == "Chipmakers rallied."
+    assert analysis.laggards[0].change_percent == -5.0
+    assert analysis.model == "test-model"
+    # The model was actually pinned to the sector tool.
+    assert client.calls[0]["tool_choice"] == {
+        "type": "tool",
+        "name": "submit_sector_analysis",
+    }
+
+
+def test_sector_analysis_renders_board_into_prompt():
+    client = _StubClient(_sector_tool_message())
+    board = [
+        a_sector(
+            sector="Technology",
+            symbol="XLK",
+            price=110.0,
+            previous_close=100.0,
+            performance=a_performance(),
+        )
+    ]
+    BedrockSectorAnalysisProvider(client=client).analyze(board)
+
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "Market sectors today" in prompt
+    assert "Technology (XLK)" in prompt
+    assert "day 10.00%" in prompt
+    assert "1y 21.00%" in prompt  # trailing windows render when present
+
+
+def test_sector_analysis_joins_real_percent_and_drops_unknown_sector():
+    # The model names one sector on the board and one that isn't; the unknown one is
+    # dropped, and the known one carries the board's real percent, never a model figure.
+    client = _StubClient(
+        _sector_tool_message(
+            leaders=[
+                {"sector": "Technology", "note": "on the board"},
+                {"sector": "Nowhere", "note": "off the board"},
+            ]
+        )
+    )
+    analysis = BedrockSectorAnalysisProvider(client=client).analyze(_a_board())
+    assert [h.sector for h in analysis.leaders] == ["Technology"]
+    assert analysis.leaders[0].change_percent == 10.0
+
+
+def test_sector_analysis_drops_a_highlight_without_a_note():
+    client = _StubClient(
+        _sector_tool_message(laggards=[{"sector": "Energy", "note": ""}])
+    )
+    analysis = BedrockSectorAnalysisProvider(client=client).analyze(_a_board())
+    assert analysis.laggards == ()
+
+
+def test_sector_analysis_raises_when_model_does_not_call_the_tool():
+    client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
+    with pytest.raises(StockDataUnavailable):
+        BedrockSectorAnalysisProvider(client=client).analyze(_a_board())
+
+
+def test_sector_analysis_maps_a_client_error_to_a_domain_error():
+    with pytest.raises(StockDataUnavailable):
+        BedrockSectorAnalysisProvider(client=_BoomClient()).analyze(_a_board())
+
+
+def test_sector_analysis_rejects_an_offschema_tone():
+    client = _StubClient(_sector_tool_message(tone="euphoric"))  # not in the enum
+    with pytest.raises(StockDataUnavailable):
+        BedrockSectorAnalysisProvider(client=client).analyze(_a_board())
+
+
+def test_sector_analysis_use_case_hands_over_a_ranked_board():
+    # The use case ranks the board best-first before handing it to the analyzer.
+    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
+    energy = a_sector(sector="Energy", symbol="XLE", price=95.0, previous_close=100.0)
+    use_case = GetSectorAnalysis(
+        GetSectorPerformance(FakeSectorProvider([energy, tech])), analyzer
+    )
+    use_case.execute()
+    assert [s.sector for s in analyzer.received] == ["Technology", "Energy"]
+
+
+def test_sector_analysis_use_case_propagates_a_board_failure():
+    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    use_case = GetSectorAnalysis(
+        GetSectorPerformance(
+            FakeSectorProvider(raises=StockDataUnavailable("sectors", "boom"))
+        ),
+        analyzer,
+    )
+    with pytest.raises(StockDataUnavailable):
+        use_case.execute()
+
+
+def test_get_sector_analysis_returns_200(make_client):
+    client = make_client(
+        sector_analysis_provider=FakeSectorAnalysisProvider(a_sector_analysis())
+    )
+    r = client.get("/sectors/analysis")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["summary"]
+    assert body["tone"] == "risk_on"
+    assert body["leaders"][0]["sector"] == "Technology"
+    assert body["leaders"][0]["change_percent"] == 1.8
+    assert body["laggards"][0]["sector"] == "Utilities"
+    assert "not financial advice" in body["disclaimer"].lower()
+    assert body["model"] == "claude-opus-4-8"
+
+
+def test_get_sector_analysis_502_when_model_fails(make_client):
+    client = make_client(
+        sector_analysis_provider=FakeSectorAnalysisProvider(
+            raises=StockDataUnavailable("sectors", "bedrock timeout")
+        )
+    )
+    assert client.get("/sectors/analysis").status_code == 502
+
+
+def test_get_sector_analysis_404_when_board_unavailable(make_client):
+    # The board is primary — a not-found board surfaces as 404, like /sectors.
+    client = make_client(
+        sector_provider=FakeSectorProvider(raises=StockNotFound("sectors")),
+        sector_analysis_provider=FakeSectorAnalysisProvider(a_sector_analysis()),
+    )
+    assert client.get("/sectors/analysis").status_code == 404
 
 
 # --------------------------- CORS ---------------------------

@@ -19,11 +19,14 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
+from app.stocks.bedrock_sector_analysis_provider import BedrockSectorAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     CandleSeries,
     InvestmentAnalysis,
     Quote,
+    SectorAnalysis,
+    SectorHighlight,
     SectorPerformance,
     StockPerformance,
     Timeframe,
@@ -62,6 +65,7 @@ from app.stocks.ports import (
     CompanyProfileProvider,
     InvestmentAnalysisProvider,
     LogoProvider,
+    SectorAnalysisProvider,
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
@@ -77,13 +81,16 @@ from app.stocks.schemas import (
     ResistanceLevelsResponse,
     RsiPointResponse,
     RsiResponse,
+    SectorAnalysisResponse,
     SectorBoardResponse,
+    SectorHighlightResponse,
     SectorPerformanceResponse,
     StockPerformanceResponse,
     SupportLevelResponse,
     SupportLevelsResponse,
 )
 from app.stocks.use_cases import (
+    GetSectorAnalysis,
     GetSectorPerformance,
     GetStockAnalysis,
     GetStockCandles,
@@ -267,6 +274,33 @@ def get_stock_analysis(
 
 
 @lru_cache(maxsize=1)
+def get_sector_analysis_provider() -> SectorAnalysisProvider:
+    # Same wiring as get_analysis_provider — Bedrock authenticates through the
+    # process's AWS credentials, so there's no secret to gate on; region + model id
+    # are env config with sane defaults, sharing the same env vars so one deploy
+    # config drives every analyser. A missing 'bedrock' extra surfaces as a 503.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_ANALYSIS_MODEL_ID")
+    try:
+        if model_id:
+            return BedrockSectorAnalysisProvider(model_id=model_id, region=region)
+        return BedrockSectorAnalysisProvider(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI analysis is not configured (install the 'bedrock' extra)."
+        ) from exc
+
+
+def get_sector_analysis(
+    # Reuses the sector-board wiring wholesale (the Alpaca-backed
+    # GetSectorPerformance), then hands the ranked board to the analyzer.
+    sectors: GetSectorPerformance = Depends(get_sector_performance),
+    analyzer: SectorAnalysisProvider = Depends(get_sector_analysis_provider),
+) -> GetSectorAnalysis:
+    return GetSectorAnalysis(sectors, analyzer)
+
+
+@lru_cache(maxsize=1)
 def get_logo_provider() -> LogoProvider:
     # Logo.dev keeps logos current through rebrands/symbol changes. It needs a
     # free *publishable* token (logo.dev, 500k/mo); without it the logo endpoint
@@ -443,6 +477,32 @@ def _present_sectors(sectors: list[SectorPerformance]) -> SectorBoardResponse:
             )
             for s in sectors
         ],
+    )
+
+
+def _present_sector_highlight(highlight: SectorHighlight) -> SectorHighlightResponse:
+    """Presenter: one sector highlight entity -> HTTP response DTO."""
+    return SectorHighlightResponse(
+        sector=highlight.sector,
+        symbol=highlight.symbol,
+        change_percent=highlight.change_percent,
+        note=highlight.note,
+    )
+
+
+def _present_sector_analysis(analysis: SectorAnalysis) -> SectorAnalysisResponse:
+    """Presenter: sector-analysis entity -> HTTP response DTO.
+
+    Same shape as ``_present_analysis`` — the disclaimer is attached here, at the
+    edge, since it's a property of the service, not something the model authors."""
+    return SectorAnalysisResponse(
+        summary=analysis.summary,
+        tone=analysis.tone.value,
+        leaders=[_present_sector_highlight(h) for h in analysis.leaders],
+        laggards=[_present_sector_highlight(h) for h in analysis.laggards],
+        disclaimer=_ANALYSIS_DISCLAIMER,
+        model=analysis.model,
+        generated_at=analysis.generated_at,
     )
 
 
@@ -734,3 +794,22 @@ def get_sectors_endpoint(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present_sectors(sectors)
+
+
+@router.get("/sectors/analysis", response_model=SectorAnalysisResponse)
+def get_sector_analysis_endpoint(
+    response: Response,
+    use_case: GetSectorAnalysis = Depends(get_sector_analysis),
+) -> SectorAnalysisResponse:
+    try:
+        analysis = use_case.execute()
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    # The model call is slow and metered, and a market-wide read only drifts as the
+    # sector board does — cache longer than the per-stock analysis (this backs a
+    # homepage widget hit by every visitor) so a burst of viewers collapses onto one
+    # generation rather than re-billing per request.
+    response.headers["Cache-Control"] = "public, max-age=900"
+    return _present_sector_analysis(analysis)
