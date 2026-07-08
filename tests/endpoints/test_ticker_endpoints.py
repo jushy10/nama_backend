@@ -33,6 +33,7 @@ from app.stocks.ticker.entities import TickerOptionsMetrics, TickerValuation
 from app.stocks.ticker.use_cases import TickerCard, TickerClassification
 from app.stocks.universe.entities import (
     Classifications,
+    IndustryValuation,
     MarketCapTier,
     SortDirection,
     StockSearchPage,
@@ -383,7 +384,25 @@ class _FakeClassifications:
         return self._result
 
 
-def _search_client(*, search=None, classifications=None) -> TestClient:
+class _FakeIndustryValuation:
+    """Stands in for GetIndustryValuation; records the industry, returns a canned benchmark
+    (or raises)."""
+
+    def __init__(self, *, result=None, error=None) -> None:
+        self._result = result
+        self._error = error
+        self.industry: str | None = None
+
+    def execute(self, industry):
+        self.industry = industry
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def _search_client(
+    *, search=None, classifications=None, industry_valuation=None
+) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
     if search is not None:
@@ -391,6 +410,10 @@ def _search_client(*, search=None, classifications=None) -> TestClient:
     if classifications is not None:
         app.dependency_overrides[endpoints.get_classifications_use_case] = (
             lambda: classifications
+        )
+    if industry_valuation is not None:
+        app.dependency_overrides[endpoints.get_industry_valuation_use_case] = (
+            lambda: industry_valuation
         )
     return TestClient(app)
 
@@ -587,3 +610,60 @@ def test_classifications_sets_a_longer_cache_header():
     resp = _search_client(classifications=fake).get("/stocks/classifications")
 
     assert resp.headers["cache-control"] == "public, max-age=300"
+
+
+# --- The per-industry P/E benchmark (GET /stocks/industries/{industry}/pe) ------------------
+
+
+def test_industry_pe_returns_the_expected_json_shape():
+    fake = _FakeIndustryValuation(
+        result=IndustryValuation(
+            industry="semiconductors",
+            count=34,
+            median_pe=21.0,
+            p25_pe=15.5,
+            p75_pe=30.2,
+        )
+    )
+    resp = _search_client(industry_valuation=fake).get(
+        "/stocks/industries/Semiconductors/pe"
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "industry": "semiconductors",
+        "count": 34,
+        "median_pe": 21.0,
+        "p25_pe": 15.5,
+        "p75_pe": 30.2,
+    }
+    # The raw path label is handed to the use case (which slugs it) — the endpoint doesn't.
+    assert fake.industry == "Semiconductors"
+
+
+def test_industry_pe_unknown_industry_is_200_with_null_stats():
+    fake = _FakeIndustryValuation(
+        result=IndustryValuation(
+            industry="nonesuch", count=0, median_pe=None, p25_pe=None, p75_pe=None
+        )
+    )
+    resp = _search_client(industry_valuation=fake).get("/stocks/industries/nonesuch/pe")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 0
+    assert body["median_pe"] is None
+
+
+def test_industry_pe_maps_value_error_to_400():
+    fake = _FakeIndustryValuation(error=ValueError("An industry is required."))
+    resp = _search_client(industry_valuation=fake).get("/stocks/industries/%20/pe")
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "An industry is required."
+
+
+def test_industry_pe_sets_a_short_cache_header():
+    fake = _FakeIndustryValuation(result=IndustryValuation("x", 1, 20.0, 20.0, 20.0))
+    resp = _search_client(industry_valuation=fake).get("/stocks/industries/x/pe")
+    assert resp.headers["cache-control"] == "public, max-age=60"

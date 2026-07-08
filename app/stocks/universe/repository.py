@@ -145,3 +145,15 @@ class StockSearchRepository(ABC):
         the search then accepts back as its ``sector`` / ``industry`` filters.
         """
         raise NotImplementedError
+
+    @abstractmethod
+    def pe_ratios_for_industry(self, industry: str) -> tuple[float, ...]:
+        """Return the *positive* trailing P/Es of the screened stocks in ``industry`` — the
+        sample a peer-valuation benchmark is built from.
+
+        Only usable multiples: null and non-positive P/Es are excluded (a P/E off a loss is
+        meaningless), so the caller gets a clean list to summarize. ``industry`` is a stored
+        slug; an unknown one (or one with no valued members yet) yields an empty tuple — no
+        coverage, not an error.
+        """
+        raise NotImplementedError

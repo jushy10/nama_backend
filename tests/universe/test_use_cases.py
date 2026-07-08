@@ -33,6 +33,7 @@ from app.stocks.universe.repository import (
     UniverseSyncCounts,
 )
 from app.stocks.universe.use_cases import (
+    GetIndustryValuation,
     ListClassifications,
     SearchStocks,
     SyncUniverse,
@@ -348,13 +349,16 @@ _RESULT = StockSearchResult(
 
 
 class _FakeSearchRepo(StockSearchRepository):
-    """Records the criteria it was handed and returns a canned page / classifications."""
+    """Records the criteria it was handed and returns a canned page / classifications /
+    per-industry P/E list."""
 
-    def __init__(self, *, page=None, classifications=None) -> None:
+    def __init__(self, *, page=None, classifications=None, pe_ratios=()) -> None:
         self._page = page or StockSearchPage(results=(), total=0, limit=0, offset=0)
         self._classifications = classifications or Classifications((), ())
+        self._pe_ratios = pe_ratios
         self.criteria: StockSearchCriteria | None = None
         self.classifications_calls = 0
+        self.industry_asked: str | None = None
 
     def search(self, criteria):
         self.criteria = criteria
@@ -363,6 +367,10 @@ class _FakeSearchRepo(StockSearchRepository):
     def classifications(self):
         self.classifications_calls += 1
         return self._classifications
+
+    def pe_ratios_for_industry(self, industry):
+        self.industry_asked = industry
+        return tuple(self._pe_ratios)
 
 
 def test_search_normalizes_inputs_and_passes_clean_criteria():
@@ -452,3 +460,44 @@ def test_list_classifications_passes_through():
 
     assert result is classifications
     assert repo.classifications_calls == 1
+
+
+# --- GetIndustryValuation (the per-industry P/E benchmark) ---------------------------------
+
+
+def test_industry_valuation_slugs_the_industry_and_summarizes_peers():
+    repo = _FakeSearchRepo(pe_ratios=(10.0, 20.0, 30.0, 40.0, 50.0))
+    result = GetIndustryValuation(repo).execute("  Semiconductors ")
+    # The raw label is slugged + trimmed before the read, so a slug or a label both work.
+    assert repo.industry_asked == "semiconductors"
+    assert result.industry == "semiconductors"
+    assert result.count == 5
+    assert (result.median_pe, result.p25_pe, result.p75_pe) == (30.0, 20.0, 40.0)
+
+
+def test_industry_valuation_interpolates_quartiles_on_an_even_sample():
+    # Four peers: the median sits between the two middles, the quartiles interpolate.
+    result = GetIndustryValuation(
+        _FakeSearchRepo(pe_ratios=(10.0, 20.0, 30.0, 40.0))
+    ).execute("x")
+    assert result.median_pe == 25.0  # (20 + 30) / 2
+    assert result.p25_pe == 17.5
+    assert result.p75_pe == 32.5
+
+
+def test_industry_valuation_single_peer_is_its_own_median():
+    result = GetIndustryValuation(_FakeSearchRepo(pe_ratios=(18.0,))).execute("x")
+    assert result.count == 1
+    assert (result.median_pe, result.p25_pe, result.p75_pe) == (18.0, 18.0, 18.0)
+
+
+def test_industry_valuation_empty_when_no_peers():
+    # An unknown but well-formed industry has no peers — a valid benchmark, not an error.
+    result = GetIndustryValuation(_FakeSearchRepo(pe_ratios=())).execute("nonesuch")
+    assert result.count == 0
+    assert (result.median_pe, result.p25_pe, result.p75_pe) == (None, None, None)
+
+
+def test_industry_valuation_rejects_a_blank_industry():
+    with pytest.raises(ValueError):
+        GetIndustryValuation(_FakeSearchRepo()).execute("   ")
