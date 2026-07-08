@@ -20,7 +20,7 @@ def _stub_yfinance_crumb_reset(monkeypatch):
 def _disable_rate_limiter(monkeypatch):
     """Turn the per-IP limiter off for the suite.
 
-    Every ``TestClient`` request carries no ``X-Forwarded-For`` and shares one
+    Every ``TestClient`` request carries no ``X-Client-IP`` and shares one
     client host (``testclient``), so the live limiter would pool the whole suite
     into a single bucket and start returning 429s once the cumulative count
     crossed a window — flaky, and unrelated to what most tests assert. The

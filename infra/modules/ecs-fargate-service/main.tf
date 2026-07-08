@@ -304,12 +304,19 @@ resource "aws_apigatewayv2_integration" "this" {
   payload_format_version = "1.0"
   timeout_milliseconds   = 30000
 
-  # Hand the app a trustworthy client IP for per-client rate limiting: overwrite
-  # X-Forwarded-For with the source IP the gateway actually observed. Because the
-  # gateway replaces the whole header, a client can't slip past the limiter with a
-  # forged X-Forwarded-For — the app reads the first entry and trusts it.
+  # Hand the app a trustworthy client IP for per-client rate limiting: stamp the
+  # source IP the gateway actually observed into a header the app reads as the
+  # limiter key. Because `overwrite` replaces any inbound value, a client can't
+  # slip past the limiter with a forged header.
+  #
+  # This targets a custom header, NOT X-Forwarded-For: API Gateway v2 rejects any
+  # mapping operation on X-Forwarded-For ("Operations on header x-forwarded-for
+  # are restricted"), so overwriting it fails at apply time. A custom header has
+  # no such restriction and is stamped deterministically (unlike relying on the
+  # gateway to append the source IP to XFF, which HTTP APIs over a VPC link don't
+  # do reliably). Keep this name in sync with `_client_ip` in app/main.py.
   request_parameters = {
-    "overwrite:header.X-Forwarded-For" = "$context.identity.sourceIp"
+    "overwrite:header.X-Client-IP" = "$context.identity.sourceIp"
   }
 }
 
