@@ -20,6 +20,7 @@ from app.stocks.entities import (
     InvestmentAnalysis,
     Logo,
     Quote,
+    SectorAnalysis,
     SectorPerformance,
     Stock,
     StockFundamentals,
@@ -42,6 +43,7 @@ from app.stocks.ports import (
     CompanyProfileProvider,
     InvestmentAnalysisProvider,
     LogoProvider,
+    SectorAnalysisProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockFundamentalsProvider,
@@ -438,3 +440,26 @@ class GetSectorPerformance:
             sectors,
             key=lambda s: (s.change_percent is None, -(s.change_percent or 0.0)),
         )
+
+
+class GetSectorAnalysis:
+    """Use case: an AI-generated read of which market sectors are leading today.
+
+    The market-wide sibling of ``GetStockAnalysis``. Reuses
+    ``GetSectorPerformance`` to assemble the day's ranked board, then hands it to
+    the injected analyzer. Both the board and the analysis are primary data — an
+    upstream board failure (``StockNotFound``/``StockDataUnavailable``) or a model
+    failure propagates rather than yielding an analysis of nothing. The analyzer
+    reasons only over the board it's handed; it fetches nothing itself. Takes no
+    input — it reports on the whole market.
+    """
+
+    def __init__(
+        self, sectors: GetSectorPerformance, analyzer: SectorAnalysisProvider
+    ) -> None:
+        self._sectors = sectors
+        self._analyzer = analyzer
+
+    def execute(self) -> SectorAnalysis:
+        board = self._sectors.execute()
+        return self._analyzer.analyze(board)

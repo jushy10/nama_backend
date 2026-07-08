@@ -18,6 +18,7 @@ from app.stocks.entities import (
     InvestmentAnalysis,
     Logo,
     Quote,
+    SectorAnalysis,
     SectorPerformance,
     Stock,
     StockFundamentals,
@@ -266,6 +267,33 @@ class InvestmentAnalysisProvider(ABC):
             industry_valuation: the industry P/E benchmark (median + quartiles
                 over the stock's screened peers), so the model can judge its
                 trailing multiple against its peers, else ``None``.
+
+        Raises:
+            StockDataUnavailable: the model call failed or returned no usable
+                result.
+        """
+        raise NotImplementedError
+
+
+class SectorAnalysisProvider(ABC):
+    """A gateway that turns the day's ranked sector board into a short,
+    AI-generated read of which market sectors are leading and lagging.
+
+    The market-wide sibling of ``InvestmentAnalysisProvider``: like it, this port
+    isn't handed a lookup key — the use case has already assembled the board (each
+    sector's daily move + trailing returns). The adapter reasons only over what
+    it's given and fetches nothing. This backs a dedicated endpoint (its own reason
+    to exist, not best-effort enrichment), so a failure surfaces as an error rather
+    than being swallowed.
+    """
+
+    @abstractmethod
+    def analyze(self, sectors: list[SectorPerformance]) -> SectorAnalysis:
+        """Return a market-sector analysis built from the ranked board.
+
+        Args:
+            sectors: the day's sectors, already ranked best performer first, each
+                carrying its daily move and best-effort trailing-window returns.
 
         Raises:
             StockDataUnavailable: the model call failed or returned no usable
