@@ -24,6 +24,7 @@ the SQL that reads them lives in the adapter, the normalization in the use case.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
@@ -211,6 +212,67 @@ class Classifications:
 
     sectors: tuple[str, ...]
     industries: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class IndustryValuation:
+    """A per-industry trailing-P/E benchmark over the screened universe.
+
+    The distribution of one industry's stored consensus-basis trailing P/Es (the same
+    figure the search sorts on and the ticker card serves), summarized so a caller can judge
+    whether a single stock's multiple is rich or cheap *for its industry* — the one anchor
+    that makes an absolute P/E meaningful. ``median_pe`` is the typical multiple and
+    ``p25_pe`` / ``p75_pe`` the interquartile range (the middle-half band); ``count`` is how
+    many peers had a usable (positive) P/E — the sample the summary rests on, so a thin
+    industry reads as low-confidence. All three stats are ``None`` when ``count`` is 0 (an
+    unknown industry, or none valued yet): no coverage, not an error. ``industry`` echoes the
+    normalized slug.
+    """
+
+    industry: str
+    count: int
+    median_pe: float | None
+    p25_pe: float | None
+    p75_pe: float | None
+
+    @classmethod
+    def from_pe_ratios(
+        cls, industry: str, pe_ratios: Sequence[float]
+    ) -> "IndustryValuation":
+        """Summarize an industry's peer P/Es into the benchmark.
+
+        Callers pass only *usable* (positive) P/Es — the repository filters null and
+        non-positive out — so this is pure statistics: sort, then take the median and the
+        quartiles by linear interpolation. An empty sample yields all-``None`` stats.
+        """
+        values = sorted(pe_ratios)
+        return cls(
+            industry=industry,
+            count=len(values),
+            median_pe=_percentile(values, 50),
+            p25_pe=_percentile(values, 25),
+            p75_pe=_percentile(values, 75),
+        )
+
+
+def _percentile(sorted_values: Sequence[float], q: float) -> float | None:
+    """The ``q``-th percentile (0–100) of an already-sorted sequence, by linear interpolation
+    between the two nearest ranks — the common "type 7" definition (what numpy defaults to).
+
+    Computed in Python rather than SQL on purpose: SQLite (the offline tests) has no median /
+    percentile function, so the repository fetches the peer list and this summarizes it — one
+    definition that behaves identically on SQLite and Postgres. ``None`` for an empty sample;
+    the result is rounded to 2 dp, the precision the anchor stores P/Es at."""
+    n = len(sorted_values)
+    if n == 0:
+        return None
+    if n == 1:
+        return round(sorted_values[0], 2)
+    rank = (q / 100) * (n - 1)
+    lo = int(rank)
+    hi = min(lo + 1, n - 1)
+    frac = rank - lo
+    return round(sorted_values[lo] + frac * (sorted_values[hi] - sorted_values[lo]), 2)
 
 
 def slugify(label: object) -> str | None:

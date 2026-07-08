@@ -645,3 +645,23 @@ def test_classifications_are_distinct_sorted_and_null_free(session):
         "semiconductors",
         "software_infrastructure",
     )
+
+
+def test_pe_ratios_for_industry_returns_positive_pes_of_that_industry(session):
+    _seed(session, "NVDA", industry="semiconductors", pe_ratio=46.5)
+    _seed(session, "AMD", industry="semiconductors", pe_ratio=30.0)
+    _seed(session, "INTC", industry="semiconductors", pe_ratio=None)  # unvalued — excluded
+    _seed(session, "LOSS", industry="semiconductors", pe_ratio=-5.0)  # trailing loss — excluded
+    _seed(session, "MSFT", industry="software_infrastructure", pe_ratio=35.0)  # other industry
+    r = SqlStockSearchRepository(session)
+
+    pes = r.pe_ratios_for_industry("semiconductors")
+
+    # Only the two positive semis — the null and the negative P/E are filtered out, and the
+    # other industry doesn't leak in.
+    assert sorted(pes) == [30.0, 46.5]
+
+
+def test_pe_ratios_for_industry_empty_for_an_unknown_industry(session):
+    _seed(session, "NVDA", industry="semiconductors", pe_ratio=46.5)
+    assert SqlStockSearchRepository(session).pe_ratios_for_industry("nonesuch") == ()

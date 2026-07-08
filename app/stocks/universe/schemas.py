@@ -62,3 +62,21 @@ class ClassificationsResponse(BaseModel):
 
     sectors: list[str]
     industries: list[str]
+
+
+class IndustryValuationResponse(BaseModel):
+    """A per-industry trailing-P/E benchmark over the screened universe.
+
+    ``median_pe`` is the industry's typical trailing P/E (consensus basis — the same figure
+    the search sorts on and the ticker card serves) and ``p25_pe`` / ``p75_pe`` the
+    interquartile range, so a client can see where a given stock's multiple sits relative to
+    its peers — the anchor that makes an absolute P/E meaningful. ``count`` is how many peers
+    had a usable (positive) P/E; all three stats are ``null`` when it's 0 (an unknown industry,
+    or none valued yet). ``industry`` echoes the normalized slug.
+    """
+
+    industry: str
+    count: int
+    median_pe: float | None = None
+    p25_pe: float | None = None
+    p75_pe: float | None = None

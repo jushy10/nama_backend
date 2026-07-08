@@ -29,6 +29,7 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.progress import iter_with_progress
 from app.stocks.universe.entities import (
     Classifications,
+    IndustryValuation,
     MarketCapTier,
     ScreenedStock,
     SortDirection,
@@ -277,3 +278,29 @@ class ListClassifications:
 
     def execute(self) -> Classifications:
         return self._repository.classifications()
+
+
+class GetIndustryValuation:
+    """The per-industry trailing-P/E benchmark for ``GET /stocks/industries/{industry}/pe``.
+
+    Normalizes the industry to the stored slug at the edge (so the client can send either the
+    slug or the raw label, like the search's filters), reads its screened peers' positive P/Es
+    from the repository, and summarizes them into an ``IndustryValuation`` (median + the
+    interquartile range + the peer count). Pure orchestration over the read repository — no
+    live feed; the P/Es are already on the anchor, materialized by the universe sync.
+    """
+
+    def __init__(self, repository: StockSearchRepository) -> None:
+        self._repository = repository
+
+    def execute(self, industry: str) -> IndustryValuation:
+        """Slug the industry, read its peers' P/Es, and summarize.
+
+        A blank or non-alphanumeric industry (nothing to slug) is a ``ValueError`` (a 400 at
+        the edge); an *unknown but well-formed* industry simply has no peers, so the result is
+        a valid benchmark with ``count`` 0 and null stats — "no coverage", not an error."""
+        slug = slugify(industry)
+        if slug is None:
+            raise ValueError("An industry is required.")
+        pe_ratios = self._repository.pe_ratios_for_industry(slug)
+        return IndustryValuation.from_pe_ratios(slug, pe_ratios)

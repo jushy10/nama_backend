@@ -263,6 +263,23 @@ class SqlStockSearchRepository(StockSearchRepository):
             industries=self._distinct(StockRecord.industry),
         )
 
+    def pe_ratios_for_industry(self, industry: str) -> tuple[float, ...]:
+        # Positive P/Es only: `pe_ratio > 0` already drops NULLs (in SQL `NULL > 0` is not
+        # true) and non-positive figures (a trailing loss the sync stored as None, or a stray
+        # <= 0). `pe_ratio` is only ever written on screened rows, so no separate screened
+        # gate is needed — a non-null P/E implies a screened member.
+        rows = (
+            self._session.execute(
+                select(StockRecord.pe_ratio).where(
+                    StockRecord.industry == industry,
+                    StockRecord.pe_ratio > 0,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return tuple(rows)
+
     def _conditions(self, criteria: StockSearchCriteria) -> list:
         """The WHERE terms shared by the count and the page query — the screened gate plus
         whichever filters the criteria carries (a term is added only when its field is set)."""

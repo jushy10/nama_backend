@@ -92,6 +92,7 @@ from app.stocks.ticker.use_cases import ClassifyTicker, GetTickerCard, TickerCar
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.universe.entities import (
     Classifications,
+    IndustryValuation,
     MarketCapTier,
     SortDirection,
     StockSearchPage,
@@ -99,10 +100,15 @@ from app.stocks.universe.entities import (
 )
 from app.stocks.universe.schemas import (
     ClassificationsResponse,
+    IndustryValuationResponse,
     StockSearchItemResponse,
     StockSearchResponse,
 )
-from app.stocks.universe.use_cases import ListClassifications, SearchStocks
+from app.stocks.universe.use_cases import (
+    GetIndustryValuation,
+    ListClassifications,
+    SearchStocks,
+)
 
 router = APIRouter(tags=["ticker"])
 
@@ -308,6 +314,13 @@ def get_classifications_use_case(db: Session = Depends(get_db)) -> ListClassific
     return ListClassifications(SqlStockSearchRepository(db))
 
 
+def get_industry_valuation_use_case(
+    db: Session = Depends(get_db),
+) -> GetIndustryValuation:
+    # Same request-scoped read repository the search uses — a pure DB read over the anchor.
+    return GetIndustryValuation(SqlStockSearchRepository(db))
+
+
 def _present_search(page: StockSearchPage) -> StockSearchResponse:
     """Presenter: search-page entity -> HTTP response DTO."""
     return StockSearchResponse(
@@ -339,6 +352,19 @@ def _present_classifications(c: Classifications) -> ClassificationsResponse:
     """Presenter: classifications entity -> HTTP response DTO."""
     return ClassificationsResponse(
         sectors=list(c.sectors), industries=list(c.industries)
+    )
+
+
+def _present_industry_valuation(
+    v: IndustryValuation,
+) -> IndustryValuationResponse:
+    """Presenter: industry-valuation entity -> HTTP response DTO."""
+    return IndustryValuationResponse(
+        industry=v.industry,
+        count=v.count,
+        median_pe=v.median_pe,
+        p25_pe=v.p25_pe,
+        p75_pe=v.p75_pe,
     )
 
 
@@ -435,3 +461,25 @@ def list_classifications_endpoint(
     # longer than the search list.
     response.headers["Cache-Control"] = "public, max-age=300"
     return _present_classifications(classifications)
+
+
+@router.get(
+    "/stocks/industries/{industry}/pe", response_model=IndustryValuationResponse
+)
+def industry_pe_endpoint(
+    industry: str,
+    response: Response,
+    use_case: GetIndustryValuation = Depends(get_industry_valuation_use_case),
+) -> IndustryValuationResponse:
+    """The trailing-P/E benchmark for one industry — the median plus the interquartile range
+    of its screened peers' P/Es, for judging whether a stock's multiple is rich or cheap for
+    its industry. ``industry`` accepts the slug from /stocks/classifications (e.g.
+    'semiconductors') or the raw label. An unknown industry is a 200 with count 0, not a 404."""
+    try:
+        valuation = use_case.execute(industry)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    # A plain DB read over the slow-moving universe (refreshed out of band by the sync) — cache
+    # briefly like the search list so a burst of viewers collapses onto one query.
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return _present_industry_valuation(valuation)
