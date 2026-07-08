@@ -206,6 +206,31 @@ def test_enrichment_persists_even_a_sparse_profile():
 
     assert repo.profiled == [("SPARSE", EtfProfile.empty())]  # upsert still called
     assert (report.enriched, report.enrich_failed) == (1, 0)
+    # Empty holdings+sectors is the funds_data-blocked signature — surfaced as a health signal.
+    assert report.enriched_without_holdings == 1
+
+
+def test_enrichment_flags_only_funds_missing_holdings_and_sectors():
+    # The health counter distinguishes a fund whose funds_data served (holdings/sectors present)
+    # from one that came back with neither (the block signature). Both still count as enriched —
+    # .info served, so the scalar profile persisted regardless.
+    screen = _a_screen(SyncEtfs.MIN_PLAUSIBLE_SCREEN)
+    repo = _FakeRepo(targets=("FULL", "BARE"))
+    provider = _FakeProfileProvider(
+        {
+            "FULL": EtfProfile(
+                category="large_blend",
+                top_holdings=(EtfHolding(ticker="NVDA", name="NVIDIA Corp", weight=7.89),),
+                sector_weightings=(EtfSectorWeight(sector="technology", weight=39.1),),
+            ),
+            "BARE": EtfProfile(category="large_growth"),  # .info only — funds_data empty
+        }
+    )
+
+    report = SyncEtfs(_FakeScreener(screen), repo, provider).execute()
+
+    assert (report.enriched, report.enrich_failed) == (2, 0)
+    assert report.enriched_without_holdings == 1  # only BARE is flagged
 
 
 def test_enrichment_defaults_to_no_limit_then_overrides():

@@ -17,7 +17,12 @@ but the ETF-specific query does carry it.) Every row still carries ``netAssets``
 
 Yahoo intermittently blocks data-centre IPs; a blocked screen surfaces as
 ``StockDataUnavailable`` (the sync treats it as a lost round), or — if it simply returns nothing
-— an empty screen the sync skips.
+— an empty screen the sync skips. A screen page is a crumb-gated Yahoo call like the per-ticker
+reads, so each page goes through ``yfinance_session.call``: a transient crumb 401 (raised, or
+swallowed into a payload with no ``total``) drops the cached crumb and re-fetches once before it's
+treated as a failure — so one bad handshake on page 0 no longer sinks the whole sweep. A
+legitimate past-the-end page still carries ``total`` (only ``quotes`` is empty), so it's never
+mistaken for a block.
 
 Yahoo's exchange codes are mapped to the same vocabulary the stock screen/anchor use
 (``NMS``/``NGM``/``NCM`` → ``NASDAQ``, ``NYQ`` → ``NYSE``, ``ASE`` → ``AMEX``, ``BTS`` →
@@ -31,6 +36,7 @@ The broad ``region == us`` ETF screen can occasionally return a stray non-fund r
 
 from __future__ import annotations
 
+from app.stocks.adapters import yfinance_session
 from app.stocks.etfs.entities import ScreenedEtf
 from app.stocks.etfs.ports import EtfScreener
 from app.stocks.exceptions import StockDataUnavailable
@@ -118,8 +124,15 @@ def _live_screen_page(*, min_net_assets: float, offset: int, size: int) -> dict:
             ETFQuery("gte", [_AUM_FIELD, min_net_assets]),
         ],
     )
-    return yf.screen(
-        query, offset=offset, size=size, sortField=_AUM_FIELD, sortAsc=False
+    # Through the shared crumb-401 retry, like the per-ticker reads. A well-formed page always
+    # carries ``total`` (even past the end, where only ``quotes`` is empty), so "no ``total``" is
+    # the swallowed-401 / malformed signature worth a fresh-crumb retry — and the legitimate empty
+    # tail page, which does carry ``total``, is not retried.
+    return yfinance_session.call(
+        lambda: yf.screen(
+            query, offset=offset, size=size, sortField=_AUM_FIELD, sortAsc=False
+        ),
+        is_empty=lambda page: not (isinstance(page, dict) and "total" in page),
     )
 
 

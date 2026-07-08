@@ -71,6 +71,40 @@ class _FakeFundsData:
         return self._sector_weightings
 
 
+class _RetryFundsData:
+    """Models a swallowed crumb 401 on the first ``funds_data`` fetch and success on the retry:
+    every attribute returns its empty value on its *first* access and the real value afterward.
+
+    The adapter reads all three attributes once per snapshot, so the first snapshot comes back
+    empty (the swallowed-401 signature) and the retried one — after ``yfinance_session.call``
+    refreshes the crumb — serves the real holdings/sectors. Stateless per-attribute counters, so it
+    makes no assumption about the order the adapter reads them in."""
+
+    def __init__(self, *, description, top_holdings, sector_weightings):
+        self._real = {
+            "description": description,
+            "top_holdings": top_holdings,
+            "sector_weightings": sector_weightings,
+        }
+        self._seen: dict[str, int] = {}
+
+    def _value(self, key):
+        self._seen[key] = self._seen.get(key, 0) + 1
+        return None if self._seen[key] == 1 else self._real[key]
+
+    @property
+    def description(self):
+        return self._value("description")
+
+    @property
+    def top_holdings(self):
+        return self._value("top_holdings")
+
+    @property
+    def sector_weightings(self):
+        return self._value("sector_weightings")
+
+
 class _FakeTicker:
     """A stand-in for ``yf.Ticker`` exposing a canned ``.info`` + ``.funds_data`` (either may
     raise on access)."""
@@ -205,6 +239,26 @@ def test_funds_data_failure_yields_a_partial_profile_not_an_error():
     assert profile.description is None
     assert profile.top_holdings == ()
     assert profile.sector_weightings == ()
+
+
+def test_empty_funds_data_read_is_retried_with_a_fresh_crumb():
+    # Yahoo surfaces a swallowed crumb 401 on the crumb-gated topHoldings module as an empty
+    # result. The first funds_data snapshot comes back empty; the adapter must drop the crumb and
+    # retry (like the .info read) rather than silently dropping the holdings + sectors — the bug
+    # that left main ETFs (VOO/SPY/...) with a category but no holdings/weightings in the DB, since
+    # the merge-preserving write then leaves those child tables empty. The retry serves the real
+    # data, so it lands.
+    funds = _RetryFundsData(
+        description="The fund employs an indexing investment approach.",
+        top_holdings=_holdings_frame([("NVDA", "NVIDIA Corp", 0.078851)]),
+        sector_weightings={"technology": 0.3913},
+    )
+    profile = _provider(_FakeTicker(_VOO_INFO, funds)).get_profile("VOO")
+
+    assert [h.ticker for h in profile.top_holdings] == ["NVDA"]
+    assert profile.top_holdings[0].weight == pytest.approx(7.8851)
+    assert [s.sector for s in profile.sector_weightings] == ["technology"]
+    assert profile.description == "The fund employs an indexing investment approach."
 
 
 def test_none_holdings_and_non_dict_sectors_yield_empty_lists():

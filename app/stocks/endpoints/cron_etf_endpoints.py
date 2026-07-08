@@ -74,12 +74,14 @@ def run_etf_sync(limit: int | None) -> EtfSyncReport:
             )
         else:
             logger.info(
-                "etf sync done: screened=%d added=%d updated=%d enriched=%d enrich_failed=%d",
+                "etf sync done: screened=%d added=%d updated=%d enriched=%d "
+                "enrich_failed=%d without_holdings=%d",
                 report.screened,
                 report.added,
                 report.updated,
                 report.enriched,
                 report.enrich_failed,
+                report.enriched_without_holdings,
             )
         return report
     finally:
