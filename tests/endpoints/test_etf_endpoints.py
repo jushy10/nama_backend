@@ -15,7 +15,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import etf_endpoints as endpoints
-from app.stocks.entities import Quote, StockPerformance
+from app.stocks.entities import (
+    Confidence,
+    InvestmentAnalysis,
+    Quote,
+    Recommendation,
+    StockPerformance,
+)
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfDetail,
@@ -401,4 +407,91 @@ def test_detail_quote_failure_is_a_502():
     # The quote is primary — its failure surfaces as the same 502 the quote/ticker endpoints use.
     fake = _FakeDetailUseCase(error=StockDataUnavailable("VOO", "alpaca down"))
     resp = _detail_client(fake).get("/stocks/etf/VOO")
+    assert resp.status_code == 502
+
+
+# --- GET /stocks/etf/{ticker}/analysis (the AI read) --------------------------------------------
+
+
+class _FakeEtfAnalysisUseCase:
+    """Stands in for GetEtfAnalysis; returns a canned analysis or raises. Records the tickers it was
+    asked for so the endpoint's path-param pass-through can be asserted."""
+
+    def __init__(self, *, result=None, error=None) -> None:
+        self._result = result
+        self._error = error
+        self.calls: list[str] = []
+
+    def execute(self, ticker: str) -> InvestmentAnalysis:
+        self.calls.append(ticker)
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def _analysis_client(fake: _FakeEtfAnalysisUseCase) -> TestClient:
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    app.dependency_overrides[endpoints.get_etf_analysis_use_case] = lambda: fake
+    return TestClient(app)
+
+
+def _an_analysis(**overrides) -> InvestmentAnalysis:
+    base = dict(
+        symbol="VOO",
+        recommendation=Recommendation.BUY,
+        confidence=Confidence.HIGH,
+        thesis="A cheap, broad way to own the whole market.",
+        strengths=("Very low yearly cost", "Broadly diversified"),
+        risks=("Concentrated in a few big tech names",),
+        model="claude-haiku-4-5",
+        generated_at=datetime(2026, 7, 6, 20, 0, tzinfo=timezone.utc),
+    )
+    base.update(overrides)
+    return InvestmentAnalysis(**base)
+
+
+def test_analysis_returns_the_full_json_shape():
+    fake = _FakeEtfAnalysisUseCase(result=_an_analysis())
+    resp = _analysis_client(fake).get("/stocks/etf/voo/analysis")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # The entity's `symbol` is presented as `ticker`; an asset_type marker rides along.
+    assert body["ticker"] == "VOO"
+    assert body["asset_type"] == "etf"
+    assert body["recommendation"] == "buy"  # enum -> its string value
+    assert body["confidence"] == "high"
+    assert body["thesis"].startswith("A cheap")
+    assert body["strengths"] == ["Very low yearly cost", "Broadly diversified"]
+    assert body["risks"] == ["Concentrated in a few big tech names"]
+    assert body["model"] == "claude-haiku-4-5"
+    assert body["generated_at"] == "2026-07-06T20:00:00Z"
+    # The disclaimer is authored by the service (not the model) and always attached.
+    assert "not financial" in body["disclaimer"].lower()
+    assert fake.calls == ["voo"]  # the raw path param reaches the use case (it normalizes)
+
+
+def test_analysis_sets_the_cache_header():
+    fake = _FakeEtfAnalysisUseCase(result=_an_analysis())
+    resp = _analysis_client(fake).get("/stocks/etf/VOO/analysis")
+    assert resp.headers["cache-control"] == "public, max-age=300"
+
+
+def test_analysis_non_etf_is_a_404():
+    fake = _FakeEtfAnalysisUseCase(error=StockNotFound("AAPL"))
+    resp = _analysis_client(fake).get("/stocks/etf/AAPL/analysis")
+    assert resp.status_code == 404
+
+
+def test_analysis_invalid_symbol_is_a_400():
+    fake = _FakeEtfAnalysisUseCase(error=ValueError("'123' is not a valid ETF symbol."))
+    resp = _analysis_client(fake).get("/stocks/etf/123/analysis")
+    assert resp.status_code == 400
+
+
+def test_analysis_model_or_quote_failure_is_a_502():
+    # Both the primary snapshot (the quote) and the model call surface as StockDataUnavailable -> 502.
+    fake = _FakeEtfAnalysisUseCase(error=StockDataUnavailable("VOO", "bedrock down"))
+    resp = _analysis_client(fake).get("/stocks/etf/VOO/analysis")
     assert resp.status_code == 502

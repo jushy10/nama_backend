@@ -20,6 +20,13 @@ fund's detail card.
   hasn't enriched yet just serves null/empty profile fields on a 200. Pay-per-use bites on
   ``performance`` alone — it makes two live calls (the Alpaca windows + the Yahoo return ladder),
   both best-effort; ``metrics``/``dividends`` ride the DB-read profile + stored facts, no extra call.
+- ``GET /stocks/etf/{ticker}/analysis`` — a plain-language, AI-generated buy/hold/sell read on the
+  fund (the ETF sibling of ``GET /stocks/{symbol}/analysis``). Assembles the fund's snapshot (the
+  same quote + stored facts + profile the detail card shows, with the trailing/long-term returns)
+  and asks Claude on Bedrock for a balanced read grounded only in those figures. Same error map as
+  the detail card (400 bad ticker / 404 not-an-ETF / 502 failed quote or model call), plus a 503
+  from the wiring when the optional ``bedrock`` extra isn't installed. Cached 5 min — model calls
+  are slow and metered.
 
 The two list routes are pure DB reads (``SqlEtfSearchRepository`` → ``SearchEtfs`` /
 ``ListEtfCategories``), no vendor or key, so their only request error is a 400 (a bad
@@ -31,13 +38,18 @@ refresh that populates the table + profile (screen + profile enrichment) is the 
 endpoint (``POST /internal/etfs/sync``).
 """
 
+import os
+from functools import lru_cache
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.stocks.adapters.bedrock_etf_analysis_adapter import BedrockEtfAnalysisProvider
 from app.stocks.adapters.yfinance_etf_profile_adapter import (
     YfinanceEtfProfileProvider,
 )
+from app.stocks.entities import InvestmentAnalysis
 from app.stocks.etfs.db_repository import (
     SqlEtfLookupRepository,
     SqlEtfSearchRepository,
@@ -49,7 +61,9 @@ from app.stocks.etfs.entities import (
     EtfSort,
     SortDirection,
 )
+from app.stocks.etfs.ports import EtfAnalysisProvider
 from app.stocks.etfs.schemas import (
+    EtfAnalysisResponse,
     EtfCategoriesResponse,
     EtfDetailResponse,
     EtfDividendsResponse,
@@ -60,7 +74,12 @@ from app.stocks.etfs.schemas import (
     EtfSearchResponse,
     EtfSectorWeightResponse,
 )
-from app.stocks.etfs.use_cases import GetEtfDetail, ListEtfCategories, SearchEtfs
+from app.stocks.etfs.use_cases import (
+    GetEtfAnalysis,
+    GetEtfDetail,
+    ListEtfCategories,
+    SearchEtfs,
+)
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import StockPerformanceProvider, StockQuoteProvider
 from app.stocks.router import get_provider
@@ -94,6 +113,37 @@ def get_etf_detail_use_case(
     return GetEtfDetail(
         SqlEtfLookupRepository(db), provider, performance, YfinanceEtfProfileProvider()
     )
+
+
+@lru_cache(maxsize=1)
+def get_etf_analysis_provider() -> EtfAnalysisProvider:
+    # The Bedrock analyser, a process singleton (the SDK client is reusable and the config is
+    # static). Shares the stock analyser's env, so one deploy config drives both: BEDROCK_REGION
+    # (default us-east-1) and the optional BEDROCK_ANALYSIS_MODEL_ID (a cross-region inference
+    # profile). There is no API key — Bedrock authenticates through the process's AWS credentials
+    # (the ECS task role in prod). The anthropic/bedrock extra is optional and imported lazily, so a
+    # deploy without it turns the ImportError into a 503 here rather than failing app import.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_ANALYSIS_MODEL_ID")
+    try:
+        if model_id:
+            return BedrockEtfAnalysisProvider(model_id=model_id, region=region)
+        return BedrockEtfAnalysisProvider(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI analysis is not configured (install the 'bedrock' extra)."
+        ) from exc
+
+
+def get_etf_analysis_use_case(
+    detail: GetEtfDetail = Depends(get_etf_detail_use_case),
+    analyzer: EtfAnalysisProvider = Depends(get_etf_analysis_provider),
+) -> GetEtfAnalysis:
+    # Reuses the detail use case as the primary snapshot builder (so the analysis reasons over
+    # exactly what the detail card shows — same quote, same stored facts, same profile) and pairs it
+    # with the Bedrock analyser. The detail's missing-keys 503 (Alpaca quote) and the analyser's 503
+    # (missing extra) both ride through.
+    return GetEtfAnalysis(detail, analyzer)
 
 
 def _present_search(page: EtfSearchPage) -> EtfSearchResponse:
@@ -194,6 +244,34 @@ def _present_detail(detail: EtfDetail) -> EtfDetailResponse:
     )
 
 
+# Authored by the service and attached at the edge — never trusted to the model — so the legal
+# framing is ours, not something the language model can drop or reword. The same disclaimer the
+# stock analysis serves, since the caveat is identical for a fund.
+_ANALYSIS_DISCLAIMER = (
+    "AI-generated for informational and educational purposes only — not financial "
+    "advice. Markets carry risk; do your own research before investing."
+)
+
+
+def _present_etf_analysis(analysis: InvestmentAnalysis) -> EtfAnalysisResponse:
+    """Presenter: the AI analysis entity -> HTTP response DTO.
+
+    Maps the entity's ``symbol`` onto the ETF slice's ``ticker`` field, unpacks the enums to their
+    string values, turns the strengths/risks tuples into lists, and attaches the service-authored
+    disclaimer (the model never sees or controls it)."""
+    return EtfAnalysisResponse(
+        ticker=analysis.symbol,
+        recommendation=analysis.recommendation.value,
+        confidence=analysis.confidence.value,
+        thesis=analysis.thesis,
+        strengths=list(analysis.strengths),
+        risks=list(analysis.risks),
+        disclaimer=_ANALYSIS_DISCLAIMER,
+        model=analysis.model,
+        generated_at=analysis.generated_at,
+    )
+
+
 @router.get("/stocks/etfs", response_model=EtfSearchResponse)
 def search_etfs_endpoint(
     response: Response,
@@ -233,7 +311,12 @@ def search_etfs_endpoint(
 ) -> EtfSearchResponse:
     try:
         page = use_case.execute(
-            query=q, category=category, sort=sort, direction=order, limit=limit, offset=offset
+            query=q,
+            category=category,
+            sort=sort,
+            direction=order,
+            limit=limit,
+            offset=offset,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -285,3 +368,34 @@ def get_etf_detail_endpoint(
     # viewers onto one upstream read without going stale.
     response.headers["Cache-Control"] = "public, max-age=300"
     return _present_detail(detail)
+
+
+@router.get("/stocks/etf/{ticker}/analysis", response_model=EtfAnalysisResponse)
+def get_etf_analysis_endpoint(
+    ticker: str,
+    response: Response,
+    use_case: GetEtfAnalysis = Depends(get_etf_analysis_use_case),
+) -> EtfAnalysisResponse:
+    """A plain-language, AI-generated buy/hold/sell read on one fund — the ETF sibling of
+    ``GET /stocks/{symbol}/analysis``. Builds the fund's snapshot (the same quote + stored facts +
+    profile the detail card shows, plus the trailing/long-term returns) and asks Claude on Bedrock
+    for a balanced read grounded only in those figures.
+
+    Same error map as the detail card: a bad ticker is a 400, a non-ETF a 404, and a failed primary
+    (the live quote) or a failed model call a 502. A missing bedrock extra is a 503 from the wiring.
+    """
+    try:
+        analysis = use_case.execute(ticker)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        # Not in the stored ETF universe (or a symbol with no data) -> "not an ETF".
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        # The primary snapshot (the live quote) or the model call failed.
+        raise HTTPException(502, str(exc)) from exc
+    # Model calls are slow and metered, and a fund's fundamentals move slowly — cache briefly (the
+    # same 5 min the stock analysis and the detail card use) so a burst of viewers collapses onto one
+    # generation.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return _present_etf_analysis(analysis)
