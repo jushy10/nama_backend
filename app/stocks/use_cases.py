@@ -5,8 +5,9 @@ provider for the data. Depend only on the entity and the port — never on a
 framework or a concrete provider.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.annual.ports import AnnualEarningsProvider
@@ -41,6 +42,7 @@ from app.stocks.ports import (
     AnalystEstimatesProvider,
     CandleProvider,
     CompanyProfileProvider,
+    InvestmentAnalysisCache,
     InvestmentAnalysisProvider,
     LogoProvider,
     SectorAnalysisProvider,
@@ -94,15 +96,31 @@ class GetStockInfo:
     def execute(self, symbol: str) -> Stock:
         normalized = _normalize_symbol(symbol)
         stock = self._provider.get_stock(normalized)  # required; errors propagate
-        fundamentals = self._fundamentals(normalized)
-        profile = self._profile(normalized)
+        # The four enrichment sources below are independent network reads (Alpaca /
+        # Finnhub), with no ordering between them, so they run concurrently rather
+        # than in series: the gather latency the AI-analysis path pays before the
+        # model call collapses from their sum to their slowest. Each is already
+        # best-effort (returns None on its own failure), and the vendor SDKs' HTTP
+        # clients are safe to call concurrently for independent reads. Estimates is
+        # deliberately kept off the pool — it reads the shared request DB session,
+        # which must not be touched from a worker thread, and it's a fast local read
+        # rather than a network round-trip.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            fundamentals_future = pool.submit(self._fundamentals, normalized)
+            profile_future = pool.submit(self._profile, normalized)
+            performance_future = pool.submit(self._performance, normalized)
+            all_time_high_future = pool.submit(self._all_time_high, normalized, stock)
+            fundamentals = fundamentals_future.result()
+            profile = profile_future.result()
+            performance = performance_future.result()
+            all_time_high = all_time_high_future.result()
         return replace(
             stock,
             # Prefer the profile vendor's clean display name ("Apple Inc.") over
             # the price feed's full legal title ("Apple Inc. Common Stock"); fall
             # back to the feed's name when the profile is missing or unconfigured.
             name=profile.name if profile and profile.name else stock.name,
-            performance=self._performance(normalized),
+            performance=performance,
             market_cap=fundamentals.market_cap if fundamentals else None,
             dividend_per_share=(
                 fundamentals.dividend_per_share if fundamentals else None
@@ -110,7 +128,7 @@ class GetStockInfo:
             dividend_yield=fundamentals.dividend_yield if fundamentals else None,
             metrics=fundamentals.metrics if fundamentals else None,
             analyst_estimates=self._estimates(normalized),
-            all_time_high=self._all_time_high(normalized, stock),
+            all_time_high=all_time_high,
         )
 
     def _performance(self, symbol: str) -> StockPerformance | None:
@@ -331,6 +349,13 @@ class GetStockAnalysis:
     propagates — while every context source is best-effort, so a miss on any of
     them leaves the analysis intact rather than failing it. The analyzer reasons
     only over what it's handed; it fetches nothing itself.
+
+    A read-through result cache fronts the whole thing: a fresh stored analysis
+    (within ``cache_ttl`` of its ``generated_at``) is returned without gathering or
+    calling the model at all, and a freshly-generated one is stored on the way out.
+    The cache is optional (``None`` disables it) and best-effort — a read failure
+    is a miss and a write failure is swallowed — so it only ever makes the endpoint
+    faster, never wrong or unavailable.
     """
 
     def __init__(
@@ -341,6 +366,8 @@ class GetStockAnalysis:
         annual_provider: AnnualEarningsProvider | None = None,
         recommendations_provider: RecommendationProvider | None = None,
         industry_repository: StockSearchRepository | None = None,
+        cache: InvestmentAnalysisCache | None = None,
+        cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._stock_info = stock_info
         self._analyzer = analyzer
@@ -348,21 +375,53 @@ class GetStockAnalysis:
         self._annual_provider = annual_provider
         self._recommendations_provider = recommendations_provider
         self._industry_repository = industry_repository
+        self._cache = cache
+        self._cache_ttl = cache_ttl
 
     def execute(self, symbol: str) -> InvestmentAnalysis:
         normalized = _normalize_symbol(symbol)
+        # A fresh cached read short-circuits the whole gather + model call — the
+        # analysis only drifts as the figures do, so a repeat view within the TTL
+        # (and any burst of viewers) is served straight from the store.
+        cached = self._fresh_cached(normalized)
+        if cached is not None:
+            return cached
         # The enriched snapshot is primary: a bad symbol (ValueError), an unknown
         # one (StockNotFound), or an upstream failure (StockDataUnavailable) all
         # propagate rather than yielding an analysis of nothing. Everything else is
         # best-effort context assembled below.
         stock = self._stock_info.execute(normalized)
-        return self._analyzer.analyze(
+        analysis = self._analyzer.analyze(
             stock,
             self._quarterly(normalized),
             self._annual(normalized),
             self._recommendations(normalized),
             self._industry_valuation(normalized),
         )
+        # Store for the next viewer. Best-effort by contract (a write failure is
+        # swallowed in the adapter), so it never sinks the freshly-made analysis.
+        if self._cache is not None:
+            self._cache.put(analysis)
+        return analysis
+
+    def _fresh_cached(self, symbol: str) -> InvestmentAnalysis | None:
+        # A stored read is a hit only while it's within the TTL; past that it's
+        # stale and we regenerate (overwriting it). A cache-read failure degrades to
+        # a miss in the adapter, so this simply returns None and we regenerate.
+        if self._cache is None:
+            return None
+        stored = self._cache.get(symbol)
+        if stored is None or not self._is_fresh(stored):
+            return None
+        return stored
+
+    def _is_fresh(self, analysis: InvestmentAnalysis) -> bool:
+        generated = analysis.generated_at
+        if generated is None:
+            return False
+        if generated.tzinfo is None:  # a naive stamp (e.g. from SQLite) is UTC
+            generated = generated.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - generated <= self._cache_ttl
 
     def _quarterly(self, symbol: str) -> QuarterlyEarningsTimeline | None:
         # Best-effort context: the beat history sharpens the analysis but isn't

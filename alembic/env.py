@@ -22,6 +22,7 @@ from app.stocks.earnings.quarterly import models as quarterly_earnings_models  #
 from app.stocks.earnings.annual import models as annual_earnings_models  # noqa: F401
 from app.stocks.recommendations import models as recommendations_models  # noqa: F401
 from app.stocks.etfs import models as etf_models  # noqa: F401
+from app.stocks.analysis import models as analysis_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

@@ -275,6 +275,36 @@ class InvestmentAnalysisProvider(ABC):
         raise NotImplementedError
 
 
+class InvestmentAnalysisCache(ABC):
+    """A persistence gateway that stores the most recent AI analysis per symbol.
+
+    The analysis is expensive to produce (a language-model call on top of a
+    multi-source data gather) yet only drifts as the underlying figures do, so a
+    read-through cache lets a burst of viewers — and repeat views within the
+    window — collapse onto one generation. The **freshness policy is the use
+    case's** (it compares ``generated_at`` against a TTL): this port only stores
+    and returns the latest stored read, one row per symbol. Both the stock and the
+    ETF analysers share the port; the concrete adapter is instantiated per *kind*
+    (a stock vs. a fund) so the two never collide on a shared ticker.
+
+    Being a cache, both operations are best-effort: a read failure (a DB hiccup)
+    is treated as a miss so the caller regenerates, and a write failure is
+    swallowed — the caller already holds a good answer. Neither ever raises.
+    """
+
+    @abstractmethod
+    def get(self, symbol: str) -> InvestmentAnalysis | None:
+        """Return the stored analysis for ``symbol`` (any age), or ``None`` on a
+        miss or a cache-read failure. The caller decides whether it's fresh."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def put(self, analysis: InvestmentAnalysis) -> None:
+        """Store ``analysis`` as the latest for its symbol (upsert). A write
+        failure is swallowed — caching must never sink the request."""
+        raise NotImplementedError
+
+
 class SectorAnalysisProvider(ABC):
     """A gateway that turns the day's ranked sector board into a short,
     AI-generated read of which market sectors are leading and lagging.

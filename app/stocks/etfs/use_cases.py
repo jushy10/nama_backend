@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 from app.stocks.entities import InvestmentAnalysis, StockPerformance
@@ -45,7 +46,11 @@ from app.stocks.etfs.repository import (
     EtfSearchRepository,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import StockPerformanceProvider, StockQuoteProvider
+from app.stocks.ports import (
+    InvestmentAnalysisCache,
+    StockPerformanceProvider,
+    StockQuoteProvider,
+)
 from app.stocks.progress import iter_with_progress
 
 logger = logging.getLogger(__name__)
@@ -393,6 +398,11 @@ class GetEtfAnalysis:
     yield) is best-effort inside ``GetEtfDetail`` as ever, so a fund the sync hasn't enriched yet
     still gets analysed off its quote + stored facts, just with thinner context (and the model
     lowers its confidence accordingly).
+
+    A read-through result cache fronts the whole thing, exactly as on the stock analysis: a fresh
+    stored read (within ``cache_ttl`` of its ``generated_at``) skips the snapshot build and the
+    model call, and a freshly-generated one is stored on the way out. Optional and best-effort, so
+    it only makes the endpoint faster, never wrong or unavailable.
     """
 
     # The performance block is the only include that enriches the *entity* handed to the model — it
@@ -402,10 +412,44 @@ class GetEtfAnalysis:
     # analysis sees them without asking. So the fullest snapshot is "performance" alone.
     _SNAPSHOT_INCLUDES = ("performance",)
 
-    def __init__(self, detail: GetEtfDetail, analyzer: EtfAnalysisProvider) -> None:
+    def __init__(
+        self,
+        detail: GetEtfDetail,
+        analyzer: EtfAnalysisProvider,
+        cache: InvestmentAnalysisCache | None = None,
+        cache_ttl: timedelta = timedelta(minutes=30),
+    ) -> None:
         self._detail = detail
         self._analyzer = analyzer
+        self._cache = cache
+        self._cache_ttl = cache_ttl
 
     def execute(self, symbol: str) -> InvestmentAnalysis:
-        detail = self._detail.execute(symbol, include=self._SNAPSHOT_INCLUDES)
-        return self._analyzer.analyze(detail)
+        # Normalize up front so the cache key matches what the analyzer stamps on the
+        # result (``EtfDetail.ticker``, the normalized ticker) — a hit here skips both
+        # the snapshot build (quote + live 3y/5y returns) and the model call.
+        normalized = _normalize_symbol(symbol)
+        cached = self._fresh_cached(normalized)
+        if cached is not None:
+            return cached
+        detail = self._detail.execute(normalized, include=self._SNAPSHOT_INCLUDES)
+        analysis = self._analyzer.analyze(detail)
+        if self._cache is not None:
+            self._cache.put(analysis)
+        return analysis
+
+    def _fresh_cached(self, symbol: str) -> InvestmentAnalysis | None:
+        if self._cache is None:
+            return None
+        stored = self._cache.get(symbol)
+        if stored is None or not self._is_fresh(stored):
+            return None
+        return stored
+
+    def _is_fresh(self, analysis: InvestmentAnalysis) -> bool:
+        generated = analysis.generated_at
+        if generated is None:
+            return False
+        if generated.tzinfo is None:  # a naive stamp (e.g. from SQLite) is UTC
+            generated = generated.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - generated <= self._cache_ttl
