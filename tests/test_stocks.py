@@ -32,6 +32,11 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
+from app.stocks.earnings.annual.entities import (
+    AnnualEarnings,
+    AnnualEarningsTimeline,
+)
+from app.stocks.earnings.annual.ports import AnnualEarningsProvider
 from app.stocks.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
@@ -52,6 +57,8 @@ from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,
 )
+from app.stocks.ticker.entities import TickerOptionsMetrics
+from app.stocks.ticker.ports import OptionChainProvider
 from app.stocks.router import (
     get_sector_performance,
     get_stock_analysis,
@@ -251,8 +258,43 @@ class FakeQuarterlyEarningsProvider(QuarterlyEarningsProvider):
         return self._timeline
 
 
+class FakeAnnualEarningsProvider(AnnualEarningsProvider):
+    """Returns/raises whatever the test configured for the annual timeline."""
+
+    def __init__(self, timeline=None, raises: Exception | None = None):
+        self._timeline = timeline
+        self._raises = raises
+
+    def get_annual_earnings(self, symbol: str) -> AnnualEarningsTimeline:
+        if self._raises is not None:
+            raise self._raises
+        assert self._timeline is not None
+        return self._timeline
+
+
+class FakeOptionChainProvider(OptionChainProvider):
+    """Serves the expirations/chains the test configured, or raises — enough for
+    the analysis use case to sample an options read (or degrade when it can't)."""
+
+    def __init__(self, expirations=(), chains=None, raises: Exception | None = None):
+        self._expirations = expirations
+        self._chains = chains or {}
+        self._raises = raises
+
+    def get_expirations(self, symbol: str):
+        if self._raises is not None:
+            raise self._raises
+        return tuple(self._expirations)
+
+    def get_chain(self, symbol: str, expiration):
+        if self._raises is not None:
+            raise self._raises
+        return tuple(self._chains.get(expiration, ()))
+
+
 class FakeAnalysisProvider(InvestmentAnalysisProvider):
-    """Returns/raises whatever the test configured; records (symbol, had_earnings)."""
+    """Returns/raises whatever the test configured; records (symbol, had_quarterly)
+    and stashes the last quarterly/annual/options context it was handed."""
 
     def __init__(
         self,
@@ -262,9 +304,17 @@ class FakeAnalysisProvider(InvestmentAnalysisProvider):
         self._analysis = analysis
         self._raises = raises
         self.received: list[tuple[str, bool]] = []
+        self.last_quarterly = None
+        self.last_annual = None
+        self.last_options = None
 
-    def analyze(self, stock, earnings=None) -> InvestmentAnalysis:
-        self.received.append((stock.symbol, earnings is not None))
+    def analyze(
+        self, stock, quarterly=None, annual=None, options=None
+    ) -> InvestmentAnalysis:
+        self.received.append((stock.symbol, quarterly is not None))
+        self.last_quarterly = quarterly
+        self.last_annual = annual
+        self.last_options = options
         if self._raises is not None:
             raise self._raises
         assert self._analysis is not None
@@ -453,6 +503,42 @@ def a_quarterly_timeline(quarters=None, symbol: str = "AAPL") -> QuarterlyEarnin
     if quarters is None:
         quarters = (a_quarter(),)
     return QuarterlyEarningsTimeline(symbol=symbol, quarters=tuple(quarters))
+
+
+def an_annual_year(**overrides) -> AnnualEarnings:
+    base = dict(
+        fiscal_year=2025, period_end=date(2025, 9, 30),
+        eps_actual=6.10, eps_estimate=None,
+        revenue_actual=400_000_000_000.0, revenue_estimate=None,
+        net_income=100_000_000_000.0, eps_actual_consensus=6.50,
+    )
+    base.update(overrides)
+    return AnnualEarnings(**base)
+
+
+def an_annual_timeline(years=None, symbol: str = "AAPL") -> AnnualEarningsTimeline:
+    if years is None:
+        years = (
+            an_annual_year(),  # a reported fiscal year
+            AnnualEarnings(  # a forward (estimated) year
+                fiscal_year=2026, period_end=date(2026, 9, 30),
+                eps_actual=None, eps_estimate=8.0,
+                revenue_actual=None, revenue_estimate=420_000_000_000.0,
+                net_income=None, eps_actual_consensus=None,
+            ),
+        )
+    return AnnualEarningsTimeline(symbol=symbol, years=tuple(years))
+
+
+def a_ticker_options(**overrides) -> TickerOptionsMetrics:
+    base = dict(
+        implied_volatility=28.5, expected_move_percent=6.2,
+        expected_move_by=date(2026, 7, 17),
+        insurance_cost_percent=4.1, insurance_expires=date(2026, 9, 18),
+        put_call_ratio=0.85,
+    )
+    base.update(overrides)
+    return TickerOptionsMetrics(**base)
 
 
 # --------------------------- entity rules (pure) ---------------------------
@@ -1044,6 +1130,8 @@ def make_client():
         resistance_levels_provider: CandleProvider | None = None,
         sector_provider: SectorPerformanceProvider | None = None,
         earnings_provider: QuarterlyEarningsProvider | None = None,
+        annual_earnings_provider: AnnualEarningsProvider | None = None,
+        options_provider: OptionChainProvider | None = None,
         quote_provider: StockQuoteProvider | None = None,
         analysis_provider: InvestmentAnalysisProvider | None = None,
     ) -> TestClient:
@@ -1083,6 +1171,8 @@ def make_client():
                 ),
                 analysis_provider,
                 earnings_provider,
+                annual_earnings_provider,
+                options_provider,
             )
         return TestClient(app)
 
@@ -1180,6 +1270,61 @@ def test_analysis_use_case_omits_an_empty_timeline():
     assert analyzer.received == [("AAPL", False)]
 
 
+def test_analysis_use_case_passes_annual_and_options():
+    # The annual timeline and the sampled options read reach the analyzer as
+    # best-effort context alongside the quarterly timeline.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        FakeQuarterlyEarningsProvider(a_quarterly_timeline()),
+        FakeAnnualEarningsProvider(an_annual_timeline()),
+        FakeOptionChainProvider(
+            expirations=(date(2026, 7, 17),),
+            chains={date(2026, 7, 17): ()},
+        ),
+        today=lambda: date(2026, 6, 18),  # pin so the expiry is in the future
+    )
+    use_case.execute("aapl")
+    assert analyzer.last_quarterly is not None
+    assert analyzer.last_annual is not None
+    assert analyzer.last_options is not None  # sampled from a future expiry
+
+
+def test_analysis_use_case_annual_and_options_are_best_effort():
+    # A failing annual fetch and a failing (or blocked) options read must not sink
+    # the analysis — both degrade to omitted context, like the quarterly timeline.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        FakeQuarterlyEarningsProvider(a_quarterly_timeline()),
+        FakeAnnualEarningsProvider(raises=StockDataUnavailable("AAPL", "boom")),
+        FakeOptionChainProvider(raises=StockDataUnavailable("AAPL", "blocked")),
+    )
+    analysis = use_case.execute("AAPL")
+    assert analysis.recommendation is Recommendation.HOLD
+    assert analyzer.last_annual is None
+    assert analyzer.last_options is None
+
+
+def test_analysis_use_case_omits_an_empty_annual_timeline():
+    # An uncovered symbol yields an empty annual timeline, not an error — omitted,
+    # the same stance as the quarterly timeline.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        None,
+        FakeAnnualEarningsProvider(an_annual_timeline(years=())),
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_annual is None
+
+
 def test_analysis_use_case_propagates_stock_not_found():
     analyzer = FakeAnalysisProvider(an_analysis())
     info = GetStockInfo(FakeProvider(raises=StockNotFound("ZZZZ")))
@@ -1222,7 +1367,27 @@ def test_bedrock_adapter_renders_figures_into_prompt():
     assert "P/E (trailing): 28.50" in prompt  # a metric rendered from KeyMetrics
     assert "FCF/share (trailing): 6.43" in prompt  # ROE/FCF per share ride along too
     assert "ROE %: 147.40" in prompt
-    assert "Recent earnings" in prompt  # the beat history was included
+    assert "Recent quarterly earnings" in prompt  # the beat history was included
+
+
+def test_bedrock_adapter_renders_forward_options_and_annual_into_prompt():
+    # The richer context — forward consensus (from estimates), the options-market
+    # read, and the annual timeline — each renders into its own labelled section.
+    client = _StubClient(_tool_message())
+    BedrockAnalysisProvider(client=client).analyze(
+        a_stock(metrics=a_key_metrics(), analyst_estimates=an_estimates()),
+        a_quarterly_timeline(),
+        an_annual_timeline(),
+        a_ticker_options(),
+    )
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "Forward P/E (consensus): 37.23" in prompt  # price / FY1 consensus EPS
+    assert "Expected EPS growth next year %: 15.00" in prompt  # FY1 -> FY2
+    assert "Options market" in prompt
+    assert "Implied volatility" in prompt  # a rendered options figure
+    assert "Annual earnings (fiscal years):" in prompt
+    assert "FY2025 reported" in prompt
+    assert "FY2026 estimated" in prompt
 
 
 def test_bedrock_adapter_raises_when_no_tool_call():
@@ -1267,6 +1432,25 @@ def test_get_analysis_normalizes_and_supplies_earnings(make_client):
     )
     assert client.get("/stocks/aapl/analysis").status_code == 200
     assert analyzer.received == [("AAPL", True)]
+
+
+def test_get_analysis_supplies_annual_and_options_context(make_client):
+    # The endpoint wires the annual timeline and the options read through to the
+    # analyzer as context, alongside the quarterly timeline.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    client = make_client(
+        provider=FakeProvider(stock=a_stock()),
+        analysis_provider=analyzer,
+        earnings_provider=FakeQuarterlyEarningsProvider(a_quarterly_timeline()),
+        annual_earnings_provider=FakeAnnualEarningsProvider(an_annual_timeline()),
+        options_provider=FakeOptionChainProvider(
+            expirations=(date(2099, 1, 15),),  # far future: always a sampleable expiry
+            chains={date(2099, 1, 15): ()},
+        ),
+    )
+    assert client.get("/stocks/AAPL/analysis").status_code == 200
+    assert analyzer.last_annual is not None
+    assert analyzer.last_options is not None
 
 
 def test_get_analysis_404_when_symbol_unknown(make_client):

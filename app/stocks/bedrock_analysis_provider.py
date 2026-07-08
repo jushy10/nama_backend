@@ -2,9 +2,11 @@
 
 The only module that knows Bedrock (and the Anthropic SDK) exists. It takes the
 data the use case already gathered — the price snapshot, trailing performance,
-the valuation/health metrics, and the recent earnings beat history — renders it
-into a compact prompt, and asks Claude Opus 4.8 for a balanced buy/hold/sell
-read. Swap models or vendors and only this file changes.
+the trailing *and* forward valuation/health/growth metrics, the options-market
+read, and the recent quarterly and annual earnings — renders it into a compact
+prompt, and asks Claude for a balanced buy/hold/sell read written in plain,
+everyday language a non-expert can follow. Swap models or vendors and only this
+file changes.
 
 Two deliberate choices keep it robust and on-pattern:
 
@@ -24,7 +26,7 @@ to ``StockDataUnavailable`` — the one error this port documents.
 
 Operational note: model access must be enabled for the Anthropic model in the
 target region, and the model id may need to be a cross-region inference profile
-(e.g. ``us.anthropic.claude-opus-4-8``). Both are deploy-time config, surfaced
+(e.g. ``us.anthropic.claude-haiku-4-5``). Both are deploy-time config, surfaced
 through the constructor / env (see ``router.get_analysis_provider``).
 
 Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
@@ -38,9 +40,11 @@ from app.stocks.entities import (
     Recommendation,
     Stock,
 )
+from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.ports import InvestmentAnalysisProvider
+from app.stocks.ticker.entities import TickerOptionsMetrics
 
 # A single forced tool is how the model is pinned to structured output: Claude
 # must call submit_analysis, so the response comes back as validated JSON
@@ -49,8 +53,8 @@ from app.stocks.ports import InvestmentAnalysisProvider
 _ANALYSIS_TOOL = {
     "name": "submit_analysis",
     "description": (
-        "Record a balanced buy/hold/sell analysis of the stock, grounded only in "
-        "the figures provided in the prompt."
+        "Record a balanced buy/hold/sell read on the stock in plain, everyday "
+        "language, grounded only in the figures provided in the prompt."
     ),
     "input_schema": {
         "type": "object",
@@ -58,29 +62,36 @@ _ANALYSIS_TOOL = {
             "recommendation": {
                 "type": "string",
                 "enum": [r.value for r in Recommendation],
-                "description": "The headline call, weighing the data on balance.",
+                "description": "The overall call, weighing everything on balance.",
             },
             "confidence": {
                 "type": "string",
                 "enum": [c.value for c in Confidence],
-                "description": "How strongly the data supports the recommendation.",
+                "description": "How sure you are, given how much clear data there is.",
             },
             "thesis": {
                 "type": "string",
                 "description": (
-                    "2-4 sentences of reasoning that weigh the bull and bear cases "
-                    "and justify the recommendation."
+                    "2-3 short sentences in plain, everyday language explaining the "
+                    "overall take and the main reason for it — as if to a friend who "
+                    "doesn't follow the markets. No jargon."
                 ),
             },
             "strengths": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Up to 4 concise bull-case points, each tied to a figure.",
+                "description": (
+                    "Up to 3 short, plain-language reasons the stock looks good — "
+                    "each clear on its own to someone with no finance background."
+                ),
             },
             "risks": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Up to 4 concise bear-case points, each tied to a figure.",
+                "description": (
+                    "Up to 3 short, plain-language reasons to be cautious — each "
+                    "clear on its own to someone with no finance background."
+                ),
             },
         },
         "required": ["recommendation", "confidence", "thesis", "strengths", "risks"],
@@ -88,30 +99,49 @@ _ANALYSIS_TOOL = {
 }
 
 _SYSTEM_PROMPT = (
-    "You are an equity research assistant. Given a snapshot of one stock's market "
-    "data, valuation and profitability metrics, and recent earnings, produce a "
-    "balanced, evidence-based read on whether it looks like a buy, hold, or sell.\n"
-    "Ground every statement ONLY in the figures provided — do not use outside "
-    "knowledge, recent news, or prices you may recall, and never invent numbers. "
-    "If the data is thin, say so and lower your confidence. Weigh both the bull "
-    "and bear cases honestly. This is general information, not personalized "
-    "financial advice. Respond by calling the submit_analysis tool."
+    "You are a friendly investing assistant explaining one stock to an everyday "
+    "person with no finance background. You are given a snapshot of the stock's "
+    "price, its valuation and profitability figures, what the options market is "
+    "pricing in, and its recent quarterly and annual earnings. From only those "
+    "figures, give a clear, balanced read on whether it currently looks like a "
+    "buy, hold, or sell.\n"
+    "Write in plain, warm, everyday language — short sentences, no jargon. When a "
+    "figure matters, say what it means in a few plain words (e.g. 'its price is "
+    "high compared with its earnings') rather than naming the ratio. Never assume "
+    "the reader knows finance terms. Ground every statement ONLY in the figures "
+    "provided — do not use outside knowledge, recent news, or prices you may "
+    "recall, and never invent numbers. If the data is thin, say so plainly and "
+    "lower your confidence. Be honest about both the good and the bad. This is "
+    "general information, not personal financial advice. Respond by calling the "
+    "submit_analysis tool."
 )
 
 
 class BedrockAnalysisProvider(InvestmentAnalysisProvider):
-    """Generates an ``InvestmentAnalysis`` with Claude Opus 4.8 on Amazon Bedrock.
+    """Generates an ``InvestmentAnalysis`` with Claude on Amazon Bedrock.
 
-    ``model_id`` and ``region`` are deploy-time config (the model id may be a
-    cross-region inference profile). ``client`` is an injection seam: pass a
-    ready-made client (e.g. a test stub) to bypass the Anthropic SDK entirely;
-    otherwise the Bedrock client is built lazily and authenticates through the
-    process's AWS credentials.
+    Defaults to the fast Haiku tier (``model_id``) since the analysis output is
+    short and plain — speed matters more than extra reasoning here. ``model_id``
+    and ``region`` are deploy-time config (the model id may be a cross-region
+    inference profile), so a deploy can swap in a larger model via env without a
+    code change. ``client`` is an injection seam: pass a ready-made client (e.g. a
+    test stub) to bypass the Anthropic SDK entirely; otherwise the Bedrock client
+    is built lazily and authenticates through the process's AWS credentials.
     """
 
-    _DEFAULT_MODEL_ID = "us.anthropic.claude-opus-4-8"
+    # Defaults to the fast Haiku tier: this endpoint's output is short and plain by
+    # design, so the extra reasoning of a larger model buys little here — and Haiku
+    # generates markedly faster, the whole point of this endpoint. The id is a
+    # cross-region inference profile (the form Bedrock wants for current Claude
+    # models) and is env-overridable, so a deploy can point BEDROCK_ANALYSIS_MODEL_ID
+    # at whatever model the account is entitled to (prod has run Sonnet).
+    _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5"
     _DEFAULT_REGION = "us-east-1"
-    _MAX_TOKENS = 2000
+    # The output is short and plain by design (a few sentences + two brief bullet
+    # lists), so a tight cap is ample — and fewer generated tokens is the main
+    # lever on this endpoint's latency, since output generation dominates the
+    # model call. Kept above the worst case so a full read is never truncated.
+    _MAX_TOKENS = 800
 
     def __init__(
         self,
@@ -133,9 +163,13 @@ class BedrockAnalysisProvider(InvestmentAnalysisProvider):
         self._client = AnthropicBedrock(aws_region=region)
 
     def analyze(
-        self, stock: Stock, earnings: QuarterlyEarningsTimeline | None = None
+        self,
+        stock: Stock,
+        quarterly: QuarterlyEarningsTimeline | None = None,
+        annual: AnnualEarningsTimeline | None = None,
+        options: TickerOptionsMetrics | None = None,
     ) -> InvestmentAnalysis:
-        prompt = _render_prompt(stock, earnings)
+        prompt = _render_prompt(stock, quarterly, annual, options)
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -204,11 +238,21 @@ def _string_tuple(value) -> tuple[str, ...]:
     return tuple(text for item in value if (text := str(item).strip()))
 
 
-def _render_prompt(stock: Stock, earnings: QuarterlyEarningsTimeline | None) -> str:
+def _render_prompt(
+    stock: Stock,
+    quarterly: QuarterlyEarningsTimeline | None,
+    annual: AnnualEarningsTimeline | None = None,
+    options: TickerOptionsMetrics | None = None,
+) -> str:
     """Render the gathered data into a compact, labelled block for the model.
 
     Only fields that are present are included, so the model is never handed a
-    ``None`` to reason about — thin coverage simply yields a shorter prompt.
+    ``None`` to reason about — thin coverage simply yields a shorter prompt. The
+    sections mirror what the app's own endpoints expose: the enriched snapshot
+    (price, dividend, performance, and the trailing *and* forward
+    valuation/health/growth metrics — the ticker card's figures) followed, when
+    available, by the options-market read and the quarterly and annual earnings
+    timelines.
     """
     metrics = stock.metrics
     perf = stock.performance
@@ -244,6 +288,19 @@ def _render_prompt(stock: Stock, earnings: QuarterlyEarningsTimeline | None) -> 
             ("52-week high", metrics.week_52_high),
             ("52-week low", metrics.week_52_low),
         ]
+    # Forward-looking consensus: what analysts expect next, the same figures the
+    # ticker card's forward valuation is built on. Trailing metrics say what the
+    # business has done; these say what it's expected to do.
+    fields += [
+        ("Forward P/E (consensus)", stock.forward_pe),
+        ("Forward P/S (consensus)", stock.forward_ps),
+    ]
+    growth = stock.growth
+    if growth is not None:
+        fields += [
+            ("Expected revenue growth next year %", growth.forward_revenue_growth),
+            ("Expected EPS growth next year %", growth.forward_eps_growth),
+        ]
     if perf is not None:
         fields += [
             ("Return 1w %", perf.one_week),
@@ -255,22 +312,43 @@ def _render_prompt(stock: Stock, earnings: QuarterlyEarningsTimeline | None) -> 
         ]
     lines = [f"Stock: {stock.symbol}"]
     lines += [f"- {label}: {_num(value)}" for label, value in fields if value is not None]
-    earnings_block = _render_earnings(earnings)
-    if earnings_block:
-        lines.append("")
-        lines.append(earnings_block)
+    for block in (
+        _render_options(options),
+        _render_quarterly(quarterly),
+        _render_annual(annual),
+    ):
+        if block:
+            lines.append("")
+            lines.append(block)
     return "\n".join(lines)
 
 
-def _render_earnings(earnings: QuarterlyEarningsTimeline | None) -> str:
+def _render_options(options: TickerOptionsMetrics | None) -> str:
+    """Render the options-market read as a short labelled block (or '' if none) —
+    the four figures the ticker card serves, what the options market is pricing in."""
+    if options is None:
+        return ""
+    fields: list[tuple[str, object]] = [
+        ("Implied volatility % (how jumpy the market expects it to be)", options.implied_volatility),
+        ("Expected price move % (priced in for the near term)", options.expected_move_percent),
+        ("Cost to insure against a drop %", options.insurance_cost_percent),
+        ("Put/call volume ratio (above 1 = more downside bets)", options.put_call_ratio),
+    ]
+    rendered = [f"- {label}: {_num(value)}" for label, value in fields if value is not None]
+    if not rendered:
+        return ""
+    return "\n".join(["Options market (what traders are pricing in):"] + rendered)
+
+
+def _render_quarterly(quarterly: QuarterlyEarningsTimeline | None) -> str:
     """Render the reported half of the quarterly timeline as a short labelled
     block (or '' if none) — newest quarter first, the order the read scans in."""
-    if earnings is None or not earnings.past:
+    if quarterly is None or not quarterly.past:
         return ""
-    reported = list(reversed(earnings.past))  # the timeline is oldest-first
+    reported = list(reversed(quarterly.past))  # the timeline is oldest-first
     scoreable = [q for q in reported if q.beat is not None]
     beats = sum(1 for q in scoreable if q.beat)
-    lines = ["Recent earnings (newest quarter first):"]
+    lines = ["Recent quarterly earnings (newest quarter first):"]
     if scoreable:
         rate = round(beats / len(scoreable) * 100, 1)
         lines.append(
@@ -293,6 +371,36 @@ def _render_earnings(earnings: QuarterlyEarningsTimeline | None) -> str:
             parts.append(f"revenue {q.revenue_actual:,.0f}")
         if parts:
             lines.append("- " + ", ".join(parts))
+    return "\n".join(lines)
+
+
+def _render_annual(annual: AnnualEarningsTimeline | None) -> str:
+    """Render the annual timeline as a short labelled block (or '' if none) —
+    reported fiscal years newest first, then the forward (estimated) years.
+
+    Reported EPS is shown on the analyst-consensus (adjusted) basis when it's
+    available (``eps_actual_consensus``), falling back to GAAP diluted, so a
+    reported year and a forward estimate sit on the same basis."""
+    if annual is None or annual.is_empty:
+        return ""
+    lines = ["Annual earnings (fiscal years):"]
+    for y in reversed(annual.past):  # oldest-first -> newest-first
+        parts = [f"FY{y.fiscal_year} reported"]
+        eps = y.eps_actual_consensus if y.eps_actual_consensus is not None else y.eps_actual
+        if eps is not None:
+            parts.append(f"EPS {eps}")
+        if y.revenue_actual is not None:
+            parts.append(f"revenue {y.revenue_actual:,.0f}")
+        if y.net_income is not None:
+            parts.append(f"net income {y.net_income:,.0f}")
+        lines.append("- " + ", ".join(parts))
+    for y in annual.future:  # soonest-first
+        parts = [f"FY{y.fiscal_year} estimated"]
+        if y.eps_estimate is not None:
+            parts.append(f"EPS est {y.eps_estimate}")
+        if y.revenue_estimate is not None:
+            parts.append(f"revenue est {y.revenue_estimate:,.0f}")
+        lines.append("- " + ", ".join(parts))
     return "\n".join(lines)
 
 

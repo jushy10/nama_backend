@@ -109,6 +109,39 @@ def _normalize_includes(include: Sequence[str] | None) -> frozenset[str]:
     return frozenset(parts)
 
 
+def sample_options_metrics(
+    options: OptionChainProvider,
+    symbol: str,
+    price: float,
+    today: date,
+    *,
+    near_window: timedelta = _NEAR_WINDOW,
+    insurance_window: timedelta = _INSURANCE_WINDOW,
+) -> TickerOptionsMetrics | None:
+    """The options-market read: sample the ~1-month and ~3-month expiries and let
+    the entity derive the four figures at ``price``.
+
+    Shared by the ticker card and the AI-analysis context so the two read the
+    options market the same way. Nearest-listed wins: options expire on fixed
+    exchange dates, so each window picks the future expiry closest to its target —
+    and when the listed dates are sparse both windows may land on the same expiry
+    (the entity dedupes the shared chain). ``None`` when the symbol has no listed
+    options — "no coverage", not an error.
+
+    Propagates the provider's ``StockNotFound``/``StockDataUnavailable`` straight
+    through: the read is best-effort enrichment, so each caller wraps this in its
+    own try/except rather than the helper deciding to swallow a failure.
+    """
+    future = [e for e in options.get_expirations(symbol) if e > today]
+    if not future:
+        return None
+    near = min(future, key=lambda e: abs(e - today - near_window))
+    far = min(future, key=lambda e: abs(e - today - insurance_window))
+    near_chain = options.get_chain(symbol, near)
+    far_chain = near_chain if far == near else options.get_chain(symbol, far)
+    return TickerOptionsMetrics.from_chains(price, near_chain, far_chain)
+
+
 @dataclass(frozen=True)
 class TickerCard:
     """Everything the ticker endpoint serves, assembled from the ports.
@@ -330,28 +363,16 @@ class GetTickerCard:
             return None  # best-effort: never sink the card
 
     def _get_options_metrics(self, symbol: str, quote: Quote) -> TickerOptionsMetrics | None:
-        """The options-market read: sample the ~1-month and ~3-month expiries and
-        let the entity derive the four figures at today's price.
-
-        Nearest-listed wins: options expire on fixed exchange dates, so each
-        window picks the future expiry closest to its target — and when the
-        listed dates are sparse both windows may land on the same expiry (the
-        entity dedupes the shared chain). No listed options at all is "no
-        coverage", not an error."""
+        """The card's options-market read — best-effort, so a Yahoo-blocked read
+        leaves the block null rather than sinking the card. The sampling itself is
+        shared with the AI-analysis context (``sample_options_metrics``), so both
+        surfaces read the same two expiries the same way."""
         if self._options is None:
             return None
         try:
-            today = self._today()
-            future = [e for e in self._options.get_expirations(symbol) if e > today]
-            if not future:
-                return None
-            near = min(future, key=lambda e: abs(e - today - _NEAR_WINDOW))
-            far = min(future, key=lambda e: abs(e - today - _INSURANCE_WINDOW))
-            near_chain = self._options.get_chain(symbol, near)
-            far_chain = (
-                near_chain if far == near else self._options.get_chain(symbol, far)
+            return sample_options_metrics(
+                self._options, symbol, quote.price, self._today()
             )
-            return TickerOptionsMetrics.from_chains(quote.price, near_chain, far_chain)
         except (StockNotFound, StockDataUnavailable):
             return None  # best-effort: a Yahoo-blocked read never sinks the card
 

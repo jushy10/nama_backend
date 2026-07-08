@@ -6,8 +6,13 @@ framework or a concrete provider.
 """
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
+from typing import Callable
 
+from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
+from app.stocks.earnings.annual.ports import AnnualEarningsProvider
+from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
+from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
@@ -22,8 +27,6 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
-from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
-from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import (
     ResistanceLevelSeries,
@@ -46,6 +49,9 @@ from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,
 )
+from app.stocks.ticker.entities import TickerOptionsMetrics
+from app.stocks.ticker.ports import OptionChainProvider
+from app.stocks.ticker.use_cases import sample_options_metrics
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -314,45 +320,85 @@ class GetStockAnalysis:
     """Use case: an AI-generated buy/hold/sell read on a single stock.
 
     Reuses ``GetStockInfo`` to assemble the enriched snapshot (price plus the
-    best-effort performance/fundamentals/valuation enrichment), best-effort adds
-    the recent quarterly earnings timeline as extra context, then asks the
-    injected analyzer to weigh it all. The snapshot and the analysis are the
-    primary data — a bad/unknown symbol or a model failure propagates — while the
-    earnings context is best-effort, so a miss there leaves the analysis intact
-    rather than failing it. The analyzer reasons only over what it's handed; it
-    fetches nothing itself.
+    best-effort performance/fundamentals/trailing+forward valuation enrichment),
+    then best-effort layers on the same context the app's own views expose — the
+    quarterly and annual earnings timelines and the options-market read (sampled
+    the way the ticker card samples it) — before asking the injected analyzer to
+    weigh it all. The snapshot and the analysis are the primary data — a
+    bad/unknown symbol or a model failure propagates — while every context source
+    is best-effort, so a miss on any of them leaves the analysis intact rather
+    than failing it. The analyzer reasons only over what it's handed; it fetches
+    nothing itself.
     """
 
     def __init__(
         self,
         stock_info: GetStockInfo,
         analyzer: InvestmentAnalysisProvider,
-        earnings_provider: QuarterlyEarningsProvider | None = None,
+        quarterly_provider: QuarterlyEarningsProvider | None = None,
+        annual_provider: AnnualEarningsProvider | None = None,
+        options_provider: OptionChainProvider | None = None,
+        today: Callable[[], date] | None = None,
     ) -> None:
         self._stock_info = stock_info
         self._analyzer = analyzer
-        self._earnings_provider = earnings_provider
+        self._quarterly_provider = quarterly_provider
+        self._annual_provider = annual_provider
+        self._options_provider = options_provider
+        # Injectable clock for the options expiry windows, pinned in tests the way
+        # the ticker card and the yfinance adapters pin theirs.
+        self._today = today or date.today
 
     def execute(self, symbol: str) -> InvestmentAnalysis:
         normalized = _normalize_symbol(symbol)
         # The enriched snapshot is primary: a bad symbol (ValueError), an unknown
         # one (StockNotFound), or an upstream failure (StockDataUnavailable) all
-        # propagate rather than yielding an analysis of nothing.
+        # propagate rather than yielding an analysis of nothing. Everything else is
+        # best-effort context assembled below.
         stock = self._stock_info.execute(normalized)
-        earnings = self._earnings(normalized)
-        return self._analyzer.analyze(stock, earnings)
+        return self._analyzer.analyze(
+            stock,
+            self._quarterly(normalized),
+            self._annual(normalized),
+            self._options(normalized, stock.price),
+        )
 
-    def _earnings(self, symbol: str) -> QuarterlyEarningsTimeline | None:
+    def _quarterly(self, symbol: str) -> QuarterlyEarningsTimeline | None:
         # Best-effort context: the beat history sharpens the analysis but isn't
         # required, so a missing provider, an upstream miss, or an uncovered
         # symbol (empty timeline) simply omits it.
-        if self._earnings_provider is None:
+        if self._quarterly_provider is None:
             return None
         try:
-            timeline = self._earnings_provider.get_quarterly_earnings(symbol)
+            timeline = self._quarterly_provider.get_quarterly_earnings(symbol)
         except (StockNotFound, StockDataUnavailable):
             return None
         return None if timeline.is_empty else timeline
+
+    def _annual(self, symbol: str) -> AnnualEarningsTimeline | None:
+        # Best-effort context, same stance as the quarterly timeline: an
+        # unconfigured provider, an upstream miss, or an uncovered symbol (empty
+        # timeline) just omits the annual history.
+        if self._annual_provider is None:
+            return None
+        try:
+            timeline = self._annual_provider.get_annual_earnings(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None
+        return None if timeline.is_empty else timeline
+
+    def _options(self, symbol: str, price: float) -> TickerOptionsMetrics | None:
+        # Best-effort context: the options read is a live call (no cache), so a
+        # thin listing or a blocked fetch just omits it — it never sinks the
+        # analysis. Reuses the ticker card's sampling so both read it the same way.
+        if self._options_provider is None:
+            return None
+        try:
+            return sample_options_metrics(
+                self._options_provider, symbol, price, self._today()
+            )
+        except (StockNotFound, StockDataUnavailable):
+            return None
 
 
 class GetSectorPerformance:

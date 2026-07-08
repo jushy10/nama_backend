@@ -8,6 +8,7 @@ implementation. The core never imports Alpaca; Alpaca imports the core.
 from abc import ABC, abstractmethod
 from datetime import date, datetime
 
+from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.entities import (
     AllTimeHigh,
@@ -23,6 +24,7 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
+from app.stocks.ticker.entities import TickerOptionsMetrics
 
 
 class StockDataProvider(ABC):
@@ -226,26 +228,38 @@ class InvestmentAnalysisProvider(ABC):
     AI-generated buy / hold / sell read.
 
     Unlike the other ports this one isn't handed a symbol to look up — the use
-    case has already assembled the enriched ``Stock`` (price, performance,
-    valuation/health metrics) and, when available, the recent quarterly earnings
-    timeline. The adapter only reasons over what it's given and never fetches
-    outside data. This backs a dedicated endpoint (its own reason to exist, not
-    best-effort enrichment), so a failure surfaces as an error rather than being
-    swallowed.
+    case has already assembled everything the read reasons over: the enriched
+    ``Stock`` snapshot (price, performance, trailing + forward valuation/health
+    metrics) and, when available, the recent quarterly and annual earnings
+    timelines plus the options-market read. The adapter only reasons over what
+    it's given and never fetches outside data. This backs a dedicated endpoint
+    (its own reason to exist, not best-effort enrichment), so a failure surfaces
+    as an error rather than being swallowed.
     """
 
     @abstractmethod
     def analyze(
-        self, stock: Stock, earnings: QuarterlyEarningsTimeline | None = None
+        self,
+        stock: Stock,
+        quarterly: QuarterlyEarningsTimeline | None = None,
+        annual: AnnualEarningsTimeline | None = None,
+        options: TickerOptionsMetrics | None = None,
     ) -> InvestmentAnalysis:
         """Return a buy/hold/sell analysis built from the supplied data.
 
+        Every argument beyond ``stock`` is best-effort *context* the use case
+        gathers — the same data the ticker card and the earnings endpoints serve.
+        Each is ``None`` when its source is unconfigured, uncovered, or briefly
+        unreachable; the analysis stands on whatever it's handed.
+
         Args:
             stock: the enriched snapshot to reason over (price, performance,
-                valuation/health metrics).
-            earnings: the recent quarterly earnings timeline when available,
-                else ``None`` (nothing cached and Yahoo unreachable, or the
-                symbol isn't covered) — the analysis can stand without it.
+                trailing + forward valuation/health metrics).
+            quarterly: the recent quarterly earnings timeline, else ``None``.
+            annual: the recent annual (fiscal-year) earnings timeline, else
+                ``None``.
+            options: the options-market read (implied volatility, expected move,
+                cost of protection, put/call lean), else ``None``.
 
         Raises:
             StockDataUnavailable: the model call failed or returned no usable
