@@ -1390,21 +1390,40 @@ def test_analysis_use_case_omits_an_empty_annual_timeline():
 def test_analysis_use_case_passes_industry_valuation():
     # The ticker's industry benchmark reaches the analyzer: the repo resolves the
     # industry, its peers' P/Es are summarized into the entity, and it's handed on.
+    # Five peers — the smallest sample the representativeness gate lets through.
     analyzer = FakeAnalysisProvider(an_analysis())
     info = GetStockInfo(FakeProvider(stock=a_stock()))
     use_case = GetStockAnalysis(
         info,
         analyzer,
         industry_repository=FakeSearchRepo(
-            industry="semiconductors", pe_ratios=(10.0, 20.0, 30.0, 40.0)
+            industry="semiconductors", pe_ratios=(10.0, 20.0, 30.0, 40.0, 50.0)
         ),
     )
     use_case.execute("aapl")
     valuation = analyzer.last_industry_valuation
     assert valuation is not None
     assert valuation.industry == "semiconductors"
-    assert valuation.count == 4
-    assert valuation.median_pe == 25.0  # interpolated median of the four peers
+    assert valuation.count == 5
+    assert valuation.median_pe == 30.0  # median of the five peers
+
+
+def test_analysis_use_case_omits_thin_industry_valuation():
+    # A benchmark under MIN_REPRESENTATIVE_PEERS (here 4 valued peers) is omitted:
+    # a "median" over so few names describes those companies, not the industry, so
+    # the model must not be handed it as a peer anchor. One below the entity's gate
+    # — the boundary the previous test sits just above.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        industry_repository=FakeSearchRepo(
+            industry="uranium", pe_ratios=(10.0, 20.0, 30.0, 40.0)
+        ),
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_industry_valuation is None
 
 
 def test_analysis_use_case_omits_industry_valuation_when_unscreened():
@@ -1606,20 +1625,21 @@ def test_get_analysis_supplies_annual_and_recommendations_context(make_client):
 
 def test_get_analysis_supplies_industry_valuation_context(make_client):
     # The endpoint wires the industry P/E benchmark through to the analyzer: the
-    # ticker's industry is resolved and its peers summarized into the entity.
+    # ticker's industry is resolved and its peers summarized into the entity
+    # (enough of them to clear the representativeness gate).
     analyzer = FakeAnalysisProvider(an_analysis())
     client = make_client(
         provider=FakeProvider(stock=a_stock()),
         analysis_provider=analyzer,
         industry_repository=FakeSearchRepo(
-            industry="semiconductors", pe_ratios=(10.0, 20.0, 30.0)
+            industry="semiconductors", pe_ratios=(10.0, 20.0, 30.0, 40.0, 50.0)
         ),
     )
     assert client.get("/stocks/AAPL/analysis").status_code == 200
     valuation = analyzer.last_industry_valuation
     assert valuation is not None
     assert valuation.industry == "semiconductors"
-    assert valuation.count == 3
+    assert valuation.count == 5
 
 
 def test_get_analysis_404_when_symbol_unknown(make_client):

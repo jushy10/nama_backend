@@ -229,11 +229,26 @@ class IndustryValuation:
     normalized slug.
     """
 
+    # The smallest peer sample a benchmark can rest on and still say something about the
+    # *industry* rather than about one or two companies. Below this, the "median" is just
+    # a couple of stocks' own multiples (in the worst case the looked-up stock itself —
+    # sole-peer industries exist in the live universe), so a comparison against it is
+    # noise wearing a verdict. Five keeps ~80% of live industries while dropping every
+    # degenerate case a sweep of the deployed data surfaced.
+    MIN_REPRESENTATIVE_PEERS = 5
+
     industry: str
     count: int
     median_pe: float | None
     p25_pe: float | None
     p75_pe: float | None
+
+    @property
+    def is_representative(self) -> bool:
+        """Whether the sample is large enough to stand for the industry
+        (``count >= MIN_REPRESENTATIVE_PEERS``) — the gate consumers comparing one stock
+        against the benchmark should apply before treating it as a peer anchor."""
+        return self.count >= self.MIN_REPRESENTATIVE_PEERS
 
     @classmethod
     def from_pe_ratios(
