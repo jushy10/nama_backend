@@ -22,9 +22,12 @@ Two Yahoo surfaces are read per fund:
   is retried once with a fresh handshake.
 - ``Ticker.funds_data`` — the fund-specific surface: ``description`` (prose), ``top_holdings`` (a
   DataFrame indexed by holding symbol, with ``Name`` + ``Holding Percent`` columns) and
-  ``sector_weightings`` (a ``{sector: weight}`` dict). Read best-effort and independently, so a
-  fund whose ``.info`` serves but whose ``funds_data`` doesn't (or vice-versa) still yields
-  whatever half came back.
+  ``sector_weightings`` (a ``{sector: weight}`` dict). This is Yahoo's crumb-gated ``topHoldings``
+  ``quoteSummary`` module, so — like ``.info`` — the read goes through ``yfinance_session.call``: a
+  crumb 401 (raised, or swallowed into an empty holdings+sectors result) drops the cached crumb and
+  retries once before degrading. Read best-effort and independently of ``.info``, so a fund whose
+  ``.info`` serves but whose ``funds_data`` doesn't (or vice-versa) still yields whatever half came
+  back.
 
 **Unit normalization** (verified empirically against VOO — Yahoo mixes fractions and
 already-percent numbers on the same blob, so each field is converted individually to human
@@ -47,7 +50,10 @@ what came back). So a hard ``.info`` failure — a raised error, or an empty ``.
 after the crumb retry (Yahoo's swallowed-401 / IP-block signal) — raises ``StockDataUnavailable``.
 Everything past a served ``.info`` is best-effort: ``funds_data`` and every individual field degrade
 to ``None`` / empty rather than raising, so a reachable-but-sparse fund yields a partial profile,
-not an error.
+not an error. ``funds_data`` is nonetheless fetched through the *same* crumb-401 retry as ``.info``
+(an empty holdings+sectors read is the swallowed-401 signal), so a transient block there is
+recovered rather than silently dropping the holdings/sectors — only a block that *survives* the
+retry degrades to the partial profile.
 """
 
 from __future__ import annotations
@@ -122,20 +128,47 @@ class YfinanceEtfProfileProvider(EtfProfileProvider):
     def _read_funds_data(
         self, ticker
     ) -> tuple[str | None, tuple[EtfHolding, ...], tuple[EtfSectorWeight, ...]]:
-        """The ``funds_data`` surface (description + holdings + sector weightings), each read
-        defensively so a missing or shape-shifted piece just yields its empty default. Best-effort
-        by contract: ``funds_data`` itself can raise for a fund Yahoo carries no fund data for —
-        that's caught here (not propagated), so a served ``.info`` still yields a partial profile
-        rather than a failure."""
+        """The ``funds_data`` surface (description + holdings + sector weightings), routed through
+        ``yfinance_session.call`` so a crumb 401 on *this* fetch is retried once with a fresh crumb
+        — exactly like the ``.info`` read above.
+
+        This surface is Yahoo's crumb-gated ``topHoldings`` ``quoteSummary`` module, and without the
+        retry it was the silent hole in the profile: from a data-centre IP a transient 401 here
+        (raised, or swallowed into an empty result) dropped the holdings *and* sector weightings
+        while the retry-protected ``.info`` still served the fund's scalars — so a fund landed with
+        its category/family but no holdings/sectors, and the merge-preserving write then left those
+        child tables empty. Retrying with a fresh crumb closes that gap.
+
+        Best-effort by contract past the retry: a failure that *survives* it — Yahoo's hard IP gate
+        (which a fresh crumb can't clear), or a fund it genuinely carries no fund data for — is
+        caught here (not propagated), so a served ``.info`` still yields a partial profile rather
+        than a failure."""
         try:
-            funds = ticker.funds_data
-            return (
-                _clean(getattr(funds, "description", None)),
-                _holdings(getattr(funds, "top_holdings", None)),
-                _sector_weightings(getattr(funds, "sector_weightings", None)),
+            return yfinance_session.call(
+                lambda: self._funds_snapshot(ticker),
+                # Holdings and sector weightings are parsed from one ``topHoldings`` response, so
+                # they land (or fail) together: both empty is the swallowed-401 signature → retry
+                # with a fresh crumb. A fund Yahoo genuinely has no fund data for just retries once
+                # and stays empty. (Description alone isn't enough signal, so it's excluded.)
+                is_empty=lambda snap: not snap[1] and not snap[2],
             )
-        except Exception:  # noqa: BLE001 — best-effort: no funds_data → empty description/lists
+        except Exception:  # noqa: BLE001 — best-effort: a hard/failed funds_data read → empty half
             return (None, (), ())
+
+    def _funds_snapshot(
+        self, ticker
+    ) -> tuple[str | None, tuple[EtfHolding, ...], tuple[EtfSectorWeight, ...]]:
+        """One read of the ``funds_data`` surface into the domain shape — the unit
+        :meth:`_read_funds_data` retries. Each field is shaped defensively so a missing or
+        shape-shifted piece just yields its empty default; a *raised* access (a 401, or a fund with
+        no fund data) propagates to :func:`yfinance_session.call`, which retries a crumb 401 and
+        re-raises anything else for the caller to swallow."""
+        funds = ticker.funds_data
+        return (
+            _clean(getattr(funds, "description", None)),
+            _holdings(getattr(funds, "top_holdings", None)),
+            _sector_weightings(getattr(funds, "sector_weightings", None)),
+        )
 
 
 def _holdings(frame) -> tuple[EtfHolding, ...]:
