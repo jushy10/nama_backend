@@ -404,8 +404,10 @@ class GetStockAnalysis:
         # Two DB reads on the shared anchor — resolve the ticker's industry, then
         # summarize its screened peers' P/Es into the benchmark entity. An
         # unconfigured repository, an unscreened/unclassified symbol (no industry),
-        # or an industry no peer has been valued in yet (count 0) all omit it rather
-        # than handing the model an empty shell.
+        # or a benchmark too thin to stand for its industry (fewer than
+        # MIN_REPRESENTATIVE_PEERS valued peers — a "median" of one or two stocks
+        # is noise, not an anchor) all omit it rather than handing the model a
+        # figure it would over-trust.
         if self._industry_repository is None:
             return None
         try:
@@ -416,7 +418,7 @@ class GetStockAnalysis:
         except (StockNotFound, StockDataUnavailable):
             return None
         valuation = IndustryValuation.from_pe_ratios(industry, pe_ratios)
-        return valuation if valuation.count > 0 else None
+        return valuation if valuation.is_representative else None
 
 
 class GetSectorPerformance:
