@@ -14,7 +14,12 @@ lazily later. The trade-off, accepted deliberately: the screen quote has **no se
 ``ScreenedStock.sector`` comes back ``None`` — the ``stocks.sector`` column waits for a
 source that publishes it. Yahoo also intermittently blocks data-centre IPs; a blocked
 screen surfaces as ``StockDataUnavailable`` (a hard failure the caller maps to 502), or —
-if it simply returns nothing — an empty screen the sync skips.
+if it simply returns nothing — an empty screen the sync skips. A screen page is a crumb-gated
+Yahoo call like the per-ticker reads, so each page goes through ``yfinance_session.call``: a
+transient crumb 401 (raised, or swallowed into a payload with no ``total``) drops the cached
+crumb and re-fetches once before it's treated as a failure — so one bad handshake on page 0
+no longer sinks the whole sweep. A legitimate past-the-end page still carries ``total`` (only
+``quotes`` is empty), so it's never mistaken for a block.
 
 Yahoo's exchange codes are mapped to the same vocabulary Alpaca fills the anchor with
 (``NMS``/``NGM``/``NCM`` → ``NASDAQ``, ``NYQ`` → ``NYSE``, ``ASE`` → ``AMEX``, ``BTS`` →
@@ -24,6 +29,7 @@ settled it.
 
 from __future__ import annotations
 
+from app.stocks.adapters import yfinance_session
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.universe.entities import ScreenedStock
 from app.stocks.universe.ports import StockScreener
@@ -105,8 +111,15 @@ def _live_screen_page(*, min_market_cap: float, offset: int, size: int) -> dict:
             ),
         ],
     )
-    return yf.screen(
-        query, offset=offset, size=size, sortField="intradaymarketcap", sortAsc=False
+    # Through the shared crumb-401 retry, like the per-ticker reads. A well-formed page always
+    # carries ``total`` (even past the end, where only ``quotes`` is empty), so "no ``total``" is
+    # the swallowed-401 / malformed signature worth a fresh-crumb retry — and the legitimate empty
+    # tail page, which does carry ``total``, is not retried.
+    return yfinance_session.call(
+        lambda: yf.screen(
+            query, offset=offset, size=size, sortField="intradaymarketcap", sortAsc=False
+        ),
+        is_empty=lambda page: not (isinstance(page, dict) and "total" in page),
     )
 
 
