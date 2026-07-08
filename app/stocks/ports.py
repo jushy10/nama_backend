@@ -25,6 +25,7 @@ from app.stocks.entities import (
     Timeframe,
 )
 from app.stocks.recommendations.entities import AnalystRecommendations
+from app.stocks.universe.entities import IndustryValuation
 
 
 class StockDataProvider(ABC):
@@ -231,10 +232,11 @@ class InvestmentAnalysisProvider(ABC):
     case has already assembled everything the read reasons over: the enriched
     ``Stock`` snapshot (price, performance, trailing + forward valuation/health
     metrics) and, when available, the recent quarterly and annual earnings
-    timelines plus the analyst recommendation trends. The adapter only reasons
-    over what it's given and never fetches outside data. This backs a dedicated
-    endpoint (its own reason to exist, not best-effort enrichment), so a failure
-    surfaces as an error rather than being swallowed.
+    timelines, the analyst recommendation trends, and the stock's industry P/E
+    benchmark. The adapter only reasons over what it's given and never fetches
+    outside data. This backs a dedicated endpoint (its own reason to exist, not
+    best-effort enrichment), so a failure surfaces as an error rather than being
+    swallowed.
     """
 
     @abstractmethod
@@ -244,6 +246,7 @@ class InvestmentAnalysisProvider(ABC):
         quarterly: QuarterlyEarningsTimeline | None = None,
         annual: AnnualEarningsTimeline | None = None,
         recommendations: AnalystRecommendations | None = None,
+        industry_valuation: IndustryValuation | None = None,
     ) -> InvestmentAnalysis:
         """Return a buy/hold/sell analysis built from the supplied data.
 
@@ -260,6 +263,9 @@ class InvestmentAnalysisProvider(ABC):
                 ``None``.
             recommendations: the analyst recommendation trends (the sell-side
                 buy/hold/sell consensus and its direction), else ``None``.
+            industry_valuation: the industry P/E benchmark (median + quartiles
+                over the stock's screened peers), so the model can judge its
+                trailing multiple against its peers, else ``None``.
 
         Raises:
             StockDataUnavailable: the model call failed or returned no usable

@@ -62,6 +62,8 @@ from app.stocks.recommendations.entities import (
     RecommendationTrend,
 )
 from app.stocks.recommendations.ports import RecommendationProvider
+from app.stocks.universe.entities import IndustryValuation
+from app.stocks.universe.repository import StockSearchRepository
 from app.stocks.router import (
     get_sector_performance,
     get_stock_analysis,
@@ -289,9 +291,43 @@ class FakeRecommendationProvider(RecommendationProvider):
         return self._recommendations
 
 
+class FakeSearchRepo(StockSearchRepository):
+    """The two anchor reads the analysis path uses — the ticker's industry and its
+    peers' P/Es — configurable per test. ``search`` / ``classifications`` are the
+    search endpoint's job, not exercised here, so they raise if ever called."""
+
+    def __init__(
+        self,
+        *,
+        industry: str | None = None,
+        pe_ratios: tuple[float, ...] = (),
+        raises: Exception | None = None,
+    ):
+        self._industry = industry
+        self._pe_ratios = pe_ratios
+        self._raises = raises
+
+    def industry_for_ticker(self, ticker: str) -> str | None:
+        if self._raises is not None:
+            raise self._raises
+        return self._industry
+
+    def pe_ratios_for_industry(self, industry: str) -> tuple[float, ...]:
+        if self._raises is not None:
+            raise self._raises
+        return self._pe_ratios
+
+    def search(self, criteria):  # pragma: no cover - not used by the analysis path
+        raise NotImplementedError
+
+    def classifications(self):  # pragma: no cover - not used by the analysis path
+        raise NotImplementedError
+
+
 class FakeAnalysisProvider(InvestmentAnalysisProvider):
     """Returns/raises whatever the test configured; records (symbol, had_quarterly)
-    and stashes the last quarterly/annual/recommendations context it was handed."""
+    and stashes the last quarterly/annual/recommendations/industry context it was
+    handed."""
 
     def __init__(
         self,
@@ -304,14 +340,21 @@ class FakeAnalysisProvider(InvestmentAnalysisProvider):
         self.last_quarterly = None
         self.last_annual = None
         self.last_recommendations = None
+        self.last_industry_valuation = None
 
     def analyze(
-        self, stock, quarterly=None, annual=None, recommendations=None
+        self,
+        stock,
+        quarterly=None,
+        annual=None,
+        recommendations=None,
+        industry_valuation=None,
     ) -> InvestmentAnalysis:
         self.received.append((stock.symbol, quarterly is not None))
         self.last_quarterly = quarterly
         self.last_annual = annual
         self.last_recommendations = recommendations
+        self.last_industry_valuation = industry_valuation
         if self._raises is not None:
             raise self._raises
         assert self._analysis is not None
@@ -1139,6 +1182,7 @@ def make_client():
         recommendations_provider: RecommendationProvider | None = None,
         quote_provider: StockQuoteProvider | None = None,
         analysis_provider: InvestmentAnalysisProvider | None = None,
+        industry_repository: StockSearchRepository | None = None,
     ) -> TestClient:
         if quote_provider is not None:
             app.dependency_overrides[get_stock_quote] = (
@@ -1178,6 +1222,7 @@ def make_client():
                 earnings_provider,
                 annual_earnings_provider,
                 recommendations_provider,
+                industry_repository,
             )
         return TestClient(app)
 
@@ -1342,6 +1387,69 @@ def test_analysis_use_case_omits_an_empty_annual_timeline():
     assert analyzer.last_annual is None
 
 
+def test_analysis_use_case_passes_industry_valuation():
+    # The ticker's industry benchmark reaches the analyzer: the repo resolves the
+    # industry, its peers' P/Es are summarized into the entity, and it's handed on.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        industry_repository=FakeSearchRepo(
+            industry="semiconductors", pe_ratios=(10.0, 20.0, 30.0, 40.0)
+        ),
+    )
+    use_case.execute("aapl")
+    valuation = analyzer.last_industry_valuation
+    assert valuation is not None
+    assert valuation.industry == "semiconductors"
+    assert valuation.count == 4
+    assert valuation.median_pe == 25.0  # interpolated median of the four peers
+
+
+def test_analysis_use_case_omits_industry_valuation_when_unscreened():
+    # A symbol with no industry on the anchor (unscreened/unclassified) yields no
+    # benchmark rather than an empty shell.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info, analyzer, industry_repository=FakeSearchRepo(industry=None)
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_industry_valuation is None
+
+
+def test_analysis_use_case_omits_industry_valuation_when_no_valued_peers():
+    # An industry no peer has a usable P/E in (count 0) is omitted — nothing to
+    # anchor the comparison on.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        industry_repository=FakeSearchRepo(industry="biotech", pe_ratios=()),
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_industry_valuation is None
+
+
+def test_analysis_use_case_industry_valuation_is_best_effort():
+    # A failing anchor read must not sink the analysis — it degrades to an omitted
+    # benchmark, the same stance as the earnings/recommendations context.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        industry_repository=FakeSearchRepo(
+            raises=StockDataUnavailable("AAPL", "db down")
+        ),
+    )
+    analysis = use_case.execute("AAPL")
+    assert analysis.recommendation is Recommendation.HOLD
+    assert analyzer.last_industry_valuation is None
+
+
 def test_analysis_use_case_propagates_stock_not_found():
     analyzer = FakeAnalysisProvider(an_analysis())
     info = GetStockInfo(FakeProvider(raises=StockNotFound("ZZZZ")))
@@ -1408,6 +1516,32 @@ def test_bedrock_adapter_renders_forward_recommendations_and_annual_into_prompt(
     assert "FY2026 estimated" in prompt
 
 
+def test_bedrock_adapter_renders_industry_valuation_into_prompt():
+    # The industry benchmark renders its own labelled block, so the model can weigh
+    # the stock's own trailing P/E against its peers.
+    client = _StubClient(_tool_message())
+    BedrockAnalysisProvider(client=client).analyze(
+        a_stock(metrics=a_key_metrics()),
+        a_quarterly_timeline(),
+        industry_valuation=IndustryValuation.from_pe_ratios(
+            "semiconductors", (10.0, 20.0, 30.0, 40.0)
+        ),
+    )
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "Industry valuation benchmark" in prompt
+    assert "Industry: semiconductors" in prompt
+    assert "Median P/E: 25.00" in prompt  # interpolated median of the four peers
+    assert "25th-75th percentile): 17.50 to 32.50" in prompt
+
+
+def test_bedrock_adapter_omits_industry_valuation_block_when_absent():
+    # No benchmark supplied -> no block (the section is skipped, not rendered empty).
+    client = _StubClient(_tool_message())
+    BedrockAnalysisProvider(client=client).analyze(a_stock(metrics=a_key_metrics()))
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "Industry valuation benchmark" not in prompt
+
+
 def test_bedrock_adapter_raises_when_no_tool_call():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # model didn't call it
     with pytest.raises(StockDataUnavailable):
@@ -1468,6 +1602,24 @@ def test_get_analysis_supplies_annual_and_recommendations_context(make_client):
     assert client.get("/stocks/AAPL/analysis").status_code == 200
     assert analyzer.last_annual is not None
     assert analyzer.last_recommendations is not None
+
+
+def test_get_analysis_supplies_industry_valuation_context(make_client):
+    # The endpoint wires the industry P/E benchmark through to the analyzer: the
+    # ticker's industry is resolved and its peers summarized into the entity.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    client = make_client(
+        provider=FakeProvider(stock=a_stock()),
+        analysis_provider=analyzer,
+        industry_repository=FakeSearchRepo(
+            industry="semiconductors", pe_ratios=(10.0, 20.0, 30.0)
+        ),
+    )
+    assert client.get("/stocks/AAPL/analysis").status_code == 200
+    valuation = analyzer.last_industry_valuation
+    assert valuation is not None
+    assert valuation.industry == "semiconductors"
+    assert valuation.count == 3
 
 
 def test_get_analysis_404_when_symbol_unknown(make_client):

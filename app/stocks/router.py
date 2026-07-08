@@ -67,6 +67,7 @@ from app.stocks.ports import (
     StockPerformanceProvider,
 )
 from app.stocks.recommendations.ports import RecommendationProvider
+from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
@@ -246,10 +247,23 @@ def get_stock_analysis(
     quarterly: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
     annual: AnnualEarningsProvider = Depends(get_annual_earnings_provider),
     recommendations: RecommendationProvider = Depends(get_recommendation_provider),
+    # The industry P/E benchmark is a pure DB read off the shared anchor — the same
+    # screened universe the /stocks/industries/{industry}/pe endpoint groups on —
+    # so it rides the request session directly, no provider/key. Best-effort: an
+    # unscreened symbol just omits the peer comparison.
+    db: Session = Depends(get_db),
 ) -> GetStockAnalysis:
     # Reuses the stock snapshot wiring wholesale (price + enrichment), then layers
-    # the analyzer and the best-effort earnings + recommendations context on top.
-    return GetStockAnalysis(stock_info, analyzer, quarterly, annual, recommendations)
+    # the analyzer and the best-effort earnings + recommendations + industry-P/E
+    # context on top.
+    return GetStockAnalysis(
+        stock_info,
+        analyzer,
+        quarterly,
+        annual,
+        recommendations,
+        SqlStockSearchRepository(db),
+    )
 
 
 @lru_cache(maxsize=1)

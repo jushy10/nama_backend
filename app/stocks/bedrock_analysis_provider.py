@@ -3,7 +3,8 @@
 The only module that knows Bedrock (and the Anthropic SDK) exists. It takes the
 data the use case already gathered — the price snapshot, trailing performance,
 the trailing *and* forward valuation/health/growth metrics, the recent quarterly
-and annual earnings, and the analyst recommendation trends — renders it into a
+and annual earnings, the analyst recommendation trends, and the stock's industry
+P/E benchmark (how its valuation sits against its peers) — renders it into a
 compact prompt, and asks Claude for a balanced buy/hold/sell read written in
 plain, everyday language a non-expert can follow. Swap models or vendors and only
 this file changes.
@@ -45,6 +46,7 @@ from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.ports import InvestmentAnalysisProvider
 from app.stocks.recommendations.entities import AnalystRecommendations
+from app.stocks.universe.entities import IndustryValuation
 
 # A single forced tool is how the model is pinned to structured output: Claude
 # must call submit_analysis, so the response comes back as validated JSON
@@ -102,9 +104,14 @@ _SYSTEM_PROMPT = (
     "You are a friendly investing assistant explaining one stock to an everyday "
     "person with no finance background. You are given a snapshot of the stock's "
     "price, its valuation and profitability figures, its recent quarterly and "
-    "annual earnings, and what Wall Street analysts recommend. From only those "
-    "figures, give a clear, balanced read on whether it currently looks like a "
-    "buy, hold, or sell.\n"
+    "annual earnings, what Wall Street analysts recommend, and how its valuation "
+    "compares with other companies in the same industry. From only those figures, "
+    "give a clear, balanced read on whether it currently looks like a buy, hold, "
+    "or sell.\n"
+    "When an industry benchmark is provided, weigh the stock's own price-to-"
+    "earnings against it — a much higher figure than its peers means it's "
+    "priced richly (expensive) for its industry, a much lower one means cheaply "
+    "— and explain that comparison in plain words.\n"
     "Write in plain, warm, everyday language — short sentences, no jargon. When a "
     "figure matters, say what it means in a few plain words (e.g. 'its price is "
     "high compared with its earnings') rather than naming the ratio. Never assume "
@@ -168,8 +175,11 @@ class BedrockAnalysisProvider(InvestmentAnalysisProvider):
         quarterly: QuarterlyEarningsTimeline | None = None,
         annual: AnnualEarningsTimeline | None = None,
         recommendations: AnalystRecommendations | None = None,
+        industry_valuation: IndustryValuation | None = None,
     ) -> InvestmentAnalysis:
-        prompt = _render_prompt(stock, quarterly, annual, recommendations)
+        prompt = _render_prompt(
+            stock, quarterly, annual, recommendations, industry_valuation
+        )
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -243,6 +253,7 @@ def _render_prompt(
     quarterly: QuarterlyEarningsTimeline | None,
     annual: AnnualEarningsTimeline | None = None,
     recommendations: AnalystRecommendations | None = None,
+    industry_valuation: IndustryValuation | None = None,
 ) -> str:
     """Render the gathered data into a compact, labelled block for the model.
 
@@ -251,8 +262,8 @@ def _render_prompt(
     sections mirror what the app's own endpoints expose: the enriched snapshot
     (price, dividend, performance, and the trailing *and* forward
     valuation/health/growth metrics — the ticker card's figures) followed, when
-    available, by the quarterly and annual earnings timelines and the analyst
-    recommendation trends.
+    available, by the quarterly and annual earnings timelines, the analyst
+    recommendation trends, and the industry P/E benchmark.
     """
     metrics = stock.metrics
     perf = stock.performance
@@ -316,10 +327,33 @@ def _render_prompt(
         _render_quarterly(quarterly),
         _render_annual(annual),
         _render_recommendations(recommendations),
+        _render_industry_valuation(industry_valuation),
     ):
         if block:
             lines.append("")
             lines.append(block)
+    return "\n".join(lines)
+
+
+def _render_industry_valuation(valuation: IndustryValuation | None) -> str:
+    """Render the industry P/E benchmark as a short labelled block (or '' if none)
+    — the peer-valuation anchor that turns the stock's own trailing P/E from an
+    absolute number into a relative one ("28 against an industry that trades near
+    21"). The use case only passes a benchmark with at least one valued peer, so a
+    present block always carries a median."""
+    if valuation is None or valuation.count == 0 or valuation.median_pe is None:
+        return ""
+    lines = [
+        "Industry valuation benchmark "
+        f"(trailing P/E across {valuation.count} peer(s) in the same industry):",
+        f"- Industry: {valuation.industry}",
+        f"- Median P/E: {_num(valuation.median_pe)}",
+    ]
+    if valuation.p25_pe is not None and valuation.p75_pe is not None:
+        lines.append(
+            f"- Typical range (25th-75th percentile): "
+            f"{_num(valuation.p25_pe)} to {_num(valuation.p75_pe)}"
+        )
     return "\n".join(lines)
 
 

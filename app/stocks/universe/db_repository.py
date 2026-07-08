@@ -280,6 +280,14 @@ class SqlStockSearchRepository(StockSearchRepository):
         )
         return tuple(rows)
 
+    def industry_for_ticker(self, ticker: str) -> str | None:
+        # A single-column read on the anchor. `scalar_one_or_none` maps both "no row" and a
+        # row with a null industry to None — the caller (the analysis path) treats both the
+        # same way: no industry, so no peer benchmark to attach.
+        return self._session.execute(
+            select(StockRecord.industry).where(StockRecord.ticker == ticker)
+        ).scalar_one_or_none()
+
     def _conditions(self, criteria: StockSearchCriteria) -> list:
         """The WHERE terms shared by the count and the page query — the screened gate plus
         whichever filters the criteria carries (a term is added only when its field is set)."""

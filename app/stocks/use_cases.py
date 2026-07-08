@@ -50,6 +50,8 @@ from app.stocks.ports import (
 )
 from app.stocks.recommendations.entities import AnalystRecommendations
 from app.stocks.recommendations.ports import RecommendationProvider
+from app.stocks.universe.entities import IndustryValuation
+from app.stocks.universe.repository import StockSearchRepository
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -320,8 +322,9 @@ class GetStockAnalysis:
     Reuses ``GetStockInfo`` to assemble the enriched snapshot (price plus the
     best-effort performance/fundamentals/trailing+forward valuation enrichment),
     then best-effort layers on the same context the app's own views expose — the
-    quarterly and annual earnings timelines and the analyst recommendation trends
-    — before asking the injected analyzer to weigh it all. The snapshot and the
+    quarterly and annual earnings timelines, the analyst recommendation trends, and
+    the stock's industry P/E benchmark (how its valuation sits against its peers) —
+    before asking the injected analyzer to weigh it all. The snapshot and the
     analysis are the primary data — a bad/unknown symbol or a model failure
     propagates — while every context source is best-effort, so a miss on any of
     them leaves the analysis intact rather than failing it. The analyzer reasons
@@ -335,12 +338,14 @@ class GetStockAnalysis:
         quarterly_provider: QuarterlyEarningsProvider | None = None,
         annual_provider: AnnualEarningsProvider | None = None,
         recommendations_provider: RecommendationProvider | None = None,
+        industry_repository: StockSearchRepository | None = None,
     ) -> None:
         self._stock_info = stock_info
         self._analyzer = analyzer
         self._quarterly_provider = quarterly_provider
         self._annual_provider = annual_provider
         self._recommendations_provider = recommendations_provider
+        self._industry_repository = industry_repository
 
     def execute(self, symbol: str) -> InvestmentAnalysis:
         normalized = _normalize_symbol(symbol)
@@ -354,6 +359,7 @@ class GetStockAnalysis:
             self._quarterly(normalized),
             self._annual(normalized),
             self._recommendations(normalized),
+            self._industry_valuation(normalized),
         )
 
     def _quarterly(self, symbol: str) -> QuarterlyEarningsTimeline | None:
@@ -391,6 +397,26 @@ class GetStockAnalysis:
         except (StockNotFound, StockDataUnavailable):
             return None
         return None if recs.is_empty else recs
+
+    def _industry_valuation(self, symbol: str) -> IndustryValuation | None:
+        # Best-effort context: the peer-valuation anchor that makes the stock's own
+        # trailing P/E meaningful ("28 is high for an industry that trades near 21").
+        # Two DB reads on the shared anchor — resolve the ticker's industry, then
+        # summarize its screened peers' P/Es into the benchmark entity. An
+        # unconfigured repository, an unscreened/unclassified symbol (no industry),
+        # or an industry no peer has been valued in yet (count 0) all omit it rather
+        # than handing the model an empty shell.
+        if self._industry_repository is None:
+            return None
+        try:
+            industry = self._industry_repository.industry_for_ticker(symbol)
+            if not industry:
+                return None
+            pe_ratios = self._industry_repository.pe_ratios_for_industry(industry)
+        except (StockNotFound, StockDataUnavailable):
+            return None
+        valuation = IndustryValuation.from_pe_ratios(industry, pe_ratios)
+        return valuation if valuation.count > 0 else None
 
 
 class GetSectorPerformance:
