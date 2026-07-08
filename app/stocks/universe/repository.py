@@ -157,3 +157,15 @@ class StockSearchRepository(ABC):
         coverage, not an error.
         """
         raise NotImplementedError
+
+    @abstractmethod
+    def industry_for_ticker(self, ticker: str) -> str | None:
+        """Return the stored industry slug for ``ticker``, or ``None`` when the anchor has no
+        row for it or the industry hasn't been classified yet.
+
+        The primitive that lets a *ticker-driven* caller (the AI analysis) find the industry
+        whose P/E benchmark to build via :meth:`pe_ratios_for_industry` — resolving the
+        ticker's own industry and summarizing its peers is the use case's job, so this stays a
+        single-column read on the same taxonomy the search filters and the benchmark group on.
+        """
+        raise NotImplementedError

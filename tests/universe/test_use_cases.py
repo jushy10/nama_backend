@@ -352,13 +352,17 @@ class _FakeSearchRepo(StockSearchRepository):
     """Records the criteria it was handed and returns a canned page / classifications /
     per-industry P/E list."""
 
-    def __init__(self, *, page=None, classifications=None, pe_ratios=()) -> None:
+    def __init__(
+        self, *, page=None, classifications=None, pe_ratios=(), industry=None
+    ) -> None:
         self._page = page or StockSearchPage(results=(), total=0, limit=0, offset=0)
         self._classifications = classifications or Classifications((), ())
         self._pe_ratios = pe_ratios
+        self._industry = industry
         self.criteria: StockSearchCriteria | None = None
         self.classifications_calls = 0
         self.industry_asked: str | None = None
+        self.ticker_asked: str | None = None
 
     def search(self, criteria):
         self.criteria = criteria
@@ -371,6 +375,10 @@ class _FakeSearchRepo(StockSearchRepository):
     def pe_ratios_for_industry(self, industry):
         self.industry_asked = industry
         return tuple(self._pe_ratios)
+
+    def industry_for_ticker(self, ticker):
+        self.ticker_asked = ticker
+        return self._industry
 
 
 def test_search_normalizes_inputs_and_passes_clean_criteria():

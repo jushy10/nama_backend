@@ -665,3 +665,20 @@ def test_pe_ratios_for_industry_returns_positive_pes_of_that_industry(session):
 def test_pe_ratios_for_industry_empty_for_an_unknown_industry(session):
     _seed(session, "NVDA", industry="semiconductors", pe_ratio=46.5)
     assert SqlStockSearchRepository(session).pe_ratios_for_industry("nonesuch") == ()
+
+
+def test_industry_for_ticker_returns_the_stored_slug(session):
+    _seed(session, "NVDA", industry="semiconductors", pe_ratio=46.5)
+    assert (
+        SqlStockSearchRepository(session).industry_for_ticker("NVDA")
+        == "semiconductors"
+    )
+
+
+def test_industry_for_ticker_none_when_unknown_or_unclassified(session):
+    # No row at all, and a row present but with no industry yet, both read as None —
+    # the analysis path treats either as "no peer benchmark to attach".
+    _seed(session, "NEW", industry=None)
+    r = SqlStockSearchRepository(session)
+    assert r.industry_for_ticker("ZZZZ") is None  # no such anchor row
+    assert r.industry_for_ticker("NEW") is None  # row exists, industry unclassified
