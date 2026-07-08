@@ -4,8 +4,8 @@ GET /stocks/etf/{ticker}).
 Offline: the use cases are built over in-memory fakes and injected through dependency_overrides, so
 this checks the controllers + presenters + query binding — the search response envelope, the
 q/category/sort/order/paging params reaching the use case, the enum validation, the categories
-menu, and for the detail card: the JSON shape (quote + stored facts + best-effort profile), the
-404-for-non-ETF, the 502-on-quote-failure, the best-effort degradation, and the cache header — with
+menu, and for the detail card: the JSON shape (quote + stored facts + stored profile), the
+404-for-non-ETF, the 502-on-quote-failure, the empty-profile serving, and the cache header — with
 no database, Alpaca, or Yahoo.
 """
 
@@ -288,6 +288,22 @@ def test_detail_omits_unrequested_blocks():
     assert body["metrics"] is None
     assert body["dividends"] is None
     assert body["performance"] is None
+
+
+def test_detail_serves_null_enrichment_for_an_unenriched_fund():
+    # A fund the sync hasn't profile-enriched yet has an empty stored profile — the quote + stored
+    # facts still serve on a 200, with the always-on enrichment fields null/empty.
+    fake = _FakeDetailUseCase(result=_a_detail(profile=EtfProfile.empty()))
+    resp = _detail_client(fake).get("/stocks/etf/VOO")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["price"] == 685.28  # quote still serves
+    assert body["name"] == "Vanguard S&P 500 ETF"  # stored facts still serve
+    assert body["fund_family"] is None
+    assert body["description"] is None
+    assert body["top_holdings"] == []
+    assert body["sector_weightings"] == []
 
 
 def test_detail_emits_only_the_requested_block():

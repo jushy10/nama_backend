@@ -9,22 +9,23 @@ fund's detail card.
 - ``GET /stocks/etfs/categories`` — the distinct category slugs, for the FE's filter menu.
 - ``GET /stocks/etf/{ticker}`` — one fund's detail card: the **live quote** (Alpaca, primary —
   the same feed the quote endpoint uses, so a quote failure is the same 502), the stored
-  ``etfs``-table facts (name/exchange/category), and the always-on best-effort Yahoo (``yfinance``)
-  enrichment (fund family, description, top holdings, sector weightings). Then **opt-in blocks** via
-  ``?include=`` (repeat or comma-separate; an unknown value is a 400): ``metrics`` (expense ratio,
-  NAV, net assets), ``dividends`` (yield), and ``performance`` (the ``1w``/``1m``/``3m``/``6m``/
-  ``ytd``/``1y`` trailing returns — the same gains format the stock endpoints serve — plus Yahoo's
-  3y/5y annualized returns). A symbol that isn't in the stored ETF universe is a **404** ("not an
-  ETF"). The Yahoo half never sinks the card — a blocked read just leaves those fields null/empty
-  on a 200. Pay-per-use only bites on ``performance`` (its own Alpaca call, made just when asked
-  for); ``metrics``/``dividends`` ride the always-fetched profile, so they cost no extra call.
+  ``etfs``-table facts (name/exchange/category), and the stored profile (fund family, description,
+  top holdings, sector weightings) read straight from the DB — populated out-of-band by the sync,
+  so there's no live Yahoo call on the read path. Then **opt-in blocks** via ``?include=`` (repeat
+  or comma-separate; an unknown value is a 400): ``metrics`` (expense ratio, NAV, net assets),
+  ``dividends`` (yield), and ``performance`` (the ``1w``/``1m``/``3m``/``6m``/``ytd``/``1y``
+  trailing returns — the same gains format the stock endpoints serve — plus the 3y/5y annualized
+  returns from the stored profile). A symbol that isn't in the stored ETF universe is a **404**
+  ("not an ETF"). A fund the sync hasn't enriched yet just serves null/empty profile fields on a
+  200. Pay-per-use only bites on ``performance`` (its own Alpaca call, made just when asked for);
+  ``metrics``/``dividends`` ride the DB-read profile + stored facts, so they cost no extra call.
 
 The two list routes are pure DB reads (``SqlEtfSearchRepository`` → ``SearchEtfs`` /
 ``ListEtfCategories``), no vendor or key, so their only request error is a 400 (a bad
 ``sort``/``order`` is a 422 from the enum binding). The detail route reuses the composition root's
 Alpaca provider (whose missing-keys 503 it inherits — the quote is primary) for both the quote and
-the opt-in trailing-return windows (it implements both ports), plus the keyless yfinance ETF-profile
-adapter (best-effort). The refresh that populates the table (screen + category enrichment) is the
+the opt-in trailing-return windows (it implements both ports), plus a pure DB read of the stored
+profile. The refresh that populates the table + profile (screen + profile enrichment) is the
 separate cron endpoint (``POST /internal/etfs/sync``).
 """
 
@@ -32,7 +33,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.yfinance_etf_profile_adapter import YfinanceEtfProfileProvider
 from app.stocks.etfs.db_repository import (
     SqlEtfLookupRepository,
     SqlEtfSearchRepository,
@@ -44,7 +44,6 @@ from app.stocks.etfs.entities import (
     EtfSort,
     SortDirection,
 )
-from app.stocks.etfs.ports import EtfProfileProvider
 from app.stocks.etfs.schemas import (
     EtfCategoriesResponse,
     EtfDetailResponse,
@@ -74,25 +73,18 @@ def get_categories_use_case(db: Session = Depends(get_db)) -> ListEtfCategories:
     return ListEtfCategories(SqlEtfSearchRepository(db))
 
 
-def get_etf_profile_provider() -> EtfProfileProvider:
-    # The detail card's Yahoo enrichment — keyless yfinance, like the ETF category/screener
-    # sources. Best-effort by contract (the provider never raises), so it's always wired.
-    return YfinanceEtfProfileProvider()
-
-
 def get_etf_detail_use_case(
     provider: StockQuoteProvider = Depends(get_provider),
-    profile: EtfProfileProvider = Depends(get_etf_profile_provider),
     db: Session = Depends(get_db),
 ) -> GetEtfDetail:
     # The Alpaca singleton backs the live quote AND the opt-in trailing-return windows (the same
     # instance the quote/ticker endpoints use, so the fund's move never disagrees) — it implements
     # both StockQuoteProvider and StockPerformanceProvider, so the one dependency serves both roles
     # (the isinstance mirrors the ticker card's wiring). The lookup repository is the request-scoped
-    # read over the etfs table (the membership gate + the stored facts), and the profile is the
-    # keyless yfinance enrichment.
+    # read over the etfs table + its profile children (the membership gate, the stored facts, and
+    # the stored profile). No live Yahoo on the read path — the sync populates the profile out of band.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
-    return GetEtfDetail(SqlEtfLookupRepository(db), provider, profile, performance)
+    return GetEtfDetail(SqlEtfLookupRepository(db), provider, performance)
 
 
 def _present_search(page: EtfSearchPage) -> EtfSearchResponse:

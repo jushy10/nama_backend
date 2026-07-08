@@ -8,13 +8,14 @@ on a background thread and returns ``202`` at once, so the sweep can't blow API 
 30s integration timeout. The shared ``background_sync`` helper owns the threading, the
 single-flight guard, and the exception handling (see it for the full rationale and the
 per-process-guard caveat). The ETF sweep is two passes: a bulk screen-and-upsert, then a
-per-ticker category enrichment (a few hundred sequential Yahoo ``.info`` calls — minutes, well
-past 30s), the same shape as the universe sweep. ``limit`` caps only the enrichment pass; the
-screen always runs in full. A partial run is safe — the screen upsert and each category write
-commit independently, and the enrichment is fill-once, so an interrupted run resumes next trigger.
+per-ticker profile enrichment (a few hundred sequential Yahoo ``.info`` + ``funds_data`` calls —
+minutes, well past 30s), the same shape as the universe sweep. ``limit`` caps only the enrichment
+pass; the screen always runs in full. A partial run is safe — the screen upsert and each profile
+write commit independently, and the profile write is merge-preserving, so an interrupted run
+resumes next trigger without losing stored data.
 
 Wiring lives here, the composition-root way: ``run_etf_sync`` opens a fresh session and builds
-the live yfinance screener + category adapters and the SQL repository for the use case. Yahoo
+the live yfinance screener + profile adapters and the SQL repository for the use case. Yahoo
 needs no API key, so there's no credential to gate on; the sync is always constructable.
 ``get_sync_runner`` is the DI seam tests override with a fake.
 
@@ -29,8 +30,8 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.yfinance_etf_category_adapter import (
-    YfinanceEtfCategoryProvider,
+from app.stocks.adapters.yfinance_etf_profile_adapter import (
+    YfinanceEtfProfileProvider,
 )
 from app.stocks.adapters.yfinance_etf_screener_adapter import (
     YfinanceEtfScreenerProvider,
@@ -52,7 +53,7 @@ _sync_lock = threading.Lock()
 
 
 def run_etf_sync(limit: int | None) -> EtfSyncReport:
-    """Perform one full ETF sync (screen + upsert + category enrichment) with its **own** DB
+    """Perform one full ETF sync (screen + upsert + profile enrichment) with its **own** DB
     session (the request-scoped ``get_db`` one is closed by the time the background thread runs).
     ``limit`` caps the enrichment pass only; the screen always runs in full."""
     db = SessionLocal()
@@ -60,7 +61,7 @@ def run_etf_sync(limit: int | None) -> EtfSyncReport:
         report = SyncEtfs(
             YfinanceEtfScreenerProvider(),
             SqlEtfRepository(db),
-            YfinanceEtfCategoryProvider(),
+            YfinanceEtfProfileProvider(),
         ).execute(limit=limit)
         if report.skipped:
             logger.warning(
@@ -99,10 +100,10 @@ async def sync_etfs_endpoint(
         ge=1,
         le=2000,
         description=(
-            "Max funds whose category the background sweep classifies this run, via a per-ticker "
-            "Yahoo call. Omit to classify EVERY still-uncategorised fund in one run (the default); "
-            "pass a value only to throttle a run if Yahoo starts rate-limiting. The screen itself "
-            "always runs in full regardless."
+            "Max funds whose profile the background sweep refreshes this run, via a per-ticker "
+            "Yahoo call. Omit to refresh EVERY stored fund in one run (the default); pass a value "
+            "only to throttle a run if Yahoo starts rate-limiting. The screen itself always runs "
+            "in full regardless."
         ),
     ),
     run: SyncRunner = Depends(get_sync_runner),

@@ -48,3 +48,28 @@ def test_upgrade_creates_the_etfs_table(alembic):
 
     command.downgrade(config, "base")
     assert "etfs" not in inspect(create_engine(url)).get_table_names()
+
+
+def test_upgrade_adds_the_etf_profile_columns_and_child_tables(alembic):
+    # 0020 adds the profile scalars onto `etfs` and the two child tables the sync persists.
+    config, url = alembic
+
+    command.upgrade(config, "head")
+    inspector = inspect(create_engine(url))
+    etf_columns = {c["name"] for c in inspector.get_columns("etfs")}
+    assert {
+        "fund_family",
+        "dividend_yield",
+        "description",
+        "nav",
+        "ytd_return",
+        "three_year_return",
+        "five_year_return",
+        "profile_fetched_at",
+    } <= etf_columns
+    tables = set(inspector.get_table_names())
+    assert {"etf_sector_weightings", "etf_top_holdings"} <= tables
+
+    command.downgrade(config, "base")
+    remaining = set(inspect(create_engine(url)).get_table_names())
+    assert not ({"etf_sector_weightings", "etf_top_holdings"} & remaining)

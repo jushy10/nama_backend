@@ -62,7 +62,7 @@ def test_defaults_to_no_limit_when_omitted():
     fake = _FakeRunner(_report())
     resp = _client(fake).post("/internal/etfs/sync")
     assert resp.status_code == 202
-    # Omitted => uncapped: the runner is asked to categorise every fund (limit null).
+    # Omitted => uncapped: the runner is asked to refresh every fund's profile (limit null).
     assert resp.json() == {"status": "accepted", "limit": None}
     _drain()
     assert fake.calls == [None]

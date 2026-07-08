@@ -241,6 +241,11 @@ class _FakeEtfs(EtfLookupRepository):
     def get(self, ticker: str):
         return None  # unused by the card (it only asks is_etf)
 
+    def get_stored_profile(self, ticker: str):
+        from app.stocks.etfs.entities import EtfProfile
+
+        return EtfProfile.empty()  # unused by the card (it only asks is_etf)
+
 
 def _a_reported_quarter(year: int, quarter: int, eps: float) -> QuarterlyEarnings:
     return QuarterlyEarnings(
