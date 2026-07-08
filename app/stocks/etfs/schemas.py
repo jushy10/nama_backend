@@ -11,6 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.stocks.schemas import StockPerformanceResponse
+
 
 class EtfSearchItemResponse(BaseModel):
     """One row of an ETF search — stored facts only, no live price.
@@ -75,21 +77,62 @@ class EtfSectorWeightResponse(BaseModel):
     weight: float  # percent of fund
 
 
+class EtfMetricsResponse(BaseModel):
+    """The fund's headline size/cost metrics — the opt-in ``metrics`` block.
+
+    ``expense_ratio`` and ``net_assets`` are the stored ``etfs``-table facts (falling back to Yahoo
+    only when the table lacks them, so this block agrees with the screener list); ``nav`` (net asset
+    value per share) rides the best-effort Yahoo profile. ``expense_ratio`` is a human percent
+    (``0.03`` = 0.03%); ``net_assets`` (AUM) and ``nav`` are raw figures. Any field Yahoo/the table
+    doesn't carry is ``null``."""
+
+    expense_ratio: float | None = None  # percent
+    nav: float | None = None  # net asset value per share (raw price)
+    net_assets: float | None = None  # AUM (raw)
+
+
+class EtfDividendsResponse(BaseModel):
+    """The fund's distribution yield — the opt-in ``dividends`` block.
+
+    ``yield_percentage`` is the trailing distribution yield as a human percent (``1.03`` = 1.03%),
+    off the best-effort Yahoo profile; ``null`` for a non-distributing fund or an uncovered
+    field."""
+
+    yield_percentage: float | None = None  # percent
+
+
+class EtfPerformanceResponse(StockPerformanceResponse):
+    """The fund's trailing returns — the opt-in ``performance`` block.
+
+    Extends the shared trailing-window shape (``1w`` / ``1m`` / ``3m`` / ``6m`` / ``ytd`` / ``1y``,
+    the same price-return gains the stock endpoints serve, from Alpaca) with the two longer horizons
+    Yahoo publishes: ``three_year_return`` / ``five_year_return`` (annualized average returns, off
+    the profile). Every figure is a human percent; any window without enough history — or a
+    horizon Yahoo doesn't cover — is ``null``."""
+
+    three_year_return: float | None = None  # percent (annualized avg, Yahoo)
+    five_year_return: float | None = None  # percent (annualized avg, Yahoo)
+
+
 class EtfDetailResponse(BaseModel):
-    """One fund's detail card: the live quote, the stored ``etfs`` facts, and the best-effort
-    Yahoo profile (``GET /stocks/etf/{ticker}``).
+    """One fund's detail card: the live quote, the stored ``etfs`` facts, the always-on Yahoo
+    enrichment, and the opt-in blocks (``GET /stocks/etf/{ticker}?include=...``).
 
     ``ticker`` is the symbol and ``asset_type`` is always ``"etf"`` (the endpoint only serves
     funds — a non-ETF symbol is a 404). ``price`` / ``change`` / ``change_percent`` /
     ``previous_close`` / ``as_of`` are the live quote (Alpaca), the same rules as every other price
-    view. ``name`` / ``exchange`` / ``category`` / ``net_assets`` / ``expense_ratio`` are stored
-    ``etfs``-table facts (net_assets/expense_ratio falling back to Yahoo only when the table lacks
-    them). The rest — ``fund_family`` / ``nav`` / ``dividend_yield`` / the trailing returns /
-    ``description`` / ``top_holdings`` / ``sector_weightings`` — are best-effort Yahoo enrichment:
-    ``null`` (or ``[]`` for the lists) when Yahoo is blocked or doesn't cover the field, still a
-    200. Every percent field (``expense_ratio``, ``dividend_yield``, the ``*_return`` figures, each
-    holding/sector ``weight``) is a human percent (``0.03`` = 0.03%, ``39.13`` = 39.13%);
-    ``net_assets`` and ``nav`` are raw figures."""
+    view. ``name`` / ``exchange`` / ``category`` are stored ``etfs``-table facts. The always-on
+    Yahoo enrichment — ``fund_family`` / ``description`` / ``top_holdings`` / ``sector_weightings``
+    — is best-effort: ``null`` (or ``[]`` for the lists) when Yahoo is blocked or doesn't cover the
+    field, still a 200.
+
+    ``metrics`` (expense ratio, NAV, net assets), ``dividends`` (yield) and ``performance``
+    (trailing returns) are **opt-in** via ``?include=`` — ``null`` unless requested. Requesting
+    ``metrics`` / ``dividends`` costs no extra upstream call (they're drawn from the already-fetched
+    profile + stored facts); ``performance`` is the one block with its own call (the Alpaca windows),
+    fetched only when asked for and best-effort. Every percent field (``expense_ratio``, the yield,
+    the ``*_return`` figures, each holding/sector ``weight``) is a human percent (``0.03`` = 0.03%,
+    ``39.13`` = 39.13%); ``net_assets`` and ``nav`` are raw figures."""
 
     ticker: str
     name: str | None = None
@@ -103,15 +146,12 @@ class EtfDetailResponse(BaseModel):
     as_of: datetime | None = None
     # Stored etfs-table facts.
     category: str | None = None  # fund-category slug (e.g. "large_blend")
-    net_assets: float | None = None  # AUM (raw)
-    expense_ratio: float | None = None  # percent
-    # Best-effort Yahoo (yfinance) enrichment — null / [] when unavailable.
+    # Always-on best-effort Yahoo (yfinance) enrichment — null / [] when unavailable.
     fund_family: str | None = None
-    nav: float | None = None  # net asset value per share (raw price)
-    dividend_yield: float | None = None  # percent
-    ytd_return: float | None = None  # percent
-    three_year_return: float | None = None  # percent (annualized)
-    five_year_return: float | None = None  # percent (annualized)
     description: str | None = None
     top_holdings: list[EtfHoldingResponse] = []  # up to 10, largest first; [] if unavailable
     sector_weightings: list[EtfSectorWeightResponse] = []  # weight desc; [] if unavailable
+    # Opt-in blocks (?include=metrics,dividends,performance) — null unless requested.
+    metrics: EtfMetricsResponse | None = None
+    dividends: EtfDividendsResponse | None = None
+    performance: EtfPerformanceResponse | None = None
