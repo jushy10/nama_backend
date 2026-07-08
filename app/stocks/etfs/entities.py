@@ -9,8 +9,8 @@ stdlib only.
 ``name`` / ``exchange``) alongside ``net_assets`` (assets under management, the ETF analogue of
 a stock's market cap and the natural "top" ranking) and ``expense_ratio``. The fund's
 ``category`` is deliberately *not* on it — the bulk screen doesn't publish one, exactly like the
-stock screen carries no sector — so it's filled separately by the sync's enrichment pass and
-modelled as ``EtfClassification``.
+stock screen carries no sector — so it's filled separately by the sync's per-fund enrichment
+pass (which reads it off the same ``EtfProfile`` as the rest of the fund's profile).
 
 The read side (``GET /stocks/etfs`` + ``GET /stocks/etfs/categories``) adds the shapes the
 search flows through: ``EtfSearchCriteria`` (a normalized query — free text, a ``category``
@@ -43,8 +43,8 @@ class ScreenedEtf:
     fund) — the fund's size, and the default "top" ranking. ``expense_ratio`` is a percent
     (``0.39`` = 0.39% a year). Everything but the ``ticker`` is optional: ``exchange`` and the
     name come from the screen, and either figure the screen omits rides in ``None``. The fund's
-    ``category`` is not here — the screen doesn't carry it; the enrichment pass fills it (see
-    ``EtfClassification``).
+    ``category`` is not here — the screen doesn't carry it; the enrichment pass fills it (off the
+    same ``EtfProfile`` it persists the rest of the profile from).
     """
 
     ticker: str
@@ -52,30 +52,6 @@ class ScreenedEtf:
     exchange: str | None = None
     net_assets: float | None = None
     expense_ratio: float | None = None
-
-
-@dataclass(frozen=True)
-class EtfClassification:
-    """A fund's category, as a canonical snake_case slug.
-
-    The screen (``ScreenedEtf``) doesn't carry it — Yahoo publishes the fund category only on
-    the per-ticker ``.info`` surface — so this is the shape the sync's enrichment pass fetches
-    and persists. ``category`` is ``None`` when Yahoo doesn't categorise the fund (left for a
-    later run).
-
-    Stored as a slug — lower-cased, with every run of non-alphanumeric characters collapsed to a
-    single underscore (``"Large Growth"`` → ``large_growth``, ``"Commodities Focused"`` →
-    ``commodities_focused``) — a stable, join-friendly key rather than Yahoo's display text.
-    ``from_label`` is the constructor callers use, so the slug rule lives in one place.
-    """
-
-    category: str | None = None
-
-    @classmethod
-    def from_label(cls, category: object) -> "EtfClassification":
-        """Build a classification from a raw vendor label, slugged to snake_case (dropped to
-        ``None`` when blank or non-string)."""
-        return cls(category=slugify(category))
 
 
 class EtfSort(str, Enum):
@@ -201,22 +177,29 @@ class EtfSectorWeight:
 
 @dataclass(frozen=True)
 class EtfProfile:
-    """The best-effort profile enrichment for one fund, sourced from Yahoo (yfinance).
+    """One fund's full profile — the facts the bulk screen doesn't carry.
 
-    Everything here rides Yahoo's per-ticker ``.info`` / ``funds_data`` surfaces — not the price
-    feed or the ``etfs`` table — so the whole block is best-effort: any field the vendor doesn't
-    carry (or a blocked call) simply stays ``None`` / empty and the detail endpoint still serves
-    the quote + stored facts. All the percent figures are normalized to human percent here in the
-    domain's vocabulary (the adapter owns the vendor's unit quirks): ``dividend_yield``,
-    ``ytd_return``, ``three_year_return`` and ``five_year_return`` are percents;
-    ``expense_ratio`` is a percent too (a fallback for the stored one). ``net_assets`` (AUM) and
-    ``nav`` are raw figures. ``top_holdings`` is capped and ordered by the vendor (largest first);
-    ``sector_weightings`` is sorted by weight descending. Empty lists mean "unavailable", never
-    "the fund holds nothing"."""
+    Two lives: the sync's yfinance adapter *produces* it from Yahoo's per-ticker ``.info`` /
+    ``funds_data`` surfaces and the repository *persists* it (the scalars onto the ``etfs`` row,
+    the two lists into their child tables); the detail read *reconstructs* it from those stored
+    rows. Either way it's the same normalized shape. All percent figures are normalized to human
+    percent here in the domain's vocabulary (the adapter owns the vendor's unit quirks):
+    ``dividend_yield``, ``ytd_return``, ``three_year_return`` and ``five_year_return`` are
+    percents; ``expense_ratio`` is a percent too. ``net_assets`` (AUM) and ``nav`` are raw
+    figures. ``category`` is the fund's classification slug (e.g. ``large_growth``) — it rides the
+    same ``.info`` fetch, so the enrichment pass reads it here rather than through a second call.
+    ``top_holdings`` is capped and ordered largest first; ``sector_weightings`` is sorted by
+    weight descending. Empty lists mean "unavailable", never "the fund holds nothing".
 
+    ``net_assets`` / ``expense_ratio`` are here because the adapter reads them off the same blob,
+    but the sync does **not** persist them from the profile — the screen owns those columns — so a
+    profile rebuilt from storage leaves them ``None`` (the detail resolves them from the stored
+    screen facts instead)."""
+
+    category: str | None = None  # classification slug (e.g. "large_growth")
     fund_family: str | None = None
-    net_assets: float | None = None  # AUM (raw), Yahoo's totalAssets — a fallback for the table's
-    expense_ratio: float | None = None  # percent — a fallback for the table's
+    net_assets: float | None = None  # AUM (raw), Yahoo's totalAssets (screen owns the stored col)
+    expense_ratio: float | None = None  # percent (screen owns the stored col)
     nav: float | None = None  # net asset value per share (raw price)
     dividend_yield: float | None = None  # percent
     ytd_return: float | None = None  # percent

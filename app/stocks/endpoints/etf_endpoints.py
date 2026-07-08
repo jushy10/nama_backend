@@ -9,16 +9,17 @@ fund's detail card.
 - ``GET /stocks/etfs/categories`` — the distinct category slugs, for the FE's filter menu.
 - ``GET /stocks/etf/{ticker}`` — one fund's detail card: the **live quote** (Alpaca, primary —
   the same feed the quote endpoint uses, so a quote failure is the same 502), the stored
-  ``etfs``-table facts (name/exchange/category/net_assets/expense_ratio), and best-effort Yahoo
-  (``yfinance``) enrichment (fund family, NAV, trailing returns, description, top holdings, sector
-  weightings). A symbol that isn't in the stored ETF universe is a **404** ("not an ETF"). The
-  Yahoo half never sinks the card — a blocked read just leaves those fields null/empty on a 200.
+  ``etfs``-table facts (name/exchange/category/net_assets/expense_ratio), and the stored profile
+  (fund family, NAV, dividend yield, trailing returns, description, top holdings, sector
+  weightings) read straight from the DB — populated out-of-band by the sync, so there's no live
+  Yahoo call on the read path. A symbol that isn't in the stored ETF universe is a **404** ("not
+  an ETF"). A fund the sync hasn't enriched yet just serves null/empty profile fields on a 200.
 
 The two list routes are pure DB reads (``SqlEtfSearchRepository`` → ``SearchEtfs`` /
 ``ListEtfCategories``), no vendor or key, so their only request error is a 400 (a bad
 ``sort``/``order`` is a 422 from the enum binding). The detail route reuses the composition root's
-Alpaca quote provider (whose missing-keys 503 it inherits — the quote is primary) plus the keyless
-yfinance ETF-profile adapter (best-effort). The refresh that populates the table (screen + category
+Alpaca quote provider (whose missing-keys 503 it inherits — the quote is primary) plus a pure DB
+read of the stored profile. The refresh that populates the table + profile (screen + profile
 enrichment) is the separate cron endpoint (``POST /internal/etfs/sync``).
 """
 
@@ -26,7 +27,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.yfinance_etf_profile_adapter import YfinanceEtfProfileProvider
 from app.stocks.etfs.db_repository import (
     SqlEtfLookupRepository,
     SqlEtfSearchRepository,
@@ -38,7 +38,6 @@ from app.stocks.etfs.entities import (
     EtfSort,
     SortDirection,
 )
-from app.stocks.etfs.ports import EtfProfileProvider
 from app.stocks.etfs.schemas import (
     EtfCategoriesResponse,
     EtfDetailResponse,
@@ -65,22 +64,15 @@ def get_categories_use_case(db: Session = Depends(get_db)) -> ListEtfCategories:
     return ListEtfCategories(SqlEtfSearchRepository(db))
 
 
-def get_etf_profile_provider() -> EtfProfileProvider:
-    # The detail card's Yahoo enrichment — keyless yfinance, like the ETF category/screener
-    # sources. Best-effort by contract (the provider never raises), so it's always wired.
-    return YfinanceEtfProfileProvider()
-
-
 def get_etf_detail_use_case(
     quotes: StockQuoteProvider = Depends(get_provider),
-    profile: EtfProfileProvider = Depends(get_etf_profile_provider),
     db: Session = Depends(get_db),
 ) -> GetEtfDetail:
     # The Alpaca singleton backs the live quote (the same instance the quote/ticker endpoints use,
-    # so the fund's move never disagrees), the lookup repository is the request-scoped read over
-    # the etfs table (the membership gate + the stored facts), and the profile is the keyless
-    # yfinance enrichment.
-    return GetEtfDetail(SqlEtfLookupRepository(db), quotes, profile)
+    # so the fund's move never disagrees); the lookup repository is the request-scoped read over
+    # the etfs table + its profile children (the membership gate, the stored facts, and the stored
+    # profile). No live Yahoo call on the read path — the sync populates the profile out of band.
+    return GetEtfDetail(SqlEtfLookupRepository(db), quotes)
 
 
 def _present_search(page: EtfSearchPage) -> EtfSearchResponse:

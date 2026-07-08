@@ -1,15 +1,19 @@
 """Interface Adapters: the SQLAlchemy-backed ETF repositories.
 
-Both implement ``repository.py`` against the slice's own ``etfs`` table and are the only layer
-that touches SQLAlchemy:
+All implement ``repository.py`` against the slice's own ``etfs`` table (and its
+``etf_sector_weightings`` / ``etf_top_holdings`` children) and are the only layer that touches
+SQLAlchemy:
 
 - ``SqlEtfRepository`` (write side): ``upsert_screen`` writes the screen into ``etfs`` — filling
   ticker/name/exchange fill-once, refreshing the ``net_assets``/``expense_ratio`` figures + the
-  screen stamp on every run (additive; an absent fund is kept, never deleted). ``set_category``
-  is the enrichment write (fill-once per fund). Each commits its own write so a successful — or
-  partial — sync is durable independent of the request.
+  screen stamp on every run (additive; an absent fund is kept, never deleted). ``upsert_profile``
+  is the per-fund enrichment write (the profile scalars onto the row + the two child sets),
+  merge-preserving so a partial Yahoo response never wipes good stored data. Each commits its own
+  write so a successful — or partial — sync is durable independent of the request.
 - ``SqlEtfSearchRepository`` (read side): the ``GET /stocks/etfs`` search + the
   ``.../categories`` menu, reading those same columns back. Read-only.
+- ``SqlEtfLookupRepository`` (read side): the per-ticker membership check + the detail card's
+  stored facts and profile. Read-only.
 """
 
 from __future__ import annotations
@@ -19,17 +23,25 @@ from datetime import datetime, timezone
 from sqlalchemy import func, literal, nulls_last, or_, select
 from sqlalchemy.orm import Session
 
+from app.stocks.etfs import models
 from app.stocks.etfs.entities import (
     EtfCategories,
-    EtfClassification,
+    EtfHolding,
+    EtfProfile,
     EtfSearchCriteria,
     EtfSearchPage,
     EtfSearchResult,
+    EtfSectorWeight,
     EtfSort,
     ScreenedEtf,
     SortDirection,
 )
-from app.stocks.etfs.models import EtfRecord, get_or_create_etf
+from app.stocks.etfs.models import (
+    EtfRecord,
+    EtfSectorWeightingRecord,
+    EtfTopHoldingRecord,
+    get_or_create_etf,
+)
 from app.stocks.etfs.repository import (
     EtfLookupRepository,
     EtfRepository,
@@ -39,9 +51,9 @@ from app.stocks.etfs.repository import (
 
 
 class SqlEtfRepository(EtfRepository):
-    """Writes the screened ETF set through a request-scoped session, into the ``etfs`` table.
-    ``upsert_screen`` / ``set_category`` each commit their own write so a successful (or partial)
-    sync is durable independent of the surrounding request."""
+    """Writes the screened ETF set + each fund's profile through a request-scoped session, into the
+    ``etfs`` table and its children. ``upsert_screen`` / ``upsert_profile`` each commit their own
+    write so a successful (or partial) sync is durable independent of the surrounding request."""
 
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
@@ -72,34 +84,64 @@ class SqlEtfRepository(EtfRepository):
         self._session.commit()
         return EtfSyncCounts(added=added, updated=updated)
 
-    def tickers_missing_category(self, limit: int | None) -> tuple[str, ...]:
-        # Largest net_assets first (ticker as a stable tiebreak) so a capped, rate-limited run
-        # spends its scarce successful .info calls on the biggest, most-viewed funds — a
-        # megafund like SPY/VOO is categorised in the first run rather than starved behind the
-        # long tail. A fund with no net_assets (unusual) sorts last. ``limit=None`` lifts the cap
-        # entirely — SQLAlchemy's ``.limit(None)`` renders no LIMIT — so a run sweeps the whole set.
-        rows = (
-            self._session.execute(
-                select(EtfRecord.ticker)
-                .where(EtfRecord.category.is_(None))
-                .order_by(nulls_last(EtfRecord.net_assets.desc()), EtfRecord.ticker)
-                .limit(limit)
-            )
-            .scalars()
-            .all()
-        )
-        return tuple(rows)
+    def profile_refresh_targets(self, limit: int | None) -> tuple[str, ...]:
+        # Stalest-first (never-fetched ahead of stamped, then oldest refresh; ticker tiebreak) so a
+        # capped, rate-limited run refreshes the funds most out of date and successive capped runs
+        # round-robin the whole set. The ordering + limit live in models. ``limit=None`` sweeps all.
+        return tuple(models.profile_refresh_targets(self._session, limit))
 
-    def set_category(self, ticker: str, classification: EtfClassification) -> None:
+    def upsert_profile(self, ticker: str, profile: EtfProfile) -> None:
         etf = self._session.execute(
             select(EtfRecord).where(EtfRecord.ticker == ticker)
         ).scalar_one_or_none()
         if etf is None:
             return
-        # Fill-once: write only when the source supplies a category and the column still lacks
-        # one, so a settled value survives.
-        if classification.category and not etf.category:
-            etf.category = classification.category
+        now = self._now()
+        # Scalars: write each only when the fetch carried it, so a sparse/transient response never
+        # clobbers a stored value with null. net_assets/expense_ratio are the screen's — untouched.
+        if profile.category is not None:
+            etf.category = profile.category
+        if profile.fund_family is not None:
+            etf.fund_family = profile.fund_family
+        if profile.dividend_yield is not None:
+            etf.dividend_yield = profile.dividend_yield
+        if profile.description is not None:
+            etf.description = profile.description
+        if profile.nav is not None:
+            etf.nav = profile.nav
+        if profile.ytd_return is not None:
+            etf.ytd_return = profile.ytd_return
+        if profile.three_year_return is not None:
+            etf.three_year_return = profile.three_year_return
+        if profile.five_year_return is not None:
+            etf.five_year_return = profile.five_year_return
+        etf.profile_fetched_at = now
+        # Child sets: replace wholesale only when the fetch returned rows; an empty list leaves the
+        # stored rows intact (a blocked funds_data read must not wipe good holdings/sectors).
+        if profile.sector_weightings:
+            models.delete_sector_weightings_for_etf(self._session, etf.id)
+            for weight in profile.sector_weightings:
+                self._session.add(
+                    EtfSectorWeightingRecord(
+                        etf_id=etf.id,
+                        sector=weight.sector,
+                        weight=weight.weight,
+                        fetched_at=now,
+                    )
+                )
+        if profile.top_holdings:
+            models.delete_top_holdings_for_etf(self._session, etf.id)
+            for position, holding in enumerate(profile.top_holdings):
+                self._session.add(
+                    EtfTopHoldingRecord(
+                        etf_id=etf.id,
+                        position=position,
+                        ticker=holding.ticker,
+                        name=holding.name,
+                        weight=holding.weight,
+                        fetched_at=now,
+                    )
+                )
         self._session.commit()
 
 
@@ -223,3 +265,32 @@ class SqlEtfLookupRepository(EtfLookupRepository):
             select(EtfRecord).where(EtfRecord.ticker == ticker)
         ).scalar_one_or_none()
         return None if row is None else _to_result(row)
+
+    def get_stored_profile(self, ticker: str) -> EtfProfile:
+        row = self._session.execute(
+            select(EtfRecord).where(EtfRecord.ticker == ticker)
+        ).scalar_one_or_none()
+        if row is None:
+            return EtfProfile.empty()
+        sectors = tuple(
+            EtfSectorWeight(sector=r.sector, weight=r.weight)
+            for r in models.sector_weightings_for_etf(self._session, ticker)
+        )
+        holdings = tuple(
+            EtfHolding(ticker=r.ticker, name=r.name, weight=r.weight)
+            for r in models.top_holdings_for_etf(self._session, ticker)
+        )
+        # net_assets/expense_ratio deliberately left None — the detail resolves them from the
+        # stored screen facts (``get``), not the profile (which never owned those columns).
+        return EtfProfile(
+            category=row.category,
+            fund_family=row.fund_family,
+            nav=row.nav,
+            dividend_yield=row.dividend_yield,
+            ytd_return=row.ytd_return,
+            three_year_return=row.three_year_return,
+            five_year_return=row.five_year_return,
+            description=row.description,
+            top_holdings=holdings,
+            sector_weightings=sectors,
+        )

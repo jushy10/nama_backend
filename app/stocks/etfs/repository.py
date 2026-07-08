@@ -4,12 +4,13 @@ Dependency Inversion for storage: the use cases are handed a repository and neve
 it's backed by SQLAlchemy or an in-memory fake (tests). The concrete SQLAlchemy implementations
 live in ``db_repository.py``.
 
-Two ports, split by capability (the ``CLAUDE.md`` "one port per capability" rule): the write
-side ``EtfRepository`` the sync uses (the screen upsert *and* the per-fund category enrichment),
-and the read side ``EtfSearchRepository`` the ``GET /stocks/etfs`` search + ``.../categories``
-menu use. Both front the slice's own ``etfs`` table — unlike the stock ``universe`` slice, which
-is table-less and writes onto the shared ``stocks`` anchor; an ETF is not a company, so it gets
-its own table rather than polluting the stock universe.
+Three ports, split by capability (the ``CLAUDE.md`` "one port per capability" rule): the write
+side ``EtfRepository`` the sync uses (the screen upsert *and* the per-fund profile enrichment), the
+read side ``EtfSearchRepository`` the ``GET /stocks/etfs`` search + ``.../categories`` menu use, and
+``EtfLookupRepository`` for the two per-ticker reads the detail card needs. All front the slice's
+own ``etfs`` table (and its ``etf_sector_weightings`` / ``etf_top_holdings`` children) — unlike the
+stock ``universe`` slice, which is table-less and writes onto the shared ``stocks`` anchor; an ETF
+is not a company, so it gets its own tables rather than polluting the stock universe.
 """
 
 from abc import ABC, abstractmethod
@@ -17,7 +18,7 @@ from dataclasses import dataclass
 
 from app.stocks.etfs.entities import (
     EtfCategories,
-    EtfClassification,
+    EtfProfile,
     EtfSearchCriteria,
     EtfSearchPage,
     EtfSearchResult,
@@ -41,7 +42,8 @@ class EtfSyncCounts:
 
 
 class EtfRepository(ABC):
-    """A persistent store for the screened ETF set, refreshed by the sync — the ``etfs`` table."""
+    """A persistent store for the screened ETF set + each fund's profile, refreshed by the sync —
+    the ``etfs`` table and its ``etf_sector_weightings`` / ``etf_top_holdings`` children."""
 
     @abstractmethod
     def upsert_screen(self, etfs: tuple[ScreenedEtf, ...]) -> EtfSyncCounts:
@@ -49,32 +51,39 @@ class EtfRepository(ABC):
 
         For each: create the row if absent, fill ticker/name/exchange when missing (never
         clobbering a settled value), and set/refresh the screen figures
-        (``net_assets``/``expense_ratio``) plus the last-screen stamp. Leaves ``category``
-        alone — that's the enrichment pass's column. Additive: ETFs absent from the screen are
-        left untouched (no delete). Commits its own write.
+        (``net_assets``/``expense_ratio``) plus the last-screen stamp. Leaves the profile columns
+        alone — that's ``upsert_profile``'s job. Additive: ETFs absent from the screen are left
+        untouched (no delete). Commits its own write.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def tickers_missing_category(self, limit: int | None) -> tuple[str, ...]:
-        """Return the tickers still missing a ``category`` — the enrichment pass's work-list — up
-        to ``limit`` of them, or **all** of them when ``limit`` is ``None``.
+    def profile_refresh_targets(self, limit: int | None) -> tuple[str, ...]:
+        """Return the tickers whose profile most needs a refresh — the enrichment pass's work-list
+        — up to ``limit`` of them, or **all** of them when ``limit`` is ``None``.
 
-        Ordered **largest net_assets first** (ticker as a stable tiebreak), so a capped run
-        spends its budget classifying the biggest, most-viewed funds before the long tail — the
-        per-ticker source is rate-limited, so only so many succeed per run. Deterministic, so
-        successive capped runs still sweep the whole set. A fund the source can't categorise (or
-        a run that never reaches it under the cap) simply surfaces again next run.
+        Every screened fund is a target (profile figures drift, so there's no "done" state).
+        Ordered **stalest first** — never-fetched funds (null ``profile_fetched_at``) ahead of any
+        stamped fund, then oldest-refresh first, with ``ticker`` as a stable tiebreak — so a capped,
+        rate-limited run spends its budget on the funds most out of date and successive capped runs
+        round-robin the whole set rather than starving the tail.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def set_category(self, ticker: str, classification: EtfClassification) -> None:
-        """Fill ``ticker``'s ``category`` on the row from ``classification``.
+    def upsert_profile(self, ticker: str, profile: EtfProfile) -> None:
+        """Persist ``ticker``'s profile: the scalars onto the ``etfs`` row (``category`` /
+        ``fund_family`` / ``dividend_yield`` / ``description`` / ``nav`` / the trailing returns) and
+        the two lists into their child tables (``etf_sector_weightings`` / ``etf_top_holdings``),
+        stamping ``profile_fetched_at``.
 
-        Fill-once: written only when the source supplies a category and the column is still
-        unset, so a settled value is never clobbered. A no-op if the ticker has no row or the
-        classification is empty. Commits its own write, so a partial enrichment sweep is durable.
+        **Merge-preserving**, so a partial/transient Yahoo response never erases good stored data
+        (the same spirit as the earnings slices' merge sync): each scalar is written only when the
+        incoming value is non-``None`` (a field the fetch didn't carry leaves the stored one), and a
+        child set is replaced (delete-then-insert) only when the fetch returned rows (an empty list
+        leaves the stored rows intact). Does **not** touch ``net_assets`` / ``expense_ratio`` — the
+        screen owns those. A no-op if the ticker has no ``etfs`` row. Commits its own write, so a
+        partial enrichment sweep is durable.
         """
         raise NotImplementedError
 
@@ -109,13 +118,13 @@ class EtfSearchRepository(ABC):
 
 
 class EtfLookupRepository(ABC):
-    """A read-only view over a *single* stored fund, keyed by ticker — the seam for the two
-    per-ticker reads the search surface doesn't cover.
+    """A read-only view over a *single* stored fund, keyed by ticker — the seam for the per-ticker
+    reads the search surface doesn't cover.
 
     Split from ``EtfSearchRepository`` (the "one port per capability" rule) so the *ticker* slice
     can depend on just the membership check — its only question is "is this symbol an ETF?" — and
-    the ETF-detail read on the full row, without pulling in the whole paginated search surface.
-    Both are backed by the same ``etfs`` table and its unique ``ticker`` index.
+    the ETF-detail read on the full row + stored profile, without pulling in the whole paginated
+    search surface. All are backed by the same ``etfs`` table and its children.
     """
 
     @abstractmethod
@@ -134,9 +143,21 @@ class EtfLookupRepository(ABC):
         when the fund isn't in the universe.
 
         One indexed row read on the unique ``ticker``: the identity facts (name/exchange) plus the
-        stored figures (net_assets/expense_ratio) and the ``category`` slug — the anchor the
-        ETF-detail endpoint reads before layering the live quote and the best-effort yfinance
-        enrichment. ``None`` (not an error) is how the endpoint learns a symbol is not an ETF, so
-        it can answer 404.
+        stored screen figures (net_assets/expense_ratio) and the ``category`` slug — the anchor the
+        ETF-detail endpoint reads before layering the live quote and the stored profile. ``None``
+        (not an error) is how the endpoint learns a symbol is not an ETF, so it can answer 404.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_stored_profile(self, ticker: str) -> EtfProfile:
+        """Return ``ticker``'s stored profile — the scalars off the ``etfs`` row plus the sector
+        weightings / top holdings from the child tables — as an ``EtfProfile``.
+
+        The detail read's enrichment source (the endpoint is DB-only — no live Yahoo call). A fund
+        with a row but no profile yet (the enrichment pass hasn't reached it) yields an empty
+        ``EtfProfile`` (all ``None`` / empty lists), never an error, so the card still serves the
+        quote + screen facts around it. ``net_assets`` / ``expense_ratio`` are left ``None`` here —
+        the detail resolves them from the stored screen facts (``get``), not the profile.
         """
         raise NotImplementedError

@@ -1,11 +1,11 @@
 """Tests for the ETF use cases: SyncEtfs (write side) + SearchEtfs / ListEtfCategories /
 GetEtfDetail (read).
 
-Offline: hand-written fakes for the screener, classifier, quote, profile, and repository ports, so
-this exercises only the orchestration — the upsert-vs-skip decision and the category enrichment
-pass for the sync, the edge normalization (trim/slug/clamp) and criteria pass-through for the
-search, and for the detail: the membership gate (404 before any upstream call), the quote-primary
-propagation, and the best-effort profile degradation — independent of Yahoo, Alpaca, or the DB.
+Offline: hand-written fakes for the screener, profile source, quote, and repository ports, so this
+exercises only the orchestration — the upsert-vs-skip decision and the profile enrichment pass for
+the sync, the edge normalization (trim/slug/clamp) and criteria pass-through for the search, and for
+the detail: the membership gate (404 before any upstream call), the quote-primary propagation, and
+the DB-only stored-profile read — independent of Yahoo, Alpaca, or the DB.
 """
 
 from datetime import datetime, timezone
@@ -15,7 +15,6 @@ import pytest
 from app.stocks.entities import Quote
 from app.stocks.etfs.entities import (
     EtfCategories,
-    EtfClassification,
     EtfHolding,
     EtfProfile,
     EtfSearchCriteria,
@@ -26,7 +25,7 @@ from app.stocks.etfs.entities import (
     ScreenedEtf,
     SortDirection,
 )
-from app.stocks.etfs.ports import EtfCategoryProvider, EtfProfileProvider, EtfScreener
+from app.stocks.etfs.ports import EtfProfileProvider, EtfScreener
 from app.stocks.etfs.repository import (
     EtfLookupRepository,
     EtfRepository,
@@ -70,41 +69,46 @@ class _FakeScreener(EtfScreener):
         return self._etfs
 
 
-class _FakeClassifier(EtfCategoryProvider):
-    """Maps ticker -> classification; raises StockDataUnavailable for tickers in ``errors``."""
+_NOT_CALLED = object()  # sentinel: the enrichment work-list query was never issued
+
+
+class _FakeProfileProvider(EtfProfileProvider):
+    """Maps ticker -> profile; raises StockDataUnavailable for tickers in ``errors``. A ticker with
+    no mapping yields an empty profile (a reachable-but-sparse fund)."""
 
     def __init__(self, mapping=None, *, errors=()) -> None:
         self._mapping = dict(mapping or {})
         self._errors = set(errors)
         self.calls: list[str] = []
 
-    def get_category(self, symbol):
+    def get_profile(self, symbol):
         self.calls.append(symbol)
         if symbol in self._errors:
             raise StockDataUnavailable(symbol, "yahoo blocked")
-        return self._mapping.get(symbol, EtfClassification())
+        return self._mapping.get(symbol, EtfProfile.empty())
 
 
 class _FakeRepo(EtfRepository):
-    """Records the upsert input and the categories written; serves a canned work-list."""
+    """Records the screen upsert input, the enrichment work-list limit, and the profiles written;
+    serves a canned work-list."""
 
-    def __init__(self, *, counts=EtfSyncCounts(0, 0), missing=()) -> None:
+    def __init__(self, *, counts=EtfSyncCounts(0, 0), targets=()) -> None:
         self._counts = counts
-        self._missing = tuple(missing)
+        self._targets = tuple(targets)
         self.upserted: tuple[ScreenedEtf, ...] | None = None
-        self.categorised: list[tuple[str, EtfClassification]] = []
-        self.missing_limit: int | None = None
+        self.profiled: list[tuple[str, EtfProfile]] = []
+        self.refresh_limit: object = _NOT_CALLED
 
     def upsert_screen(self, etfs):
         self.upserted = tuple(etfs)
         return self._counts
 
-    def tickers_missing_category(self, limit):
-        self.missing_limit = limit
-        return self._missing
+    def profile_refresh_targets(self, limit):
+        self.refresh_limit = limit
+        return self._targets
 
-    def set_category(self, ticker, classification):
-        self.categorised.append((ticker, classification))
+    def upsert_profile(self, ticker, profile):
+        self.profiled.append((ticker, profile))
 
 
 def test_sync_upserts_a_healthy_screen_and_reports_counts():
@@ -112,7 +116,7 @@ def test_sync_upserts_a_healthy_screen_and_reports_counts():
     screener = _FakeScreener(screen)
     repo = _FakeRepo(counts=EtfSyncCounts(added=5, updated=45))
 
-    report = SyncEtfs(screener, repo, _FakeClassifier()).execute()
+    report = SyncEtfs(screener, repo, _FakeProfileProvider()).execute()
 
     assert isinstance(report, EtfSyncReport)
     assert screener.calls == 1
@@ -120,33 +124,34 @@ def test_sync_upserts_a_healthy_screen_and_reports_counts():
     assert repo.upserted == screen  # the whole screen reached the upsert
     assert (report.screened, report.added, report.updated) == (len(screen), 5, 45)
     assert report.skipped is False
-    assert (report.enriched, report.enrich_failed) == (0, 0)  # nothing missing to categorise
+    assert (report.enriched, report.enrich_failed) == (0, 0)  # no funds in the work-list
+    assert repo.refresh_limit is None  # the enrichment pass still ran (uncapped), just no targets
 
 
 def test_sync_skips_an_empty_screen_without_touching_the_store():
     repo = _FakeRepo()
-    classifier = _FakeClassifier()
+    provider = _FakeProfileProvider()
 
-    report = SyncEtfs(_FakeScreener(()), repo, classifier).execute()
+    report = SyncEtfs(_FakeScreener(()), repo, provider).execute()
 
     assert report.skipped is True
     assert (report.screened, report.added, report.updated) == (0, 0, 0)
     assert (report.enriched, report.enrich_failed) == (0, 0)
     assert repo.upserted is None  # upsert never called — the store is left intact
     # The enrichment pass is skipped too — a blocked bulk screen means blocked .info calls.
-    assert repo.missing_limit is None
-    assert classifier.calls == []
+    assert repo.refresh_limit is _NOT_CALLED
+    assert provider.calls == []
 
 
 def test_sync_skips_an_implausibly_small_screen():
     repo = _FakeRepo()
     report = SyncEtfs(
-        _FakeScreener(_a_screen(SyncEtfs.MIN_PLAUSIBLE_SCREEN - 1)), repo, _FakeClassifier()
+        _FakeScreener(_a_screen(SyncEtfs.MIN_PLAUSIBLE_SCREEN - 1)), repo, _FakeProfileProvider()
     ).execute()
 
     assert report.skipped is True
     assert repo.upserted is None
-    assert repo.missing_limit is None  # enrichment not reached
+    assert repo.refresh_limit is _NOT_CALLED  # enrichment not reached
 
 
 def test_sync_propagates_a_hard_screen_failure():
@@ -155,72 +160,66 @@ def test_sync_propagates_a_hard_screen_failure():
         SyncEtfs(
             _FakeScreener(error=StockDataUnavailable("*", "yahoo blocked")),
             repo,
-            _FakeClassifier(),
+            _FakeProfileProvider(),
         ).execute()
     assert repo.upserted is None  # nothing written on a hard failure
-    assert repo.missing_limit is None
+    assert repo.refresh_limit is _NOT_CALLED
 
 
-def test_sync_enriches_funds_missing_a_category():
+def test_sync_refreshes_each_stored_funds_profile():
     screen = _a_screen(SyncEtfs.MIN_PLAUSIBLE_SCREEN)
-    repo = _FakeRepo(missing=("SPY", "QQQ"))
-    classifier = _FakeClassifier(
-        {
-            "SPY": EtfClassification("large_blend"),
-            "QQQ": EtfClassification("large_growth"),
-        }
-    )
+    repo = _FakeRepo(targets=("SPY", "QQQ"))
+    spy = EtfProfile(category="large_blend", fund_family="SSGA")
+    qqq = EtfProfile(category="large_growth", fund_family="Invesco")
+    provider = _FakeProfileProvider({"SPY": spy, "QQQ": qqq})
 
-    report = SyncEtfs(_FakeScreener(screen), repo, classifier).execute()
+    report = SyncEtfs(_FakeScreener(screen), repo, provider).execute()
 
-    assert classifier.calls == ["SPY", "QQQ"]
-    assert repo.categorised == [
-        ("SPY", EtfClassification("large_blend")),
-        ("QQQ", EtfClassification("large_growth")),
-    ]
+    assert provider.calls == ["SPY", "QQQ"]
+    assert repo.profiled == [("SPY", spy), ("QQQ", qqq)]
     assert (report.enriched, report.enrich_failed) == (2, 0)
 
 
 def test_enrichment_counts_a_source_failure_and_keeps_going():
     screen = _a_screen(SyncEtfs.MIN_PLAUSIBLE_SCREEN)
-    repo = _FakeRepo(missing=("SPY", "BADX", "QQQ"))
-    classifier = _FakeClassifier(
-        {"SPY": EtfClassification("large_blend"), "QQQ": EtfClassification("large_growth")},
+    repo = _FakeRepo(targets=("SPY", "BADX", "QQQ"))
+    provider = _FakeProfileProvider(
+        {"SPY": EtfProfile(category="large_blend"), "QQQ": EtfProfile(category="large_growth")},
         errors=("BADX",),
     )
 
-    report = SyncEtfs(_FakeScreener(screen), repo, classifier).execute()
+    report = SyncEtfs(_FakeScreener(screen), repo, provider).execute()
 
-    # BADX raised, so it isn't written — but the sweep continued to QQQ.
-    assert [ticker for ticker, _ in repo.categorised] == ["SPY", "QQQ"]
+    # BADX raised, so its stored profile is left untouched — but the sweep continued to QQQ.
+    assert [ticker for ticker, _ in repo.profiled] == ["SPY", "QQQ"]
     assert (report.enriched, report.enrich_failed) == (2, 1)
 
 
-def test_enrichment_leaves_an_uncategorisable_fund_for_later():
+def test_enrichment_persists_even_a_sparse_profile():
+    # A reachable-but-sparse fund (empty profile) is still fetched and persisted — the
+    # merge-preserving upsert handles the emptiness — so it's counted enriched, not left for later.
     screen = _a_screen(SyncEtfs.MIN_PLAUSIBLE_SCREEN)
-    repo = _FakeRepo(missing=("WEIRD",))
-    # The source reached the fund but has no category for it.
-    classifier = _FakeClassifier({"WEIRD": EtfClassification()})
+    repo = _FakeRepo(targets=("SPARSE",))
+    provider = _FakeProfileProvider({})  # SPARSE -> EtfProfile.empty()
 
-    report = SyncEtfs(_FakeScreener(screen), repo, classifier).execute()
+    report = SyncEtfs(_FakeScreener(screen), repo, provider).execute()
 
-    assert repo.categorised == []  # nothing written
-    # Neither enriched nor failed — nothing went wrong, it's just left for a later run.
-    assert (report.enriched, report.enrich_failed) == (0, 0)
+    assert repo.profiled == [("SPARSE", EtfProfile.empty())]  # upsert still called
+    assert (report.enriched, report.enrich_failed) == (1, 0)
 
 
 def test_enrichment_defaults_to_no_limit_then_overrides():
     screen = _a_screen(SyncEtfs.MIN_PLAUSIBLE_SCREEN)
 
-    # Default: uncapped — the enrichment pass asks the repo for every uncategorised fund.
+    # Default: uncapped — the enrichment pass asks the repo for every stored fund.
     repo = _FakeRepo()
-    SyncEtfs(_FakeScreener(screen), repo, _FakeClassifier()).execute()
-    assert repo.missing_limit is None
+    SyncEtfs(_FakeScreener(screen), repo, _FakeProfileProvider()).execute()
+    assert repo.refresh_limit is None
 
     # An explicit limit still caps a run — the throttle escape hatch.
     repo = _FakeRepo()
-    SyncEtfs(_FakeScreener(screen), repo, _FakeClassifier()).execute(limit=25)
-    assert repo.missing_limit == 25
+    SyncEtfs(_FakeScreener(screen), repo, _FakeProfileProvider()).execute(limit=25)
+    assert repo.refresh_limit == 25
 
 
 # --- SearchEtfs / ListEtfCategories (the read side) ----------------------------------------
@@ -370,11 +369,14 @@ def _a_profile() -> EtfProfile:
 
 
 class _FakeLookup(EtfLookupRepository):
-    """In-memory single-fund lookup; records the get/is_etf calls."""
+    """In-memory single-fund lookup; records the get / get_stored_profile calls. Serves canned
+    stored facts + a canned stored profile (the detail read is DB-only, no live Yahoo)."""
 
-    def __init__(self, facts: EtfSearchResult | None) -> None:
+    def __init__(self, facts: EtfSearchResult | None, profile: EtfProfile | None = None) -> None:
         self._facts = facts
+        self._profile = profile if profile is not None else EtfProfile.empty()
         self.get_calls: list[str] = []
+        self.profile_calls: list[str] = []
 
     def is_etf(self, ticker: str) -> bool:
         return self._facts is not None
@@ -382,6 +384,10 @@ class _FakeLookup(EtfLookupRepository):
     def get(self, ticker: str) -> EtfSearchResult | None:
         self.get_calls.append(ticker)
         return self._facts
+
+    def get_stored_profile(self, ticker: str) -> EtfProfile:
+        self.profile_calls.append(ticker)
+        return self._profile
 
 
 class _FakeQuotes(StockQuoteProvider):
@@ -397,35 +403,17 @@ class _FakeQuotes(StockQuoteProvider):
         return self._quote or _quote(symbol)
 
 
-class _FakeProfileProvider(EtfProfileProvider):
-    def __init__(self, profile: EtfProfile | None = None, error: Exception | None = None) -> None:
-        self._profile = profile if profile is not None else EtfProfile.empty()
-        self._error = error
-        self.calls: list[str] = []
-
-    def get_profile(self, symbol: str) -> EtfProfile:
-        self.calls.append(symbol)
-        if self._error is not None:
-            raise self._error
-        return self._profile
-
-
 _UNSET = object()  # sentinel so an explicit facts=None (non-ETF) differs from "not passed"
 
 
-def _detail_use_case(
-    *, facts=_UNSET, quote=None, quote_error=None, profile=None, profile_error=None
-):
-    lookup = _FakeLookup(_facts() if facts is _UNSET else facts)
+def _detail_use_case(*, facts=_UNSET, quote=None, quote_error=None, profile=None):
+    lookup = _FakeLookup(_facts() if facts is _UNSET else facts, profile)
     quotes = _FakeQuotes(quote, quote_error)
-    prof = _FakeProfileProvider(profile, profile_error)
-    return GetEtfDetail(lookup, quotes, prof), lookup, quotes, prof
+    return GetEtfDetail(lookup, quotes), lookup, quotes
 
 
 def test_detail_assembles_quote_stored_facts_and_profile():
-    use_case, _, quotes, prof = _detail_use_case(
-        quote=_quote(), profile=_a_profile()
-    )
+    use_case, lookup, quotes = _detail_use_case(quote=_quote(), profile=_a_profile())
 
     detail = use_case.execute("voo")  # lower-case in -> normalized
 
@@ -442,15 +430,16 @@ def test_detail_assembles_quote_stored_facts_and_profile():
     # with the screener list).
     assert detail.net_assets == 1.7e12
     assert detail.expense_ratio == 0.03
-    # Best-effort profile enrichment rides along.
+    # Stored profile enrichment rides along, read from the DB (not a live Yahoo call).
     assert detail.profile.fund_family == "Vanguard"
     assert detail.profile.top_holdings[0].ticker == "NVDA"
     assert quotes.calls == ["VOO"]
-    assert prof.calls == ["VOO"]
+    assert lookup.profile_calls == ["VOO"]
 
 
 def test_detail_falls_back_to_profile_figures_when_the_table_lacks_them():
-    # A fund the table has no net_assets/expense_ratio for yet: the profile fills the gap.
+    # A fund the table has no net_assets/expense_ratio for yet: the profile fills the gap (the
+    # assemble precedence — facts first, profile second).
     use_case, *_ = _detail_use_case(
         facts=_facts(net_assets=None, expense_ratio=None),
         profile=_a_profile(),  # carries net_assets=1.8e12, expense_ratio=0.05
@@ -463,37 +452,34 @@ def test_detail_falls_back_to_profile_figures_when_the_table_lacks_them():
 
 
 def test_detail_404s_before_any_upstream_call_for_a_non_etf():
-    use_case, lookup, quotes, prof = _detail_use_case(facts=None)  # not in the universe
+    use_case, lookup, quotes = _detail_use_case(facts=None)  # not in the universe
 
     with pytest.raises(StockNotFound):
         use_case.execute("AAPL")
 
-    # The membership gate short-circuits: neither the quote nor the profile was fetched.
+    # The membership gate short-circuits: neither the quote nor the stored profile was read.
     assert lookup.get_calls == ["AAPL"]
     assert quotes.calls == []
-    assert prof.calls == []
+    assert lookup.profile_calls == []
 
 
 def test_detail_propagates_a_quote_failure():
     # The quote is primary — its failure propagates (mapped to 502 at the edge), not degraded.
-    use_case, _, _, prof = _detail_use_case(
+    use_case, lookup, _ = _detail_use_case(
         quote_error=StockDataUnavailable("VOO", "alpaca down")
     )
 
     with pytest.raises(StockDataUnavailable):
         use_case.execute("VOO")
 
-    # The profile is never reached once the primary source has failed.
-    assert prof.calls == []
+    # The profile read is never reached once the primary source has failed.
+    assert lookup.profile_calls == []
 
 
-def test_detail_degrades_to_an_empty_profile_when_yahoo_is_unavailable():
-    # Best-effort enrichment: even a (contract-breaking) raising profile provider never sinks the
-    # card — the quote + stored facts still serve on a 200-worthy result with an empty profile.
-    use_case, *_ = _detail_use_case(
-        quote=_quote(),
-        profile_error=StockDataUnavailable("VOO", "yahoo blocked"),
-    )
+def test_detail_serves_an_empty_profile_for_an_unenriched_fund():
+    # A fund the sync hasn't profile-enriched yet: the stored profile is empty, but the card still
+    # serves the quote + stored facts on a 200-worthy result.
+    use_case, *_ = _detail_use_case(quote=_quote())  # profile defaults to EtfProfile.empty()
 
     detail = use_case.execute("VOO")
 

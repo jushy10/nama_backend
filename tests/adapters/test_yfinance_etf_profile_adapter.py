@@ -3,8 +3,8 @@
 Offline: a fake Ticker (with a fake ``funds_data``) is injected through the adapter's
 ``ticker_factory`` seam, so this exercises the field mapping, the per-field unit normalization
 (Yahoo mixes fractions and already-percent numbers — verified empirically against VOO), the
-holdings/sector shaping, and the total (never-raises) best-effort contract — without touching
-Yahoo.
+holdings/sector shaping, and the failure contract — **raises on a hard ``.info`` read** (the sync's
+signal to skip and retry the fund), best-effort past that — without touching Yahoo.
 """
 
 import pandas as pd
@@ -13,11 +13,12 @@ import pytest
 from app.stocks.adapters.yfinance_etf_profile_adapter import (
     YfinanceEtfProfileProvider,
 )
-from app.stocks.etfs.entities import EtfHolding, EtfProfile, EtfSectorWeight
+from app.stocks.exceptions import StockDataUnavailable
 
 # The VOO ``.info`` shape, at the raw units Yahoo actually returns (see the adapter's docstring):
 # netExpenseRatio/ytdReturn are already-percent numbers, the yield/return averages are fractions.
 _VOO_INFO = {
+    "category": "Large Blend",  # display label -> slugged to "large_blend"
     "fundFamily": "Vanguard",
     "totalAssets": 1_701_513_003_008,
     "netExpenseRatio": 0.03,  # already a percent -> as-is
@@ -118,6 +119,7 @@ def _voo_ticker() -> _FakeTicker:
 def test_maps_and_normalizes_every_info_field_to_human_percent():
     profile = _provider(_voo_ticker()).get_profile("VOO")
 
+    assert profile.category == "large_blend"  # display label slugged
     assert profile.fund_family == "Vanguard"
     assert profile.net_assets == 1_701_513_003_008.0  # raw AUM, passed through
     assert profile.expense_ratio == 0.03  # already a percent -> unchanged
@@ -127,6 +129,7 @@ def test_maps_and_normalizes_every_info_field_to_human_percent():
     assert profile.ytd_return == 11.25  # already a percent -> NOT x100 (passed through)
     assert profile.three_year_return == pytest.approx(20.4)  # 0.204 fraction -> x100
     assert profile.five_year_return == pytest.approx(13.0)  # 0.130 fraction -> x100
+    assert profile.description == "The fund employs an indexing investment approach."
 
 
 def test_maps_holdings_with_weight_as_percent_preserving_order():
@@ -163,10 +166,12 @@ def test_caps_holdings_at_ten():
 
 
 def test_missing_info_fields_are_null_not_an_error():
-    # A sparse .info (fund Yahoo barely covers) leaves each absent field null, still a profile.
+    # A sparse .info (fund Yahoo barely covers) leaves each absent field null, still a profile —
+    # a served-but-sparse .info does NOT raise (only an empty/failed one does).
     ticker = _FakeTicker({"fundFamily": "iShares"}, _FakeFundsData())
     profile = _provider(ticker).get_profile("IVV")
     assert profile.fund_family == "iShares"
+    assert profile.category is None
     assert profile.dividend_yield is None
     assert profile.ytd_return is None
     assert profile.nav is None
@@ -174,26 +179,32 @@ def test_missing_info_fields_are_null_not_an_error():
     assert profile.sector_weightings == ()
 
 
-def test_empty_info_degrades_the_whole_read():
-    # yfinance surfaces a swallowed crumb 401 as an empty .info; after the retry it's still empty,
-    # so the info-derived half is all null (the funds_data half can still fill, but here it's empty
-    # too).
+def test_empty_info_raises():
+    # yfinance surfaces a swallowed crumb 401 as an empty .info; after the retry it's still empty.
+    # The sync must tell this block apart from a served-but-sparse fund, so it's a hard failure.
     ticker = _FakeTicker({}, _FakeFundsData())
-    profile = _provider(ticker).get_profile("VOO")
-    assert profile == EtfProfile.empty()
+    with pytest.raises(StockDataUnavailable):
+        _provider(ticker).get_profile("VOO")
 
 
-def test_info_failure_degrades_to_an_empty_profile_without_raising():
-    # The total contract: a hard vendor failure on .info never raises — it returns an empty
-    # profile so the detail endpoint still serves the quote + stored facts.
+def test_info_hard_failure_raises():
+    # A raised vendor error on .info is a hard failure — it raises so the sync skips (and retries)
+    # the fund and leaves its stored profile intact.
     ticker = _FakeTicker(None, info_error=RuntimeError("429 Too Many Requests"))
-    assert _provider(ticker).get_profile("VOO") == EtfProfile.empty()
+    with pytest.raises(StockDataUnavailable):
+        _provider(ticker).get_profile("VOO")
 
 
-def test_funds_data_failure_degrades_to_an_empty_profile_without_raising():
-    # funds_data can raise for a fund Yahoo carries no fund data for; that must not raise either.
+def test_funds_data_failure_yields_a_partial_profile_not_an_error():
+    # funds_data can raise for a fund Yahoo carries no fund data for; that's best-effort — the
+    # served .info half still yields a profile, with an empty description/holdings/sectors.
     ticker = _FakeTicker(_VOO_INFO, funds_error=RuntimeError("no fund data"))
-    assert _provider(ticker).get_profile("VOO") == EtfProfile.empty()
+    profile = _provider(ticker).get_profile("VOO")
+    assert profile.fund_family == "Vanguard"  # info half serves
+    assert profile.category == "large_blend"
+    assert profile.description is None
+    assert profile.top_holdings == ()
+    assert profile.sector_weightings == ()
 
 
 def test_none_holdings_and_non_dict_sectors_yield_empty_lists():

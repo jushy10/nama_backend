@@ -5,11 +5,14 @@ knows nothing of Yahoo, HTTP, or SQLAlchemy:
 
 - ``SyncEtfs`` — the out-of-band populator. Two passes in one run: (1) screen the top US ETFs
   and upsert the result into the ``etfs`` table (additive: it never removes a fund); (2) enrich
-  the stored funds that still lack a ``category`` — **all** of them by default, or up to ``limit``
-  when the caller throttles — classifying each through a per-ticker call and writing its slug.
-  Invoked by the (fire-and-forget) cron endpoint. Guarded so a blocked/truncated screen (empty or
-  implausibly small) skips *both* passes rather than churning a partial set or hammering the same
-  blocked vendor with per-ticker calls.
+  the stored funds with their full profile — **all** of them by default, or up to ``limit`` when
+  the caller throttles — fetching each fund's profile (category, fund family, dividend yield, NAV,
+  description, trailing returns, top holdings, sector weightings) through a single per-ticker call
+  and persisting it (scalars onto the row, the two lists into their child tables). The write is
+  merge-preserving, so a fund whose fetch hard-fails is simply skipped and retried next run — its
+  stored profile is left intact. Invoked by the (fire-and-forget) cron endpoint. Guarded so a
+  blocked/truncated screen (empty or implausibly small) skips *both* passes rather than churning a
+  partial set or hammering the same blocked vendor with per-ticker calls.
 - ``SearchEtfs`` — the read side (``GET /stocks/etfs``): normalize a search request at the edge
   and hand the read repository a clean ``EtfSearchCriteria``, returning the matched page. No live
   feed — the set is already in the table.
@@ -25,14 +28,13 @@ from dataclasses import dataclass
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfDetail,
-    EtfProfile,
     EtfSearchCriteria,
     EtfSearchPage,
     EtfSort,
     SortDirection,
     slugify,
 )
-from app.stocks.etfs.ports import EtfCategoryProvider, EtfProfileProvider, EtfScreener
+from app.stocks.etfs.ports import EtfProfileProvider, EtfScreener
 from app.stocks.etfs.repository import (
     EtfLookupRepository,
     EtfRepository,
@@ -50,11 +52,12 @@ class EtfSyncReport:
     """The outcome of one sync run.
 
     ``screened`` is the screen size and ``added`` / ``updated`` the rows the screen upsert
-    inserted / refreshed. ``enriched`` is how many funds the enrichment pass categorised this run
-    and ``enrich_failed`` how many per-ticker lookups the source couldn't serve (an outage or
-    block) — both zero when the screen was skipped. ``skipped`` is ``True`` when the screen came
-    back empty or implausibly small (a truncated or blocked fetch) so *nothing* was written; the
-    other counts are then all zero. There is no ``removed`` count — the sync is additive.
+    inserted / refreshed. ``enriched`` is how many funds the enrichment pass fetched and persisted
+    a profile for this run and ``enrich_failed`` how many per-ticker lookups the source couldn't
+    serve (an outage or block) — both zero when the screen was skipped. ``skipped`` is ``True``
+    when the screen came back empty or implausibly small (a truncated or blocked fetch) so
+    *nothing* was written; the other counts are then all zero. There is no ``removed`` count — the
+    sync is additive.
     """
 
     screened: int
@@ -66,8 +69,8 @@ class EtfSyncReport:
 
 
 class SyncEtfs:
-    """Populate/refresh the searchable ETF set from a live top-ETFs screen, then categorise the
-    funds that still lack one."""
+    """Populate/refresh the searchable ETF set from a live top-ETFs screen, then enrich each stored
+    fund with its full profile."""
 
     # The AUM floor that defines the searchable ETF set: US funds with at least $1M in net
     # assets — effectively the full US ETF universe, excluding only near-empty/pre-launch
@@ -84,26 +87,26 @@ class SyncEtfs:
         self,
         screener: EtfScreener,
         repository: EtfRepository,
-        classifier: EtfCategoryProvider,
+        profile_provider: EtfProfileProvider,
     ) -> None:
         self._screener = screener
         self._repository = repository
-        self._classifier = classifier
+        self._profile_provider = profile_provider
 
     def execute(self, *, limit: int | None = None) -> EtfSyncReport:
-        """Screen the top ETFs, upsert the result, then categorise the still-uncategorised funds.
+        """Screen the top ETFs, upsert the result, then refresh each stored fund's profile.
 
-        ``limit`` caps how many funds the enrichment pass classifies this run; ``None`` (the
-        default) categorises **every** still-uncategorised fund in the one run. A caller (the cron
-        endpoint) passes a value only to throttle a run — e.g. if Yahoo starts rate-limiting the
-        per-ticker calls.
+        ``limit`` caps how many funds the enrichment pass refreshes this run; ``None`` (the
+        default) refreshes **every** stored fund in the one run. A caller (the cron endpoint)
+        passes a value only to throttle a run — e.g. if Yahoo starts rate-limiting the per-ticker
+        calls.
 
         A hard screen failure (``StockDataUnavailable``) propagates to the caller (the background
         runner logs it). A *degraded* screen — fewer than ``MIN_PLAUSIBLE_SCREEN`` funds — is
         skipped so a partial/blocked fetch isn't written, and the enrichment pass is skipped too
         (if the one bulk screen call was blocked, the per-ticker calls would be as well).
         Otherwise the whole screen is upserted (additive) and the enrichment pass runs. A single
-        fund's classification failure never aborts the run — it's counted and the sweep continues.
+        fund's profile-fetch failure never aborts the run — it's counted and the sweep continues.
         """
         capped = None if limit is None else max(1, limit)
         screened = self._screener.screen(min_net_assets=self.MIN_NET_ASSETS)
@@ -117,7 +120,7 @@ class SyncEtfs:
                 enrich_failed=0,
             )
         counts = self._repository.upsert_screen(screened)
-        enriched, enrich_failed = self._enrich_missing_categories(capped)
+        enriched, enrich_failed = self._enrich_profiles(capped)
         return EtfSyncReport(
             screened=len(screened),
             added=counts.added,
@@ -127,29 +130,26 @@ class SyncEtfs:
             enrich_failed=enrich_failed,
         )
 
-    def _enrich_missing_categories(self, limit: int | None) -> tuple[int, int]:
-        """Categorise the stored funds still missing a category, writing each one's slug — up to
-        ``limit`` of them, or **all** of them when ``limit`` is ``None``. Returns
-        ``(enriched, failed)``: ``enriched`` wrote a category, ``failed`` couldn't reach the
-        source. A fund the source reaches but doesn't categorise (``category`` None) is neither —
-        it's left for a later run rather than counted, since nothing was written and nothing went
-        wrong."""
+    def _enrich_profiles(self, limit: int | None) -> tuple[int, int]:
+        """Fetch and persist each stored fund's profile — up to ``limit`` of them, stalest first,
+        or **all** of them when ``limit`` is ``None``. Returns ``(enriched, failed)``: ``enriched``
+        persisted a profile, ``failed`` couldn't reach the source. A hard per-ticker failure leaves
+        the fund's stored profile untouched (the write is merge-preserving and simply isn't called),
+        so a bad Yahoo day delays a fund's refresh but never erases it; the next run retries it."""
         enriched = 0
         failed = 0
-        tickers = self._repository.tickers_missing_category(limit)
+        tickers = self._repository.profile_refresh_targets(limit)
         for ticker in iter_with_progress(
-            tickers, logger=logger, label="etf sync (categorization)"
+            tickers, logger=logger, label="etf sync (profile enrichment)"
         ):
             try:
-                classification = self._classifier.get_category(ticker)
+                profile = self._profile_provider.get_profile(ticker)
             except (StockNotFound, StockDataUnavailable):
-                # The source couldn't serve this fund this run (outage/block). Leave it and count
-                # it; the next run retries it.
+                # The source couldn't serve this fund this run (outage/block). Leave its stored
+                # profile intact and count it; the next run retries it.
                 failed += 1
                 continue
-            if classification.category is None:
-                continue  # source has no category yet — leave it for a later run
-            self._repository.set_category(ticker, classification)
+            self._repository.upsert_profile(ticker, profile)
             enriched += 1
         return enriched, failed
 
@@ -231,30 +231,28 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 class GetEtfDetail:
-    """Use case: one fund's detail card — the live quote, the stored ``etfs`` facts, and the
-    best-effort Yahoo profile (``GET /stocks/etf/{ticker}``).
+    """Use case: one fund's detail card — the live quote, the stored ``etfs`` facts, and the stored
+    profile (``GET /stocks/etf/{ticker}``).
 
     Membership-gated and quote-primary. First the symbol is looked up in the stored ETF universe:
     a symbol that isn't a screened fund raises ``StockNotFound`` (the endpoint maps it to 404 —
-    "not an ETF"), *before* any quote or Yahoo call, so a stock or a bogus ticker costs nothing
-    upstream. Then the live quote is fetched and is **primary** — a quote failure propagates
-    (the endpoint maps it to the same 502/503 the quote endpoints use), because a detail card with
-    no price isn't worth serving. The Yahoo profile is best-effort enrichment layered last: its
-    provider is total (never raises), so a blocked or uncovered read just leaves the profile empty
-    and the card still returns 200 with the quote + stored facts. The stored net_assets/expense
-    figures win over the profile's where both exist (the detail page must agree with the screener
-    list); the profile only fills the gaps.
+    "not an ETF"), *before* any quote call, so a stock or a bogus ticker costs nothing upstream.
+    Then the live quote is fetched and is **primary** — a quote failure propagates (the endpoint
+    maps it to the same 502/503 the quote endpoints use), because a detail card with no price isn't
+    worth serving. The profile is read from the DB (the sync's enrichment pass populates it — no
+    live Yahoo call on the read path): a fund the pass hasn't reached yet just yields an empty
+    profile, and the card still returns 200 with the quote + stored facts. The stored
+    net_assets/expense figures (screen facts) win over the profile's where both exist (the detail
+    page must agree with the screener list); the profile only fills the gaps.
     """
 
     def __init__(
         self,
         lookup: EtfLookupRepository,
         quotes: StockQuoteProvider,
-        profile: EtfProfileProvider,
     ) -> None:
         self._lookup = lookup
         self._quotes = quotes
-        self._profile = profile
 
     def execute(self, symbol: str) -> EtfDetail:
         normalized = _normalize_symbol(symbol)
@@ -264,10 +262,7 @@ class GetEtfDetail:
             raise StockNotFound(normalized)
         # Primary source: a quote failure propagates (mapped to 502/503 at the edge).
         quote = self._quotes.get_quote(normalized)
-        # Best-effort enrichment: the provider is total, but guard anyway so a contract slip
-        # can never sink a card whose primary data (the quote) is already in hand.
-        try:
-            profile = self._profile.get_profile(normalized)
-        except (StockNotFound, StockDataUnavailable):
-            profile = EtfProfile.empty()
+        # Enrichment, read from the DB (populated out-of-band by the sync). A fund not yet
+        # enriched yields an empty profile — never an error — so the card still serves.
+        profile = self._lookup.get_stored_profile(normalized)
         return EtfDetail.assemble(normalized, quote, facts, profile)
