@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.stocks.entities import Quote
+from app.stocks.entities import Quote, StockPerformance
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfHolding,
@@ -40,7 +40,7 @@ from app.stocks.etfs.use_cases import (
     SyncEtfs,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import StockQuoteProvider
+from app.stocks.ports import StockPerformanceProvider, StockQuoteProvider
 
 
 def _etf(ticker, *, net_assets=1e10):
@@ -403,17 +403,49 @@ class _FakeQuotes(StockQuoteProvider):
         return self._quote or _quote(symbol)
 
 
+def _a_performance() -> StockPerformance:
+    return StockPerformance(
+        one_week=1.1, one_month=2.2, three_month=3.3, six_month=4.4, ytd=5.5, one_year=6.6
+    )
+
+
+class _FakePerformance(StockPerformanceProvider):
+    def __init__(
+        self, perf: StockPerformance | None = None, error: Exception | None = None
+    ) -> None:
+        self._perf = perf
+        self._error = error
+        self.calls: list[str] = []
+
+    def get_performance(self, symbol: str) -> StockPerformance:
+        self.calls.append(symbol)
+        if self._error is not None:
+            raise self._error
+        return self._perf if self._perf is not None else _a_performance()
+
+
 _UNSET = object()  # sentinel so an explicit facts=None (non-ETF) differs from "not passed"
 
 
-def _detail_use_case(*, facts=_UNSET, quote=None, quote_error=None, profile=None):
+def _detail_use_case(
+    *,
+    facts=_UNSET,
+    quote=None,
+    quote_error=None,
+    profile=None,
+    performance=None,
+    performance_error=None,
+):
+    # The profile is read from the lookup repo (DB-only); the performance provider backs the
+    # opt-in 'performance' block. Returns (use_case, lookup, quotes, perf).
     lookup = _FakeLookup(_facts() if facts is _UNSET else facts, profile)
     quotes = _FakeQuotes(quote, quote_error)
-    return GetEtfDetail(lookup, quotes), lookup, quotes
+    perf = _FakePerformance(performance, performance_error)
+    return GetEtfDetail(lookup, quotes, perf), lookup, quotes, perf
 
 
 def test_detail_assembles_quote_stored_facts_and_profile():
-    use_case, lookup, quotes = _detail_use_case(quote=_quote(), profile=_a_profile())
+    use_case, lookup, quotes, perf = _detail_use_case(quote=_quote(), profile=_a_profile())
 
     detail = use_case.execute("voo")  # lower-case in -> normalized
 
@@ -434,7 +466,11 @@ def test_detail_assembles_quote_stored_facts_and_profile():
     assert detail.profile.fund_family == "Vanguard"
     assert detail.profile.top_holdings[0].ticker == "NVDA"
     assert quotes.calls == ["VOO"]
-    assert lookup.profile_calls == ["VOO"]
+    assert lookup.profile_calls == ["VOO"]  # the stored profile is read regardless of the includes
+    # No includes requested: no performance call, and the block is null.
+    assert detail.include == frozenset()
+    assert detail.performance is None
+    assert perf.calls == []
 
 
 def test_detail_falls_back_to_profile_figures_when_the_table_lacks_them():
@@ -452,28 +488,35 @@ def test_detail_falls_back_to_profile_figures_when_the_table_lacks_them():
 
 
 def test_detail_404s_before_any_upstream_call_for_a_non_etf():
-    use_case, lookup, quotes = _detail_use_case(facts=None)  # not in the universe
+    use_case, lookup, quotes, perf = _detail_use_case(
+        facts=None, performance=_a_performance()
+    )  # not in the universe
 
     with pytest.raises(StockNotFound):
-        use_case.execute("AAPL")
+        use_case.execute("AAPL", include=["performance"])
 
-    # The membership gate short-circuits: neither the quote nor the stored profile was read.
+    # The membership gate short-circuits: neither the quote, the stored profile, nor the
+    # (requested) performance was read.
     assert lookup.get_calls == ["AAPL"]
     assert quotes.calls == []
     assert lookup.profile_calls == []
+    assert perf.calls == []
 
 
 def test_detail_propagates_a_quote_failure():
     # The quote is primary — its failure propagates (mapped to 502 at the edge), not degraded.
-    use_case, lookup, _ = _detail_use_case(
-        quote_error=StockDataUnavailable("VOO", "alpaca down")
+    use_case, lookup, _, perf = _detail_use_case(
+        quote_error=StockDataUnavailable("VOO", "alpaca down"),
+        performance=_a_performance(),
     )
 
     with pytest.raises(StockDataUnavailable):
-        use_case.execute("VOO")
+        use_case.execute("VOO", include=["performance"])
 
-    # The profile read is never reached once the primary source has failed.
+    # Neither the stored profile nor the (requested) performance is reached once the primary
+    # has failed.
     assert lookup.profile_calls == []
+    assert perf.calls == []
 
 
 def test_detail_serves_an_empty_profile_for_an_unenriched_fund():
@@ -494,3 +537,59 @@ def test_detail_rejects_an_invalid_symbol_before_the_lookup(bad):
     with pytest.raises(ValueError):
         use_case.execute(bad)
     assert lookup.get_calls == []  # rejected at the edge, before touching the repository
+
+
+def test_detail_records_requested_includes_without_fetching_performance():
+    # metrics/dividends draw from the DB-read profile, so requesting them costs no extra call —
+    # only the recorded include set changes; the performance block's own call is untouched.
+    use_case, lookup, _, perf = _detail_use_case(profile=_a_profile())
+
+    detail = use_case.execute("VOO", include=["metrics", "dividends"])
+
+    assert detail.include == frozenset({"metrics", "dividends"})
+    assert lookup.profile_calls == ["VOO"]  # the stored profile was read (metrics' NAV + yield)
+    assert perf.calls == []  # but performance was not requested, so no Alpaca windows call
+    assert detail.performance is None
+
+
+def test_detail_fetches_performance_only_when_requested():
+    perf_data = _a_performance()
+    use_case, _, _, perf = _detail_use_case(
+        profile=_a_profile(), performance=perf_data
+    )
+
+    detail = use_case.execute("VOO", include=["performance"])
+
+    assert detail.include == frozenset({"performance"})
+    assert perf.calls == ["VOO"]
+    assert detail.performance == perf_data  # the trailing windows the block serves
+
+
+def test_detail_accepts_comma_separated_includes():
+    use_case, *_ = _detail_use_case(profile=_a_profile())
+    detail = use_case.execute("VOO", include=["metrics,performance"])
+    assert detail.include == frozenset({"metrics", "performance"})
+
+
+def test_detail_performance_degrades_to_none_when_the_windows_read_fails():
+    # Best-effort even when requested: a blocked Alpaca performance read leaves the block's gains
+    # null (performance=None) rather than sinking the card — the quote + facts still serve.
+    use_case, *_ = _detail_use_case(
+        quote=_quote(),
+        performance_error=StockDataUnavailable("VOO", "alpaca windows down"),
+    )
+
+    detail = use_case.execute("VOO", include=["performance"])
+
+    assert "performance" in detail.include  # asked for...
+    assert detail.performance is None  # ...but the best-effort read failed
+    assert detail.quote.price == 685.28  # the card still serves
+
+
+def test_detail_rejects_an_unknown_include_before_the_lookup():
+    use_case, lookup, quotes, *_ = _detail_use_case()
+    with pytest.raises(ValueError):
+        use_case.execute("VOO", include=["bogus"])
+    # Rejected at the edge (normalization), before the membership gate or any upstream call.
+    assert lookup.get_calls == []
+    assert quotes.calls == []

@@ -45,7 +45,11 @@ from app.stocks.adapters.annual_earnings_estimates_adapter import (
 )
 from app.stocks.adapters.yfinance_options_adapter import YfinanceOptionChainProvider
 from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
+from app.stocks.earnings.annual.ports import AnnualEarningsProvider
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.endpoints.annual_earnings_endpoints import (
+    get_annual_earnings_provider,
+)
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     get_quarterly_earnings_provider,
 )
@@ -59,6 +63,7 @@ from app.stocks.ports import (
     StockFundamentalsProvider,
     StockPerformanceProvider,
 )
+from app.stocks.ticker.ports import OptionChainProvider
 from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
@@ -231,14 +236,18 @@ def get_analysis_provider() -> InvestmentAnalysisProvider:
 def get_stock_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
     analyzer: InvestmentAnalysisProvider = Depends(get_analysis_provider),
-    # The quarterly timeline is best-effort *context* for the analysis — the same
-    # DB-cached provider the quarterly endpoint reads through, so it costs no
-    # extra vendor call for a cached symbol and needs no API key.
-    earnings: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
+    # Best-effort *context* for the analysis, each reusing the same provider its own
+    # endpoint reads through: the quarterly and annual timelines ride the DB-cached
+    # earnings providers (no extra vendor call for a cached symbol, no API key), and
+    # the options chain rides the keyless yfinance singleton (live per request, so a
+    # blocked or thin read just omits the block).
+    quarterly: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
+    annual: AnnualEarningsProvider = Depends(get_annual_earnings_provider),
+    options: OptionChainProvider = Depends(get_options_provider),
 ) -> GetStockAnalysis:
     # Reuses the stock snapshot wiring wholesale (price + enrichment), then layers
-    # the analyzer and the best-effort earnings context on top.
-    return GetStockAnalysis(stock_info, analyzer, earnings)
+    # the analyzer and the best-effort earnings/options context on top.
+    return GetStockAnalysis(stock_info, analyzer, quarterly, annual, options)
 
 
 @lru_cache(maxsize=1)

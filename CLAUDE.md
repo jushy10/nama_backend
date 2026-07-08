@@ -511,14 +511,14 @@ app/
     │   ├── db_repository.py     #    SqlUniverseRepository (upsert_screen + set_pe_ratios) + SqlStockSearchRepository (search/classifications; screened-only)
     │   ├── use_cases.py         #    SyncUniverse (write: screen + classify + value pe, from quarterly TTM × screen price) + SearchStocks / ListClassifications (read)
     │   └── schemas.py           #    HTTP DTOs for the read endpoints (search page + classifications; endpoints in endpoints/ticker_endpoints.py)
-    ├── etfs/               # ── ETF sub-slice (owns its OWN `etfs` table + 2 child tables — an ETF is not a company; screens the top US ETFs, enriches each with its full profile, AND reads them back):
-    │   ├── entities.py          #    ScreenedEtf (AUM/expense) + EtfProfile (category/family/dividend/NAV/description/returns) + EtfHolding + EtfSectorWeight + EtfDetail + slugify; read-side shapes (EtfSearchCriteria/Result/Page, EtfSort/SortDirection, EtfCategories)
+    ├── etfs/               # ── ETF sub-slice (owns its OWN `etfs` table + 2 child tables — an ETF is not a company; screens the top US ETFs, enriches each with its full profile, reads them back, AND serves one fund's detail card):
+    │   ├── entities.py          #    ScreenedEtf (AUM/expense) + EtfProfile (category/family/dividend/NAV/description/returns) + EtfHolding + EtfSectorWeight + EtfDetail (quote+facts+profile composite, carries the requested `include` set + best-effort performance) + slugify; read-side shapes (EtfSearchCriteria/Result/Page, EtfSort/SortDirection, EtfCategories)
     │   ├── ports.py             #    live-source ports: EtfScreener (bulk screen, no criteria) + EtfProfileProvider (per-ticker full profile — the screen carries none; raises on a hard read)
     │   ├── repository.py        #    abstract persistence ports: EtfRepository (write: screen upsert + profile enrichment) + EtfSearchRepository (read: search + categories) + EtfLookupRepository (read: membership + stored facts + stored profile)
     │   ├── models.py            #    EtfRecord (`etfs`: AUM/expense/category + profile scalars) + EtfSectorWeightingRecord (`etf_sector_weightings`) + EtfTopHoldingRecord (`etf_top_holdings`) + get_or_create_etf (standalone anchor, not a stocks child)
     │   ├── db_repository.py     #    SqlEtfRepository (upsert_screen additive + profile_refresh_targets/upsert_profile merge-preserving) + SqlEtfSearchRepository (search/categories) + SqlEtfLookupRepository (is_etf/get/get_stored_profile)
-    │   ├── use_cases.py         #    SyncEtfs (write — screen+upsert then per-ticker profile enrichment) + SearchEtfs / ListEtfCategories / GetEtfDetail (read)
-    │   └── schemas.py           #    HTTP DTOs for the read endpoints (search page + categories menu + detail card; endpoints in endpoints/etf_endpoints.py)
+    │   ├── use_cases.py         #    SyncEtfs (write — screen+upsert then per-ticker profile enrichment) + SearchEtfs / ListEtfCategories (read) + GetEtfDetail (one fund's card: membership-gated, quote-primary, DB-read profile, opt-in metrics/dividends/performance)
+    │   └── schemas.py           #    HTTP DTOs for the read endpoints (search page + categories menu) + the detail card (base + stored profile enrichment + opt-in EtfMetrics/EtfDividends/EtfPerformance blocks); endpoints in endpoints/etf_endpoints.py
     ├── index_membership/   # ── index-membership sub-slice (table-less; reconciles in_sp500/in_nasdaq100 on the anchor):
     │   ├── entities.py          #    IndexMembershipSnapshot (the two ticker sets, slice-local)
     │   ├── ports.py             #    live-source port (IndexMembershipSource)
@@ -533,7 +533,7 @@ app/
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
     │   ├── recommendations_endpoints.py          #  GET /stocks/{symbol}/recommendations
     │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol} (card) + GET /stocks/ticker (search) + GET /stocks/classifications
-    │   ├── etf_endpoints.py                      #  GET /stocks/etfs (top-ETF search/filter/sort) + GET /stocks/etfs/categories (filter menu) + GET /stocks/etf/{ticker} (detail card: quote + stored facts + stored profile, DB-only)
+    │   ├── etf_endpoints.py                      #  GET /stocks/etfs (top-ETF search/filter/sort) + GET /stocks/etfs/categories (filter menu) + GET /stocks/etf/{ticker} (one fund's card: quote + facts + DB-read profile + opt-in ?include=metrics/dividends/performance)
     │   ├── cron_etf_endpoints.py                 #  POST /internal/etfs/sync (fire-and-forget: screen + profile enrichment)
     │   ├── cron_universe_endpoints.py            #  POST /internal/universe/sync (fire-and-forget)
     │   ├── cron_index_membership_endpoints.py    #  POST /internal/index-membership/sync (fire-and-forget)
