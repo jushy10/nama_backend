@@ -51,7 +51,9 @@ def test_upgrade_creates_the_etfs_table(alembic):
 
 
 def test_upgrade_adds_the_etf_profile_columns_and_child_tables(alembic):
-    # 0020 adds the profile scalars onto `etfs` and the two child tables the sync persists.
+    # 0020 adds the profile scalars onto `etfs` and the two child tables the sync persists; 0021
+    # then drops the trailing-return ladder (served live from Yahoo instead), so at head those
+    # three columns are gone while the rest of the profile stays.
     config, url = alembic
 
     command.upgrade(config, "head")
@@ -62,11 +64,12 @@ def test_upgrade_adds_the_etf_profile_columns_and_child_tables(alembic):
         "dividend_yield",
         "description",
         "nav",
-        "ytd_return",
-        "three_year_return",
-        "five_year_return",
         "profile_fetched_at",
     } <= etf_columns
+    # The trailing-return ladder was dropped by 0021 — no longer stored.
+    assert not (
+        {"ytd_return", "three_year_return", "five_year_return"} & etf_columns
+    )
     tables = set(inspector.get_table_names())
     assert {"etf_sector_weightings", "etf_top_holdings"} <= tables
 

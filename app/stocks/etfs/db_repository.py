@@ -109,12 +109,8 @@ class SqlEtfRepository(EtfRepository):
             etf.description = profile.description
         if profile.nav is not None:
             etf.nav = profile.nav
-        if profile.ytd_return is not None:
-            etf.ytd_return = profile.ytd_return
-        if profile.three_year_return is not None:
-            etf.three_year_return = profile.three_year_return
-        if profile.five_year_return is not None:
-            etf.five_year_return = profile.five_year_return
+        # The trailing-return ladder (ytd/3y/5y) is deliberately not persisted — the detail card
+        # reads those live from Yahoo — so it's dropped here even though the fetch carries it.
         etf.profile_fetched_at = now
         # Child sets: replace wholesale only when the fetch returned rows; an empty list leaves the
         # stored rows intact (a blocked funds_data read must not wipe good holdings/sectors).
@@ -281,15 +277,14 @@ class SqlEtfLookupRepository(EtfLookupRepository):
             for r in models.top_holdings_for_etf(self._session, ticker)
         )
         # net_assets/expense_ratio deliberately left None — the detail resolves them from the
-        # stored screen facts (``get``), not the profile (which never owned those columns).
+        # stored screen facts (``get``), not the profile (which never owned those columns). The
+        # trailing returns (ytd/3y/5y) are likewise None here — no longer stored; the detail card
+        # overlays them from a live Yahoo read when the performance block is requested.
         return EtfProfile(
             category=row.category,
             fund_family=row.fund_family,
             nav=row.nav,
             dividend_yield=row.dividend_yield,
-            ytd_return=row.ytd_return,
-            three_year_return=row.three_year_return,
-            five_year_return=row.five_year_return,
             description=row.description,
             top_holdings=holdings,
             sector_weightings=sectors,

@@ -7,8 +7,9 @@ knows nothing of Yahoo, HTTP, or SQLAlchemy:
   and upsert the result into the ``etfs`` table (additive: it never removes a fund); (2) enrich
   the stored funds with their full profile — **all** of them by default, or up to ``limit`` when
   the caller throttles — fetching each fund's profile (category, fund family, dividend yield, NAV,
-  description, trailing returns, top holdings, sector weightings) through a single per-ticker call
-  and persisting it (scalars onto the row, the two lists into their child tables). The write is
+  description, top holdings, sector weightings) through a single per-ticker call and persisting it
+  (scalars onto the row, the two lists into their child tables — the trailing returns ride the same
+  fetch but are not stored; the detail card reads those live). The write is
   merge-preserving, so a fund whose fetch hard-fails is simply skipped and retried next run — its
   stored profile is left intact. Invoked by the (fire-and-forget) cron endpoint. Guarded so a
   blocked/truncated screen (empty or implausibly small) skips *both* passes rather than churning a
@@ -23,13 +24,14 @@ knows nothing of Yahoo, HTTP, or SQLAlchemy:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 
 from app.stocks.entities import StockPerformance
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfDetail,
+    EtfProfile,
     EtfSearchCriteria,
     EtfSearchPage,
     EtfSort,
@@ -283,18 +285,21 @@ class GetEtfDetail:
     "not an ETF"), *before* any quote call, so a stock or a bogus ticker costs nothing upstream.
     Then the live quote is fetched and is **primary** — a quote failure propagates (the endpoint
     maps it to the same 502/503 the quote endpoints use), because a detail card with no price isn't
-    worth serving. The profile is read from the DB (the sync's enrichment pass populates it — no
-    live Yahoo call on the read path): a fund the pass hasn't reached yet just yields an empty
-    profile, and the card still returns 200 with the quote + stored facts. The stored
-    net_assets/expense figures (screen facts) win over the profile's where both exist (the detail
-    page must agree with the screener list); the profile only fills the gaps.
+    worth serving. The profile is read from the DB (the sync's enrichment pass populates it): a fund
+    the pass hasn't reached yet just yields an empty profile, and the card still returns 200 with the
+    quote + stored facts. The stored net_assets/expense figures (screen facts) win over the profile's
+    where both exist (the detail page must agree with the screener list); the profile only fills the
+    gaps. The one exception to the DB-read profile is the trailing-return ladder (3y/5y), no longer
+    stored and overlaid from a live Yahoo read — see ``performance`` below.
 
     The opt-in blocks (``?include=``) shape what the card carries: ``metrics`` (expense ratio, NAV,
     net assets) and ``dividends`` (yield) are drawn from the DB-read profile + stored facts, so
     requesting them costs no *extra* call — only their serialization is gated. ``performance``
-    (the trailing price-return windows) is the one block with its own upstream call (Alpaca), so
-    it's fetched only when asked for, best-effort (a blocked read leaves the block's gains null
-    without sinking the card); the 3y/5y annualized returns it also surfaces ride the profile.
+    (the trailing price-return windows) is fetched only when asked for and carries **two** upstream
+    calls, both best-effort (a blocked read leaves the affected figures null without sinking the
+    card): the Alpaca trailing windows, and — since the 3y/5y annualized returns it surfaces are no
+    longer stored — a live Yahoo profile read whose return ladder is overlaid onto the profile. This
+    is the only block with a live Yahoo call on the read path, and only when it's requested.
     """
 
     def __init__(
@@ -302,10 +307,14 @@ class GetEtfDetail:
         lookup: EtfLookupRepository,
         quotes: StockQuoteProvider,
         performance: StockPerformanceProvider | None = None,
+        profile_provider: EtfProfileProvider | None = None,
     ) -> None:
         self._lookup = lookup
         self._quotes = quotes
         self._performance = performance
+        # Backs the performance block's live 3y/5y returns (no longer stored). Optional/best-effort
+        # like the performance provider — an unwired one just leaves the returns null.
+        self._profile_provider = profile_provider
 
     def execute(self, symbol: str, include: Sequence[str] | None = None) -> EtfDetail:
         normalized = _normalize_symbol(symbol)
@@ -321,20 +330,43 @@ class GetEtfDetail:
         # card still serves. It backs the always-on enrichment as well as the metrics/dividends
         # blocks' figures (nav/yield), which are serialization-gated, not extra calls.
         profile = self._lookup.get_stored_profile(normalized)
-        performance = (
-            self._get_performance(normalized) if "performance" in wanted else None
-        )
+        performance = None
+        if "performance" in wanted:
+            performance = self._get_performance(normalized)
+            # The 3y/5y returns this block surfaces are no longer stored — overlay them from a live
+            # Yahoo read (best-effort, like the Alpaca windows beside them). Done only here, so no
+            # other request path pays a live Yahoo call.
+            profile = self._with_live_returns(normalized, profile)
         return EtfDetail.assemble(
             normalized, quote, facts, profile, include=wanted, performance=performance
         )
 
     def _get_performance(self, symbol: str) -> StockPerformance | None:
-        # The one opt-in block with its own upstream call (Alpaca trailing windows), so it's
-        # fetched only when requested — and best-effort: a failure leaves the gains null rather
-        # than sinking the card whose primary data (the quote) is already in hand.
+        # The Alpaca trailing windows — fetched only when the performance block is requested, and
+        # best-effort: a failure leaves the gains null rather than sinking the card whose primary
+        # data (the quote) is already in hand.
         if self._performance is None:
             return None
         try:
             return self._performance.get_performance(symbol)
         except (StockNotFound, StockDataUnavailable):
             return None
+
+    def _with_live_returns(self, symbol: str, profile: EtfProfile) -> EtfProfile:
+        """Overlay the fund's trailing-return ladder (ytd/3y/5y) onto the DB-read ``profile`` from a
+        live Yahoo read — the sole live Yahoo call on the read path, made only for the performance
+        block. Best-effort like the Alpaca windows: a blocked/failed read (Yahoo IP-gates
+        data-centre IPs intermittently) leaves the returns null without sinking the card. An unwired
+        provider leaves them null too."""
+        if self._profile_provider is None:
+            return profile
+        try:
+            live = self._profile_provider.get_profile(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return profile
+        return replace(
+            profile,
+            ytd_return=live.ytd_return,
+            three_year_return=live.three_year_return,
+            five_year_return=live.five_year_return,
+        )

@@ -11,28 +11,33 @@ fund's detail card.
   the same feed the quote endpoint uses, so a quote failure is the same 502), the stored
   ``etfs``-table facts (name/exchange/category), and the stored profile (fund family, description,
   top holdings, sector weightings) read straight from the DB — populated out-of-band by the sync,
-  so there's no live Yahoo call on the read path. Then **opt-in blocks** via ``?include=`` (repeat
+  so the base card makes no live Yahoo call. Then **opt-in blocks** via ``?include=`` (repeat
   or comma-separate; an unknown value is a 400): ``metrics`` (expense ratio, NAV, net assets),
   ``dividends`` (yield), and ``performance`` (the ``1w``/``1m``/``3m``/``6m``/``ytd``/``1y``
   trailing returns — the same gains format the stock endpoints serve — plus the 3y/5y annualized
-  returns from the stored profile). A symbol that isn't in the stored ETF universe is a **404**
-  ("not an ETF"). A fund the sync hasn't enriched yet just serves null/empty profile fields on a
-  200. Pay-per-use only bites on ``performance`` (its own Alpaca call, made just when asked for);
-  ``metrics``/``dividends`` ride the DB-read profile + stored facts, so they cost no extra call.
+  returns, which are no longer stored and so come from a live Yahoo read made only for this block).
+  A symbol that isn't in the stored ETF universe is a **404** ("not an ETF"). A fund the sync
+  hasn't enriched yet just serves null/empty profile fields on a 200. Pay-per-use bites on
+  ``performance`` alone — it makes two live calls (the Alpaca windows + the Yahoo return ladder),
+  both best-effort; ``metrics``/``dividends`` ride the DB-read profile + stored facts, no extra call.
 
 The two list routes are pure DB reads (``SqlEtfSearchRepository`` → ``SearchEtfs`` /
 ``ListEtfCategories``), no vendor or key, so their only request error is a 400 (a bad
 ``sort``/``order`` is a 422 from the enum binding). The detail route reuses the composition root's
 Alpaca provider (whose missing-keys 503 it inherits — the quote is primary) for both the quote and
-the opt-in trailing-return windows (it implements both ports), plus a pure DB read of the stored
-profile. The refresh that populates the table + profile (screen + profile enrichment) is the
-separate cron endpoint (``POST /internal/etfs/sync``).
+the opt-in trailing-return windows (it implements both ports), a DB read of the stored profile, and
+the keyless Yahoo profile provider that backs the performance block's live 3y/5y returns. The
+refresh that populates the table + profile (screen + profile enrichment) is the separate cron
+endpoint (``POST /internal/etfs/sync``).
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.stocks.adapters.yfinance_etf_profile_adapter import (
+    YfinanceEtfProfileProvider,
+)
 from app.stocks.etfs.db_repository import (
     SqlEtfLookupRepository,
     SqlEtfSearchRepository,
@@ -82,9 +87,13 @@ def get_etf_detail_use_case(
     # both StockQuoteProvider and StockPerformanceProvider, so the one dependency serves both roles
     # (the isinstance mirrors the ticker card's wiring). The lookup repository is the request-scoped
     # read over the etfs table + its profile children (the membership gate, the stored facts, and
-    # the stored profile). No live Yahoo on the read path — the sync populates the profile out of band.
+    # the stored profile). The Yahoo profile provider backs the performance block's live 3y/5y
+    # returns (no longer stored) — the one live Yahoo call on the read path, made only when that
+    # block is requested; it's keyless, so it's always constructable (best-effort like the windows).
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
-    return GetEtfDetail(SqlEtfLookupRepository(db), provider, performance)
+    return GetEtfDetail(
+        SqlEtfLookupRepository(db), provider, performance, YfinanceEtfProfileProvider()
+    )
 
 
 def _present_search(page: EtfSearchPage) -> EtfSearchResponse:
@@ -129,7 +138,8 @@ def _present_dividends(detail: EtfDetail) -> EtfDividendsResponse:
 
 def _present_performance(detail: EtfDetail) -> EtfPerformanceResponse:
     """The ``performance`` block: the Alpaca trailing windows (null when that best-effort read was
-    blocked) plus Yahoo's 3y/5y annualized returns (off the always-fetched profile)."""
+    blocked) plus Yahoo's 3y/5y annualized returns — the latter overlaid onto the profile by the
+    use case from a live Yahoo read (no longer stored), likewise null when that read was blocked."""
     perf = detail.performance
     p = detail.profile
     return EtfPerformanceResponse(

@@ -4,8 +4,9 @@ GetEtfDetail (read).
 Offline: hand-written fakes for the screener, profile source, quote, and repository ports, so this
 exercises only the orchestration — the upsert-vs-skip decision and the profile enrichment pass for
 the sync, the edge normalization (trim/slug/clamp) and criteria pass-through for the search, and for
-the detail: the membership gate (404 before any upstream call), the quote-primary propagation, and
-the DB-only stored-profile read — independent of Yahoo, Alpaca, or the DB.
+the detail: the membership gate (404 before any upstream call), the quote-primary propagation, the
+DB-read stored profile, and the live-Yahoo overlay of the 3y/5y returns for the performance block —
+independent of Yahoo, Alpaca, or the DB.
 """
 
 from datetime import datetime, timezone
@@ -378,24 +379,30 @@ def _quote(symbol="VOO", price=685.28, previous_close=682.07) -> Quote:
 
 
 def _a_profile() -> EtfProfile:
+    # The DB-read stored profile: no trailing returns (they're no longer stored — the detail
+    # overlays them live for the performance block; see _live_returns_profile below).
     return EtfProfile(
         fund_family="Vanguard",
         net_assets=1.8e12,  # a wrong-answer sentinel: the table's net_assets must win
         expense_ratio=0.05,  # sentinel: the table's expense_ratio must win
         nav=685.28,
         dividend_yield=1.03,
-        ytd_return=11.25,
-        three_year_return=20.41,
-        five_year_return=13.01,
         description="An S&P 500 index fund.",
         top_holdings=(EtfHolding(ticker="NVDA", name="NVIDIA Corp", weight=7.89),),
         sector_weightings=(EtfSectorWeight(sector="technology", weight=39.13),),
     )
 
 
+def _live_returns_profile() -> EtfProfile:
+    # What the live Yahoo profile read carries for the performance block's return ladder — only
+    # the returns matter here (the rest of the profile is DB-read, not taken from this).
+    return EtfProfile(ytd_return=11.25, three_year_return=20.41, five_year_return=13.01)
+
+
 class _FakeLookup(EtfLookupRepository):
     """In-memory single-fund lookup; records the get / get_stored_profile calls. Serves canned
-    stored facts + a canned stored profile (the detail read is DB-only, no live Yahoo)."""
+    stored facts + a canned stored profile (the 3y/5y returns are overlaid separately from the live
+    profile provider, not served here)."""
 
     def __init__(self, facts: EtfSearchResult | None, profile: EtfProfile | None = None) -> None:
         self._facts = facts
@@ -460,17 +467,25 @@ def _detail_use_case(
     profile=None,
     performance=None,
     performance_error=None,
+    live_returns=None,  # the live Yahoo profile the returns are overlaid from (None -> empty)
+    live_returns_error=False,  # simulate a blocked live Yahoo read (raises StockDataUnavailable)
 ):
-    # The profile is read from the lookup repo (DB-only); the performance provider backs the
-    # opt-in 'performance' block. Returns (use_case, lookup, quotes, perf).
+    # The stored profile is read from the lookup repo; the performance provider backs the opt-in
+    # 'performance' block's Alpaca windows; the profile provider backs that same block's live 3y/5y
+    # returns (no longer stored). Returns (use_case, lookup, quotes, perf, profile_provider).
     lookup = _FakeLookup(_facts() if facts is _UNSET else facts, profile)
     quotes = _FakeQuotes(quote, quote_error)
     perf = _FakePerformance(performance, performance_error)
-    return GetEtfDetail(lookup, quotes, perf), lookup, quotes, perf
+    mapping = {} if live_returns is None else {"VOO": live_returns}
+    profile_provider = _FakeProfileProvider(
+        mapping, errors=("VOO",) if live_returns_error else ()
+    )
+    use_case = GetEtfDetail(lookup, quotes, perf, profile_provider)
+    return use_case, lookup, quotes, perf, profile_provider
 
 
 def test_detail_assembles_quote_stored_facts_and_profile():
-    use_case, lookup, quotes, perf = _detail_use_case(quote=_quote(), profile=_a_profile())
+    use_case, lookup, quotes, perf, _ = _detail_use_case(quote=_quote(), profile=_a_profile())
 
     detail = use_case.execute("voo")  # lower-case in -> normalized
 
@@ -513,35 +528,38 @@ def test_detail_falls_back_to_profile_figures_when_the_table_lacks_them():
 
 
 def test_detail_404s_before_any_upstream_call_for_a_non_etf():
-    use_case, lookup, quotes, perf = _detail_use_case(
-        facts=None, performance=_a_performance()
+    use_case, lookup, quotes, perf, provider = _detail_use_case(
+        facts=None, performance=_a_performance(), live_returns=_live_returns_profile()
     )  # not in the universe
 
     with pytest.raises(StockNotFound):
         use_case.execute("AAPL", include=["performance"])
 
-    # The membership gate short-circuits: neither the quote, the stored profile, nor the
-    # (requested) performance was read.
+    # The membership gate short-circuits: neither the quote, the stored profile, the (requested)
+    # performance, nor the live returns read was reached.
     assert lookup.get_calls == ["AAPL"]
     assert quotes.calls == []
     assert lookup.profile_calls == []
     assert perf.calls == []
+    assert provider.calls == []
 
 
 def test_detail_propagates_a_quote_failure():
     # The quote is primary — its failure propagates (mapped to 502 at the edge), not degraded.
-    use_case, lookup, _, perf = _detail_use_case(
+    use_case, lookup, _, perf, provider = _detail_use_case(
         quote_error=StockDataUnavailable("VOO", "alpaca down"),
         performance=_a_performance(),
+        live_returns=_live_returns_profile(),
     )
 
     with pytest.raises(StockDataUnavailable):
         use_case.execute("VOO", include=["performance"])
 
-    # Neither the stored profile nor the (requested) performance is reached once the primary
-    # has failed.
+    # Neither the stored profile, the (requested) performance, nor the live returns read is reached
+    # once the primary has failed.
     assert lookup.profile_calls == []
     assert perf.calls == []
+    assert provider.calls == []
 
 
 def test_detail_serves_an_empty_profile_for_an_unenriched_fund():
@@ -566,20 +584,23 @@ def test_detail_rejects_an_invalid_symbol_before_the_lookup(bad):
 
 def test_detail_records_requested_includes_without_fetching_performance():
     # metrics/dividends draw from the DB-read profile, so requesting them costs no extra call —
-    # only the recorded include set changes; the performance block's own call is untouched.
-    use_case, lookup, _, perf = _detail_use_case(profile=_a_profile())
+    # only the recorded include set changes; the performance block's own calls are untouched.
+    use_case, lookup, _, perf, provider = _detail_use_case(
+        profile=_a_profile(), live_returns=_live_returns_profile()
+    )
 
     detail = use_case.execute("VOO", include=["metrics", "dividends"])
 
     assert detail.include == frozenset({"metrics", "dividends"})
     assert lookup.profile_calls == ["VOO"]  # the stored profile was read (metrics' NAV + yield)
     assert perf.calls == []  # but performance was not requested, so no Alpaca windows call
+    assert provider.calls == []  # and no live Yahoo returns read (that rides the performance block)
     assert detail.performance is None
 
 
 def test_detail_fetches_performance_only_when_requested():
     perf_data = _a_performance()
-    use_case, _, _, perf = _detail_use_case(
+    use_case, _, _, perf, _ = _detail_use_case(
         profile=_a_profile(), performance=perf_data
     )
 
@@ -588,6 +609,58 @@ def test_detail_fetches_performance_only_when_requested():
     assert detail.include == frozenset({"performance"})
     assert perf.calls == ["VOO"]
     assert detail.performance == perf_data  # the trailing windows the block serves
+
+
+def test_detail_overlays_live_returns_onto_the_profile_for_the_performance_block():
+    # The 3y/5y returns are no longer stored: when performance is requested, they're fetched live
+    # from Yahoo and overlaid onto the (otherwise DB-read) profile the block surfaces.
+    use_case, _, _, _, provider = _detail_use_case(
+        profile=_a_profile(),
+        performance=_a_performance(),
+        live_returns=_live_returns_profile(),
+    )
+
+    detail = use_case.execute("VOO", include=["performance"])
+
+    assert provider.calls == ["VOO"]  # the live Yahoo read was made
+    assert detail.profile.three_year_return == 20.41
+    assert detail.profile.five_year_return == 13.01
+    # The overlay preserves the DB-read half of the profile (only the return ladder changes).
+    assert detail.profile.fund_family == "Vanguard"
+    assert detail.profile.top_holdings[0].ticker == "NVDA"
+
+
+def test_detail_does_not_fetch_live_returns_without_the_performance_block():
+    # No performance block -> no live Yahoo call, and the (unstored) returns stay null.
+    use_case, _, _, _, provider = _detail_use_case(
+        profile=_a_profile(), live_returns=_live_returns_profile()
+    )
+
+    detail = use_case.execute("VOO", include=["metrics"])
+
+    assert provider.calls == []  # the returns are only fetched for the performance block
+    assert detail.profile.three_year_return is None
+    assert detail.profile.five_year_return is None
+
+
+def test_detail_live_returns_degrade_to_none_when_yahoo_is_blocked():
+    # Best-effort even when requested: a blocked live Yahoo read leaves the returns null (the
+    # profile keeps its DB values) without sinking the card — mirrors the Alpaca windows beside it.
+    perf_data = _a_performance()
+    use_case, _, _, _, provider = _detail_use_case(
+        quote=_quote(),
+        profile=_a_profile(),
+        performance=perf_data,
+        live_returns_error=True,
+    )
+
+    detail = use_case.execute("VOO", include=["performance"])
+
+    assert provider.calls == ["VOO"]  # attempted...
+    assert detail.profile.three_year_return is None  # ...but blocked -> null
+    assert detail.profile.five_year_return is None
+    assert detail.performance == perf_data  # the Alpaca windows still serve
+    assert detail.quote.price == 685.28  # the card still serves
 
 
 def test_detail_accepts_comma_separated_includes():
