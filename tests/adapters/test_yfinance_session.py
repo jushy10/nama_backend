@@ -123,3 +123,67 @@ def test_frame_is_empty_predicate():
     assert yfinance_session.frame_is_empty(None) is True
     assert yfinance_session.frame_is_empty(_Frame(True)) is True
     assert yfinance_session.frame_is_empty(_Frame(False)) is False
+
+
+# --- The optional egress proxy (YF_PROXY_URL) ----------------------------------------------------
+
+
+def test_proxy_url_is_applied_to_yfinance_when_configured(monkeypatch):
+    # With YF_PROXY_URL set, the first call routes yfinance's HTTP through it (set on yfinance's
+    # own config, which it re-reads per request). yf.config.network.proxy is restored afterward so
+    # the rest of the suite runs direct.
+    import yfinance as yf
+
+    monkeypatch.setattr(yfinance_session, "_PROXY_URL", "http://user:pass@proxy.test:8080")
+    monkeypatch.setattr(yfinance_session, "_proxy_configured", False)
+    original = yf.config.network.proxy
+    try:
+        yfinance_session.call(lambda: {"ok": True})
+        assert yf.config.network.proxy == "http://user:pass@proxy.test:8080"
+    finally:
+        yf.config.network.proxy = original
+
+
+def test_no_proxy_url_leaves_yfinance_direct(monkeypatch):
+    # The default (unset) never touches yfinance's proxy config — local/tests egress directly.
+    import yfinance as yf
+
+    monkeypatch.setattr(yfinance_session, "_PROXY_URL", "")
+    monkeypatch.setattr(yfinance_session, "_proxy_configured", False)
+    original = yf.config.network.proxy
+    try:
+        yfinance_session.call(lambda: {"ok": True})
+        assert yf.config.network.proxy == original  # untouched
+    finally:
+        yf.config.network.proxy = original
+
+
+def test_placeholder_proxy_url_is_ignored(monkeypatch):
+    # The SSM secret ships a "REPLACE_ME_VIA_PUT_PARAMETER" placeholder until the real value is set
+    # out of band. Without a proxy scheme it must NOT be applied (that would break every Yahoo
+    # call) — it's ignored and yfinance stays direct.
+    import yfinance as yf
+
+    monkeypatch.setattr(yfinance_session, "_PROXY_URL", "REPLACE_ME_VIA_PUT_PARAMETER")
+    monkeypatch.setattr(yfinance_session, "_proxy_configured", False)
+    original = yf.config.network.proxy
+    try:
+        yfinance_session.call(lambda: {"ok": True})
+        assert yf.config.network.proxy == original  # placeholder ignored, still direct
+    finally:
+        yf.config.network.proxy = original
+
+
+def test_proxy_is_configured_only_once(monkeypatch):
+    # The one-time guard: a proxy-config failure (or success) sets the flag so it isn't re-applied
+    # on every call. Here a broken yfinance import path would warn once; we assert the guard flips.
+    monkeypatch.setattr(yfinance_session, "_PROXY_URL", "http://user:pass@proxy.test:8080")
+    monkeypatch.setattr(yfinance_session, "_proxy_configured", False)
+    import yfinance as yf
+
+    original = yf.config.network.proxy
+    try:
+        yfinance_session._ensure_proxy_configured()
+        assert yfinance_session._proxy_configured is True
+    finally:
+        yf.config.network.proxy = original
