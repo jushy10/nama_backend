@@ -6,8 +6,7 @@ framework or a concrete provider.
 """
 
 from dataclasses import replace
-from datetime import date, datetime
-from typing import Callable
+from datetime import datetime
 
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.annual.ports import AnnualEarningsProvider
@@ -49,9 +48,8 @@ from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,
 )
-from app.stocks.ticker.entities import TickerOptionsMetrics
-from app.stocks.ticker.ports import OptionChainProvider
-from app.stocks.ticker.use_cases import sample_options_metrics
+from app.stocks.recommendations.entities import AnalystRecommendations
+from app.stocks.recommendations.ports import RecommendationProvider
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -322,13 +320,12 @@ class GetStockAnalysis:
     Reuses ``GetStockInfo`` to assemble the enriched snapshot (price plus the
     best-effort performance/fundamentals/trailing+forward valuation enrichment),
     then best-effort layers on the same context the app's own views expose — the
-    quarterly and annual earnings timelines and the options-market read (sampled
-    the way the ticker card samples it) — before asking the injected analyzer to
-    weigh it all. The snapshot and the analysis are the primary data — a
-    bad/unknown symbol or a model failure propagates — while every context source
-    is best-effort, so a miss on any of them leaves the analysis intact rather
-    than failing it. The analyzer reasons only over what it's handed; it fetches
-    nothing itself.
+    quarterly and annual earnings timelines and the analyst recommendation trends
+    — before asking the injected analyzer to weigh it all. The snapshot and the
+    analysis are the primary data — a bad/unknown symbol or a model failure
+    propagates — while every context source is best-effort, so a miss on any of
+    them leaves the analysis intact rather than failing it. The analyzer reasons
+    only over what it's handed; it fetches nothing itself.
     """
 
     def __init__(
@@ -337,17 +334,13 @@ class GetStockAnalysis:
         analyzer: InvestmentAnalysisProvider,
         quarterly_provider: QuarterlyEarningsProvider | None = None,
         annual_provider: AnnualEarningsProvider | None = None,
-        options_provider: OptionChainProvider | None = None,
-        today: Callable[[], date] | None = None,
+        recommendations_provider: RecommendationProvider | None = None,
     ) -> None:
         self._stock_info = stock_info
         self._analyzer = analyzer
         self._quarterly_provider = quarterly_provider
         self._annual_provider = annual_provider
-        self._options_provider = options_provider
-        # Injectable clock for the options expiry windows, pinned in tests the way
-        # the ticker card and the yfinance adapters pin theirs.
-        self._today = today or date.today
+        self._recommendations_provider = recommendations_provider
 
     def execute(self, symbol: str) -> InvestmentAnalysis:
         normalized = _normalize_symbol(symbol)
@@ -360,7 +353,7 @@ class GetStockAnalysis:
             stock,
             self._quarterly(normalized),
             self._annual(normalized),
-            self._options(normalized, stock.price),
+            self._recommendations(normalized),
         )
 
     def _quarterly(self, symbol: str) -> QuarterlyEarningsTimeline | None:
@@ -387,18 +380,17 @@ class GetStockAnalysis:
             return None
         return None if timeline.is_empty else timeline
 
-    def _options(self, symbol: str, price: float) -> TickerOptionsMetrics | None:
-        # Best-effort context: the options read is a live call (no cache), so a
-        # thin listing or a blocked fetch just omits it — it never sinks the
-        # analysis. Reuses the ticker card's sampling so both read it the same way.
-        if self._options_provider is None:
+    def _recommendations(self, symbol: str) -> AnalystRecommendations | None:
+        # Best-effort context: the sell-side's own buy/hold/sell consensus, the
+        # same DB-cached read the recommendations endpoint serves. A missing
+        # provider, an upstream miss, or an uncovered symbol (empty run) omits it.
+        if self._recommendations_provider is None:
             return None
         try:
-            return sample_options_metrics(
-                self._options_provider, symbol, price, self._today()
-            )
+            recs = self._recommendations_provider.get_recommendations(symbol)
         except (StockNotFound, StockDataUnavailable):
             return None
+        return None if recs.is_empty else recs
 
 
 class GetSectorPerformance:

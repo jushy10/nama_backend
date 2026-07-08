@@ -53,6 +53,9 @@ from app.stocks.endpoints.annual_earnings_endpoints import (
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     get_quarterly_earnings_provider,
 )
+from app.stocks.endpoints.recommendations_endpoints import (
+    get_recommendation_provider,
+)
 from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
@@ -63,7 +66,7 @@ from app.stocks.ports import (
     StockFundamentalsProvider,
     StockPerformanceProvider,
 )
-from app.stocks.ticker.ports import OptionChainProvider
+from app.stocks.recommendations.ports import RecommendationProvider
 from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
@@ -236,18 +239,17 @@ def get_analysis_provider() -> InvestmentAnalysisProvider:
 def get_stock_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
     analyzer: InvestmentAnalysisProvider = Depends(get_analysis_provider),
-    # Best-effort *context* for the analysis, each reusing the same provider its own
-    # endpoint reads through: the quarterly and annual timelines ride the DB-cached
-    # earnings providers (no extra vendor call for a cached symbol, no API key), and
-    # the options chain rides the keyless yfinance singleton (live per request, so a
-    # blocked or thin read just omits the block).
+    # Best-effort *context* for the analysis, each reusing the same DB-cached
+    # provider its own endpoint reads through — no extra vendor call for a cached
+    # symbol and no API key: the quarterly and annual earnings timelines and the
+    # analyst recommendation trends.
     quarterly: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
     annual: AnnualEarningsProvider = Depends(get_annual_earnings_provider),
-    options: OptionChainProvider = Depends(get_options_provider),
+    recommendations: RecommendationProvider = Depends(get_recommendation_provider),
 ) -> GetStockAnalysis:
     # Reuses the stock snapshot wiring wholesale (price + enrichment), then layers
-    # the analyzer and the best-effort earnings/options context on top.
-    return GetStockAnalysis(stock_info, analyzer, quarterly, annual, options)
+    # the analyzer and the best-effort earnings + recommendations context on top.
+    return GetStockAnalysis(stock_info, analyzer, quarterly, annual, recommendations)
 
 
 @lru_cache(maxsize=1)

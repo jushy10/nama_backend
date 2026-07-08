@@ -2,11 +2,11 @@
 
 The only module that knows Bedrock (and the Anthropic SDK) exists. It takes the
 data the use case already gathered — the price snapshot, trailing performance,
-the trailing *and* forward valuation/health/growth metrics, the options-market
-read, and the recent quarterly and annual earnings — renders it into a compact
-prompt, and asks Claude for a balanced buy/hold/sell read written in plain,
-everyday language a non-expert can follow. Swap models or vendors and only this
-file changes.
+the trailing *and* forward valuation/health/growth metrics, the recent quarterly
+and annual earnings, and the analyst recommendation trends — renders it into a
+compact prompt, and asks Claude for a balanced buy/hold/sell read written in
+plain, everyday language a non-expert can follow. Swap models or vendors and only
+this file changes.
 
 Two deliberate choices keep it robust and on-pattern:
 
@@ -44,7 +44,7 @@ from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.ports import InvestmentAnalysisProvider
-from app.stocks.ticker.entities import TickerOptionsMetrics
+from app.stocks.recommendations.entities import AnalystRecommendations
 
 # A single forced tool is how the model is pinned to structured output: Claude
 # must call submit_analysis, so the response comes back as validated JSON
@@ -101,8 +101,8 @@ _ANALYSIS_TOOL = {
 _SYSTEM_PROMPT = (
     "You are a friendly investing assistant explaining one stock to an everyday "
     "person with no finance background. You are given a snapshot of the stock's "
-    "price, its valuation and profitability figures, what the options market is "
-    "pricing in, and its recent quarterly and annual earnings. From only those "
+    "price, its valuation and profitability figures, its recent quarterly and "
+    "annual earnings, and what Wall Street analysts recommend. From only those "
     "figures, give a clear, balanced read on whether it currently looks like a "
     "buy, hold, or sell.\n"
     "Write in plain, warm, everyday language — short sentences, no jargon. When a "
@@ -167,9 +167,9 @@ class BedrockAnalysisProvider(InvestmentAnalysisProvider):
         stock: Stock,
         quarterly: QuarterlyEarningsTimeline | None = None,
         annual: AnnualEarningsTimeline | None = None,
-        options: TickerOptionsMetrics | None = None,
+        recommendations: AnalystRecommendations | None = None,
     ) -> InvestmentAnalysis:
-        prompt = _render_prompt(stock, quarterly, annual, options)
+        prompt = _render_prompt(stock, quarterly, annual, recommendations)
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -242,7 +242,7 @@ def _render_prompt(
     stock: Stock,
     quarterly: QuarterlyEarningsTimeline | None,
     annual: AnnualEarningsTimeline | None = None,
-    options: TickerOptionsMetrics | None = None,
+    recommendations: AnalystRecommendations | None = None,
 ) -> str:
     """Render the gathered data into a compact, labelled block for the model.
 
@@ -251,8 +251,8 @@ def _render_prompt(
     sections mirror what the app's own endpoints expose: the enriched snapshot
     (price, dividend, performance, and the trailing *and* forward
     valuation/health/growth metrics — the ticker card's figures) followed, when
-    available, by the options-market read and the quarterly and annual earnings
-    timelines.
+    available, by the quarterly and annual earnings timelines and the analyst
+    recommendation trends.
     """
     metrics = stock.metrics
     perf = stock.performance
@@ -313,9 +313,9 @@ def _render_prompt(
     lines = [f"Stock: {stock.symbol}"]
     lines += [f"- {label}: {_num(value)}" for label, value in fields if value is not None]
     for block in (
-        _render_options(options),
         _render_quarterly(quarterly),
         _render_annual(annual),
+        _render_recommendations(recommendations),
     ):
         if block:
             lines.append("")
@@ -323,21 +323,30 @@ def _render_prompt(
     return "\n".join(lines)
 
 
-def _render_options(options: TickerOptionsMetrics | None) -> str:
-    """Render the options-market read as a short labelled block (or '' if none) —
-    the four figures the ticker card serves, what the options market is pricing in."""
-    if options is None:
+def _render_recommendations(recommendations: AnalystRecommendations | None) -> str:
+    """Render the analyst recommendation trend as a short labelled block (or '' if
+    none) — the sell-side's own buy/hold/sell consensus, for the model to weigh
+    against its read (agreeing or deliberately differing)."""
+    if recommendations is None or recommendations.is_empty:
         return ""
-    fields: list[tuple[str, object]] = [
-        ("Implied volatility % (how jumpy the market expects it to be)", options.implied_volatility),
-        ("Expected price move % (priced in for the near term)", options.expected_move_percent),
-        ("Cost to insure against a drop %", options.insurance_cost_percent),
-        ("Put/call volume ratio (above 1 = more downside bets)", options.put_call_ratio),
-    ]
-    rendered = [f"- {label}: {_num(value)}" for label, value in fields if value is not None]
-    if not rendered:
+    latest = recommendations.latest
+    if latest is None or latest.total == 0:
         return ""
-    return "\n".join(["Options market (what traders are pricing in):"] + rendered)
+    lines = ["Analyst recommendations (the sell-side's own view):"]
+    if latest.consensus is not None:
+        lines.append(
+            f"- Consensus: {latest.consensus} "
+            f"(average {latest.score} on a 1=Strong Buy to 5=Strong Sell scale, "
+            f"from {latest.total} analysts)"
+        )
+    lines.append(
+        "- Breakdown: "
+        f"{latest.strong_buy} strong buy, {latest.buy} buy, {latest.hold} hold, "
+        f"{latest.sell} sell, {latest.strong_sell} strong sell"
+    )
+    if recommendations.direction is not None:
+        lines.append(f"- Trend vs last month: {recommendations.direction}")
+    return "\n".join(lines)
 
 
 def _render_quarterly(quarterly: QuarterlyEarningsTimeline | None) -> str:

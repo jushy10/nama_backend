@@ -118,18 +118,17 @@ def sample_options_metrics(
     near_window: timedelta = _NEAR_WINDOW,
     insurance_window: timedelta = _INSURANCE_WINDOW,
 ) -> TickerOptionsMetrics | None:
-    """The options-market read: sample the ~1-month and ~3-month expiries and let
-    the entity derive the four figures at ``price``.
+    """The ticker card's options-market read: sample the ~1-month and ~3-month
+    expiries and let the entity derive the four figures at ``price``.
 
-    Shared by the ticker card and the AI-analysis context so the two read the
-    options market the same way. Nearest-listed wins: options expire on fixed
-    exchange dates, so each window picks the future expiry closest to its target —
-    and when the listed dates are sparse both windows may land on the same expiry
-    (the entity dedupes the shared chain). ``None`` when the symbol has no listed
-    options — "no coverage", not an error.
+    Nearest-listed wins: options expire on fixed exchange dates, so each window
+    picks the future expiry closest to its target — and when the listed dates are
+    sparse both windows may land on the same expiry (the entity dedupes the shared
+    chain). ``None`` when the symbol has no listed options — "no coverage", not an
+    error.
 
     Propagates the provider's ``StockNotFound``/``StockDataUnavailable`` straight
-    through: the read is best-effort enrichment, so each caller wraps this in its
+    through: the read is best-effort enrichment, so the caller wraps this in its
     own try/except rather than the helper deciding to swallow a failure.
     """
     future = [e for e in options.get_expirations(symbol) if e > today]
@@ -364,9 +363,9 @@ class GetTickerCard:
 
     def _get_options_metrics(self, symbol: str, quote: Quote) -> TickerOptionsMetrics | None:
         """The card's options-market read — best-effort, so a Yahoo-blocked read
-        leaves the block null rather than sinking the card. The sampling itself is
-        shared with the AI-analysis context (``sample_options_metrics``), so both
-        surfaces read the same two expiries the same way."""
+        leaves the block null rather than sinking the card. The expiry sampling
+        lives in ``sample_options_metrics`` (a module-level helper, so the rule for
+        which two expiries to read is stated once)."""
         if self._options is None:
             return None
         try:
