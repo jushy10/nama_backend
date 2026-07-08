@@ -303,6 +303,14 @@ resource "aws_apigatewayv2_integration" "this" {
   # ceiling, not a tunable — anything slower 504s at the gateway.
   payload_format_version = "1.0"
   timeout_milliseconds   = 30000
+
+  # Hand the app a trustworthy client IP for per-client rate limiting: overwrite
+  # X-Forwarded-For with the source IP the gateway actually observed. Because the
+  # gateway replaces the whole header, a client can't slip past the limiter with a
+  # forged X-Forwarded-For — the app reads the first entry and trusts it.
+  request_parameters = {
+    "overwrite:header.X-Forwarded-For" = "$context.identity.sourceIp"
+  }
 }
 
 # One catch-all route: the app's FastAPI router does the real routing.

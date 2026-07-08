@@ -14,6 +14,9 @@ dependencies = [
     "lxml>=4.9",        # required by yfinance's Ticker.earnings_dates: pandas.read_html parses
                         # Yahoo's HTML with it. Not a hard yfinance dep, but the quarterly-earnings
                         # live path fails without it ("Import lxml failed"), so pin it explicitly.
+    "slowapi>=0.1.9",   # in-process per-client (per-IP) rate limiting — a token bucket keyed on the
+                        # caller's IP so one abusive client can't exhaust the service. In-memory
+                        # counter (fine for a single task); swap storage_uri for Redis to scale out.
 ]
 
 # PostgreSQL driver — install with `pip install -e ".[postgres]"` anywhere that
