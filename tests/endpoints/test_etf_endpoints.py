@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import etf_endpoints as endpoints
-from app.stocks.entities import Quote
+from app.stocks.entities import Quote, StockPerformance
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfDetail,
@@ -151,15 +151,18 @@ def test_categories_endpoint_returns_the_slugs():
 
 
 class _FakeDetailUseCase:
-    """Stands in for GetEtfDetail; returns a canned detail or raises."""
+    """Stands in for GetEtfDetail; returns a canned detail or raises. Records the ``include`` it
+    was handed so the endpoint's query-param pass-through can be asserted."""
 
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error
         self.calls: list[str] = []
+        self.includes: list = []
 
-    def execute(self, ticker: str) -> EtfDetail:
+    def execute(self, ticker: str, include=None) -> EtfDetail:
         self.calls.append(ticker)
+        self.includes.append(include)
         if self._error is not None:
             raise self._error
         return self._result
@@ -172,7 +175,23 @@ def _detail_client(fake: _FakeDetailUseCase) -> TestClient:
     return TestClient(app)
 
 
-def _a_detail(*, profile: EtfProfile | None = None) -> EtfDetail:
+def _a_performance() -> StockPerformance:
+    return StockPerformance(
+        one_week=0.5,
+        one_month=1.2,
+        three_month=3.4,
+        six_month=6.5,
+        ytd=8.9,
+        one_year=12.3,
+    )
+
+
+def _a_detail(
+    *,
+    profile: EtfProfile | None = None,
+    include=frozenset(),
+    performance: StockPerformance | None = None,
+) -> EtfDetail:
     quote = Quote(
         symbol="VOO",
         price=685.28,
@@ -201,12 +220,23 @@ def _a_detail(*, profile: EtfProfile | None = None) -> EtfDetail:
             top_holdings=(EtfHolding(ticker="NVDA", name="NVIDIA Corp", weight=7.89),),
             sector_weightings=(EtfSectorWeight(sector="technology", weight=39.13),),
         )
-    return EtfDetail.assemble("VOO", quote, facts, profile)
+    return EtfDetail.assemble(
+        "VOO", quote, facts, profile, include=frozenset(include), performance=performance
+    )
 
 
-def test_detail_returns_the_full_json_shape():
-    fake = _FakeDetailUseCase(result=_a_detail())
-    resp = _detail_client(fake).get("/stocks/etf/VOO")
+def test_detail_returns_the_full_json_shape_with_all_includes():
+    # Every opt-in block requested: the base card + the always-on enrichment + the three nested
+    # blocks (metrics / dividends / performance). Note ytd rides the performance block's Alpaca
+    # window (8.9) — Yahoo's own ytd_return is deliberately no longer surfaced.
+    fake = _FakeDetailUseCase(
+        result=_a_detail(
+            include={"metrics", "dividends", "performance"}, performance=_a_performance()
+        )
+    )
+    resp = _detail_client(fake).get(
+        "/stocks/etf/VOO?include=metrics,dividends,performance"
+    )
 
     assert resp.status_code == 200, resp.text
     assert resp.json() == {
@@ -220,39 +250,116 @@ def test_detail_returns_the_full_json_shape():
         "previous_close": 682.07,
         "as_of": "2026-07-06T20:00:00Z",
         "category": "large_blend",
-        "net_assets": 1_701_513_003_008.0,
-        "expense_ratio": 0.03,
+        # Always-on Yahoo enrichment.
         "fund_family": "Vanguard",
-        "nav": 685.28,
-        "dividend_yield": 1.03,
-        "ytd_return": 11.25,
-        "three_year_return": 20.41,
-        "five_year_return": 13.01,
         "description": "The fund employs an indexing investment approach.",
         "top_holdings": [{"ticker": "NVDA", "name": "NVIDIA Corp", "weight": 7.89}],
         "sector_weightings": [{"sector": "technology", "weight": 39.13}],
+        # Opt-in blocks.
+        "metrics": {
+            "expense_ratio": 0.03,
+            "nav": 685.28,
+            "net_assets": 1_701_513_003_008.0,
+        },
+        "dividends": {"yield_percentage": 1.03},
+        "performance": {
+            "1w": 0.5,
+            "1m": 1.2,
+            "3m": 3.4,
+            "6m": 6.5,
+            "ytd": 8.9,  # the Alpaca window, not Yahoo's ytd_return
+            "1y": 12.3,
+            "three_year_return": 20.41,  # Yahoo annualized
+            "five_year_return": 13.01,
+        },
     }
     assert fake.calls == ["VOO"]
 
 
-def test_detail_serves_null_and_empty_enrichment_when_the_profile_is_empty():
-    # Best-effort: a blocked Yahoo read leaves the profile empty — the quote + stored facts still
-    # serve on a 200, with the enrichment fields null and the lists empty.
-    fake = _FakeDetailUseCase(result=_a_detail(profile=EtfProfile.empty()))
+def test_detail_omits_unrequested_blocks():
+    # No includes: the base card + always-on enrichment serve, and all three blocks are null.
+    fake = _FakeDetailUseCase(result=_a_detail())  # include defaults to frozenset()
     resp = _detail_client(fake).get("/stocks/etf/VOO")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["name"] == "Vanguard S&P 500 ETF"  # base + enrichment present
+    assert body["fund_family"] == "Vanguard"
+    assert body["metrics"] is None
+    assert body["dividends"] is None
+    assert body["performance"] is None
+
+
+def test_detail_emits_only_the_requested_block():
+    fake = _FakeDetailUseCase(result=_a_detail(include={"metrics"}))
+    resp = _detail_client(fake).get("/stocks/etf/VOO?include=metrics")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["metrics"] == {
+        "expense_ratio": 0.03,
+        "nav": 685.28,
+        "net_assets": 1_701_513_003_008.0,
+    }
+    assert body["dividends"] is None
+    assert body["performance"] is None
+
+
+def test_detail_passes_include_through_to_the_use_case():
+    # Repeated params reach the use case as a list; the use case owns the split/validation.
+    fake = _FakeDetailUseCase(result=_a_detail())
+    _detail_client(fake).get("/stocks/etf/VOO?include=metrics&include=performance")
+    assert fake.includes == [["metrics", "performance"]]
+
+
+def test_detail_unknown_include_is_a_400():
+    # The use case raises ValueError on an unknown include; the endpoint maps it to 400.
+    fake = _FakeDetailUseCase(error=ValueError("Unknown include(s): bogus."))
+    resp = _detail_client(fake).get("/stocks/etf/VOO?include=bogus")
+    assert resp.status_code == 400
+
+
+def test_detail_serves_null_within_the_blocks_when_the_profile_is_empty():
+    # Best-effort: a blocked Yahoo read leaves the profile empty — the quote + stored facts still
+    # serve on a 200. The always-on enrichment goes null / []; a requested block is still emitted
+    # but its Yahoo-sourced figures are null, while the stored facts still fill metrics.
+    fake = _FakeDetailUseCase(
+        result=_a_detail(
+            profile=EtfProfile.empty(),
+            include={"metrics", "dividends", "performance"},
+            performance=None,  # the best-effort Alpaca windows read was blocked too
+        )
+    )
+    resp = _detail_client(fake).get(
+        "/stocks/etf/VOO?include=metrics,dividends,performance"
+    )
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["price"] == 685.28  # quote still serves
     assert body["name"] == "Vanguard S&P 500 ETF"  # stored facts still serve
-    assert body["expense_ratio"] == 0.03  # stored fact
+    # Always-on enrichment degrades to null / [].
     assert body["fund_family"] is None
-    assert body["nav"] is None
-    assert body["dividend_yield"] is None
-    assert body["ytd_return"] is None
     assert body["description"] is None
     assert body["top_holdings"] == []
     assert body["sector_weightings"] == []
+    # The requested blocks are emitted; the stored facts fill metrics, the rest is null.
+    assert body["metrics"] == {
+        "expense_ratio": 0.03,
+        "nav": None,
+        "net_assets": 1_701_513_003_008.0,
+    }
+    assert body["dividends"] == {"yield_percentage": None}
+    assert body["performance"] == {
+        "1w": None,
+        "1m": None,
+        "3m": None,
+        "6m": None,
+        "ytd": None,
+        "1y": None,
+        "three_year_return": None,
+        "five_year_return": None,
+    }
 
 
 def test_detail_sets_the_cache_header():

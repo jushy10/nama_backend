@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Sequence
 
+from app.stocks.entities import StockPerformance
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfDetail,
@@ -39,10 +41,15 @@ from app.stocks.etfs.repository import (
     EtfSearchRepository,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import StockQuoteProvider
+from app.stocks.ports import StockPerformanceProvider, StockQuoteProvider
 from app.stocks.progress import iter_with_progress
 
 logger = logging.getLogger(__name__)
+
+# The blocks a caller may opt into on the ETF detail card (``?include=``). Everything else — the
+# quote + day move, the stored identity facts (name/exchange/category), and the always-on Yahoo
+# enrichment (fund family, description, holdings, sector weightings) — is served regardless.
+INCLUDABLE = frozenset({"metrics", "dividends", "performance"})
 
 
 @dataclass(frozen=True)
@@ -230,6 +237,28 @@ def _normalize_symbol(symbol: str) -> str:
     return normalized
 
 
+def _normalize_includes(include: Sequence[str] | None) -> frozenset[str]:
+    """Flatten/lower-case the requested includes and reject unknown ones, once, at the edge — the
+    same stance (and client idioms) as the ticker card's ``_normalize_includes``. Accepts both
+    repeated params and comma-separated values (``?include=metrics&include=dividends`` or
+    ``?include=metrics,dividends``)."""
+    if not include:
+        return frozenset()
+    parts = {
+        part.strip().lower()
+        for raw in include
+        for part in raw.split(",")
+        if part.strip()
+    }
+    unknown = parts - INCLUDABLE
+    if unknown:
+        raise ValueError(
+            f"Unknown include(s): {', '.join(sorted(unknown))}. "
+            f"Valid includes: {', '.join(sorted(INCLUDABLE))}."
+        )
+    return frozenset(parts)
+
+
 class GetEtfDetail:
     """Use case: one fund's detail card — the live quote, the stored ``etfs`` facts, and the
     best-effort Yahoo profile (``GET /stocks/etf/{ticker}``).
@@ -244,6 +273,13 @@ class GetEtfDetail:
     and the card still returns 200 with the quote + stored facts. The stored net_assets/expense
     figures win over the profile's where both exist (the detail page must agree with the screener
     list); the profile only fills the gaps.
+
+    The opt-in blocks (``?include=``) shape what the card carries: ``metrics`` (expense ratio, NAV,
+    net assets) and ``dividends`` (yield) are drawn from the always-fetched profile + stored facts,
+    so requesting them costs no *extra* call — only their serialization is gated. ``performance``
+    (the trailing price-return windows) is the one block with its own upstream call, so it's fetched
+    only when asked for, best-effort like the profile (a blocked read leaves the block's gains null
+    without sinking the card); the 3y/5y annualized returns it also surfaces ride the profile.
     """
 
     def __init__(
@@ -251,13 +287,16 @@ class GetEtfDetail:
         lookup: EtfLookupRepository,
         quotes: StockQuoteProvider,
         profile: EtfProfileProvider,
+        performance: StockPerformanceProvider | None = None,
     ) -> None:
         self._lookup = lookup
         self._quotes = quotes
         self._profile = profile
+        self._performance = performance
 
-    def execute(self, symbol: str) -> EtfDetail:
+    def execute(self, symbol: str, include: Sequence[str] | None = None) -> EtfDetail:
         normalized = _normalize_symbol(symbol)
+        wanted = _normalize_includes(include)
         # Membership gate first: not an ETF -> 404, before any upstream call.
         facts = self._lookup.get(normalized)
         if facts is None:
@@ -265,9 +304,27 @@ class GetEtfDetail:
         # Primary source: a quote failure propagates (mapped to 502/503 at the edge).
         quote = self._quotes.get_quote(normalized)
         # Best-effort enrichment: the provider is total, but guard anyway so a contract slip
-        # can never sink a card whose primary data (the quote) is already in hand.
+        # can never sink a card whose primary data (the quote) is already in hand. Fetched
+        # regardless of the includes — it backs the always-on enrichment as well as the
+        # metrics/dividends/performance blocks' Yahoo-sourced figures.
         try:
             profile = self._profile.get_profile(normalized)
         except (StockNotFound, StockDataUnavailable):
             profile = EtfProfile.empty()
-        return EtfDetail.assemble(normalized, quote, facts, profile)
+        performance = (
+            self._get_performance(normalized) if "performance" in wanted else None
+        )
+        return EtfDetail.assemble(
+            normalized, quote, facts, profile, include=wanted, performance=performance
+        )
+
+    def _get_performance(self, symbol: str) -> StockPerformance | None:
+        # The one opt-in block with its own upstream call (Alpaca trailing windows), so it's
+        # fetched only when requested — and best-effort: a failure leaves the gains null rather
+        # than sinking the card whose primary data (the quote) is already in hand.
+        if self._performance is None:
+            return None
+        try:
+            return self._performance.get_performance(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None

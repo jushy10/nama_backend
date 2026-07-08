@@ -29,10 +29,10 @@ from typing import TYPE_CHECKING
 from enum import Enum
 
 if TYPE_CHECKING:
-    # Only for the ``EtfDetail`` annotation — the shared ``Quote`` is itself a pure domain entity,
-    # but the annotation is stringized (``from __future__ import annotations``) so nothing is
-    # imported at runtime, keeping this module import-light.
-    from app.stocks.entities import Quote
+    # Only for the ``EtfDetail`` annotations — the shared ``Quote`` / ``StockPerformance`` are
+    # themselves pure domain entities, but the annotations are stringized (``from __future__ import
+    # annotations``) so nothing is imported at runtime, keeping this module import-light.
+    from app.stocks.entities import Quote, StockPerformance
 
 
 @dataclass(frozen=True)
@@ -218,10 +218,13 @@ class EtfProfile:
     net_assets: float | None = None  # AUM (raw), Yahoo's totalAssets — a fallback for the table's
     expense_ratio: float | None = None  # percent — a fallback for the table's
     nav: float | None = None  # net asset value per share (raw price)
-    dividend_yield: float | None = None  # percent
-    ytd_return: float | None = None  # percent
-    three_year_return: float | None = None  # percent (annualized)
-    five_year_return: float | None = None  # percent (annualized)
+    dividend_yield: float | None = None  # percent — feeds the card's 'dividends' block
+    # ytd_return is still parsed but deliberately NOT surfaced on the detail card: the
+    # 'performance' block's ``ytd`` is the Alpaca window (one vocabulary with 1w/1m/…/1y), so
+    # Yahoo's own year-to-date figure would only duplicate/disagree with it.
+    ytd_return: float | None = None  # percent (unsurfaced; see note above)
+    three_year_return: float | None = None  # percent (annualized) — card's 'performance' block
+    five_year_return: float | None = None  # percent (annualized) — card's 'performance' block
     description: str | None = None
     top_holdings: tuple[EtfHolding, ...] = ()
     sector_weightings: tuple[EtfSectorWeight, ...] = ()
@@ -247,7 +250,15 @@ class EtfDetail:
     shows, so the detail page must agree with it — the profile only fills the *gap* when the table
     lacks one. ``price``/``change``/``change_percent``/``previous_close``/``as_of`` are read off
     the live ``quote`` (its own change rules), so the fund's move never disagrees with the shared
-    quote endpoint."""
+    quote endpoint.
+
+    ``include`` records which opt-in blocks the caller asked for (``metrics`` / ``dividends`` /
+    ``performance``), so the presenter can tell "not requested" from "requested but unavailable" —
+    the same stance the ticker card's ``TickerCard.include`` takes. ``performance`` is the trailing
+    price-return windows (Alpaca), fetched only when that block is requested; the 3y/5y annualized
+    returns it also carries ride the always-fetched ``profile``. The always-on enrichment
+    (``fund_family`` / ``description`` / ``top_holdings`` / ``sector_weightings``) stays on the
+    ``profile`` and is served regardless of the includes."""
 
     ticker: str
     quote: "Quote"  # live price + the day's move (primary source)
@@ -257,6 +268,8 @@ class EtfDetail:
     net_assets: float | None  # AUM (raw): the table's, falling back to the profile's
     expense_ratio: float | None  # percent: the table's, falling back to the profile's
     profile: EtfProfile = field(default_factory=EtfProfile.empty)
+    include: frozenset[str] = field(default_factory=frozenset)  # opt-in blocks asked for
+    performance: "StockPerformance | None" = None  # trailing windows; only with 'performance'
 
     @classmethod
     def assemble(
@@ -265,11 +278,15 @@ class EtfDetail:
         quote: "Quote",
         facts: "EtfSearchResult",
         profile: EtfProfile,
+        *,
+        include: frozenset[str] = frozenset(),
+        performance: "StockPerformance | None" = None,
     ) -> "EtfDetail":
         """Compose the detail from the live quote, the stored ``etfs`` facts, and the Yahoo
         profile — resolving net_assets/expense_ratio table-first, profile-as-fallback (so the
         detail page never contradicts the screener list, but a gap the table hasn't filled still
-        gets a value when Yahoo has one)."""
+        gets a value when Yahoo has one). ``include`` (the requested opt-in blocks) and the
+        best-effort ``performance`` (fetched only when that block was asked for) ride through."""
         return cls(
             ticker=ticker,
             quote=quote,
@@ -283,6 +300,8 @@ class EtfDetail:
                 else profile.expense_ratio
             ),
             profile=profile,
+            include=frozenset(include),
+            performance=performance,
         )
 
 
