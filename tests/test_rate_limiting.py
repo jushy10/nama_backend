@@ -4,8 +4,8 @@ The autouse fixture in ``conftest`` disables the limiter for the rest of the
 suite (every ``TestClient`` request otherwise shares one client key and would
 pool the whole run into a single bucket). These tests re-enable it in-body and
 drive it through the real middleware, giving each client a distinct IP via
-``X-Forwarded-For`` — the header the key function reads and the gateway
-overwrites with the true source in production.
+``X-Client-IP`` — the header the key function reads and the gateway overwrites
+with the true source in production.
 """
 
 from starlette.testclient import TestClient
@@ -14,7 +14,7 @@ from app.main import app, limiter
 
 
 def _hammer(client: TestClient, ip: str, n: int) -> list[int]:
-    headers = {"X-Forwarded-For": ip}
+    headers = {"X-Client-IP": ip}
     return [client.get("/healthz", headers=headers).status_code for _ in range(n)]
 
 
