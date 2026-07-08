@@ -24,7 +24,7 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
-from app.stocks.ticker.entities import TickerOptionsMetrics
+from app.stocks.recommendations.entities import AnalystRecommendations
 
 
 class StockDataProvider(ABC):
@@ -231,10 +231,10 @@ class InvestmentAnalysisProvider(ABC):
     case has already assembled everything the read reasons over: the enriched
     ``Stock`` snapshot (price, performance, trailing + forward valuation/health
     metrics) and, when available, the recent quarterly and annual earnings
-    timelines plus the options-market read. The adapter only reasons over what
-    it's given and never fetches outside data. This backs a dedicated endpoint
-    (its own reason to exist, not best-effort enrichment), so a failure surfaces
-    as an error rather than being swallowed.
+    timelines plus the analyst recommendation trends. The adapter only reasons
+    over what it's given and never fetches outside data. This backs a dedicated
+    endpoint (its own reason to exist, not best-effort enrichment), so a failure
+    surfaces as an error rather than being swallowed.
     """
 
     @abstractmethod
@@ -243,12 +243,12 @@ class InvestmentAnalysisProvider(ABC):
         stock: Stock,
         quarterly: QuarterlyEarningsTimeline | None = None,
         annual: AnnualEarningsTimeline | None = None,
-        options: TickerOptionsMetrics | None = None,
+        recommendations: AnalystRecommendations | None = None,
     ) -> InvestmentAnalysis:
         """Return a buy/hold/sell analysis built from the supplied data.
 
         Every argument beyond ``stock`` is best-effort *context* the use case
-        gathers — the same data the ticker card and the earnings endpoints serve.
+        gathers — the same data the earnings and recommendations endpoints serve.
         Each is ``None`` when its source is unconfigured, uncovered, or briefly
         unreachable; the analysis stands on whatever it's handed.
 
@@ -258,8 +258,8 @@ class InvestmentAnalysisProvider(ABC):
             quarterly: the recent quarterly earnings timeline, else ``None``.
             annual: the recent annual (fiscal-year) earnings timeline, else
                 ``None``.
-            options: the options-market read (implied volatility, expected move,
-                cost of protection, put/call lean), else ``None``.
+            recommendations: the analyst recommendation trends (the sell-side
+                buy/hold/sell consensus and its direction), else ``None``.
 
         Raises:
             StockDataUnavailable: the model call failed or returned no usable
