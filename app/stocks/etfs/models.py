@@ -11,15 +11,17 @@ table rather than as a ``stocks`` row (which would leak funds into the stock uni
 - the screen figures (refreshed every screen run): ``net_assets`` / ``expense_ratio`` /
   ``screened_at``;
 - the per-fund *profile* the enrichment pass fills (``category`` + ``fund_family`` /
-  ``dividend_yield`` / ``description`` / ``nav`` / the trailing-return ladder), stamped by
-  ``profile_fetched_at``.
+  ``dividend_yield`` / ``description`` / ``nav``), stamped by ``profile_fetched_at``. The
+  trailing-return ladder is deliberately **not** stored — the detail card reads those live from
+  Yahoo (see ``EtfProfile``).
 
 The profile's list-valued halves live in their own child tables — ``etf_sector_weightings`` and
 ``etf_top_holdings`` — each a delete-then-insert-per-fund set hanging off ``etfs`` with ON DELETE
 CASCADE. The concrete repository (``db_repository.py``) is the only caller; it maps these rows to
 and from the slice entities, so this layer deals only in rows and columns.
 
-The schema is created by migrations 0016 (``etfs``) and 0020 (the profile columns + child tables).
+The schema is created by migrations 0016 (``etfs``) and 0020 (the profile columns + child tables);
+0021 later drops the trailing-return ladder, which is served live from Yahoo instead of stored.
 """
 
 from __future__ import annotations
@@ -55,12 +57,13 @@ class EtfRecord(Base):
 
     The rest is the per-fund **profile** the enrichment pass fills from Yahoo's per-ticker surfaces
     (the screen carries none of it): ``category`` is the classification slug (e.g. ``large_growth``);
-    ``fund_family`` / ``description`` are near-static facts; ``dividend_yield`` / ``nav`` and the
-    trailing-return ladder (``ytd_return`` / ``three_year_return`` / ``five_year_return``, all
-    percents) drift, so the enrichment pass refreshes them. All are percents except ``nav`` (a raw
-    per-share price). ``profile_fetched_at`` stamps the last successful profile refresh (null until
-    the enrichment pass first reaches the fund) and orders the stalest-first refresh queue. The
-    profile's list halves (sector weightings, top holdings) live in the child tables below.
+    ``fund_family`` / ``description`` are near-static facts; ``dividend_yield`` (a percent) and
+    ``nav`` (a raw per-share price) drift, so the enrichment pass refreshes them. The trailing-return
+    ladder (YTD / 3y / 5y) is **not** a column here — those drift the most and only the detail
+    card's ``performance`` block surfaces them, so the read path fetches them live from Yahoo
+    instead. ``profile_fetched_at`` stamps the last successful profile refresh (null until the
+    enrichment pass first reaches the fund) and orders the stalest-first refresh queue. The profile's
+    list halves (sector weightings, top holdings) live in the child tables below.
     """
 
     __tablename__ = "etfs"
@@ -80,9 +83,6 @@ class EtfRecord(Base):
     dividend_yield: Mapped[float | None] = mapped_column(Float, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     nav: Mapped[float | None] = mapped_column(Float, nullable=True)
-    ytd_return: Mapped[float | None] = mapped_column(Float, nullable=True)
-    three_year_return: Mapped[float | None] = mapped_column(Float, nullable=True)
-    five_year_return: Mapped[float | None] = mapped_column(Float, nullable=True)
     profile_fetched_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

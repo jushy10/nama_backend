@@ -191,10 +191,12 @@ class EtfProfile:
     ``top_holdings`` is capped and ordered largest first; ``sector_weightings`` is sorted by
     weight descending. Empty lists mean "unavailable", never "the fund holds nothing".
 
-    ``net_assets`` / ``expense_ratio`` are here because the adapter reads them off the same blob,
-    but the sync does **not** persist them from the profile — the screen owns those columns — so a
-    profile rebuilt from storage leaves them ``None`` (the detail resolves them from the stored
-    screen facts instead)."""
+    Three fields the adapter reads off the ``.info`` blob are **not persisted** from the profile,
+    so a profile rebuilt from storage leaves them ``None``: ``net_assets`` / ``expense_ratio`` (the
+    screen owns those columns — the detail resolves them from the stored screen facts), and the
+    trailing-return ladder ``ytd_return`` / ``three_year_return`` / ``five_year_return`` (only the
+    detail card's ``performance`` block surfaces the 3y/5y, so the read path overlays them from a
+    live Yahoo read rather than storing a snapshot that drifts between syncs)."""
 
     category: str | None = None  # classification slug (e.g. "large_growth")
     fund_family: str | None = None
@@ -202,12 +204,14 @@ class EtfProfile:
     expense_ratio: float | None = None  # percent (screen owns the stored col)
     nav: float | None = None  # net asset value per share (raw price)
     dividend_yield: float | None = None  # percent — feeds the card's 'dividends' block
-    # ytd_return is still parsed but deliberately NOT surfaced on the detail card: the
-    # 'performance' block's ``ytd`` is the Alpaca window (one vocabulary with 1w/1m/…/1y), so
-    # Yahoo's own year-to-date figure would only duplicate/disagree with it.
-    ytd_return: float | None = None  # percent (unsurfaced; see note above)
-    three_year_return: float | None = None  # percent (annualized) — card's 'performance' block
-    five_year_return: float | None = None  # percent (annualized) — card's 'performance' block
+    # The trailing-return ladder is not stored (see the class docstring) — on the detail read it's
+    # overlaid from a live Yahoo read, only when the 'performance' block is requested.
+    # ytd_return is parsed but deliberately NOT surfaced on the card: the 'performance' block's
+    # ``ytd`` is the Alpaca window (one vocabulary with 1w/1m/…/1y), so Yahoo's own year-to-date
+    # figure would only duplicate/disagree with it.
+    ytd_return: float | None = None  # percent (live-read; unsurfaced; see note above)
+    three_year_return: float | None = None  # percent (annualized, live-read) — 'performance' block
+    five_year_return: float | None = None  # percent (annualized, live-read) — 'performance' block
     description: str | None = None
     top_holdings: tuple[EtfHolding, ...] = ()
     sector_weightings: tuple[EtfSectorWeight, ...] = ()
@@ -239,9 +243,11 @@ class EtfDetail:
     ``performance``), so the presenter can tell "not requested" from "requested but unavailable" —
     the same stance the ticker card's ``TickerCard.include`` takes. ``performance`` is the trailing
     price-return windows (Alpaca), fetched only when that block is requested; the 3y/5y annualized
-    returns it also carries ride the always-fetched ``profile``. The always-on enrichment
-    (``fund_family`` / ``description`` / ``top_holdings`` / ``sector_weightings``) stays on the
-    ``profile`` and is served regardless of the includes."""
+    returns it also carries ride the ``profile`` too — but those come from a live Yahoo read the
+    use case overlays onto the (otherwise DB-read) profile just for this block, since they're no
+    longer stored. The always-on enrichment (``fund_family`` / ``description`` / ``top_holdings`` /
+    ``sector_weightings``) stays on the DB-read ``profile`` and is served regardless of the
+    includes."""
 
     ticker: str
     quote: "Quote"  # live price + the day's move (primary source)

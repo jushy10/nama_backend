@@ -250,7 +250,8 @@ def test_upsert_profile_writes_scalars_and_children_leaving_screen_figures_alone
     assert row.dividend_yield == 1.2
     assert row.description == "An S&P 500 index fund."
     assert row.nav == 580.15
-    assert (row.ytd_return, row.three_year_return, row.five_year_return) == (10.0, 15.0, 13.0)
+    # The trailing-return ladder is deliberately not persisted (served live on the detail read), so
+    # the fetch's ytd/3y/5y are dropped on write — the row has no such columns.
     # The screen's figures are untouched (the profile never owns them).
     assert (row.net_assets, row.expense_ratio) == (5e11, 0.09)
     assert row.profile_fetched_at.replace(tzinfo=timezone.utc) == _NOW
@@ -552,10 +553,12 @@ def test_get_stored_profile_reads_scalars_and_children(session):
     assert profile.category == "large_blend"
     assert profile.fund_family == "State Street"
     assert profile.nav == 580.15
+    # The trailing returns are NOT stored — the write dropped the fetch's ytd/3y/5y, so a
+    # profile rebuilt from storage carries None for them (the detail overlays them live instead).
     assert (profile.ytd_return, profile.three_year_return, profile.five_year_return) == (
-        10.0,
-        15.0,
-        13.0,
+        None,
+        None,
+        None,
     )
     # net_assets/expense_ratio are NOT part of the stored profile — the detail reads them from get().
     assert profile.net_assets is None
