@@ -373,8 +373,13 @@ translates them.
 
 **Config & secrets** come from environment variables, read only in the router's
 wiring functions (`APCA_API_KEY_ID`, `FINNHUB_API_KEY`, `LOGODEV_TOKEN`,
-`DATABASE_URL`). The `/internal/*/sync` cron endpoints are currently
-**unauthenticated** (an auth-token guard is planned, deferred for now). Build
+`DATABASE_URL`, `CRON_SYNC_TOKEN`). The `/internal/*/sync` cron endpoints are guarded
+by a shared bearer token: each `@router.post` depends on `require_cron_token`
+(`app/stocks/endpoints/cron_auth.py`), which requires `Authorization: Bearer
+$CRON_SYNC_TOKEN` (constant-time compared) and is **fail-closed** — a `503` when the token is
+unset, a `401` on a missing/wrong token. The GitHub sync workflows don't hit this HTTP surface
+(they run the sweeps as one-off ECS tasks via `python -m app.sync`, which call the `run_*_sync`
+runners directly), so the guard only gates a manual/HTTP trigger. Build
 providers lazily so the app boots without every key. Never hardcode or commit
 secrets.
 

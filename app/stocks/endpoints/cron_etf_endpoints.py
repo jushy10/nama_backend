@@ -19,9 +19,11 @@ the live yfinance screener + profile adapters and the SQL repository for the use
 needs no API key, so there's no credential to gate on; the sync is always constructable.
 ``get_sync_runner`` is the DI seam tests override with a fake.
 
-Security: this endpoint is currently **unauthenticated**, like the other cron endpoints — an
-auth-token guard (planned: a shared ``CRON_SYNC_TOKEN`` bearer) should be added before the
-endpoints are considered hardened.
+Security: the trigger is guarded by a shared bearer token. The endpoint depends on
+``require_cron_token`` (see ``cron_auth``), which requires ``Authorization: Bearer
+$CRON_SYNC_TOKEN`` and is **fail-closed** — an unset token is a ``503``, a missing or wrong one
+a ``401``. The sync workflow no longer POSTs here (it runs the sweep as a one-off ECS task via
+``python -m app.sync``), so this guard only gates the manual / HTTP trigger.
 """
 
 import logging
@@ -41,6 +43,7 @@ from app.stocks.endpoints.background_sync import (
     SyncTriggerResponse,
     trigger_sync,
 )
+from app.stocks.endpoints.cron_auth import require_cron_token
 from app.stocks.etfs.db_repository import SqlEtfRepository
 from app.stocks.etfs.use_cases import EtfSyncReport, SyncEtfs
 
@@ -92,6 +95,7 @@ def get_sync_runner() -> SyncRunner:
     "/internal/etfs/sync",
     response_model=SyncTriggerResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_cron_token)],
 )
 async def sync_etfs_endpoint(
     response: Response,

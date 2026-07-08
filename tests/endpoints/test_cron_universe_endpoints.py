@@ -46,6 +46,9 @@ def _client(fake: _FakeRunner) -> TestClient:
     app = FastAPI()
     app.include_router(cron.router)
     app.dependency_overrides[cron.get_sync_runner] = lambda: fake
+    # The auth guard is covered on its own in test_cron_auth.py; no-op it here so these
+    # controller tests don't need a token.
+    app.dependency_overrides[cron.require_cron_token] = lambda: None
     return TestClient(app)
 
 
