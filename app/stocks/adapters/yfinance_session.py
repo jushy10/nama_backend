@@ -19,6 +19,14 @@ It deliberately does **not** paper over Yahoo's harder gate ("User is unable to 
 feature"), an IP-reputation block a fresh crumb can't clear: that isn't classified as a
 crumb 401, so it exhausts the (single) retry and surfaces to the caller unchanged.
 
+That harder gate is what the optional **egress proxy** addresses. When ``YF_PROXY_URL`` is set,
+every yfinance call is routed through it — applied to yfinance's own curl_cffi session via
+``yf.config.network.proxy``, so *only* Yahoo traffic is proxied (boto3, RDS and the rest egress
+directly). A residential/rotating endpoint presents an IP Yahoo doesn't reputation-gate the way
+it gates a data-centre IP, which is the durable fix for the block a fresh crumb can't clear. Off
+by default (unset), so local runs and the offline tests never touch a proxy; a sticky-session
+endpoint is preferred so the cookie+crumb stay valid across a sweep.
+
 Adapter-layer infrastructure — importing yfinance here is fine (only adapters know the
 vendor). The retry backoff and the inter-call pacing are env-tunable and default to *off*,
 so local runs and the offline tests add no latency; the deployed app can dial them in.
@@ -26,10 +34,13 @@ so local runs and the offline tests add no latency; the deployed app can dial th
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
 from typing import Callable, Optional, TypeVar
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -42,8 +53,62 @@ _BACKOFF_SECONDS = float(os.getenv("YF_RETRY_BACKOFF_MS", "0")) / 1000.0
 # space out the sync loops' sequential per-ticker calls and stay gentler on Yahoo's limits.
 _MIN_INTERVAL_SECONDS = float(os.getenv("YF_MIN_REQUEST_INTERVAL_MS", "0")) / 1000.0
 
+# Optional egress proxy for yfinance's HTTP — the durable fix for Yahoo's hard data-centre-IP
+# gate ("unable to access this feature"), which a fresh crumb can't clear. When set, every
+# yfinance call routes through it; it's applied to yfinance's *own* curl_cffi session
+# (``yf.config.network.proxy``), so ONLY Yahoo traffic is proxied — boto3, RDS and everything
+# else egress directly. Empty (the default) = direct, so local runs and the offline tests never
+# touch a proxy; the deployed sync task sets it to a residential/rotating endpoint Yahoo doesn't
+# reputation-gate. A sticky-session endpoint is preferred so the cookie+crumb stay valid across
+# the sweep (a per-request-rotating IP just leans on the crumb retry more).
+_PROXY_URL = os.getenv("YF_PROXY_URL", "").strip()
+
+# A real proxy carries one of these schemes. Anything else — notably the SSM module's
+# "REPLACE_ME_VIA_PUT_PARAMETER" placeholder, present until the value is set out of band — is
+# ignored, so a not-yet-provisioned proxy degrades to a direct connection (+ one warning), never a
+# broken one that would fail every Yahoo call.
+_PROXY_SCHEMES = ("http://", "https://", "socks5://", "socks5h://", "socks4://")
+
 _pace_lock = threading.Lock()
 _last_call_at = 0.0
+
+_proxy_lock = threading.Lock()
+_proxy_configured = False
+
+
+def _ensure_proxy_configured() -> None:
+    """Route yfinance's HTTP through ``YF_PROXY_URL`` (once), if set.
+
+    yfinance re-reads ``config.network.proxy`` on every request, so a single assignment routes
+    all subsequent Yahoo calls through the proxy — and only Yahoo's, since it's set on yfinance's
+    own session. A no-op when unset (the default). Best-effort: a proxy-config failure logs (the
+    class only — the URL carries credentials and is never logged) and forfeits the proxying rather
+    than breaking the call path. Called at the top of every :func:`call`, so it's guaranteed set
+    before the first request without any import-order coupling."""
+    global _proxy_configured
+    if not _PROXY_URL or _proxy_configured:
+        return
+    with _proxy_lock:
+        if _proxy_configured:
+            return
+        # Set the guard up front so any early return / failure below still warns only once.
+        _proxy_configured = True
+        if not _PROXY_URL.lower().startswith(_PROXY_SCHEMES):
+            logger.warning(
+                "yfinance: YF_PROXY_URL is set but has no proxy scheme (http/https/socks) — "
+                "ignoring and continuing direct (is it still the SSM placeholder?)"
+            )
+            return
+        try:
+            import yfinance as yf
+
+            yf.config.network.proxy = _PROXY_URL
+            logger.info("yfinance: routing HTTP through the configured egress proxy")
+        except Exception as exc:  # noqa: BLE001 — a proxy misconfig must not break yfinance access
+            logger.warning(
+                "yfinance: failed to apply YF_PROXY_URL (%s) — continuing direct",
+                type(exc).__name__,
+            )
 
 
 def _pace() -> None:
@@ -122,6 +187,7 @@ def call(
     at once; a genuinely non-empty result (or an empty one with no ``is_empty`` predicate) is
     returned as-is.
     """
+    _ensure_proxy_configured()  # route through YF_PROXY_URL if set — before any request
     attempt = 0
     while True:
         _pace()

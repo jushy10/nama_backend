@@ -108,6 +108,8 @@ resource "aws_ec2_instance_state" "bastion" {
 #     --name /nama/dev/logodev-token         --value <YOUR_LOGODEV_PUBLISHABLE_KEY>
 #   aws ssm put-parameter --overwrite --type SecureString \
 #     --name /nama/dev/cron-sync-token       --value <A_LONG_RANDOM_STRING>
+#   aws ssm put-parameter --overwrite --type SecureString \
+#     --name /nama/dev/yf-proxy-url          --value 'http://user:pass@host:port'
 module "alpaca_api_key_id" {
   source      = "../../modules/ssm-secret"
   name        = "/nama/dev/alpaca-api-key-id"
@@ -151,6 +153,22 @@ module "cron_sync_token" {
   description = "Shared bearer token for the /internal/*/sync cron endpoints. Value set out of band."
 }
 
+# Optional egress proxy for yfinance's Yahoo calls (YF_PROXY_URL). Yahoo hard-gates the
+# data-centre IP the sync task runs from ("unable to access this feature") once a sweep bursts a
+# few thousand calls — a block a fresh crumb can't clear — so ~80% of the ETF profile enrichment
+# fails. Routing yfinance through a residential/rotating proxy presents an IP Yahoo doesn't gate.
+# OPTIONAL and safe by default: until the real URL is set out of band the value is the ssm-secret
+# placeholder, which the app ignores because it has no proxy scheme (see yfinance_session.py's
+# scheme guard), so yfinance stays direct. Use a STICKY-session endpoint so the cookie+crumb
+# survive a sweep. Set it out of band:
+#   aws ssm put-parameter --overwrite --type SecureString \
+#     --name /nama/dev/yf-proxy-url --value 'http://user:pass@host:port'
+module "yf_proxy_url" {
+  source      = "../../modules/ssm-secret"
+  name        = "/nama/dev/yf-proxy-url"
+  description = "Egress proxy URL for yfinance (Yahoo) — durable fix for data-centre IP gating. Optional; value set out of band."
+}
+
 # DNS + TLS certificate for the public hostname.
 module "dns" {
   source = "../../modules/dns-cert"
@@ -176,15 +194,19 @@ module "app" {
   # Injected as the env vars the app reads (app/stocks/router.py, plus the cron
   # guard in app/stocks/endpoints/cron_auth.py): the Alpaca keys (required), the
   # optional Finnhub key (market cap + dividend), the Logo.dev token (required for
-  # the logo endpoint), and the cron sync token (guards the /internal/*/sync
-  # endpoints). These ride onto BOTH task defs; the CLI sync task ignores the cron
-  # token (it calls the runners directly, not over HTTP), which is harmless.
+  # the logo endpoint), the cron sync token (guards the /internal/*/sync
+  # endpoints), and the optional yfinance egress proxy URL. These ride onto BOTH
+  # task defs; the CLI sync task ignores the cron token (it calls the runners
+  # directly, not over HTTP), which is harmless. YF_PROXY_URL matters most on the
+  # sync task (the one that bursts thousands of Yahoo calls); the API's incidental
+  # yfinance calls pick it up too, which is fine.
   extra_secrets = {
     APCA_API_KEY_ID     = module.alpaca_api_key_id.arn
     APCA_API_SECRET_KEY = module.alpaca_api_secret_key.arn
     FINNHUB_API_KEY     = module.finnhub_api_key.arn
     LOGODEV_TOKEN       = module.logodev_token.arn
     CRON_SYNC_TOKEN     = module.cron_sync_token.arn
+    YF_PROXY_URL        = module.yf_proxy_url.arn
   }
 
   # Plain (non-secret) config for the AI analysis endpoint, so the Bedrock model
