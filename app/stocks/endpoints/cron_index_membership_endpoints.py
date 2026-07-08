@@ -25,10 +25,11 @@ constructable, like the universe sweep. A source failure (e.g. Wikipedia unreach
 whose roster can't be parsed) surfaces later as a logged failure inside ``background_sync``, not
 a startup error.
 
-Security: this endpoint is currently **unauthenticated** — it writes the database (and hits
-Wikipedia) and is triggered over the public internet by the sync workflow, so an auth token
-(planned: a shared ``CRON_SYNC_TOKEN`` bearer guard) should be added before the endpoints are
-considered hardened.
+Security: the trigger is guarded by a shared bearer token. The endpoint depends on
+``require_cron_token`` (see ``cron_auth``), which requires ``Authorization: Bearer
+$CRON_SYNC_TOKEN`` and is **fail-closed** — an unset token is a ``503``, a missing or wrong one
+a ``401``. The sync workflow no longer POSTs here (it runs the reconcile as a one-off ECS task
+via ``python -m app.sync``), so this guard only gates the manual / HTTP trigger.
 """
 
 import logging
@@ -45,6 +46,7 @@ from app.stocks.endpoints.background_sync import (
     SyncTriggerResponse,
     trigger_sync,
 )
+from app.stocks.endpoints.cron_auth import require_cron_token
 from app.stocks.index_membership.db_repository import SqlIndexMembershipRepository
 from app.stocks.index_membership.use_cases import (
     IndexMembershipSyncReport,
@@ -99,6 +101,7 @@ def get_sync_runner() -> SyncRunner:
     "/internal/index-membership/sync",
     response_model=SyncTriggerResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_cron_token)],
 )
 async def sync_index_membership_endpoint(
     response: Response,

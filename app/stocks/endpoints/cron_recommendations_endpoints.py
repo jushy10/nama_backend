@@ -16,10 +16,11 @@ session and builds the live yfinance adapter + the SQL repository for the use ca
 reads Yahoo's public data with no API key, so there's no credential to gate on; the sync is
 always constructable. ``get_sync_runner`` is the DI seam tests override with a fake.
 
-Security: this endpoint is currently **unauthenticated** — it writes the database (and hits
-Yahoo) and is triggered over the public internet by the sync workflow, so an auth token
-(planned: a shared ``CRON_SYNC_TOKEN`` bearer guard) should be added before the endpoints are
-considered hardened.
+Security: the trigger is guarded by a shared bearer token. The endpoint depends on
+``require_cron_token`` (see ``cron_auth``), which requires ``Authorization: Bearer
+$CRON_SYNC_TOKEN`` and is **fail-closed** — an unset token is a ``503``, a missing or wrong one
+a ``401``. The sync workflow no longer POSTs here (it runs the sweep as a one-off ECS task via
+``python -m app.sync``), so this guard only gates the manual / HTTP trigger.
 """
 
 import logging
@@ -41,6 +42,7 @@ from app.stocks.endpoints.background_sync import (
     SyncTriggerResponse,
     trigger_sync,
 )
+from app.stocks.endpoints.cron_auth import require_cron_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["recommendations-cron"])
@@ -78,6 +80,7 @@ def get_sync_runner() -> SyncRunner:
     "/internal/recommendations/sync",
     response_model=SyncTriggerResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_cron_token)],
 )
 async def sync_recommendations_endpoint(
     response: Response,
