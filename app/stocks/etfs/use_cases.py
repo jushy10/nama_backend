@@ -61,10 +61,14 @@ class EtfSyncReport:
     ``screened`` is the screen size and ``added`` / ``updated`` the rows the screen upsert
     inserted / refreshed. ``enriched`` is how many funds the enrichment pass fetched and persisted
     a profile for this run and ``enrich_failed`` how many per-ticker lookups the source couldn't
-    serve (an outage or block) — both zero when the screen was skipped. ``skipped`` is ``True``
-    when the screen came back empty or implausibly small (a truncated or blocked fetch) so
-    *nothing* was written; the other counts are then all zero. There is no ``removed`` count — the
-    sync is additive.
+    serve (an outage or block) — both zero when the screen was skipped. ``enriched_without_holdings``
+    is the subset of ``enriched`` whose profile came back with **neither** holdings nor sector
+    weightings — the ``funds_data``-blocked signature (both ride Yahoo's one ``topHoldings``
+    response, and nearly every real ETF has them), so a non-trivial value flags a run where Yahoo
+    gated the holdings surface even though ``.info`` served; it's a health signal, not a hard
+    failure (those funds still got their scalar profile). ``skipped`` is ``True`` when the screen
+    came back empty or implausibly small (a truncated or blocked fetch) so *nothing* was written;
+    the other counts are then all zero. There is no ``removed`` count — the sync is additive.
     """
 
     screened: int
@@ -73,6 +77,7 @@ class EtfSyncReport:
     skipped: bool
     enriched: int
     enrich_failed: int
+    enriched_without_holdings: int
 
 
 class SyncEtfs:
@@ -125,9 +130,10 @@ class SyncEtfs:
                 skipped=True,
                 enriched=0,
                 enrich_failed=0,
+                enriched_without_holdings=0,
             )
         counts = self._repository.upsert_screen(screened)
-        enriched, enrich_failed = self._enrich_profiles(capped)
+        enriched, enrich_failed, enriched_without_holdings = self._enrich_profiles(capped)
         return EtfSyncReport(
             screened=len(screened),
             added=counts.added,
@@ -135,16 +141,22 @@ class SyncEtfs:
             skipped=False,
             enriched=enriched,
             enrich_failed=enrich_failed,
+            enriched_without_holdings=enriched_without_holdings,
         )
 
-    def _enrich_profiles(self, limit: int | None) -> tuple[int, int]:
+    def _enrich_profiles(self, limit: int | None) -> tuple[int, int, int]:
         """Fetch and persist each stored fund's profile — up to ``limit`` of them, stalest first,
-        or **all** of them when ``limit`` is ``None``. Returns ``(enriched, failed)``: ``enriched``
-        persisted a profile, ``failed`` couldn't reach the source. A hard per-ticker failure leaves
-        the fund's stored profile untouched (the write is merge-preserving and simply isn't called),
-        so a bad Yahoo day delays a fund's refresh but never erases it; the next run retries it."""
+        or **all** of them when ``limit`` is ``None``. Returns
+        ``(enriched, failed, without_holdings)``: ``enriched`` persisted a profile, ``failed``
+        couldn't reach the source, and ``without_holdings`` is the subset of ``enriched`` whose
+        profile carried neither holdings nor sector weightings (the ``funds_data``-blocked
+        signature — surfaced so a degraded run is visible in the logs). A hard per-ticker failure
+        leaves the fund's stored profile untouched (the write is merge-preserving and simply isn't
+        called), so a bad Yahoo day delays a fund's refresh but never erases it; the next run
+        retries it."""
         enriched = 0
         failed = 0
+        without_holdings = 0
         tickers = self._repository.profile_refresh_targets(limit)
         for ticker in iter_with_progress(
             tickers, logger=logger, label="etf sync (profile enrichment)"
@@ -158,7 +170,12 @@ class SyncEtfs:
                 continue
             self._repository.upsert_profile(ticker, profile)
             enriched += 1
-        return enriched, failed
+            # Both holdings and sector weightings ride Yahoo's one topHoldings response, so both
+            # empty means funds_data was blocked/absent even though .info served — count it as a
+            # health signal (nearly every real ETF carries both).
+            if not profile.top_holdings and not profile.sector_weightings:
+                without_holdings += 1
+        return enriched, failed, without_holdings
 
 
 class SearchEtfs:

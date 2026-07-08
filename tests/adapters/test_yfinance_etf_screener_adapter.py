@@ -210,3 +210,49 @@ def test_threads_the_aum_floor_to_the_page_fetch():
     pages = FakePages([[_q("SPY")]])
     YfinanceEtfScreenerProvider(screen_page=pages).screen(min_net_assets=2.5e9)
     assert pages.min_net_assets == 2.5e9
+
+
+# --- The live page fetch's crumb-401 retry (exercises _live_screen_page, which the FakePages seam
+#     bypasses — so yf.screen is monkeypatched instead of reaching Yahoo). ------------------------
+
+
+def test_live_page_retries_a_blocked_screen_then_succeeds(monkeypatch):
+    # A first payload with no `total` is the swallowed-401 signature, so the shared crumb-401 retry
+    # drops the crumb and re-fetches once; the retry's well-formed page is what's returned.
+    import yfinance as yf
+
+    from app.stocks.adapters.yfinance_etf_screener_adapter import _live_screen_page
+
+    calls = {"n": 0}
+
+    def fake_screen(query, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {}  # swallowed 401 — no `total`
+        return {"quotes": [{"symbol": "SPY"}], "total": 1}
+
+    monkeypatch.setattr(yf, "screen", fake_screen)
+    page = _live_screen_page(min_net_assets=_FLOOR, offset=0, size=250)
+
+    assert calls["n"] == 2  # retried once with a fresh crumb
+    assert page == {"quotes": [{"symbol": "SPY"}], "total": 1}
+
+
+def test_live_page_does_not_retry_a_legit_empty_tail(monkeypatch):
+    # A past-the-end page still carries `total` (only `quotes` is empty), so it is NOT mistaken for
+    # a block — the pagination terminator isn't wasted on a retry.
+    import yfinance as yf
+
+    from app.stocks.adapters.yfinance_etf_screener_adapter import _live_screen_page
+
+    calls = {"n": 0}
+
+    def fake_screen(query, **kwargs):
+        calls["n"] += 1
+        return {"quotes": [], "total": 5000}
+
+    monkeypatch.setattr(yf, "screen", fake_screen)
+    page = _live_screen_page(min_net_assets=_FLOOR, offset=999_999, size=250)
+
+    assert calls["n"] == 1  # no retry
+    assert page == {"quotes": [], "total": 5000}

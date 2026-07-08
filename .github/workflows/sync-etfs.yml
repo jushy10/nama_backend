@@ -8,21 +8,27 @@ run-name: Sync ETFs
 # It launches a one-off ECS Fargate task that runs `python -m app.sync etfs` (the SyncEtfs use
 # case) to completion and exits. The use case screens the US ETF universe via yfinance (Yahoo) and
 # upserts the result into the `etfs` table (additive — present funds are inserted/refreshed,
-# none removed), then enriches each still-uncategorised fund's category via a per-ticker Yahoo
-# `.info` call (the bulk screen carries no category, exactly like the universe sweep's sector
-# enrichment). The screen always runs in full; the category enrichment is uncapped by default —
-# passing no limit here classifies EVERY still-uncategorised fund in the one run. Since `category`
-# is fill-once, a run only touches funds a prior run hasn't yet categorised, so runs converge. The
-# sweep runs on its OWN 1 GB task definition (nama-dev-sync), OFF the always-on API task. The
-# task reaches the private RDS by borrowing the app service's own network config.
+# none removed), then enriches each stored fund's full profile via two per-ticker Yahoo calls —
+# `.info` (category, fund family, NAV, dividend yield, trailing returns) and `funds_data` (top
+# holdings + sector weightings) — persisting the scalars onto the row and the two lists into the
+# child tables. The screen always runs in full; the profile enrichment is uncapped by default —
+# passing no limit here refreshes EVERY stored fund in the one run. The profile figures drift, so
+# there's no fill-once "done" state: every run re-fetches all of them — ~2 Yahoo calls per fund
+# across several thousand funds, so a run is thousands of sequential calls and takes many minutes.
+# The write is merge-preserving, so a fund whose fetch is blocked keeps its stored profile and is
+# retried next run. The sweep runs on its OWN 1 GB task definition (nama-dev-sync), OFF the
+# always-on API task. The task reaches the private RDS by borrowing the app service's own network
+# config.
 #
 # FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs on ECS (the
-# enrichment pass makes hundreds of sequential Yahoo calls — minutes) and its result — "etf sync
-# done: screened=… added=… updated=… enriched=… enrich_failed=…" — lands in the task's CloudWatch
-# logs, not here. A green run means the task launched; check CloudWatch for the outcome. yfinance
-# (Yahoo) needs no API key but blocks data-centre IPs intermittently; an empty or implausibly
-# small screen is skipped inside the sync, so nothing is written and the stored (additive) set
-# stays put.
+# enrichment pass makes thousands of sequential Yahoo calls — many minutes) and its result — "etf
+# sync done: screened=… added=… updated=… enriched=… enrich_failed=… without_holdings=…" — lands
+# in the task's CloudWatch logs, not here. A green run means the task launched; check CloudWatch
+# for the outcome (`without_holdings` counts funds enriched from `.info` but whose `funds_data`
+# holdings/sectors came back empty — a non-trivial value flags Yahoo gating the holdings surface).
+# yfinance (Yahoo) needs no API key but blocks data-centre IPs intermittently; an empty or
+# implausibly small screen is skipped inside the sync, so nothing is written and the stored
+# (additive) set stays put.
 #
 # Manual run: Actions → "Sync ETFs" → Run workflow (same trigger, off-schedule).
 #
@@ -106,5 +112,5 @@ jobs:
           fi
 
           echo "Launched $task_arn"
-          echo "Fire-and-forget: the sweep runs on ECS (the category enrichment takes minutes); its result —"
-          echo "\"etf sync done: screened=… added=… updated=… enriched=… enrich_failed=…\" — lands in CloudWatch."
+          echo "Fire-and-forget: the sweep runs on ECS (the profile enrichment takes many minutes); its result —"
+          echo "\"etf sync done: screened=… added=… updated=… enriched=… enrich_failed=… without_holdings=…\" — lands in CloudWatch."

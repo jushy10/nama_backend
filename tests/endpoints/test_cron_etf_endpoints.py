@@ -31,7 +31,13 @@ class _FakeRunner:
 
 def _report() -> EtfSyncReport:
     return EtfSyncReport(
-        screened=540, added=12, updated=528, skipped=False, enriched=530, enrich_failed=3
+        screened=540,
+        added=12,
+        updated=528,
+        skipped=False,
+        enriched=530,
+        enrich_failed=3,
+        enriched_without_holdings=8,
     )
 
 
