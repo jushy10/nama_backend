@@ -5,6 +5,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from starlette.requests import Request
 
 from app.stocks.endpoints.annual_earnings_endpoints import (
     router as annual_earnings_router,
@@ -46,6 +50,22 @@ CORS_ALLOW_ORIGINS = [
 ]
 
 
+def _client_ip(request: Request) -> str:
+    """Identify the caller for rate limiting.
+
+    Behind the API Gateway VPC link the socket peer is the gateway's ENI — the
+    same address for every caller — so keying on ``request.client.host`` would
+    lump all traffic into one bucket. The real client IP arrives in
+    X-Forwarded-For, which the gateway *overwrites* with the observed source IP
+    (see the integration's request_parameters in infra), so the first entry is
+    trustworthy and can't be spoofed by a client-supplied header.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "anonymous"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Database schema is owned by Alembic migrations (`alembic upgrade head`),
@@ -55,6 +75,22 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="nama_backend", lifespan=lifespan)
+
+# Per-client (per-IP) rate limiting so one abusive caller can't exhaust the
+# service — a token bucket per client IP; over it, SlowAPI raises
+# RateLimitExceeded and the handler returns HTTP 429. The counter is in-process,
+# which is exactly right while we run a single task; if desired_count ever goes
+# above 1, point the Limiter at Redis via storage_uri so the count is shared.
+# These limits sit under API Gateway's global 50 req/s throttle: that caps total
+# load/cost, this stops any single IP from consuming it. Tune as traffic grows.
+limiter = Limiter(key_func=_client_ip, default_limits=["20/second", "600/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+# CORS is added last so it stays the outermost middleware: a 429 from the limiter
+# above still gets CORS headers, so a browser can read the response instead of
+# reporting an opaque cross-origin failure.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOW_ORIGINS,
