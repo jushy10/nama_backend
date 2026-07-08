@@ -10,7 +10,7 @@ the error only surfaces when the endpoint is actually called.
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -46,23 +46,22 @@ from app.stocks.indicators import (
 from app.stocks.adapters.annual_earnings_estimates_adapter import (
     AnnualEarningsEstimatesProvider,
 )
+from app.stocks.adapters.db_only_context_providers import (
+    DbOnlyAnnualEarningsProvider,
+    DbOnlyQuarterlyEarningsProvider,
+    DbOnlyRecommendationsProvider,
+)
 from app.stocks.adapters.yfinance_options_adapter import YfinanceOptionChainProvider
+from app.stocks.analysis.db_repository import SqlInvestmentAnalysisCache
 from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
-from app.stocks.earnings.annual.ports import AnnualEarningsProvider
-from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
-from app.stocks.endpoints.annual_earnings_endpoints import (
-    get_annual_earnings_provider,
-)
-from app.stocks.endpoints.quarterly_earnings_endpoints import (
-    get_quarterly_earnings_provider,
-)
-from app.stocks.endpoints.recommendations_endpoints import (
-    get_recommendation_provider,
+from app.stocks.earnings.quarterly.db_repository import (
+    SqlQuarterlyEarningsRepository,
 )
 from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
     CompanyProfileProvider,
+    InvestmentAnalysisCache,
     InvestmentAnalysisProvider,
     LogoProvider,
     SectorAnalysisProvider,
@@ -70,7 +69,7 @@ from app.stocks.ports import (
     StockFundamentalsProvider,
     StockPerformanceProvider,
 )
-from app.stocks.recommendations.ports import RecommendationProvider
+from app.stocks.recommendations.db_repository import SqlRecommendationsRepository
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.schemas import (
     CandleResponse,
@@ -244,32 +243,52 @@ def get_analysis_provider() -> InvestmentAnalysisProvider:
         ) from exc
 
 
+def get_analysis_cache(
+    db: Session = Depends(get_db),
+) -> InvestmentAnalysisCache:
+    # The read-through result cache for the stock analysis (kind="stock", so it
+    # never collides with a fund of the same ticker). One row per symbol, refreshed
+    # whenever a served read ages past the use case's TTL — best-effort, so a DB
+    # problem degrades to a regeneration, never an error.
+    return SqlInvestmentAnalysisCache(db, "stock")
+
+
+def analysis_cache_ttl() -> timedelta:
+    # How long a stored analysis is served before it's regenerated. Config with a
+    # sane default (30 min) — an analysis only drifts as its underlying figures do,
+    # and every served read carries its own `generated_at` so the age is visible.
+    minutes = os.environ.get("ANALYSIS_CACHE_TTL_MINUTES")
+    try:
+        return timedelta(minutes=float(minutes)) if minutes else timedelta(minutes=30)
+    except ValueError:
+        return timedelta(minutes=30)
+
+
 def get_stock_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
     analyzer: InvestmentAnalysisProvider = Depends(get_analysis_provider),
-    # Best-effort *context* for the analysis, each reusing the same DB-cached
-    # provider its own endpoint reads through — no extra vendor call for a cached
-    # symbol and no API key: the quarterly and annual earnings timelines and the
-    # analyst recommendation trends.
-    quarterly: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
-    annual: AnnualEarningsProvider = Depends(get_annual_earnings_provider),
-    recommendations: RecommendationProvider = Depends(get_recommendation_provider),
-    # The industry P/E benchmark is a pure DB read off the shared anchor — the same
-    # screened universe the /stocks/industries/{industry}/pe endpoint groups on —
-    # so it rides the request session directly, no provider/key. Best-effort: an
-    # unscreened symbol just omits the peer comparison.
+    cache: InvestmentAnalysisCache = Depends(get_analysis_cache),
+    # Best-effort *context* for the analysis: the quarterly and annual earnings
+    # timelines and the analyst recommendation trends. Read **DB-only** here (via the
+    # slices' repositories, not their read-through providers) — this path must never
+    # trigger a synchronous, rate-limited Yahoo fetch on a cache miss, which would add
+    # seconds to the request; keeping the caches current is the crons' job. An
+    # uncovered symbol simply omits the block.
     db: Session = Depends(get_db),
 ) -> GetStockAnalysis:
-    # Reuses the stock snapshot wiring wholesale (price + enrichment), then layers
-    # the analyzer and the best-effort earnings + recommendations + industry-P/E
-    # context on top.
+    # Reuses the stock snapshot wiring wholesale (price + enrichment), then layers the
+    # analyzer, the DB-only earnings + recommendations context, the industry-P/E
+    # benchmark (a pure DB read off the shared anchor — the same screened universe the
+    # /stocks/industries/{industry}/pe endpoint groups on), and the result cache.
     return GetStockAnalysis(
         stock_info,
         analyzer,
-        quarterly,
-        annual,
-        recommendations,
+        DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
+        DbOnlyAnnualEarningsProvider(SqlAnnualEarningsRepository(db)),
+        DbOnlyRecommendationsProvider(SqlRecommendationsRepository(db)),
         SqlStockSearchRepository(db),
+        cache=cache,
+        cache_ttl=analysis_cache_ttl(),
     )
 
 

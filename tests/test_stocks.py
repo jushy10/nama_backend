@@ -53,6 +53,7 @@ from app.stocks.ports import (
     AnalystEstimatesProvider,
     CandleProvider,
     CompanyProfileProvider,
+    InvestmentAnalysisCache,
     InvestmentAnalysisProvider,
     LogoProvider,
     SectorAnalysisProvider,
@@ -381,6 +382,21 @@ def an_analysis(**overrides) -> InvestmentAnalysis:
     )
     base.update(overrides)
     return InvestmentAnalysis(**base)
+
+
+class FakeAnalysisCache(InvestmentAnalysisCache):
+    """In-memory stand-in for the analysis result cache; records what it stored."""
+
+    def __init__(self, stored: InvestmentAnalysis | None = None) -> None:
+        self._store = {stored.symbol: stored} if stored is not None else {}
+        self.puts: list[InvestmentAnalysis] = []
+
+    def get(self, symbol: str) -> InvestmentAnalysis | None:
+        return self._store.get(symbol)
+
+    def put(self, analysis: InvestmentAnalysis) -> None:
+        self.puts.append(analysis)
+        self._store[analysis.symbol] = analysis
 
 
 class FakeSectorAnalysisProvider(SectorAnalysisProvider):
@@ -1348,6 +1364,87 @@ def test_analysis_use_case_passes_stock_and_earnings():
     analysis = use_case.execute("aapl")
     assert analysis.recommendation is Recommendation.HOLD
     assert analyzer.received == [("AAPL", True)]  # normalized symbol, earnings supplied
+
+
+def test_analysis_served_from_fresh_cache_skips_generation():
+    # A fresh stored read is returned verbatim — no snapshot gather, no model call.
+    fresh = an_analysis(generated_at=datetime.now(timezone.utc))
+    analyzer = FakeAnalysisProvider(an_analysis(thesis="regenerated"))
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    cache = FakeAnalysisCache(stored=fresh)
+    use_case = GetStockAnalysis(info, analyzer, cache=cache)
+    result = use_case.execute("aapl")  # normalizes to AAPL, matching the cached key
+    assert result is fresh
+    assert analyzer.received == []  # model never called (nor the snapshot gather)
+    assert cache.puts == []  # nothing re-stored
+
+
+def test_analysis_stale_cache_is_regenerated_and_stored():
+    # Past the TTL the stored read is stale: regenerate and overwrite it.
+    stale = an_analysis(generated_at=datetime(2020, 1, 1, tzinfo=timezone.utc))
+    generated = an_analysis(thesis="a fresh take")
+    analyzer = FakeAnalysisProvider(generated)
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    cache = FakeAnalysisCache(stored=stale)
+    use_case = GetStockAnalysis(
+        info, analyzer, cache=cache, cache_ttl=timedelta(minutes=30)
+    )
+    result = use_case.execute("AAPL")
+    assert result is generated  # regenerated, not the stale read
+    assert analyzer.received == [("AAPL", False)]
+    assert cache.puts == [generated]  # stored for the next viewer
+
+
+def test_analysis_cache_miss_generates_and_stores():
+    generated = an_analysis()
+    analyzer = FakeAnalysisProvider(generated)
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    cache = FakeAnalysisCache()  # empty
+    use_case = GetStockAnalysis(info, analyzer, cache=cache)
+    result = use_case.execute("AAPL")
+    assert result is generated
+    assert cache.puts == [generated]
+
+
+def test_stock_info_gathers_the_enrichment_calls_concurrently():
+    # Deterministic proof the four independent enrichment reads run in parallel, not
+    # in series: each waits on a 4-party barrier. If they truly overlap, all four
+    # arrive and the barrier releases; a regression to serial gather would leave the
+    # first one blocked until the barrier's timeout trips (BrokenBarrierError), failing
+    # this test loudly rather than merely running slower.
+    import threading
+
+    barrier = threading.Barrier(4)
+
+    class _ConcurrentFake:
+        """One fake standing in for every enrichment port; the four pooled reads each
+        rendezvous at the barrier, the required get_stock does not."""
+
+        def get_stock(self, symbol):
+            return a_stock()
+
+        def get_fundamentals(self, symbol):
+            barrier.wait(timeout=5)
+            return None
+
+        def get_profile(self, symbol):
+            barrier.wait(timeout=5)
+            return None
+
+        def get_performance(self, symbol):
+            barrier.wait(timeout=5)
+            return None
+
+        def get_all_time_high(self, symbol):
+            barrier.wait(timeout=5)
+            raise StockNotFound(symbol)  # caught in the use case -> None
+
+    fake = _ConcurrentFake()
+    info = GetStockInfo(fake, fake, fake, fake, fake)  # estimates left None (a DB read)
+
+    stock = info.execute("AAPL")  # returns only if all four rendezvous -> concurrent
+
+    assert stock.symbol == "AAPL"
 
 
 def test_analysis_use_case_earnings_is_best_effort():

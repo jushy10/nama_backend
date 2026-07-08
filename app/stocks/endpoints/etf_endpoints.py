@@ -49,6 +49,7 @@ from app.stocks.adapters.bedrock_etf_analysis_adapter import BedrockEtfAnalysisP
 from app.stocks.adapters.yfinance_etf_profile_adapter import (
     YfinanceEtfProfileProvider,
 )
+from app.stocks.analysis.db_repository import SqlInvestmentAnalysisCache
 from app.stocks.entities import InvestmentAnalysis
 from app.stocks.etfs.db_repository import (
     SqlEtfLookupRepository,
@@ -81,8 +82,12 @@ from app.stocks.etfs.use_cases import (
     SearchEtfs,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import StockPerformanceProvider, StockQuoteProvider
-from app.stocks.router import get_provider
+from app.stocks.ports import (
+    InvestmentAnalysisCache,
+    StockPerformanceProvider,
+    StockQuoteProvider,
+)
+from app.stocks.router import analysis_cache_ttl, get_provider
 
 router = APIRouter(tags=["etfs"])
 
@@ -135,15 +140,25 @@ def get_etf_analysis_provider() -> EtfAnalysisProvider:
         ) from exc
 
 
+def get_etf_analysis_cache(
+    db: Session = Depends(get_db),
+) -> InvestmentAnalysisCache:
+    # The read-through result cache for the fund analysis (kind="etf", so it never collides with a
+    # stock of the same ticker). Same table + best-effort contract as the stock analysis cache.
+    return SqlInvestmentAnalysisCache(db, "etf")
+
+
 def get_etf_analysis_use_case(
     detail: GetEtfDetail = Depends(get_etf_detail_use_case),
     analyzer: EtfAnalysisProvider = Depends(get_etf_analysis_provider),
+    cache: InvestmentAnalysisCache = Depends(get_etf_analysis_cache),
 ) -> GetEtfAnalysis:
     # Reuses the detail use case as the primary snapshot builder (so the analysis reasons over
     # exactly what the detail card shows — same quote, same stored facts, same profile) and pairs it
-    # with the Bedrock analyser. The detail's missing-keys 503 (Alpaca quote) and the analyser's 503
-    # (missing extra) both ride through.
-    return GetEtfAnalysis(detail, analyzer)
+    # with the Bedrock analyser + the read-through result cache (a fresh stored read skips the
+    # snapshot build and the model call). The detail's missing-keys 503 (Alpaca quote) and the
+    # analyser's 503 (missing extra) both ride through. TTL shares the stock analysis's config.
+    return GetEtfAnalysis(detail, analyzer, cache=cache, cache_ttl=analysis_cache_ttl())
 
 
 def _present_search(page: EtfSearchPage) -> EtfSearchResponse:

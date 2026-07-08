@@ -9,7 +9,7 @@ DB-read stored profile, and the live-Yahoo overlay of the 3y/5y returns for the 
 independent of Yahoo, Alpaca, or the DB.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -20,6 +20,7 @@ from app.stocks.entities import (
     Recommendation,
     StockPerformance,
 )
+from app.stocks.ports import InvestmentAnalysisCache
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfHolding,
@@ -801,3 +802,63 @@ def test_analysis_propagates_a_model_failure():
 
     with pytest.raises(StockDataUnavailable):
         GetEtfAnalysis(detail_uc, analyzer).execute("VOO")
+
+
+class _FakeAnalysisCache(InvestmentAnalysisCache):
+    """In-memory stand-in for the result cache; records puts."""
+
+    def __init__(self, stored: InvestmentAnalysis | None = None) -> None:
+        self._store = {stored.symbol: stored} if stored is not None else {}
+        self.puts: list[InvestmentAnalysis] = []
+
+    def get(self, symbol: str) -> InvestmentAnalysis | None:
+        return self._store.get(symbol)
+
+    def put(self, analysis: InvestmentAnalysis) -> None:
+        self.puts.append(analysis)
+        self._store[analysis.symbol] = analysis
+
+
+def test_analysis_fresh_cache_hit_skips_the_snapshot_and_model():
+    # A fresh stored read is served without building the (expensive) snapshot — the live quote +
+    # 3y/5y returns — or calling the model. This is the whole point of the cache.
+    fresh = _an_analysis(generated_at=datetime.now(timezone.utc))
+    detail_uc, lookup, quotes, perf, _ = _detail_use_case(quote=_quote(), profile=_a_profile())
+    analyzer = _FakeEtfAnalysisProvider(_an_analysis(thesis="regenerated"))
+    cache = _FakeAnalysisCache(stored=fresh)
+
+    result = GetEtfAnalysis(detail_uc, analyzer, cache=cache).execute("voo")
+
+    assert result is fresh
+    assert lookup.get_calls == []  # snapshot never built
+    assert quotes.calls == []
+    assert analyzer.received == []  # model never called
+    assert cache.puts == []  # nothing re-stored
+
+
+def test_analysis_stale_cache_is_regenerated_and_stored():
+    stale = _an_analysis(generated_at=datetime(2020, 1, 1, tzinfo=timezone.utc))
+    detail_uc, *_ = _detail_use_case(quote=_quote(), profile=_a_profile())
+    generated = _an_analysis(thesis="a fresh take")
+    analyzer = _FakeEtfAnalysisProvider(generated)
+    cache = _FakeAnalysisCache(stored=stale)
+
+    result = GetEtfAnalysis(
+        detail_uc, analyzer, cache=cache, cache_ttl=timedelta(minutes=30)
+    ).execute("VOO")
+
+    assert result is generated  # regenerated, not the stale read
+    assert len(analyzer.received) == 1
+    assert cache.puts == [generated]  # stored for the next viewer
+
+
+def test_analysis_cache_miss_generates_and_stores():
+    detail_uc, *_ = _detail_use_case(quote=_quote(), profile=_a_profile())
+    generated = _an_analysis()
+    analyzer = _FakeEtfAnalysisProvider(generated)
+    cache = _FakeAnalysisCache()  # empty
+
+    result = GetEtfAnalysis(detail_uc, analyzer, cache=cache).execute("VOO")
+
+    assert result is generated
+    assert cache.puts == [generated]
