@@ -62,6 +62,13 @@ env:
   # screen always runs in full; only enrichment is capped. Since industry is fill-once, a
   # universe larger than this is classified over successive runs.
   SYNC_LIMIT: "1000"
+  # Minimum spacing (ms) between the sweep's Yahoo calls, injected as
+  # YF_MIN_REQUEST_INTERVAL_MS on the one-off task (read by yfinance_session._pace). Bursting
+  # unspaced calls trips Yahoo's hard "unable to access this feature" IP gate mid-sweep (seen
+  # on the ETF sync); pacing holds the rate under it. Worst case here is the screen pages + up
+  # to SYNC_LIMIT .info calls (~1k) → ~13 min at 750ms; at steady state (universe classified)
+  # it's just the screen. Same knob as the other Yahoo syncs.
+  YF_PACE_MS: "750"
 
 jobs:
   sync:
@@ -93,11 +100,13 @@ jobs:
           netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
             --query 'services[0].networkConfiguration' --output json)
 
-          # Container command override: python -m app.sync universe <enrich-limit>.
-          overrides=$(jq -cn --arg slice "$SYNC_SLICE" --arg limit "${SYNC_LIMIT:-}" '
+          # Container override: python -m app.sync universe <enrich-limit>, plus
+          # YF_MIN_REQUEST_INTERVAL_MS so the sweep paces its Yahoo calls (see YF_PACE_MS above).
+          overrides=$(jq -cn --arg slice "$SYNC_SLICE" --arg limit "${SYNC_LIMIT:-}" --arg pace "$YF_PACE_MS" '
             {containerOverrides: [{
               name: "app",
-              command: (["python", "-m", "app.sync", $slice] + (if $limit == "" then [] else [$limit] end))
+              command: (["python", "-m", "app.sync", $slice] + (if $limit == "" then [] else [$limit] end)),
+              environment: [{name: "YF_MIN_REQUEST_INTERVAL_MS", value: $pace}]
             }]}')
 
           echo "Launching one-off sync task: app.sync $SYNC_SLICE $SYNC_LIMIT"
