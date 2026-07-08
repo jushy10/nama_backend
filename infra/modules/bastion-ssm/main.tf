@@ -109,6 +109,24 @@ resource "aws_instance" "this" {
     http_put_response_hop_limit = 1
   }
 
+  # A 1 GiB swapfile. The t4g.nano has only 512 MB RAM, and on a freshly-created
+  # instance the first-boot burst — cloud-init, a dnf refresh, and the SSM agent
+  # self-updating all at once — briefly exceeds it, so the OOM killer reaps the SSM
+  # agent and the box lands in SSM "ConnectionLost" until someone reboots it. Swap
+  # absorbs that spike. cloud-init's mounts module creates the file, runs mkswap /
+  # swapon, and adds the fstab entry, and it runs at the config stage (~6s into
+  # boot) — before the agent self-update spike — so swap is live when the pressure
+  # hits. user_data_replace_on_change recreates the instance so the change takes
+  # effect on a fresh boot; the bastion is stateless, so nothing is lost.
+  user_data_replace_on_change = true
+  user_data                   = <<-EOT
+    #cloud-config
+    swap:
+      filename: /swapfile
+      size: 1073741824
+      maxsize: 1073741824
+  EOT
+
   root_block_device {
     volume_size = 8
     volume_type = "gp3"
