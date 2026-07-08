@@ -149,9 +149,40 @@ class EtfDetailResponse(BaseModel):
     # Always-on best-effort Yahoo (yfinance) enrichment — null / [] when unavailable.
     fund_family: str | None = None
     description: str | None = None
-    top_holdings: list[EtfHoldingResponse] = []  # up to 10, largest first; [] if unavailable
-    sector_weightings: list[EtfSectorWeightResponse] = []  # weight desc; [] if unavailable
+    top_holdings: list[
+        EtfHoldingResponse
+    ] = []  # up to 10, largest first; [] if unavailable
+    sector_weightings: list[
+        EtfSectorWeightResponse
+    ] = []  # weight desc; [] if unavailable
     # Opt-in blocks (?include=metrics,dividends,performance) — null unless requested.
     metrics: EtfMetricsResponse | None = None
     dividends: EtfDividendsResponse | None = None
     performance: EtfPerformanceResponse | None = None
+
+
+class EtfAnalysisResponse(BaseModel):
+    """One fund's AI-generated buy/hold/sell read (``GET /stocks/etf/{ticker}/analysis``).
+
+    The ETF sibling of the stock ``InvestmentAnalysisResponse``, keyed on ``ticker`` (the ETF
+    slice's convention) with an ``asset_type`` marker. A language model produces the substance
+    (``recommendation`` / ``confidence`` / ``thesis`` / ``strengths`` / ``risks``) from the fund's
+    own figures; the ``disclaimer`` is authored by the service and attached at the edge (never
+    trusted to the model), and ``model`` / ``generated_at`` keep a served analysis traceable.
+
+    ``recommendation`` is one of ``buy`` / ``hold`` / ``sell``; ``confidence`` one of ``low`` /
+    ``medium`` / ``high``. ``strengths`` (the bull case) and ``risks`` (the bear case) are short
+    plain-language bullet points, each up to three. This is general information, not personal
+    financial advice.
+    """
+
+    ticker: str
+    asset_type: Literal["etf"] = "etf"
+    recommendation: str  # "buy" | "hold" | "sell"
+    confidence: str  # "low" | "medium" | "high"
+    thesis: str
+    strengths: list[str]  # bull-case points
+    risks: list[str]  # bear-case points
+    disclaimer: str  # authored by the service, not the model
+    model: str
+    generated_at: datetime

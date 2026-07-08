@@ -13,7 +13,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.stocks.entities import Quote, StockPerformance
+from app.stocks.entities import (
+    Confidence,
+    InvestmentAnalysis,
+    Quote,
+    Recommendation,
+    StockPerformance,
+)
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfHolding,
@@ -26,7 +32,7 @@ from app.stocks.etfs.entities import (
     ScreenedEtf,
     SortDirection,
 )
-from app.stocks.etfs.ports import EtfProfileProvider, EtfScreener
+from app.stocks.etfs.ports import EtfAnalysisProvider, EtfProfileProvider, EtfScreener
 from app.stocks.etfs.repository import (
     EtfLookupRepository,
     EtfRepository,
@@ -35,6 +41,7 @@ from app.stocks.etfs.repository import (
 )
 from app.stocks.etfs.use_cases import (
     EtfSyncReport,
+    GetEtfAnalysis,
     GetEtfDetail,
     ListEtfCategories,
     SearchEtfs,
@@ -691,3 +698,106 @@ def test_detail_rejects_an_unknown_include_before_the_lookup():
     # Rejected at the edge (normalization), before the membership gate or any upstream call.
     assert lookup.get_calls == []
     assert quotes.calls == []
+
+
+# --- GetEtfAnalysis --------------------------------------------------------------------------
+#
+# Composes GetEtfDetail (the primary snapshot) + an EtfAnalysisProvider (the AI read). The detail's
+# normalization / membership gate / quote-primary failures all propagate unchanged; the analyzer is
+# only reached once a snapshot is in hand.
+
+
+class _FakeEtfAnalysisProvider(EtfAnalysisProvider):
+    """Returns/raises whatever the test configured; records the EtfDetail snapshots it was handed."""
+
+    def __init__(self, analysis: InvestmentAnalysis | None = None, *, raises=None) -> None:
+        self._analysis = analysis
+        self._raises = raises
+        self.received: list = []
+
+    def analyze(self, detail):
+        self.received.append(detail)
+        if self._raises is not None:
+            raise self._raises
+        assert self._analysis is not None
+        return self._analysis
+
+
+def _an_analysis(**overrides) -> InvestmentAnalysis:
+    base = dict(
+        symbol="VOO",
+        recommendation=Recommendation.BUY,
+        confidence=Confidence.HIGH,
+        thesis="A cheap, broad way to own the whole market.",
+        strengths=("Very low yearly cost",),
+        risks=("Concentrated in a few big tech names",),
+        model="claude-haiku-4-5",
+        generated_at=datetime(2026, 7, 6, 20, 0, tzinfo=timezone.utc),
+    )
+    base.update(overrides)
+    return InvestmentAnalysis(**base)
+
+
+def test_analysis_builds_the_snapshot_and_returns_the_model_read():
+    # The real GetEtfDetail assembles the snapshot; the fake analyzer records what it was handed.
+    detail_uc, lookup, quotes, perf, _ = _detail_use_case(
+        quote=_quote(),
+        profile=_a_profile(),
+        live_returns=_live_returns_profile(),  # overlaid onto the perf snapshot's return ladder
+    )
+    analyzer = _FakeEtfAnalysisProvider(_an_analysis())
+
+    analysis = GetEtfAnalysis(detail_uc, analyzer).execute("voo")  # lower-case in -> normalized
+
+    assert analysis.recommendation is Recommendation.BUY
+    assert len(analyzer.received) == 1
+    detail = analyzer.received[0]
+    assert detail.ticker == "VOO"
+    assert detail.expense_ratio == 0.03  # stored fact (table wins over the profile)
+    # The performance snapshot is fetched for the analysis (the Alpaca windows + the live 3y/5y
+    # overlay), so the model sees the returns — the richest context the card can build.
+    assert perf.calls == ["VOO"]
+    assert detail.performance is not None
+    assert detail.profile.three_year_return == 20.41
+
+
+def test_analysis_rejects_a_bad_symbol_before_any_work():
+    detail_uc, lookup, quotes, *_ = _detail_use_case(quote=_quote())
+    analyzer = _FakeEtfAnalysisProvider(_an_analysis())
+
+    with pytest.raises(ValueError):
+        GetEtfAnalysis(detail_uc, analyzer).execute("TOOLONG")
+
+    assert lookup.get_calls == []  # gated at normalization, before the membership lookup
+    assert analyzer.received == []
+
+
+def test_analysis_404s_for_a_non_etf_before_the_analyzer():
+    detail_uc, lookup, quotes, *_ = _detail_use_case(facts=None)  # not in the ETF universe
+    analyzer = _FakeEtfAnalysisProvider(_an_analysis())
+
+    with pytest.raises(StockNotFound):
+        GetEtfAnalysis(detail_uc, analyzer).execute("XYZ")
+
+    assert quotes.calls == []  # membership gate is before the (primary) quote
+    assert analyzer.received == []
+
+
+def test_analysis_propagates_a_quote_failure_before_the_analyzer():
+    detail_uc, *_ = _detail_use_case(
+        quote_error=StockDataUnavailable("VOO", "alpaca down")
+    )
+    analyzer = _FakeEtfAnalysisProvider(_an_analysis())
+
+    with pytest.raises(StockDataUnavailable):
+        GetEtfAnalysis(detail_uc, analyzer).execute("VOO")
+
+    assert analyzer.received == []  # the primary snapshot failed, so the model was never asked
+
+
+def test_analysis_propagates_a_model_failure():
+    detail_uc, *_ = _detail_use_case(quote=_quote(), profile=_a_profile())
+    analyzer = _FakeEtfAnalysisProvider(raises=StockDataUnavailable("VOO", "bedrock down"))
+
+    with pytest.raises(StockDataUnavailable):
+        GetEtfAnalysis(detail_uc, analyzer).execute("VOO")

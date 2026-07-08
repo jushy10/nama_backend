@@ -7,11 +7,18 @@ exactly like the stock universe's sector). Both are implemented by yfinance adap
 never a vendor directly, so the sources are swappable and the tests run offline against
 hand-written fakes. The *persistence* seam is separate — the repository ports live in
 ``repository.py``.
+
+``EtfAnalysisProvider`` is the odd one out — not a data source but the AI read of an already-built
+detail card. It takes the assembled ``EtfDetail`` (quote + facts + profile) the use case gathered
+and returns a plain-language buy/hold/sell ``InvestmentAnalysis``; its yfinance-free adapter is the
+Bedrock one in ``app/stocks/adapters``. Same inversion — the core asks for an analysis in domain
+terms, only the adapter knows a language model backs it.
 """
 
 from abc import ABC, abstractmethod
 
-from app.stocks.etfs.entities import EtfProfile, ScreenedEtf
+from app.stocks.entities import InvestmentAnalysis
+from app.stocks.etfs.entities import EtfDetail, EtfProfile, ScreenedEtf
 
 
 class EtfScreener(ABC):
@@ -66,5 +73,32 @@ class EtfProfileProvider(ABC):
             StockDataUnavailable: the upstream lookup hard-failed (an outage or a data-centre-IP
                 block). The sync counts it as a lost fund for the run, leaves its stored profile
                 untouched, and moves on; the next run retries it.
+        """
+        raise NotImplementedError
+
+
+class EtfAnalysisProvider(ABC):
+    """A gateway for an AI-generated buy/hold/sell read on one fund.
+
+    Unlike the other ports this is not a data *source* — the use case has already assembled the
+    fund's ``EtfDetail`` (the live quote, the stored facts, and the best-effort profile), and this
+    port turns that snapshot into a plain-language ``InvestmentAnalysis``. It is handed the whole
+    ``EtfDetail`` rather than a symbol, so the adapter does no fetching of its own — it only reasons
+    over what it's given. Dependency Inversion as ever: the core asks for an analysis in domain
+    terms, and only the adapter knows a language model (Claude on Bedrock) backs it.
+    """
+
+    @abstractmethod
+    def analyze(self, detail: EtfDetail) -> InvestmentAnalysis:
+        """Return a balanced buy/hold/sell analysis of the fund described by ``detail``.
+
+        The analysis must be grounded only in the figures on ``detail`` (price, size, cost, yield,
+        returns, holdings, sector split) — never outside knowledge. Best-effort/absent fields are
+        simply omitted from the model's view, so a thin detail yields a lower-confidence read.
+
+        Raises:
+            StockDataUnavailable: the analysis could not be produced — the model call failed or
+                returned no usable structured result. The one error this port documents; the
+                endpoint maps it to a 502.
         """
         raise NotImplementedError

@@ -27,7 +27,7 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Sequence
 
-from app.stocks.entities import StockPerformance
+from app.stocks.entities import InvestmentAnalysis, StockPerformance
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfDetail,
@@ -38,7 +38,7 @@ from app.stocks.etfs.entities import (
     SortDirection,
     slugify,
 )
-from app.stocks.etfs.ports import EtfProfileProvider, EtfScreener
+from app.stocks.etfs.ports import EtfAnalysisProvider, EtfProfileProvider, EtfScreener
 from app.stocks.etfs.repository import (
     EtfLookupRepository,
     EtfRepository,
@@ -135,7 +135,9 @@ class SyncEtfs:
                 enriched_without_holdings=0,
             )
         counts = self._repository.upsert_screen(screened)
-        enriched, enrich_failed, enriched_without_holdings = self._enrich_profiles(capped)
+        enriched, enrich_failed, enriched_without_holdings = self._enrich_profiles(
+            capped
+        )
         return EtfSyncReport(
             screened=len(screened),
             added=counts.added,
@@ -216,7 +218,9 @@ class SearchEtfs:
         (already validated enums). The repository does the rest.
         """
         text = (query or "").strip()
-        capped = self.DEFAULT_LIMIT if limit is None else min(max(1, limit), self.MAX_LIMIT)
+        capped = (
+            self.DEFAULT_LIMIT if limit is None else min(max(1, limit), self.MAX_LIMIT)
+        )
         criteria = EtfSearchCriteria(
             query=text or None,
             category=slugify(category),
@@ -370,3 +374,38 @@ class GetEtfDetail:
             three_year_return=live.three_year_return,
             five_year_return=live.five_year_return,
         )
+
+
+class GetEtfAnalysis:
+    """Use case: an AI-generated buy/hold/sell read on one fund (``GET /stocks/etf/{ticker}/analysis``).
+
+    The ETF analogue of the stock slice's ``GetStockAnalysis``: it reuses ``GetEtfDetail`` to
+    assemble the fund's snapshot (the live quote, the stored ``etfs`` facts, and the best-effort
+    Yahoo profile), then hands that whole ``EtfDetail`` to the analyzer for a plain-language read.
+    Composing ``GetEtfDetail`` (rather than re-wiring the lookup/quote/profile ports) keeps the two
+    endpoints' primary data identical — the analysis reasons over exactly what the detail card
+    shows.
+
+    The detail is **primary**: its normalization (a bad ticker → ``ValueError`` → 400), its
+    membership gate (not an ETF → ``StockNotFound`` → 404), and its quote-primary failure
+    (``StockDataUnavailable`` → 502) all propagate unchanged — an analysis with no snapshot to
+    reason over isn't worth serving. The profile enrichment (holdings, sectors, fund family, NAV,
+    yield) is best-effort inside ``GetEtfDetail`` as ever, so a fund the sync hasn't enriched yet
+    still gets analysed off its quote + stored facts, just with thinner context (and the model
+    lowers its confidence accordingly).
+    """
+
+    # The performance block is the only include that enriches the *entity* handed to the model — it
+    # adds the Alpaca trailing windows (1w…1y) and the live 3y/5y return ladder. The metrics /
+    # dividends includes only gate serialization on the detail *card*; the figures they'd surface
+    # (expense ratio, NAV, net assets, yield) are already on every ``EtfDetail`` regardless, so the
+    # analysis sees them without asking. So the fullest snapshot is "performance" alone.
+    _SNAPSHOT_INCLUDES = ("performance",)
+
+    def __init__(self, detail: GetEtfDetail, analyzer: EtfAnalysisProvider) -> None:
+        self._detail = detail
+        self._analyzer = analyzer
+
+    def execute(self, symbol: str) -> InvestmentAnalysis:
+        detail = self._detail.execute(symbol, include=self._SNAPSHOT_INCLUDES)
+        return self._analyzer.analyze(detail)
