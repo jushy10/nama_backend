@@ -56,6 +56,15 @@ env:
   ECS_SERVICE: nama-dev
   SYNC_TASK_DEF: nama-dev-sync
   SYNC_SLICE: etfs
+  # Minimum spacing (ms) between the sweep's sequential Yahoo calls, injected as
+  # YF_MIN_REQUEST_INTERVAL_MS on this one-off task (read by yfinance_session._pace). The ETF
+  # sweep makes ~10k calls (~5k funds x .info + funds_data); bursting them unspaced from the one
+  # Fargate IP trips Yahoo's hard "unable to access this feature" gate mid-run — one run enriched
+  # only 840 of ~4900 funds (enrich_failed=4037). Pacing holds the request rate under Yahoo's
+  # threshold. ~750ms puts a full sweep near ~2h, fine for a weekly fire-and-forget task; tune UP
+  # (1000-1500) if runs still gate, DOWN (400-500) if they finish clean and you want them faster.
+  # This is the free alternative to the egress proxy (YF_PROXY_URL) — only one is needed.
+  YF_PACE_MS: "750"
 
 jobs:
   sync:
@@ -87,11 +96,13 @@ jobs:
           netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
             --query 'services[0].networkConfiguration' --output json)
 
-          # Container command override: python -m app.sync etfs (no limit — the screen runs in full).
-          overrides=$(jq -cn --arg slice "$SYNC_SLICE" '
+          # Container override: python -m app.sync etfs (no limit — the screen runs in full), plus
+          # YF_MIN_REQUEST_INTERVAL_MS so the sweep paces its Yahoo calls (see YF_PACE_MS above).
+          overrides=$(jq -cn --arg slice "$SYNC_SLICE" --arg pace "$YF_PACE_MS" '
             {containerOverrides: [{
               name: "app",
-              command: ["python", "-m", "app.sync", $slice]
+              command: ["python", "-m", "app.sync", $slice],
+              environment: [{name: "YF_MIN_REQUEST_INTERVAL_MS", value: $pace}]
             }]}')
 
           echo "Launching one-off sync task: app.sync $SYNC_SLICE"
