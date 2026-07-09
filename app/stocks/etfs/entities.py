@@ -86,7 +86,7 @@ class SortDirection(str, Enum):
 class EtfSearchResult:
     """One row of an ETF search — the facts served straight from the ``etfs`` table, no live
     price (a page is a single DB read; the FE fetches a live quote per row on demand via the
-    shared ``GET /stocks/{symbol}/quote``, which serves ETFs too).
+    fund's detail card ``GET /stocks/etf/{ticker}``, whose quote is Alpaca-backed and serves ETFs).
 
     Everything but the ``ticker`` is nullable — a screened ETF always has ``net_assets`` (the
     screen's selection figure) but may still lack a name, an expense ratio, a ``category``, or a

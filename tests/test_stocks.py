@@ -61,7 +61,6 @@ from app.stocks.ports import (
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
-    StockQuoteProvider,
 )
 from app.stocks.recommendations.entities import (
     AnalystRecommendations,
@@ -76,7 +75,6 @@ from app.stocks.router import (
     get_stock_analysis,
     get_stock_candles,
     get_stock_logo,
-    get_stock_quote,
     get_stock_rsi,
     get_stock_support_levels,
 )
@@ -87,7 +85,6 @@ from app.stocks.use_cases import (
     GetStockCandles,
     GetStockInfo,
     GetStockLogo,
-    GetStockQuote,
     GetStockRsi,
     GetStockSupportLevels,
 )
@@ -107,22 +104,6 @@ class FakeProvider(StockDataProvider):
             raise self._raises
         assert self._stock is not None
         return self._stock
-
-
-class FakeQuoteProvider(StockQuoteProvider):
-    """Returns/raises whatever the test configured; records calls."""
-
-    def __init__(self, quote: Quote | None = None, raises: Exception | None = None):
-        self._quote = quote
-        self._raises = raises
-        self.received: list[str] = []
-
-    def get_quote(self, symbol: str) -> Quote:
-        self.received.append(symbol)
-        if self._raises is not None:
-            raise self._raises
-        assert self._quote is not None
-        return self._quote
 
 
 class FakeLogoProvider(LogoProvider):
@@ -966,26 +947,6 @@ def test_use_case_all_time_high_none_without_provider():
     assert stock.drawdown_from_high is None
 
 
-def test_quote_use_case_normalizes_symbol():
-    fake = FakeQuoteProvider(quote=a_quote())
-    GetStockQuote(fake).execute("  aapl ")
-    assert fake.received == ["AAPL"]
-
-
-@pytest.mark.parametrize("bad", ["", "   ", "123", "AA1", "AA.B", "TOOLONG"])
-def test_quote_use_case_rejects_invalid_symbols(bad):
-    fake = FakeQuoteProvider(quote=a_quote())
-    with pytest.raises(ValueError):
-        GetStockQuote(fake).execute(bad)
-    assert fake.received == []  # provider untouched on invalid input
-
-
-def test_quote_use_case_propagates_not_found():
-    fake = FakeQuoteProvider(raises=StockNotFound("ZZZZ"))
-    with pytest.raises(StockNotFound):
-        GetStockQuote(fake).execute("ZZZZ")
-
-
 def test_logo_use_case_normalizes_symbol():
     fake = FakeLogoProvider(logo=a_logo(content=b"PNG"))
     assert GetStockLogo(fake).execute("  aapl ").content == b"PNG"
@@ -1172,15 +1133,10 @@ def make_client():
         earnings_provider: QuarterlyEarningsProvider | None = None,
         annual_earnings_provider: AnnualEarningsProvider | None = None,
         recommendations_provider: RecommendationProvider | None = None,
-        quote_provider: StockQuoteProvider | None = None,
         analysis_provider: InvestmentAnalysisProvider | None = None,
         industry_repository: StockSearchRepository | None = None,
         sector_analysis_provider: SectorAnalysisProvider | None = None,
     ) -> TestClient:
-        if quote_provider is not None:
-            app.dependency_overrides[get_stock_quote] = (
-                lambda: GetStockQuote(quote_provider)
-            )
         if logo_provider is not None:
             app.dependency_overrides[get_stock_logo] = lambda: GetStockLogo(logo_provider)
         if candle_provider is not None:
@@ -1747,52 +1703,6 @@ def test_get_analysis_400_on_bad_symbol(make_client):
     assert client.get("/stocks/TOOLONG/analysis").status_code == 400
 
 
-# --------------------------- quote endpoint ---------------------------
-
-def test_get_quote_returns_200_with_computed_fields(make_client):
-    client = make_client(quote_provider=FakeQuoteProvider(a_quote()))
-    r = client.get("/stocks/AAPL/quote")
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["symbol"] == "AAPL"
-    assert body["price"] == 297.86
-    assert body["change"] == 1.79              # entity rule via presenter
-    assert body["change_percent"] == 0.6
-    assert body["spread"] == 29.91
-    # slim payload: none of the full stock's enrichment fields
-    assert "market_cap" not in body
-    assert "name" not in body
-
-
-def test_get_quote_sets_short_cache_header(make_client):
-    client = make_client(quote_provider=FakeQuoteProvider(a_quote()))
-    r = client.get("/stocks/AAPL/quote")
-    assert r.headers["cache-control"] == "public, max-age=2"
-
-
-def test_get_quote_normalizes_lowercase(make_client):
-    fake = FakeQuoteProvider(a_quote())
-    client = make_client(quote_provider=fake)
-    assert client.get("/stocks/aapl/quote").json()["symbol"] == "AAPL"
-    assert fake.received == ["AAPL"]
-
-
-def test_get_quote_invalid_symbol_400(make_client):
-    client = make_client(quote_provider=FakeQuoteProvider(a_quote()))
-    assert client.get("/stocks/123/quote").status_code == 400
-
-
-def test_get_quote_unknown_symbol_404(make_client):
-    client = make_client(quote_provider=FakeQuoteProvider(raises=StockNotFound("ZZZZ")))
-    assert client.get("/stocks/ZZZZ/quote").status_code == 404
-
-
-def test_get_quote_upstream_failure_502(make_client):
-    fake = FakeQuoteProvider(raises=StockDataUnavailable("AAPL", "boom"))
-    client = make_client(quote_provider=fake)
-    assert client.get("/stocks/AAPL/quote").status_code == 502
-
-
 # --------------------------- logo endpoint ---------------------------
 
 def test_get_logo_returns_png_bytes(make_client):
@@ -1832,7 +1742,7 @@ def test_get_candles_returns_200_with_chart_shape(make_client):
     up = a_candle(open=100.0, close=110.0, timestamp=datetime(2026, 6, 18, tzinfo=timezone.utc))
     down = a_candle(open=110.0, close=105.0, timestamp=datetime(2026, 6, 19, tzinfo=timezone.utc))
     client = make_client(candle_provider=FakeCandleProvider(a_series((up, down))))
-    r = client.get("/stocks/AAPL/candles")
+    r = client.get("/stocks/ticker/AAPL/candles")
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["symbol"] == "AAPL"
@@ -1848,7 +1758,7 @@ def test_get_candles_returns_200_with_chart_shape(make_client):
 def test_get_candles_defaults_to_6m_daily(make_client):
     fake = FakeCandleProvider(a_series())
     client = make_client(candle_provider=fake)
-    assert client.get("/stocks/AAPL/candles").status_code == 200
+    assert client.get("/stocks/ticker/AAPL/candles").status_code == 200
     symbol, timeframe, start, end = fake.received[0]
     assert symbol == "AAPL"
     assert timeframe is Timeframe.DAY_1                    # default timeframe
@@ -1859,7 +1769,7 @@ def test_get_candles_defaults_to_6m_daily(make_client):
 def test_get_candles_honors_timeframe_and_range(make_client):
     fake = FakeCandleProvider(a_series(timeframe=Timeframe.HOUR_1))
     client = make_client(candle_provider=fake)
-    r = client.get("/stocks/AAPL/candles", params={"timeframe": "1Hour", "range": "5D"})
+    r = client.get("/stocks/ticker/AAPL/candles", params={"timeframe": "1Hour", "range": "5D"})
     assert r.status_code == 200
     _, timeframe, start, end = fake.received[0]
     assert timeframe is Timeframe.HOUR_1
@@ -1870,7 +1780,7 @@ def test_get_candles_explicit_window_overrides_range(make_client):
     fake = FakeCandleProvider(a_series())
     client = make_client(candle_provider=fake)
     r = client.get(
-        "/stocks/AAPL/candles",
+        "/stocks/ticker/AAPL/candles",
         params={"start": "2026-01-01T00:00:00Z", "end": "2026-02-01T00:00:00Z"},
     )
     assert r.status_code == 200
@@ -1881,18 +1791,18 @@ def test_get_candles_explicit_window_overrides_range(make_client):
 
 def test_get_candles_invalid_timeframe_422(make_client):
     client = make_client(candle_provider=FakeCandleProvider(a_series()))
-    assert client.get("/stocks/AAPL/candles", params={"timeframe": "1Year"}).status_code == 422
+    assert client.get("/stocks/ticker/AAPL/candles", params={"timeframe": "1Year"}).status_code == 422
 
 
 def test_get_candles_invalid_symbol_400(make_client):
     client = make_client(candle_provider=FakeCandleProvider(a_series()))
-    assert client.get("/stocks/123/candles").status_code == 400
+    assert client.get("/stocks/ticker/123/candles").status_code == 400
 
 
 def test_get_candles_inverted_window_400(make_client):
     client = make_client(candle_provider=FakeCandleProvider(a_series()))
     r = client.get(
-        "/stocks/AAPL/candles",
+        "/stocks/ticker/AAPL/candles",
         params={"start": "2026-02-01T00:00:00Z", "end": "2026-01-01T00:00:00Z"},
     )
     assert r.status_code == 400
@@ -1900,13 +1810,13 @@ def test_get_candles_inverted_window_400(make_client):
 
 def test_get_candles_unknown_symbol_404(make_client):
     client = make_client(candle_provider=FakeCandleProvider(raises=StockNotFound("ZZZZ")))
-    assert client.get("/stocks/ZZZZ/candles").status_code == 404
+    assert client.get("/stocks/ticker/ZZZZ/candles").status_code == 404
 
 
 def test_get_candles_upstream_failure_502(make_client):
     fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
     client = make_client(candle_provider=fake)
-    assert client.get("/stocks/AAPL/candles").status_code == 502
+    assert client.get("/stocks/ticker/AAPL/candles").status_code == 502
 
 
 # --------------------------- RSI endpoint ---------------------------
@@ -1992,7 +1902,7 @@ def test_get_rsi_upstream_failure_502(make_client):
 
 def test_get_support_levels_returns_200_with_levels(make_client):
     client = make_client(support_levels_provider=FakeCandleProvider(a_support_series()))
-    r = client.get("/stocks/AAPL/support-levels", params={"window": 2})
+    r = client.get("/stocks/ticker/AAPL/support-levels", params={"window": 2})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["symbol"] == "AAPL"
@@ -2010,7 +1920,7 @@ def test_get_support_levels_returns_200_with_levels(make_client):
 def test_get_support_levels_defaults_to_1y_daily(make_client):
     fake = FakeCandleProvider(a_support_series())
     client = make_client(support_levels_provider=fake)
-    r = client.get("/stocks/AAPL/support-levels")
+    r = client.get("/stocks/ticker/AAPL/support-levels")
     assert r.status_code == 200, r.text
     symbol, timeframe, start, end = fake.received[0]
     assert symbol == "AAPL"
@@ -2022,7 +1932,7 @@ def test_get_support_levels_honors_timeframe_range_and_window(make_client):
     fake = FakeCandleProvider(a_support_series(timeframe=Timeframe.HOUR_1))
     client = make_client(support_levels_provider=fake)
     r = client.get(
-        "/stocks/AAPL/support-levels",
+        "/stocks/ticker/AAPL/support-levels",
         params={"timeframe": "1Hour", "range": "5D", "window": 2},
     )
     assert r.status_code == 200, r.text
@@ -2035,7 +1945,7 @@ def test_get_support_levels_explicit_window_overrides_range(make_client):
     fake = FakeCandleProvider(a_support_series())
     client = make_client(support_levels_provider=fake)
     r = client.get(
-        "/stocks/AAPL/support-levels",
+        "/stocks/ticker/AAPL/support-levels",
         params={"start": "2026-01-01T00:00:00Z", "end": "2026-02-01T00:00:00Z"},
     )
     assert r.status_code == 200
@@ -2058,18 +1968,18 @@ def test_get_support_levels_explicit_window_overrides_range(make_client):
 )
 def test_get_support_levels_invalid_params_422(make_client, params):
     client = make_client(support_levels_provider=FakeCandleProvider(a_support_series()))
-    assert client.get("/stocks/AAPL/support-levels", params=params).status_code == 422
+    assert client.get("/stocks/ticker/AAPL/support-levels", params=params).status_code == 422
 
 
 def test_get_support_levels_invalid_symbol_400(make_client):
     client = make_client(support_levels_provider=FakeCandleProvider(a_support_series()))
-    assert client.get("/stocks/123/support-levels").status_code == 400
+    assert client.get("/stocks/ticker/123/support-levels").status_code == 400
 
 
 def test_get_support_levels_inverted_window_400(make_client):
     client = make_client(support_levels_provider=FakeCandleProvider(a_support_series()))
     r = client.get(
-        "/stocks/AAPL/support-levels",
+        "/stocks/ticker/AAPL/support-levels",
         params={"start": "2026-02-01T00:00:00Z", "end": "2026-01-01T00:00:00Z"},
     )
     assert r.status_code == 400
@@ -2079,13 +1989,13 @@ def test_get_support_levels_unknown_symbol_404(make_client):
     client = make_client(
         support_levels_provider=FakeCandleProvider(raises=StockNotFound("ZZZZ"))
     )
-    assert client.get("/stocks/ZZZZ/support-levels").status_code == 404
+    assert client.get("/stocks/ticker/ZZZZ/support-levels").status_code == 404
 
 
 def test_get_support_levels_upstream_failure_502(make_client):
     fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
     client = make_client(support_levels_provider=fake)
-    assert client.get("/stocks/AAPL/support-levels").status_code == 502
+    assert client.get("/stocks/ticker/AAPL/support-levels").status_code == 502
 
 
 # --------------------------- sectors endpoint ---------------------------
@@ -2300,17 +2210,17 @@ def test_get_sector_analysis_404_when_board_unavailable(make_client):
 # --------------------------- CORS ---------------------------
 
 def test_cors_allows_configured_origin(make_client):
-    client = make_client(quote_provider=FakeQuoteProvider(a_quote()))
+    client = make_client(logo_provider=FakeLogoProvider(a_logo(content=b"\x89PNG\r\n")))
     origin = "https://namainsights.com"
-    r = client.get("/stocks/AAPL/quote", headers={"Origin": origin})
+    r = client.get("/stocks/AAPL/logo", headers={"Origin": origin})
     assert r.status_code == 200
     assert r.headers["access-control-allow-origin"] == origin
 
 
 def test_cors_preflight_succeeds(make_client):
-    client = make_client(quote_provider=FakeQuoteProvider(a_quote()))
+    client = make_client(logo_provider=FakeLogoProvider(a_logo()))
     r = client.options(
-        "/stocks/AAPL/quote",
+        "/stocks/AAPL/logo",
         headers={
             "Origin": "https://namainsights.com",
             "Access-Control-Request-Method": "GET",

@@ -42,7 +42,7 @@ Tables are created by migrations, not on boot — run `alembic upgrade head` fir
 | GET    | `/healthz`    | Liveness check   |
 | GET    | `/stocks/ticker/{ticker}` | Ticker card: live quote + identity, opt-in dividend/performance/metrics |
 | GET    | `/stocks/{symbol}/logo` | Company logo image |
-| GET    | `/stocks/{symbol}/candles` | OHLC candlestick chart data |
+| GET    | `/stocks/ticker/{ticker}/candles` | OHLC candlestick chart data |
 | GET    | `/stocks/{symbol}/earnings/quarterly` | Per-quarter earnings timeline (reported + upcoming) |
 | GET    | `/stocks/{symbol}/earnings/annual` | Per-year earnings timeline (reported + upcoming) |
 | GET    | `/stocks/{symbol}/recommendations` | Analyst buy/hold/sell trends by month |
@@ -128,7 +128,7 @@ market cap and dividend omitted. The rest of the app runs regardless.
 
 ### Candlestick chart data
 
-`GET /stocks/{symbol}/candles` returns OHLC candles for drawing a candlestick
+`GET /stocks/ticker/{ticker}/candles` returns OHLC candles for drawing a candlestick
 chart (the green/red bars on a stock page). Each candle carries a `direction`
 (`up`/`down`) for colouring and a `time` field in **UNIX epoch seconds**, the
 format charting libraries such as [TradingView Lightweight
@@ -149,13 +149,13 @@ adjusted, and capped at the 10,000 most recent bars in the window.
 
 ```sh
 # Last 6 months, daily candles (defaults)
-curl localhost:8080/stocks/AAPL/candles
+curl localhost:8080/stocks/ticker/AAPL/candles
 
 # Last 5 trading days, hourly candles
-curl "localhost:8080/stocks/AAPL/candles?timeframe=1Hour&range=5D"
+curl "localhost:8080/stocks/ticker/AAPL/candles?timeframe=1Hour&range=5D"
 
 # An explicit window
-curl "localhost:8080/stocks/AAPL/candles?start=2026-01-01T00:00:00Z&end=2026-02-01T00:00:00Z"
+curl "localhost:8080/stocks/ticker/AAPL/candles?start=2026-01-01T00:00:00Z&end=2026-02-01T00:00:00Z"
 ```
 
 ### Company logo

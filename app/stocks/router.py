@@ -1,7 +1,7 @@
 """Controller + Presenter + dependency wiring for the stocks feature.
 
-Each controller (e.g. `get_stock_quote_endpoint`) adapts an HTTP request into a
-use-case call; its presenter (e.g. `_present_quote`) adapts the returned entity
+Each controller (e.g. `get_stock_candles_endpoint`) adapts an HTTP request into a
+use-case call; its presenter (e.g. `_present_candles`) adapts the returned entity
 into the HTTP DTO.
 
 Credentials are read from the environment (like DATABASE_URL in app/db.py).
@@ -24,7 +24,6 @@ from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     CandleSeries,
     InvestmentAnalysis,
-    Quote,
     SectorAnalysis,
     SectorHighlight,
     SectorPerformance,
@@ -74,7 +73,6 @@ from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
     InvestmentAnalysisResponse,
-    QuoteResponse,
     RsiPointResponse,
     RsiResponse,
     SectorAnalysisResponse,
@@ -92,7 +90,6 @@ from app.stocks.use_cases import (
     GetStockCandles,
     GetStockInfo,
     GetStockLogo,
-    GetStockQuote,
     GetStockRsi,
     GetStockSupportLevels,
 )
@@ -169,14 +166,6 @@ def get_stock_info(
     return GetStockInfo(
         provider, performance, fundamentals, profile, all_time_high, estimates
     )
-
-
-def get_stock_quote(
-    # Same Alpaca instance — the live-price poll endpoint reuses the provider
-    # that backs every other price view, with no extra wiring.
-    provider: AlpacaStockDataProvider = Depends(get_provider),
-) -> GetStockQuote:
-    return GetStockQuote(provider)
 
 
 def get_stock_candles(
@@ -325,21 +314,6 @@ def get_logo_provider() -> LogoProvider:
 
 def get_stock_logo(provider: LogoProvider = Depends(get_logo_provider)) -> GetStockLogo:
     return GetStockLogo(provider)
-
-
-def _present_quote(quote: Quote) -> QuoteResponse:
-    """Presenter: quote entity -> HTTP response DTO."""
-    return QuoteResponse(
-        symbol=quote.symbol,
-        price=quote.price,
-        change=quote.change,
-        change_percent=quote.change_percent,
-        previous_close=quote.previous_close,
-        bid=quote.bid,
-        ask=quote.ask,
-        spread=quote.spread,
-        as_of=quote.as_of,
-    )
 
 
 def _present_performance(
@@ -502,26 +476,6 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
-@router.get("/stocks/{symbol}/quote", response_model=QuoteResponse)
-def get_stock_quote_endpoint(
-    symbol: str,
-    response: Response,
-    use_case: GetStockQuote = Depends(get_stock_quote),
-) -> QuoteResponse:
-    try:
-        quote = use_case.execute(symbol)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except StockNotFound as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except StockDataUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
-    # Short cache so a burst of pollers (and any CDN in front) collapses onto one
-    # upstream snapshot; 2s keeps it live-ish without hitting Alpaca every refresh.
-    response.headers["Cache-Control"] = "public, max-age=2"
-    return _present_quote(quote)
-
-
 @router.get(
     "/stocks/{symbol}/logo",
     responses={200: {"content": {"image/png": {}}}},
@@ -541,9 +495,9 @@ def get_stock_logo_image(
     return Response(content=logo.content, media_type=logo.media_type)
 
 
-@router.get("/stocks/{symbol}/candles", response_model=CandleSeriesResponse)
+@router.get("/stocks/ticker/{ticker}/candles", response_model=CandleSeriesResponse)
 def get_stock_candles_endpoint(
-    symbol: str,
+    ticker: str,
     timeframe: Timeframe = Query(
         Timeframe.DAY_1, description="Granularity of each candle."
     ),
@@ -568,7 +522,7 @@ def get_stock_candles_endpoint(
         end = datetime.now(timezone.utc)
 
     try:
-        series = use_case.execute(symbol, timeframe, start=start, end=end)
+        series = use_case.execute(ticker, timeframe, start=start, end=end)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except StockNotFound as exc:
@@ -619,10 +573,10 @@ def get_stock_rsi_endpoint(
 
 
 @router.get(
-    "/stocks/{symbol}/support-levels", response_model=SupportLevelsResponse
+    "/stocks/ticker/{ticker}/support-levels", response_model=SupportLevelsResponse
 )
 def get_stock_support_levels_endpoint(
-    symbol: str,
+    ticker: str,
     timeframe: Timeframe = Query(
         Timeframe.DAY_1, description="Granularity of the candles the levels are detected from."
     ),
@@ -667,7 +621,7 @@ def get_stock_support_levels_endpoint(
 
     try:
         series = use_case.execute(
-            symbol,
+            ticker,
             timeframe,
             window=window,
             tolerance=tolerance,
