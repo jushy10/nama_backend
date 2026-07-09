@@ -256,16 +256,50 @@ class GetStockRsi:
         return rsi_series(series, period)
 
 
+# Approximate wall-clock span of one bar at each granularity. Used only to reach
+# far enough *before* the visible window to warm an EMA up (see GetStockEma). A
+# daily bar spans more than a calendar day once weekends/holidays are counted, so
+# the warmup applies a generous multiple rather than these raw spans.
+_BAR_SPAN: dict[Timeframe, timedelta] = {
+    Timeframe.MIN_1: timedelta(minutes=1),
+    Timeframe.MIN_5: timedelta(minutes=5),
+    Timeframe.MIN_15: timedelta(minutes=15),
+    Timeframe.MIN_30: timedelta(minutes=30),
+    Timeframe.HOUR_1: timedelta(hours=1),
+    Timeframe.HOUR_4: timedelta(hours=4),
+    Timeframe.DAY_1: timedelta(days=1),
+    Timeframe.WEEK_1: timedelta(weeks=1),
+    Timeframe.MONTH_1: timedelta(days=31),
+}
+
+# Reach back this many bar-spans per period of warmup. 3× comfortably covers the
+# weekend/holiday gaps that stretch a daily bar past one calendar day, so a
+# `period`-bar EMA is fully warm by the visible window's start.
+_EMA_WARMUP_FACTOR = 3
+
+
+def _ema_warmup_span(timeframe: Timeframe, max_period: int) -> timedelta:
+    """How far before the visible window to start fetching so an EMA of
+    ``max_period`` is already warm by that window's first bar."""
+    return _BAR_SPAN.get(timeframe, timedelta(days=1)) * max_period * _EMA_WARMUP_FACTOR
+
+
 class GetStockEma:
     """Use case: compute EMA overlay line(s) for a symbol from its price history.
 
     Reuses the CandleProvider port — EMA is derived from the same OHLC bars the
     chart endpoint uses, so no extra data source is needed. The indicator math is
     pure domain logic (``ema_series``); this use case only fetches the window and
-    delegates. One or more periods can be requested in a single call (the classic
-    20/50/200 overlay), each returned as its own line. Too little history for a
-    given period yields an empty line rather than an error: the symbol exists, that
-    line just can't warm up.
+    delegates. One or more periods can be requested in a single call (e.g. the
+    9/21 overlay), each returned as its own line.
+
+    **Warmup.** An EMA's first value only lands ``period - 1`` bars in, so fetching
+    exactly the visible ``[start, end]`` would leave the chart's left edge bare
+    (and a deep period blank). So the fetch reaches an extra ``max(period)`` bars
+    *before* ``start``, computes over the longer series, then trims the result back
+    to the visible window — every on-screen candle then carries a value. A ``start``
+    of ``None`` (MAX) already pulls all available history, so there's nothing
+    earlier to warm from and nothing to trim.
     """
 
     def __init__(self, provider: CandleProvider) -> None:
@@ -282,10 +316,27 @@ class GetStockEma:
     ) -> EmaSeries:
         if start is not None and end is not None and start >= end:
             raise ValueError("'start' must be earlier than 'end'.")
+        # Extend the fetch back by a warmup so the EMA is already warm at `start`.
+        fetch_start = start
+        if start is not None and periods:
+            fetch_start = start - _ema_warmup_span(timeframe, max(periods))
         series = self._provider.get_candles(
-            _normalize_symbol(symbol), timeframe, start=start, end=end
+            _normalize_symbol(symbol), timeframe, start=fetch_start, end=end
         )
-        return ema_series(series, periods)
+        ema = ema_series(series, periods)
+        if start is None:
+            return ema
+        # Trim the warmup bars back off, leaving only the visible window.
+        return replace(
+            ema,
+            lines=tuple(
+                replace(
+                    line,
+                    points=tuple(p for p in line.points if p.timestamp >= start),
+                )
+                for line in ema.lines
+            ),
+        )
 
 
 class GetStockSupportLevels:
