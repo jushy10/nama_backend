@@ -6,7 +6,7 @@ Candle it's computed from. Outer layers fetch the candles (through a port) and
 hand them here; nothing in this module reaches out for data.
 
 Currently: RSI (Relative Strength Index, Wilder's original formulation), EMA
-(exponential moving average — e.g. the 9/21 chart overlay), and
+(exponential moving average — e.g. the 9/21/50 chart overlay), and
 swing-low support levels.
 """
 
@@ -185,7 +185,7 @@ class EmaLine:
 @dataclass(frozen=True)
 class EmaSeries:
     """One or more EMA lines for a symbol at one timeframe, one per requested
-    period — e.g. the 9/21 overlay drawn on a single chart.
+    period — e.g. the 9/21/50 overlay drawn on a single chart.
 
     ``lines`` preserves the order the periods were requested in.
     """

@@ -291,7 +291,7 @@ class GetStockEma:
     chart endpoint uses, so no extra data source is needed. The indicator math is
     pure domain logic (``ema_series``); this use case only fetches the window and
     delegates. One or more periods can be requested in a single call (e.g. the
-    9/21 overlay), each returned as its own line.
+    9/21/50 overlay), each returned as its own line.
 
     **Warmup.** An EMA's first value only lands ``period - 1`` bars in, so fetching
     exactly the visible ``[start, end]`` would leave the chart's left edge bare
