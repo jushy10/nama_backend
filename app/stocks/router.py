@@ -19,11 +19,15 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
+from app.stocks.bedrock_earnings_analysis_provider import (
+    BedrockEarningsAnalysisProvider,
+)
 from app.stocks.bedrock_market_summary_provider import BedrockMarketSummaryProvider
 from app.stocks.bedrock_sector_analysis_provider import BedrockSectorAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     CandleSeries,
+    EarningsAnalysis,
     InvestmentAnalysis,
     MarketIndexReturn,
     MarketPeriodHighlight,
@@ -64,6 +68,7 @@ from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
     CompanyProfileProvider,
+    EarningsAnalysisProvider,
     InvestmentAnalysisCache,
     InvestmentAnalysisProvider,
     LogoProvider,
@@ -78,6 +83,7 @@ from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
+    EarningsAnalysisResponse,
     EmaLineResponse,
     EmaPointResponse,
     EmaResponse,
@@ -96,6 +102,7 @@ from app.stocks.schemas import (
     SupportLevelsResponse,
 )
 from app.stocks.use_cases import (
+    GetEarningsAnalysis,
     GetMarketOverview,
     GetMarketSummary,
     GetSectorAnalysis,
@@ -361,6 +368,43 @@ def get_market_summary(
 
 
 @lru_cache(maxsize=1)
+def get_earnings_analysis_provider() -> EarningsAnalysisProvider:
+    # The earnings read is short, plain output (a few sentences + a few
+    # highlights), so it runs on the fast Haiku tier — the provider's own default
+    # — rather than inheriting BEDROCK_ANALYSIS_MODEL_ID (the per-stock analysis's
+    # larger model). It gets its own override, BEDROCK_EARNINGS_ANALYSIS_MODEL_ID,
+    # so the model can still be swapped without a code change, exactly like the
+    # sector and market reads. Bedrock authenticates through the process's AWS
+    # credentials, so there's no secret to gate on; a missing 'bedrock' extra
+    # surfaces as a 503.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_EARNINGS_ANALYSIS_MODEL_ID")
+    try:
+        if model_id:
+            return BedrockEarningsAnalysisProvider(model_id=model_id, region=region)
+        return BedrockEarningsAnalysisProvider(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI analysis is not configured (install the 'bedrock' extra)."
+        ) from exc
+
+
+def get_earnings_analysis(
+    analyzer: EarningsAnalysisProvider = Depends(get_earnings_analysis_provider),
+    # The earnings timelines, read **DB-only** (via the slices' repositories, not
+    # their read-through providers) — this path must never trigger a synchronous,
+    # rate-limited Yahoo fetch on a cache miss; keeping the caches current is the
+    # crons' job. A symbol with nothing on file yields a 502 from the use case.
+    db: Session = Depends(get_db),
+) -> GetEarningsAnalysis:
+    return GetEarningsAnalysis(
+        analyzer,
+        DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
+        DbOnlyAnnualEarningsProvider(SqlAnnualEarningsRepository(db)),
+    )
+
+
+@lru_cache(maxsize=1)
 def get_logo_provider() -> LogoProvider:
     # Logo.dev keeps logos current through rebrands/symbol changes. It needs a
     # free *publishable* token (logo.dev, 500k/mo); without it the logo endpoint
@@ -411,6 +455,24 @@ def _present_analysis(analysis: InvestmentAnalysis) -> InvestmentAnalysisRespons
         thesis=analysis.thesis,
         strengths=list(analysis.strengths),
         risks=list(analysis.risks),
+        disclaimer=_ANALYSIS_DISCLAIMER,
+        model=analysis.model,
+        generated_at=analysis.generated_at,
+    )
+
+
+def _present_earnings_analysis(
+    analysis: EarningsAnalysis,
+) -> EarningsAnalysisResponse:
+    """Presenter: earnings-analysis entity -> HTTP response DTO.
+
+    The disclaimer is attached here, at the edge — it's a property of the service,
+    not something the model is trusted to author."""
+    return EarningsAnalysisResponse(
+        symbol=analysis.symbol,
+        summary=analysis.summary,
+        trend=analysis.trend.value,
+        highlights=list(analysis.highlights),
         disclaimer=_ANALYSIS_DISCLAIMER,
         model=analysis.model,
         generated_at=analysis.generated_at,
@@ -857,6 +919,30 @@ def get_stock_analysis_endpoint(
     # one generation rather than re-billing per request.
     response.headers["Cache-Control"] = "public, max-age=300"
     return _present_analysis(analysis)
+
+
+@router.get(
+    "/stocks/{symbol}/earnings/analysis",
+    response_model=EarningsAnalysisResponse,
+)
+def get_earnings_analysis_endpoint(
+    symbol: str,
+    response: Response,
+    use_case: GetEarningsAnalysis = Depends(get_earnings_analysis),
+) -> EarningsAnalysisResponse:
+    try:
+        analysis = use_case.execute(symbol)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    # The model call is slow and metered, and an earnings read only drifts as the
+    # reported figures do — cache briefly so a burst of viewers collapses onto one
+    # generation rather than re-billing per request.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return _present_earnings_analysis(analysis)
 
 
 @router.get("/sectors", response_model=SectorBoardResponse)

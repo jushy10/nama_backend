@@ -6,6 +6,7 @@ implementation. The core never imports Alpaca; Alpaca imports the core.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from datetime import date, datetime
 
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
@@ -15,6 +16,7 @@ from app.stocks.entities import (
     AnalystEstimates,
     CandleSeries,
     CompanyProfile,
+    EarningsAnalysis,
     InvestmentAnalysis,
     Logo,
     MarketIndexPerformance,
@@ -60,6 +62,31 @@ class StockQuoteProvider(ABC):
         Raises:
             StockNotFound: the symbol does not exist / has no data.
             StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class BulkQuoteProvider(ABC):
+    """A gateway for many symbols' live quotes in one call — the batched cousin of
+    ``StockQuoteProvider``.
+
+    Backs a view that colours a whole board by the day's move (the heat map): one request for
+    the entire symbol list instead of N per-symbol calls. **Best-effort per symbol** — a symbol
+    the feed carries no quote for (e.g. not on the free IEX feed) is simply *absent* from the
+    returned map, never an error, so the caller can size that tile from stored facts and leave
+    it uncoloured. Only a hard feed failure over the whole batch is fatal.
+    """
+
+    @abstractmethod
+    def get_quotes(self, symbols: Sequence[str]) -> dict[str, Quote]:
+        """Return the latest quote for each recognized symbol, keyed by symbol.
+
+        Symbols the feed has no quote for are omitted (a partial map is normal, not an error);
+        order and duplicates in the input don't matter. Given an empty input, returns an empty
+        map without a call.
+
+        Raises:
+            StockDataUnavailable: the upstream feed failed for the whole request.
         """
         raise NotImplementedError
 
@@ -372,6 +399,40 @@ class MarketSummaryProvider(ABC):
         Args:
             indexes: the day's headline indices, each carrying its daily move and
                 best-effort trailing-window returns.
+
+        Raises:
+            StockDataUnavailable: the model call failed or returned no usable
+                result.
+        """
+        raise NotImplementedError
+
+
+class EarningsAnalysisProvider(ABC):
+    """A gateway that turns a stock's earnings timelines into a short,
+    AI-generated read of its earnings story.
+
+    The earnings-focused sibling of ``InvestmentAnalysisProvider``: the use case
+    has already gathered the quarterly and annual earnings timelines, and the
+    adapter reasons only over what it's handed (the beats/misses, EPS and revenue
+    trajectory, and the forward consensus) — it fetches nothing itself. This backs
+    a dedicated endpoint (its own reason to exist, not best-effort enrichment), so
+    a failure surfaces as an error rather than being swallowed.
+    """
+
+    @abstractmethod
+    def analyze(
+        self,
+        symbol: str,
+        quarterly: QuarterlyEarningsTimeline | None = None,
+        annual: AnnualEarningsTimeline | None = None,
+    ) -> EarningsAnalysis:
+        """Return an earnings analysis built from the supplied timelines.
+
+        Args:
+            symbol: the ticker being analysed (for labelling and error context).
+            quarterly: the recent quarterly earnings timeline, else ``None``.
+            annual: the recent annual (fiscal-year) earnings timeline, else
+                ``None``.
 
         Raises:
             StockDataUnavailable: the model call failed or returned no usable

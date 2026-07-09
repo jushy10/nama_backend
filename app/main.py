@@ -42,7 +42,14 @@ from app.stocks.endpoints.cron_index_membership_endpoints import (
 )
 from app.stocks.endpoints.cron_etf_endpoints import router as etf_cron_router
 from app.stocks.endpoints.etf_endpoints import router as etf_router
+from app.stocks.endpoints.revenue_segments_endpoints import (
+    router as revenue_segments_router,
+)
+from app.stocks.endpoints.cron_revenue_segments_endpoints import (
+    router as revenue_segments_cron_router,
+)
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
+from app.stocks.endpoints.heatmap_endpoints import router as heatmap_router
 from app.stocks.router import router as stocks_router
 
 # The web server (uvicorn/gunicorn) installs handlers only on its own `uvicorn*`
@@ -148,6 +155,11 @@ app.include_router(rating_changes_router)
 # (title/publisher/link/published time), served from the DB cache over yfinance. See
 # app/stocks/endpoints/news_endpoints.py.
 app.include_router(news_router)
+# The revenue-segments read endpoint (GET /stocks/{symbol}/revenue-segments): a company's
+# revenue broken down by operating segment, product/service line, and geography — parsed from
+# its latest 10-K on SEC EDGAR and served from the DB cache. See
+# app/stocks/endpoints/revenue_segments_endpoints.py.
+app.include_router(revenue_segments_router)
 # The quarterly-earnings refresh cron endpoint (POST /internal/earnings/quarterly/sync);
 # it drives the SyncQuarterlyEarnings use case out of band. See
 # app/stocks/endpoints/cron_quarterly_earnings_endpoints.py.
@@ -173,6 +185,10 @@ app.include_router(recommendations_cron_router)
 # use case out of band (yfinance -> DB), seeding + refreshing each stock's recent
 # headlines. See app/stocks/endpoints/cron_news_endpoints.py.
 app.include_router(news_cron_router)
+# The revenue-segments refresh cron endpoint (POST /internal/revenue-segments/sync); it drives
+# the SyncRevenueSegments use case out of band (SEC EDGAR 10-K -> DB), seeding + refreshing each
+# stock's revenue disaggregation. See app/stocks/endpoints/cron_revenue_segments_endpoints.py.
+app.include_router(revenue_segments_cron_router)
 # The universe refresh cron endpoint (POST /internal/universe/sync); it drives the
 # SyncUniverse use case out of band (yfinance screen -> stocks anchor, then per-ticker
 # sector/industry enrichment), populating the stocks table with the ≥$1B US universe.
@@ -195,6 +211,12 @@ app.include_router(etf_router)
 # Fire-and-forget like the other crons (202 + background thread). See
 # app/stocks/endpoints/cron_etf_endpoints.py.
 app.include_router(etf_cron_router)
+# The market heat map (GET /market/heatmap): a Finviz-style treemap of an index (S&P 500 /
+# Nasdaq-100) — every stock a tile sized by market cap and coloured by the day's change, grouped
+# sector -> industry -> stock. Structure + size come from the screened universe on the `stocks`
+# anchor; the colours are best-effort live Alpaca quotes. See
+# app/stocks/endpoints/heatmap_endpoints.py.
+app.include_router(heatmap_router)
 
 
 @app.get("/healthz")

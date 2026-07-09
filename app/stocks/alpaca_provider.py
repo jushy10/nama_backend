@@ -8,6 +8,7 @@ SDK: https://alpaca.markets/sdks/python/
 """
 
 import bisect
+import logging
 from datetime import datetime, timedelta, timezone
 
 from alpaca.common.enums import Sort
@@ -32,6 +33,7 @@ from app.stocks.entities import (
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AllTimeHighProvider,
+    BulkQuoteProvider,
     CandleProvider,
     MarketOverviewProvider,
     SectorPerformanceProvider,
@@ -39,6 +41,8 @@ from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,
 )
+
+logger = logging.getLogger(__name__)
 
 # Our vendor-agnostic Timeframe -> Alpaca's (amount, unit).
 _TIMEFRAME_MAP: dict[Timeframe, tuple[int, TimeFrameUnit]] = {
@@ -90,6 +94,7 @@ _INDEX_ETFS: dict[str, str] = {
 class AlpacaStockDataProvider(
     StockDataProvider,
     StockQuoteProvider,
+    BulkQuoteProvider,
     StockPerformanceProvider,
     AllTimeHighProvider,
     CandleProvider,
@@ -101,6 +106,13 @@ class AlpacaStockDataProvider(
     Also derives trailing-window performance and the all-time high from daily
     bars, and historical OHLC candles for charting.
     """
+
+    # Symbols per batched snapshot request (get_quotes). Alpaca rejects an oversized
+    # multi-symbol snapshot: in prod a 200-symbol chunk failed outright while a
+    # ~100-symbol board went through, so the S&P 500 (~500 names) came back entirely
+    # uncoloured. Cap well under that — a ~500-name map is then ~5 chunks — and pair it
+    # with per-chunk best-effort below so one rejected chunk can never blank the board.
+    _SNAPSHOT_CHUNK = 100
 
     # Lookback long enough to cover the 1-year window with margin for
     # weekends/holidays, so a bar exists at or before each target date.
@@ -168,6 +180,38 @@ class AlpacaStockDataProvider(
         # Snapshot only: one data call, no asset-metadata lookup. Cheap enough to
         # back a poll-every-few-seconds endpoint.
         return self._to_quote(symbol, self._fetch_snapshot(symbol))
+
+    def get_quotes(self, symbols) -> dict[str, Quote]:
+        # The board's live quotes as a handful of chunked snapshot calls (the same call the
+        # sector/index boards make, over an arbitrary symbol list). Best-effort at two levels:
+        # per symbol — a name the free IEX feed doesn't carry (no snapshot, or no latest_trade)
+        # is skipped, so its tile is sized from stored facts and left uncoloured; and per chunk
+        # — a chunk Alpaca rejects (a bad/halted symbol, or the batch itself) is logged and
+        # skipped, so it can't discard the other chunks' quotes. Only when *every* chunk fails
+        # (and nothing was collected) is it a hard feed failure worth surfacing. Dedupe +
+        # uppercase once so a repeated/lowercase symbol maps cleanly.
+        unique = list(dict.fromkeys(s.upper() for s in symbols if s))
+        quotes: dict[str, Quote] = {}
+        failures = 0
+        for start in range(0, len(unique), self._SNAPSHOT_CHUNK):
+            chunk = unique[start : start + self._SNAPSHOT_CHUNK]
+            try:
+                request = StockSnapshotRequest(symbol_or_symbols=chunk, feed=self._feed)
+                snapshots = self._data.get_stock_snapshot(request)
+            except APIError as exc:
+                # One chunk's failure must not blank the board — skip it and keep the rest.
+                failures += 1
+                logger.warning("snapshot chunk of %d symbols failed: %s", len(chunk), exc)
+                continue
+            for symbol in chunk:
+                snapshot = snapshots.get(symbol)
+                if snapshot is None or snapshot.latest_trade is None:
+                    continue
+                quotes[symbol] = self._to_quote(symbol, snapshot)
+        # Every chunk failed and we got nothing back: a real feed outage, not a sparse board.
+        if failures and not quotes:
+            raise StockDataUnavailable("quotes", "every snapshot chunk failed")
+        return quotes
 
     def get_performance(self, symbol: str) -> StockPerformance:
         return self._compute_performance(self._fetch_daily_bars(symbol))

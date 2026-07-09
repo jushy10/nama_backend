@@ -675,3 +675,41 @@ class MarketSummary:
     periods: tuple[MarketPeriodHighlight, ...]
     model: str
     generated_at: datetime
+
+
+class EarningsTrend(str, Enum):
+    """Where a company's earnings story is heading.
+
+    ``accelerating`` when profit/sales growth is picking up (or its beats are
+    getting bigger), ``slowing`` when growth is fading or it's starting to miss,
+    ``steady`` when it's holding a consistent pace. The string values double as
+    the JSON the model returns and the API serves, the same convention as
+    ``Recommendation`` and ``MarketTone``.
+    """
+
+    ACCELERATING = "accelerating"
+    STEADY = "steady"
+    SLOWING = "slowing"
+
+
+@dataclass(frozen=True)
+class EarningsAnalysis:
+    """An AI-generated, plain-language read of a company's earnings story.
+
+    The earnings-focused sibling of ``InvestmentAnalysis``: produced by a language
+    model from the earnings figures the slice already gathers — the recent
+    quarterly and annual timelines (beats/misses, EPS and revenue, and the forward
+    consensus) — never from outside data the model happens to recall. ``summary``
+    is the plain-language headline of how earnings have gone and where they look
+    headed; ``trend`` is the direction; ``highlights`` are a few short takeaways.
+    It is informational, not personalized advice — the model fills in the substance
+    and the presenter attaches the disclaimer. ``model``/``generated_at`` keep a
+    read traceable, as with ``InvestmentAnalysis``.
+    """
+
+    symbol: str
+    summary: str
+    trend: EarningsTrend
+    highlights: tuple[str, ...]
+    model: str
+    generated_at: datetime
