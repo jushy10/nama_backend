@@ -77,7 +77,6 @@ from app.stocks.router import (
     get_stock_candles,
     get_stock_logo,
     get_stock_quote,
-    get_stock_resistance_levels,
     get_stock_rsi,
     get_stock_support_levels,
 )
@@ -89,7 +88,6 @@ from app.stocks.use_cases import (
     GetStockInfo,
     GetStockLogo,
     GetStockQuote,
-    GetStockResistanceLevels,
     GetStockRsi,
     GetStockSupportLevels,
 )
@@ -482,24 +480,6 @@ def a_support_series(timeframe: Timeframe = Timeframe.DAY_1) -> CandleSeries:
             timestamp=base + timedelta(days=i),
         )
         for i, low in enumerate(lows)
-    )
-    return a_series(candles, timeframe=timeframe)
-
-
-def a_resistance_series(timeframe: Timeframe = Timeframe.DAY_1) -> CandleSeries:
-    """A double-top "M": swing highs at 3.0 with the series ending at 1.0 — one
-    clear resistance level (moderate, two touches) when detected with window=2."""
-    highs = [1.0, 2.0, 3.0, 2.0, 1.0, 2.0, 3.0, 2.0, 1.0]
-    base = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    candles = tuple(
-        a_candle(
-            open=high,
-            high=high,
-            low=high - 0.5,
-            close=high,
-            timestamp=base + timedelta(days=i),
-        )
-        for i, high in enumerate(highs)
     )
     return a_series(candles, timeframe=timeframe)
 
@@ -1143,54 +1123,6 @@ def test_support_levels_use_case_detects_from_fetched_candles():
     assert result.levels[0].strength.value == "moderate"
 
 
-# --------------------------- resistance-levels use case ---------------------------
-
-def test_resistance_levels_use_case_normalizes_symbol_and_forwards_window():
-    fake = FakeCandleProvider(series=a_resistance_series())
-    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    end = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    GetStockResistanceLevels(fake).execute(
-        "  aapl ", Timeframe.HOUR_1, start=start, end=end
-    )
-    assert fake.received == [("AAPL", Timeframe.HOUR_1, start, end)]
-
-
-@pytest.mark.parametrize("bad", ["", "   ", "123", "AA1", "AA.B", "TOOLONG"])
-def test_resistance_levels_use_case_rejects_invalid_symbols(bad):
-    fake = FakeCandleProvider(series=a_resistance_series())
-    with pytest.raises(ValueError):
-        GetStockResistanceLevels(fake).execute(bad, Timeframe.DAY_1)
-    assert fake.received == []  # provider untouched on invalid input
-
-
-def test_resistance_levels_use_case_rejects_inverted_window():
-    fake = FakeCandleProvider(series=a_resistance_series())
-    start = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    end = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    with pytest.raises(ValueError):
-        GetStockResistanceLevels(fake).execute(
-            "AAPL", Timeframe.DAY_1, start=start, end=end
-        )
-    assert fake.received == []
-
-
-def test_resistance_levels_use_case_propagates_not_found():
-    fake = FakeCandleProvider(raises=StockNotFound("ZZZZ"))
-    with pytest.raises(StockNotFound):
-        GetStockResistanceLevels(fake).execute("ZZZZ", Timeframe.DAY_1)
-
-
-def test_resistance_levels_use_case_detects_from_fetched_candles():
-    # Double-top at 3.0, series ending at 1.0 -> one moderate resistance level.
-    result = GetStockResistanceLevels(
-        FakeCandleProvider(series=a_resistance_series())
-    ).execute("AAPL", Timeframe.DAY_1, window=2)
-    assert result.reference_price == 1.0
-    assert [level.price for level in result.levels] == [3.0]
-    assert result.levels[0].touches == 2
-    assert result.levels[0].strength.value == "moderate"
-
-
 # --------------------------- sector use case ---------------------------
 
 def test_sector_entity_change_and_percent():
@@ -1236,7 +1168,6 @@ def make_client():
         candle_provider: CandleProvider | None = None,
         rsi_provider: CandleProvider | None = None,
         support_levels_provider: CandleProvider | None = None,
-        resistance_levels_provider: CandleProvider | None = None,
         sector_provider: SectorPerformanceProvider | None = None,
         earnings_provider: QuarterlyEarningsProvider | None = None,
         annual_earnings_provider: AnnualEarningsProvider | None = None,
@@ -1261,10 +1192,6 @@ def make_client():
         if support_levels_provider is not None:
             app.dependency_overrides[get_stock_support_levels] = (
                 lambda: GetStockSupportLevels(support_levels_provider)
-            )
-        if resistance_levels_provider is not None:
-            app.dependency_overrides[get_stock_resistance_levels] = (
-                lambda: GetStockResistanceLevels(resistance_levels_provider)
             )
         if sector_provider is not None:
             app.dependency_overrides[get_sector_performance] = (
@@ -2159,106 +2086,6 @@ def test_get_support_levels_upstream_failure_502(make_client):
     fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
     client = make_client(support_levels_provider=fake)
     assert client.get("/stocks/AAPL/support-levels").status_code == 502
-
-
-# --------------------------- resistance-levels endpoint ---------------------------
-
-def test_get_resistance_levels_returns_200_with_levels(make_client):
-    client = make_client(resistance_levels_provider=FakeCandleProvider(a_resistance_series()))
-    r = client.get("/stocks/AAPL/resistance-levels", params={"window": 2})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["symbol"] == "AAPL"
-    assert body["timeframe"] == "1Day"
-    assert body["reference_price"] == 1.0
-    assert body["count"] == 1
-    level = body["levels"][0]
-    assert level["price"] == 3.0
-    assert level["touches"] == 2
-    assert level["strength"] == "moderate"
-    assert level["distance_percent"] == 200.0
-    assert set(level) == {"price", "touches", "last_touched", "strength", "distance_percent"}
-
-
-def test_get_resistance_levels_defaults_to_1y_daily(make_client):
-    fake = FakeCandleProvider(a_resistance_series())
-    client = make_client(resistance_levels_provider=fake)
-    r = client.get("/stocks/AAPL/resistance-levels")
-    assert r.status_code == 200, r.text
-    symbol, timeframe, start, end = fake.received[0]
-    assert symbol == "AAPL"
-    assert timeframe is Timeframe.DAY_1                 # default timeframe
-    assert (end - start).days == 366                    # default range = 1Y
-
-
-def test_get_resistance_levels_honors_timeframe_range_and_window(make_client):
-    fake = FakeCandleProvider(a_resistance_series(timeframe=Timeframe.HOUR_1))
-    client = make_client(resistance_levels_provider=fake)
-    r = client.get(
-        "/stocks/AAPL/resistance-levels",
-        params={"timeframe": "1Hour", "range": "5D", "window": 2},
-    )
-    assert r.status_code == 200, r.text
-    _, timeframe, start, end = fake.received[0]
-    assert timeframe is Timeframe.HOUR_1
-    assert (end - start).days == 5
-
-
-def test_get_resistance_levels_explicit_window_overrides_range(make_client):
-    fake = FakeCandleProvider(a_resistance_series())
-    client = make_client(resistance_levels_provider=fake)
-    r = client.get(
-        "/stocks/AAPL/resistance-levels",
-        params={"start": "2026-01-01T00:00:00Z", "end": "2026-02-01T00:00:00Z"},
-    )
-    assert r.status_code == 200
-    _, _, start, end = fake.received[0]
-    assert start == datetime(2026, 1, 1, tzinfo=timezone.utc)
-    assert end == datetime(2026, 2, 1, tzinfo=timezone.utc)
-
-
-@pytest.mark.parametrize(
-    "params",
-    [
-        {"window": 1},
-        {"window": 51},
-        {"tolerance": 0},
-        {"tolerance": 1},
-        {"max_levels": 0},
-        {"max_levels": 21},
-        {"timeframe": "1Year"},
-    ],
-)
-def test_get_resistance_levels_invalid_params_422(make_client, params):
-    client = make_client(resistance_levels_provider=FakeCandleProvider(a_resistance_series()))
-    assert client.get("/stocks/AAPL/resistance-levels", params=params).status_code == 422
-
-
-def test_get_resistance_levels_invalid_symbol_400(make_client):
-    client = make_client(resistance_levels_provider=FakeCandleProvider(a_resistance_series()))
-    assert client.get("/stocks/123/resistance-levels").status_code == 400
-
-
-def test_get_resistance_levels_inverted_window_400(make_client):
-    client = make_client(resistance_levels_provider=FakeCandleProvider(a_resistance_series()))
-    r = client.get(
-        "/stocks/AAPL/resistance-levels",
-        params={"start": "2026-02-01T00:00:00Z", "end": "2026-01-01T00:00:00Z"},
-    )
-    assert r.status_code == 400
-
-
-def test_get_resistance_levels_unknown_symbol_404(make_client):
-    client = make_client(
-        resistance_levels_provider=FakeCandleProvider(raises=StockNotFound("ZZZZ"))
-    )
-    assert client.get("/stocks/ZZZZ/resistance-levels").status_code == 404
-
-
-def test_get_resistance_levels_upstream_failure_502(make_client):
-    fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
-    client = make_client(resistance_levels_provider=fake)
-    assert client.get("/stocks/AAPL/resistance-levels").status_code == 502
 
 
 # --------------------------- sectors endpoint ---------------------------
