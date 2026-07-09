@@ -30,6 +30,9 @@ from app.stocks.endpoints.quarterly_earnings_endpoints import (
 from app.stocks.endpoints.recommendations_endpoints import (
     router as recommendations_router,
 )
+from app.stocks.endpoints.rating_changes_endpoints import (
+    router as rating_changes_router,
+)
 from app.stocks.endpoints.news_endpoints import router as news_router
 from app.stocks.endpoints.cron_universe_endpoints import (
     router as universe_cron_router,
@@ -137,6 +140,10 @@ app.include_router(annual_earnings_router)
 # sell-side buy/hold/sell split by month, served from the DB cache over yfinance. See
 # app/stocks/endpoints/recommendations_endpoints.py.
 app.include_router(recommendations_router)
+# The analyst rating-changes read endpoint (GET /stocks/{symbol}/rating-changes): the
+# sell-side's individual upgrade/downgrade actions, newest first, served from the DB cache
+# over yfinance. See app/stocks/endpoints/rating_changes_endpoints.py.
+app.include_router(rating_changes_router)
 # The news read endpoint (GET /stocks/{symbol}/news): the stock's recent headlines
 # (title/publisher/link/published time), served from the DB cache over yfinance. See
 # app/stocks/endpoints/news_endpoints.py.

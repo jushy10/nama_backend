@@ -58,3 +58,35 @@ class RecommendationsResponse(BaseModel):
     latest: RecommendationTrendResponse | None = None
     price_targets: AnalystPriceTargetsResponse | None = None
     trends: list[RecommendationTrendResponse]
+
+
+class RatingChangeResponse(BaseModel):
+    """One published sell-side rating action — the discrete event behind the trend.
+
+    ``firm`` and ``published_at`` identify it; ``action`` is Yahoo's grade action
+    (``up``/``down``/``init``/``main``/``reit``), ``from_grade``→``to_grade`` the move,
+    and ``target_current``/``target_prior`` the price target it set vs. the one it
+    replaced (any of these ``null`` when the source omits it). ``is_upgrade``/
+    ``is_downgrade`` surface the direction so a client doesn't re-derive it from ``action``."""
+
+    firm: str
+    published_at: date  # ISO date the action was published
+    action: str | None = None
+    from_grade: str | None = None
+    to_grade: str | None = None
+    target_current: float | None = None
+    target_prior: float | None = None
+    is_upgrade: bool
+    is_downgrade: bool
+
+
+class RatingChangesResponse(BaseModel):
+    """A stock's individual analyst rating actions, newest first.
+
+    The upgrade/downgrade feed — the events that, aggregated by month, become the
+    recommendation trend. ``count`` is how many actions are returned; an empty
+    ``changes`` means the source publishes none for the symbol."""
+
+    symbol: str
+    count: int
+    changes: list[RatingChangeResponse]
