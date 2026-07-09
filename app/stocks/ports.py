@@ -17,6 +17,8 @@ from app.stocks.entities import (
     CompanyProfile,
     InvestmentAnalysis,
     Logo,
+    MarketIndexPerformance,
+    MarketSummary,
     Quote,
     SectorAnalysis,
     SectorPerformance,
@@ -225,6 +227,25 @@ class SectorPerformanceProvider(ABC):
         raise NotImplementedError
 
 
+class MarketOverviewProvider(ABC):
+    """A gateway for the headline US indices' performance on the day.
+
+    Like ``SectorPerformanceProvider``, the indices aren't directly tradable, so
+    each is read through its proxy ETF (SPY -> S&P 500, QQQ -> Nasdaq); this sits
+    alongside the other price-derived ports.
+    """
+
+    @abstractmethod
+    def get_market_overview(self) -> list[MarketIndexPerformance]:
+        """Return the day's performance for each headline US index.
+
+        Raises:
+            StockNotFound: no index data is available at all.
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
 class InvestmentAnalysisProvider(ABC):
     """A gateway that turns the data already gathered for a stock into a short,
     AI-generated buy / hold / sell read.
@@ -324,6 +345,33 @@ class SectorAnalysisProvider(ABC):
         Args:
             sectors: the day's sectors, already ranked best performer first, each
                 carrying its daily move and best-effort trailing-window returns.
+
+        Raises:
+            StockDataUnavailable: the model call failed or returned no usable
+                result.
+        """
+        raise NotImplementedError
+
+
+class MarketSummaryProvider(ABC):
+    """A gateway that turns the day's index board into a short, AI-generated
+    overview of how the US market has moved over the past year, month and week.
+
+    The market-wide sibling of ``SectorAnalysisProvider``: like it, this port
+    isn't handed a lookup key — the use case has already assembled the board (each
+    index's daily move + trailing returns). The adapter reasons only over what
+    it's given and fetches nothing. This backs a dedicated endpoint (its own
+    reason to exist, not best-effort enrichment), so a failure surfaces as an
+    error rather than being swallowed.
+    """
+
+    @abstractmethod
+    def analyze(self, indexes: list[MarketIndexPerformance]) -> MarketSummary:
+        """Return a market summary built from the index board.
+
+        Args:
+            indexes: the day's headline indices, each carrying its daily move and
+                best-effort trailing-window returns.
 
         Raises:
             StockDataUnavailable: the model call failed or returned no usable

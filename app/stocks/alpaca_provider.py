@@ -22,6 +22,7 @@ from app.stocks.entities import (
     AllTimeHigh,
     Candle,
     CandleSeries,
+    MarketIndexPerformance,
     Quote,
     SectorPerformance,
     Stock,
@@ -32,6 +33,7 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AllTimeHighProvider,
     CandleProvider,
+    MarketOverviewProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockPerformanceProvider,
@@ -74,6 +76,16 @@ _SECTOR_ETFS: dict[str, str] = {
     "XLC": "Communication Services",
 }
 
+# The headline US indices, read through the tradable ETF that tracks each one —
+# the standard proxy, exactly like the sector board (indices aren't tradable, so
+# the ETF stands in). SPY tracks the S&P 500; QQQ tracks the Nasdaq-100 (the
+# growth-heavy index colloquially "the Nasdaq"). Insertion order is the board's
+# order: broad market first.
+_INDEX_ETFS: dict[str, str] = {
+    "SPY": "S&P 500",
+    "QQQ": "Nasdaq",
+}
+
 
 class AlpacaStockDataProvider(
     StockDataProvider,
@@ -82,6 +94,7 @@ class AlpacaStockDataProvider(
     AllTimeHighProvider,
     CandleProvider,
     SectorPerformanceProvider,
+    MarketOverviewProvider,
 ):
     """Fetches stock data from Alpaca and maps it onto the Stock entity.
 
@@ -245,6 +258,36 @@ class AlpacaStockDataProvider(
         if not sectors:
             raise StockNotFound("sectors")
         return sectors
+
+    def get_market_overview(self) -> list[MarketIndexPerformance]:
+        # Same shape as the sector board: one batched snapshot for both index ETFs,
+        # one batched bars call for their trailing windows. An index missing a
+        # quote is skipped (never fails the board); only an empty board is a hard
+        # error, and a bars failure leaves the day-change board intact.
+        try:
+            request = StockSnapshotRequest(
+                symbol_or_symbols=list(_INDEX_ETFS), feed=self._feed
+            )
+            snapshots = self._data.get_stock_snapshot(request)
+        except APIError as exc:
+            raise StockDataUnavailable("market", str(exc)) from exc
+
+        bars_by_symbol = self._fetch_daily_bars_batch(list(_INDEX_ETFS))
+
+        indexes = [
+            self._to_index(
+                symbol,
+                name,
+                snapshots[symbol],
+                self._compute_performance(bars_by_symbol.get(symbol, [])),
+            )
+            for symbol, name in _INDEX_ETFS.items()
+            if snapshots.get(symbol) is not None
+            and snapshots[symbol].latest_trade is not None
+        ]
+        if not indexes:
+            raise StockNotFound("market")
+        return indexes
 
     # --- Alpaca calls (thin and isolated) ---
 
@@ -413,6 +456,21 @@ class AlpacaStockDataProvider(
         prev = snapshot.previous_daily_bar
         return SectorPerformance(
             sector=sector,
+            symbol=symbol,
+            price=trade.price,
+            previous_close=prev.close if prev else None,
+            as_of=trade.timestamp,
+            performance=performance,
+        )
+
+    @staticmethod
+    def _to_index(symbol, name, snapshot, performance) -> MarketIndexPerformance:
+        # Same rules as _to_sector: day move = latest trade vs the previous daily
+        # close; `performance` carries the trailing windows (1w/1m/…/1y).
+        trade = snapshot.latest_trade
+        prev = snapshot.previous_daily_bar
+        return MarketIndexPerformance(
+            name=name,
             symbol=symbol,
             price=trade.price,
             previous_close=prev.close if prev else None,

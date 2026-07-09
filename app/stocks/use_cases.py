@@ -22,6 +22,8 @@ from app.stocks.entities import (
     CompanyProfile,
     InvestmentAnalysis,
     Logo,
+    MarketIndexPerformance,
+    MarketSummary,
     SectorAnalysis,
     SectorPerformance,
     Stock,
@@ -44,6 +46,8 @@ from app.stocks.ports import (
     InvestmentAnalysisCache,
     InvestmentAnalysisProvider,
     LogoProvider,
+    MarketOverviewProvider,
+    MarketSummaryProvider,
     SectorAnalysisProvider,
     SectorPerformanceProvider,
     StockDataProvider,
@@ -497,6 +501,73 @@ class GetSectorAnalysis:
             else:
                 logger.info(
                     "sector analysis timing: board_gather=%.0fms model_call=%.0fms "
+                    "-> model call failed",
+                    gather_ms,
+                    model_ms,
+                )
+
+
+class GetMarketOverview:
+    """Use case: the headline US indices' performance (the S&P 500 and Nasdaq).
+
+    Takes no input — it reports on the whole market. Returns the indices in the
+    provider's stable order (broad market first), each carrying its day move and
+    trailing-window returns.
+    """
+
+    def __init__(self, provider: MarketOverviewProvider) -> None:
+        self._provider = provider
+
+    def execute(self) -> list[MarketIndexPerformance]:
+        return self._provider.get_market_overview()
+
+
+class GetMarketSummary:
+    """Use case: an AI-generated overview of how the US market has moved lately.
+
+    The market-wide sibling of ``GetSectorAnalysis``. Reuses ``GetMarketOverview``
+    to assemble the day's index board, then hands it to the injected analyzer.
+    Both the board and the summary are primary data — an upstream board failure
+    (``StockNotFound``/``StockDataUnavailable``) or a model failure propagates
+    rather than yielding a summary of nothing. The analyzer reasons only over the
+    board it's handed; it fetches nothing itself. Takes no input — it reports on
+    the whole market.
+    """
+
+    def __init__(
+        self, overview: GetMarketOverview, analyzer: MarketSummaryProvider
+    ) -> None:
+        self._overview = overview
+        self._analyzer = analyzer
+
+    def execute(self) -> MarketSummary:
+        # Timed in two halves so the logs decompose the endpoint's latency into its
+        # only two moving parts: the index-board gather (Alpaca) and the model call
+        # (Bedrock) — the same split the sector-analysis use case records.
+        gather_start = time.perf_counter()
+        board = self._overview.execute()
+        gather_ms = (time.perf_counter() - gather_start) * 1000
+
+        # Log in a `finally` so a failing/slow model call still records the split.
+        model_start = time.perf_counter()
+        summary: MarketSummary | None = None
+        try:
+            summary = self._analyzer.analyze(board)
+            return summary
+        finally:
+            model_ms = (time.perf_counter() - model_start) * 1000
+            if summary is not None:
+                logger.info(
+                    "market summary timing: board_gather=%.0fms model_call=%.0fms "
+                    "total=%.0fms (model=%s)",
+                    gather_ms,
+                    model_ms,
+                    gather_ms + model_ms,
+                    summary.model,
+                )
+            else:
+                logger.info(
+                    "market summary timing: board_gather=%.0fms model_call=%.0fms "
                     "-> model call failed",
                     gather_ms,
                     model_ms,

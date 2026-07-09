@@ -166,6 +166,49 @@ class SectorAnalysisResponse(BaseModel):
     generated_at: datetime
 
 
+class MarketIndexReturnResponse(BaseModel):
+    """One headline index's return over a single timeframe.
+
+    `symbol` is the proxy ETF the index is read through (SPY for the S&P 500, QQQ
+    for the Nasdaq); `change_percent` is that proxy's real percent move over the
+    period (joined from the board, not authored by the model)."""
+
+    name: str
+    symbol: str
+    change_percent: float | None = None
+
+
+class MarketPeriodResponse(BaseModel):
+    """One timeframe in the market summary — the past week, month, or year.
+
+    `period` is "week"/"month"/"year"; `indexes` carries each index's real return
+    over the window; `note` is the AI's one-line, plain-language read of the
+    stretch."""
+
+    period: str  # "week" | "month" | "year"
+    indexes: list[MarketIndexReturnResponse]
+    note: str
+
+
+class MarketSummaryResponse(BaseModel):
+    """An AI-generated overview of how the US market has moved lately.
+
+    `summary` is the plain-language headline; `tone` is the risk posture the
+    recent moves imply ("risk_on"/"risk_off"/"mixed"); `periods` breaks the read
+    down by timeframe (the past year, month and week), each with the indexes' real
+    returns and a one-line note. `disclaimer` is a fixed reminder that this is
+    informational, not financial advice — authored by the service, not the model.
+    `model` and `generated_at` record what produced the summary and when. Reasoned
+    only over the day's index board; descriptive, not advice."""
+
+    summary: str
+    tone: str  # "risk_on" | "risk_off" | "mixed"
+    periods: list[MarketPeriodResponse]
+    disclaimer: str
+    model: str  # the model that produced the summary
+    generated_at: datetime
+
+
 class InvestmentAnalysisResponse(BaseModel):
     """An AI-generated, balanced buy/hold/sell read on a stock.
 

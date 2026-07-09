@@ -25,6 +25,7 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AllTimeHighProvider,
     CandleProvider,
+    MarketOverviewProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockPerformanceProvider,
@@ -320,6 +321,50 @@ def test_get_sector_performance_empty_board_not_found():
         p.get_sector_performance()
 
 
+# --------------------------- market overview ---------------------------
+
+
+def test_get_market_overview_attaches_day_change_and_windows():
+    # One snapshot batch + one bars batch. SPY has bars; QQQ has a snapshot but
+    # no bars, so it still appears with all-None trailing windows.
+    p = provider_with(
+        FakeDataClient(
+            result={"SPY": make_snapshot(), "QQQ": make_snapshot()},
+            bars={"SPY": performance_bars()},
+        ),
+        FakeTradingClient(),
+    )
+    by_symbol = {i.symbol: i for i in p.get_market_overview()}
+    assert by_symbol["SPY"].name == "S&P 500"
+    assert by_symbol["QQQ"].name == "Nasdaq"
+    assert by_symbol["SPY"].change == 1.79  # day change from the snapshot
+    assert by_symbol["SPY"].performance.one_year == 100.0  # windows from bars
+    assert by_symbol["QQQ"].performance.one_year is None  # no bars -> None
+
+
+def test_get_market_overview_bars_failure_keeps_day_change():
+    # Performance is best-effort: a bars failure must not sink the board.
+    p = provider_with(
+        FakeDataClient(result={"SPY": make_snapshot()}, bars_error=APIError("boom")),
+        FakeTradingClient(),
+    )
+    indexes = p.get_market_overview()
+    assert indexes[0].change == 1.79
+    assert indexes[0].performance.one_year is None
+
+
+def test_get_market_overview_snapshot_error_unavailable():
+    p = provider_with(FakeDataClient(error=APIError("boom")), FakeTradingClient())
+    with pytest.raises(StockDataUnavailable):
+        p.get_market_overview()
+
+
+def test_get_market_overview_empty_board_not_found():
+    p = provider_with(FakeDataClient(result={}), FakeTradingClient())
+    with pytest.raises(StockNotFound):
+        p.get_market_overview()
+
+
 # --------------------------- candles ---------------------------
 
 def make_bar(ts, open_, high, low, close, volume=1000.0):
@@ -513,3 +558,4 @@ def test_provider_implements_all_ports():
     assert isinstance(p, AllTimeHighProvider)
     assert isinstance(p, CandleProvider)
     assert isinstance(p, SectorPerformanceProvider)
+    assert isinstance(p, MarketOverviewProvider)

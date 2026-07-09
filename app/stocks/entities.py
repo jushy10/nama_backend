@@ -577,3 +577,101 @@ class SectorAnalysis:
     laggards: tuple[SectorHighlight, ...]
     model: str
     generated_at: datetime
+
+
+@dataclass(frozen=True)
+class MarketIndexPerformance:
+    """One headline US index's move on the day, proxied by a tradable ETF.
+
+    Broad-market indices (the S&P 500, the Nasdaq) aren't directly tradable, so
+    each is read through the exchange-traded fund that tracks it — SPY for the
+    S&P 500, QQQ for the Nasdaq. The day's move is the proxy's latest price versus
+    its previous close (the same rule the ``Stock`` and ``SectorPerformance``
+    entities use); ``performance`` carries the trailing-window returns
+    (1w/1m/…/1y), best-effort like the others (``None`` when price history is
+    unavailable).
+    """
+
+    name: str  # the index's plain name, e.g. "S&P 500"
+    symbol: str  # the proxy ETF ticker, e.g. "SPY"
+    price: float  # latest trade price of the proxy ETF
+    previous_close: float | None
+    as_of: datetime | None
+    performance: StockPerformance | None = None
+
+    @property
+    def change(self) -> float | None:
+        """Absolute price change since the previous close."""
+        if self.previous_close is None:
+            return None
+        return round(self.price - self.previous_close, 4)
+
+    @property
+    def change_percent(self) -> float | None:
+        """Percent price change since the previous close."""
+        if not self.previous_close:  # None or 0 -> undefined
+            return None
+        return round((self.price - self.previous_close) / self.previous_close * 100, 2)
+
+
+class MarketPeriod(str, Enum):
+    """A trailing timeframe the market summary reads over — the past week, month,
+    or year.
+
+    The string values double as the JSON the model returns and the API serves,
+    the same convention as ``MarketTone``.
+    """
+
+    WEEK = "week"
+    MONTH = "month"
+    YEAR = "year"
+
+
+@dataclass(frozen=True)
+class MarketIndexReturn:
+    """One index's return over a single timeframe, carried on a period highlight.
+
+    ``change_percent`` is joined from the day's board (a real quote), never
+    authored by the model — the same discipline ``SectorHighlight`` follows.
+    """
+
+    name: str
+    symbol: str  # the proxy ETF ticker, carried through from the board
+    change_percent: float | None
+
+
+@dataclass(frozen=True)
+class MarketPeriodHighlight:
+    """One timeframe (past week/month/year) in the market summary.
+
+    ``note`` is the model's one-line, plain-language read of how that stretch
+    went; ``indexes`` carries each index's real return over the window, joined
+    from the board (real quotes) rather than authored by the model.
+    """
+
+    period: MarketPeriod
+    note: str
+    indexes: tuple[MarketIndexReturn, ...]
+
+
+@dataclass(frozen=True)
+class MarketSummary:
+    """An AI-generated overview of how the US market has moved lately.
+
+    The market-wide sibling of ``SectorAnalysis``: produced by a language model
+    from the day's index board (the S&P 500 and the Nasdaq, each with its
+    trailing-window returns) and nothing else — never outside data the model
+    happens to recall. ``summary`` is the plain-language headline; ``tone`` is the
+    risk posture the recent moves imply; ``periods`` breaks the read down by
+    timeframe (the past year, month and week), each with a short note and the
+    indexes' real returns (joined from the board, not authored). It is
+    informational, not personalized advice — the model fills in the substance and
+    the presenter attaches the disclaimer. ``model``/``generated_at`` keep a read
+    traceable, as with ``SectorAnalysis``.
+    """
+
+    summary: str
+    tone: MarketTone
+    periods: tuple[MarketPeriodHighlight, ...]
+    model: str
+    generated_at: datetime

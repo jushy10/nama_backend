@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
+from app.stocks.bedrock_market_summary_provider import BedrockMarketSummaryProvider
 from app.stocks.bedrock_sector_analysis_provider import BedrockSectorAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
@@ -25,6 +26,11 @@ from app.stocks.entities import (
     InvestmentAnalysis,
     KeyMetrics,
     Logo,
+    MarketIndexPerformance,
+    MarketIndexReturn,
+    MarketPeriod,
+    MarketPeriodHighlight,
+    MarketSummary,
     MarketTone,
     Quote,
     Recommendation,
@@ -56,6 +62,8 @@ from app.stocks.ports import (
     InvestmentAnalysisCache,
     InvestmentAnalysisProvider,
     LogoProvider,
+    MarketOverviewProvider,
+    MarketSummaryProvider,
     SectorAnalysisProvider,
     SectorPerformanceProvider,
     StockDataProvider,
@@ -70,6 +78,7 @@ from app.stocks.recommendations.ports import RecommendationProvider
 from app.stocks.universe.entities import IndustryValuation
 from app.stocks.universe.repository import StockSearchRepository
 from app.stocks.router import (
+    get_market_summary,
     get_sector_analysis,
     get_sector_performance,
     get_stock_analysis,
@@ -79,6 +88,8 @@ from app.stocks.router import (
     get_stock_support_levels,
 )
 from app.stocks.use_cases import (
+    GetMarketOverview,
+    GetMarketSummary,
     GetSectorAnalysis,
     GetSectorPerformance,
     GetStockAnalysis,
@@ -234,6 +245,22 @@ class FakeSectorProvider(SectorPerformanceProvider):
             raise self._raises
         assert self._sectors is not None
         return self._sectors
+
+
+class FakeMarketOverviewProvider(MarketOverviewProvider):
+    """Returns/raises whatever the test configured; counts calls."""
+
+    def __init__(self, indexes=None, raises: Exception | None = None):
+        self._indexes = indexes
+        self._raises = raises
+        self.calls = 0
+
+    def get_market_overview(self) -> list[MarketIndexPerformance]:
+        self.calls += 1
+        if self._raises is not None:
+            raise self._raises
+        assert self._indexes is not None
+        return self._indexes
 
 
 class FakeQuarterlyEarningsProvider(QuarterlyEarningsProvider):
@@ -416,6 +443,64 @@ def a_sector_analysis(**overrides) -> SectorAnalysis:
     return SectorAnalysis(**base)
 
 
+class FakeMarketSummaryProvider(MarketSummaryProvider):
+    """Returns/raises whatever the test configured; stashes the board it received
+    (so a test can assert the use case handed over the index board)."""
+
+    def __init__(
+        self,
+        summary: MarketSummary | None = None,
+        raises: Exception | None = None,
+    ):
+        self._summary = summary
+        self._raises = raises
+        self.received: list[MarketIndexPerformance] | None = None
+
+    def analyze(self, indexes) -> MarketSummary:
+        self.received = list(indexes)
+        if self._raises is not None:
+            raise self._raises
+        assert self._summary is not None
+        return self._summary
+
+
+def a_market_summary(**overrides) -> MarketSummary:
+    base = dict(
+        summary="The US market has climbed over the past year, easing lately.",
+        tone=MarketTone.RISK_ON,
+        periods=(
+            MarketPeriodHighlight(
+                MarketPeriod.YEAR,
+                "Both indexes are well up over the year.",
+                (
+                    MarketIndexReturn("S&P 500", "SPY", 18.4),
+                    MarketIndexReturn("Nasdaq", "QQQ", 24.1),
+                ),
+            ),
+            MarketPeriodHighlight(
+                MarketPeriod.MONTH,
+                "Modest gains over the past month.",
+                (
+                    MarketIndexReturn("S&P 500", "SPY", 2.1),
+                    MarketIndexReturn("Nasdaq", "QQQ", 3.0),
+                ),
+            ),
+            MarketPeriodHighlight(
+                MarketPeriod.WEEK,
+                "A slight pullback this week.",
+                (
+                    MarketIndexReturn("S&P 500", "SPY", -0.6),
+                    MarketIndexReturn("Nasdaq", "QQQ", -0.9),
+                ),
+            ),
+        ),
+        model="claude-opus-4-8",
+        generated_at=datetime(2026, 6, 18, 20, 0, tzinfo=timezone.utc),
+    )
+    base.update(overrides)
+    return MarketSummary(**base)
+
+
 def a_logo(content: bytes = b"\x89PNG\r\n", media_type: str = "image/png") -> Logo:
     return Logo(content=content, media_type=media_type)
 
@@ -548,6 +633,15 @@ def a_sector(**overrides) -> SectorPerformance:
     )
     base.update(overrides)
     return SectorPerformance(**base)
+
+
+def a_market_index(**overrides) -> MarketIndexPerformance:
+    base = dict(
+        name="S&P 500", symbol="SPY", price=550.0, previous_close=545.0,
+        as_of=datetime(2026, 6, 18, 19, 59, 59, tzinfo=timezone.utc),
+    )
+    base.update(overrides)
+    return MarketIndexPerformance(**base)
 
 
 def a_quarter(**overrides) -> QuarterlyEarnings:
@@ -1136,6 +1230,8 @@ def make_client():
         analysis_provider: InvestmentAnalysisProvider | None = None,
         industry_repository: StockSearchRepository | None = None,
         sector_analysis_provider: SectorAnalysisProvider | None = None,
+        market_overview_provider: MarketOverviewProvider | None = None,
+        market_summary_provider: MarketSummaryProvider | None = None,
     ) -> TestClient:
         if logo_provider is not None:
             app.dependency_overrides[get_stock_logo] = lambda: GetStockLogo(logo_provider)
@@ -1176,6 +1272,17 @@ def make_client():
             app.dependency_overrides[get_sector_analysis] = (
                 lambda: GetSectorAnalysis(
                     GetSectorPerformance(board), sector_analysis_provider
+                )
+            )
+        if market_summary_provider is not None:
+            # Wire the market-summary use case with its index-board provider (the
+            # same GetMarketOverview the endpoint uses) and the analyzer.
+            overview = market_overview_provider or FakeMarketOverviewProvider(
+                [a_market_index()]
+            )
+            app.dependency_overrides[get_market_summary] = (
+                lambda: GetMarketSummary(
+                    GetMarketOverview(overview), market_summary_provider
                 )
             )
         return TestClient(app)
@@ -2205,6 +2312,196 @@ def test_get_sector_analysis_404_when_board_unavailable(make_client):
         sector_analysis_provider=FakeSectorAnalysisProvider(a_sector_analysis()),
     )
     assert client.get("/sectors/analysis").status_code == 404
+
+
+# --------------------------- market AI summary ---------------------------
+
+# Reuses the Bedrock stub client from the AI-analysis section, forcing the market
+# tool (submit_market_summary) with a note per timeframe.
+def _market_tool_message(**input_overrides) -> _StubMessage:
+    payload = dict(
+        summary="The market has climbed over the year, easing this week.",
+        tone="risk_on",
+        periods=[
+            {"period": "year", "note": "A strong year for both indexes."},
+            {"period": "month", "note": "Modest monthly gains."},
+            {"period": "week", "note": "A slight weekly pullback."},
+        ],
+    )
+    payload.update(input_overrides)
+    return _StubMessage(
+        [_StubBlock("tool_use", name="submit_market_summary", input=payload)]
+    )
+
+
+def _a_market_board() -> list[MarketIndexPerformance]:
+    # The S&P 500 and Nasdaq with known trailing windows (week/month/year).
+    return [
+        a_market_index(
+            name="S&P 500", symbol="SPY", price=550.0, previous_close=545.0,
+            performance=a_performance(one_week=-0.6, one_month=2.1, one_year=18.4),
+        ),
+        a_market_index(
+            name="Nasdaq", symbol="QQQ", price=480.0, previous_close=475.0,
+            performance=a_performance(one_week=-0.9, one_month=3.0, one_year=24.1),
+        ),
+    ]
+
+
+def test_market_index_entity_change_and_percent():
+    index = a_market_index(price=550.0, previous_close=545.0)
+    assert index.change == 5.0
+    assert index.change_percent == 0.92
+
+
+def test_market_summary_parses_tool_call_into_entity():
+    client = _StubClient(_market_tool_message())
+    provider = BedrockMarketSummaryProvider(client=client, model_id="test-model")
+
+    summary = provider.analyze(_a_market_board())
+
+    assert summary.summary.startswith("The market has climbed")
+    assert summary.tone is MarketTone.RISK_ON
+    # Periods always render in year -> month -> week order.
+    assert [p.period for p in summary.periods] == [
+        MarketPeriod.YEAR,
+        MarketPeriod.MONTH,
+        MarketPeriod.WEEK,
+    ]
+    year = summary.periods[0]
+    assert year.note == "A strong year for both indexes."
+    # Index returns are joined from the board's trailing windows, not authored by
+    # the model — a real quote per index for that window.
+    year_by_symbol = {r.symbol: r for r in year.indexes}
+    assert year_by_symbol["SPY"].name == "S&P 500"
+    assert year_by_symbol["SPY"].change_percent == 18.4  # from the board
+    assert year_by_symbol["QQQ"].change_percent == 24.1
+    week_by_symbol = {r.symbol: r.change_percent for r in summary.periods[2].indexes}
+    assert week_by_symbol["SPY"] == -0.6 and week_by_symbol["QQQ"] == -0.9
+    assert summary.model == "test-model"
+    # The model was actually pinned to the market tool.
+    assert client.calls[0]["tool_choice"] == {
+        "type": "tool",
+        "name": "submit_market_summary",
+    }
+
+
+def test_market_summary_renders_board_into_prompt():
+    client = _StubClient(_market_tool_message())
+    BedrockMarketSummaryProvider(client=client).analyze(_a_market_board())
+
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "US market today" in prompt
+    assert "S&P 500 (SPY)" in prompt
+    assert "Nasdaq (QQQ)" in prompt
+    assert "today 0.92%" in prompt  # SPY day move: (550-545)/545
+    assert "past year 18.40%" in prompt
+    assert "past week -0.60%" in prompt
+
+
+def test_market_summary_keeps_a_period_even_without_a_note():
+    # The numbers come from the board, so a timeframe the model didn't write about
+    # still renders (with an empty note) rather than dropping its figures.
+    client = _StubClient(
+        _market_tool_message(periods=[{"period": "year", "note": "A strong year."}])
+    )
+    summary = BedrockMarketSummaryProvider(client=client).analyze(_a_market_board())
+    assert [p.period for p in summary.periods] == [
+        MarketPeriod.YEAR,
+        MarketPeriod.MONTH,
+        MarketPeriod.WEEK,
+    ]
+    assert summary.periods[0].note == "A strong year."
+    assert summary.periods[1].note == ""  # month: no note, but numbers still present
+    assert summary.periods[1].indexes[0].change_percent == 2.1
+
+
+def test_market_summary_builds_none_returns_without_history():
+    # An index with no trailing performance still appears, with None returns.
+    board = [a_market_index(name="S&P 500", symbol="SPY", performance=None)]
+    client = _StubClient(_market_tool_message())
+    summary = BedrockMarketSummaryProvider(client=client).analyze(board)
+    year = summary.periods[0]
+    assert year.indexes[0].symbol == "SPY"
+    assert year.indexes[0].change_percent is None
+
+
+def test_market_summary_raises_when_model_does_not_call_the_tool():
+    client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
+    with pytest.raises(StockDataUnavailable):
+        BedrockMarketSummaryProvider(client=client).analyze(_a_market_board())
+
+
+def test_market_summary_maps_a_client_error_to_a_domain_error():
+    with pytest.raises(StockDataUnavailable):
+        BedrockMarketSummaryProvider(client=_BoomClient()).analyze(_a_market_board())
+
+
+def test_market_summary_rejects_an_offschema_tone():
+    client = _StubClient(_market_tool_message(tone="euphoric"))  # not in the enum
+    with pytest.raises(StockDataUnavailable):
+        BedrockMarketSummaryProvider(client=client).analyze(_a_market_board())
+
+
+def test_market_summary_use_case_hands_over_the_board():
+    analyzer = FakeMarketSummaryProvider(a_market_summary())
+    use_case = GetMarketSummary(
+        GetMarketOverview(FakeMarketOverviewProvider(_a_market_board())), analyzer
+    )
+    use_case.execute()
+    assert [i.symbol for i in analyzer.received] == ["SPY", "QQQ"]
+
+
+def test_market_summary_use_case_propagates_a_board_failure():
+    analyzer = FakeMarketSummaryProvider(a_market_summary())
+    use_case = GetMarketSummary(
+        GetMarketOverview(
+            FakeMarketOverviewProvider(raises=StockDataUnavailable("market", "boom"))
+        ),
+        analyzer,
+    )
+    with pytest.raises(StockDataUnavailable):
+        use_case.execute()
+
+
+def test_get_market_summary_returns_200(make_client):
+    client = make_client(
+        market_summary_provider=FakeMarketSummaryProvider(a_market_summary())
+    )
+    r = client.get("/market/summary")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["summary"]
+    assert body["tone"] == "risk_on"
+    assert [p["period"] for p in body["periods"]] == ["year", "month", "week"]
+    year = body["periods"][0]
+    assert year["indexes"][0]["name"] == "S&P 500"
+    assert year["indexes"][0]["change_percent"] == 18.4
+    assert year["indexes"][1]["symbol"] == "QQQ"
+    assert year["note"]
+    assert "not financial advice" in body["disclaimer"].lower()
+    assert body["model"] == "claude-opus-4-8"
+    assert r.headers["cache-control"] == "public, max-age=900"
+
+
+def test_get_market_summary_502_when_model_fails(make_client):
+    client = make_client(
+        market_summary_provider=FakeMarketSummaryProvider(
+            raises=StockDataUnavailable("market", "bedrock timeout")
+        )
+    )
+    assert client.get("/market/summary").status_code == 502
+
+
+def test_get_market_summary_404_when_board_unavailable(make_client):
+    # The board is primary — a not-found board surfaces as 404, like /sectors.
+    client = make_client(
+        market_overview_provider=FakeMarketOverviewProvider(
+            raises=StockNotFound("market")
+        ),
+        market_summary_provider=FakeMarketSummaryProvider(a_market_summary()),
+    )
+    assert client.get("/market/summary").status_code == 404
 
 
 # --------------------------- CORS ---------------------------
