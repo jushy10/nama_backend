@@ -43,6 +43,7 @@ from app.stocks.endpoints.cron_index_membership_endpoints import (
 from app.stocks.endpoints.cron_etf_endpoints import router as etf_cron_router
 from app.stocks.endpoints.etf_endpoints import router as etf_router
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
+from app.stocks.endpoints.heatmap_endpoints import router as heatmap_router
 from app.stocks.router import router as stocks_router
 
 # The web server (uvicorn/gunicorn) installs handlers only on its own `uvicorn*`
@@ -195,6 +196,12 @@ app.include_router(etf_router)
 # Fire-and-forget like the other crons (202 + background thread). See
 # app/stocks/endpoints/cron_etf_endpoints.py.
 app.include_router(etf_cron_router)
+# The market heat map (GET /market/heatmap): a Finviz-style treemap of an index (S&P 500 /
+# Nasdaq-100) — every stock a tile sized by market cap and coloured by the day's change, grouped
+# sector -> industry -> stock. Structure + size come from the screened universe on the `stocks`
+# anchor; the colours are best-effort live Alpaca quotes. See
+# app/stocks/endpoints/heatmap_endpoints.py.
+app.include_router(heatmap_router)
 
 
 @app.get("/healthz")

@@ -6,6 +6,7 @@ implementation. The core never imports Alpaca; Alpaca imports the core.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from datetime import date, datetime
 
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
@@ -60,6 +61,31 @@ class StockQuoteProvider(ABC):
         Raises:
             StockNotFound: the symbol does not exist / has no data.
             StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class BulkQuoteProvider(ABC):
+    """A gateway for many symbols' live quotes in one call — the batched cousin of
+    ``StockQuoteProvider``.
+
+    Backs a view that colours a whole board by the day's move (the heat map): one request for
+    the entire symbol list instead of N per-symbol calls. **Best-effort per symbol** — a symbol
+    the feed carries no quote for (e.g. not on the free IEX feed) is simply *absent* from the
+    returned map, never an error, so the caller can size that tile from stored facts and leave
+    it uncoloured. Only a hard feed failure over the whole batch is fatal.
+    """
+
+    @abstractmethod
+    def get_quotes(self, symbols: Sequence[str]) -> dict[str, Quote]:
+        """Return the latest quote for each recognized symbol, keyed by symbol.
+
+        Symbols the feed has no quote for are omitted (a partial map is normal, not an error);
+        order and duplicates in the input don't matter. Given an empty input, returns an empty
+        map without a call.
+
+        Raises:
+            StockDataUnavailable: the upstream feed failed for the whole request.
         """
         raise NotImplementedError
 

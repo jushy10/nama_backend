@@ -85,7 +85,7 @@ The abstractions a use case depends on. Each is an `ABC` with `@abstractmethod`s
 phrased in domain terms (`get_stock`, `get_quotes`, `get_estimates`,
 `all`). They return **entities** and document which **domain exceptions** they
 raise. One port per capability — keep them small so an adapter can implement
-exactly the ones it covers (`AlpacaStockDataProvider` implements six).
+exactly the ones it covers (`AlpacaStockDataProvider` implements seven).
 
 Naming: a live feed is a `*Provider`; static reference data is a `*Repository`.
 
@@ -128,7 +128,7 @@ only this one file changes.
 > (the yfinance live sources, their DB-cache decorators, and the estimates projection);
 > other features' adapters can migrate there over time.
 
-- `alpaca_provider.py` — Alpaca SDK → price/quote/candles/performance/sectors
+- `alpaca_provider.py` — Alpaca SDK → price/quote/candles/performance/sectors, plus the batched board feed (`BulkQuoteProvider.get_quotes` — many symbols' day-change in one chunked snapshot call, best-effort per symbol; backs the heat map)
 - `finnhub_*_provider.py` — Finnhub → fundamentals (market cap, dividend, ratios, margins) / company name (`/stock/profile2`)
 - `logodev_provider.py` — Logo.dev → logo image
 - `caching_company_profile_provider.py` — decorator adapter (wraps another adapter to add an in-process TTL cache; same port in, same port out)
@@ -606,6 +606,10 @@ app/
     │   ├── db_repository.py     #    SqlEtfRepository (upsert_screen additive + profile_refresh_targets/upsert_profile merge-preserving) + SqlEtfSearchRepository (search/categories) + SqlEtfLookupRepository (is_etf/get/get_stored_profile)
     │   ├── use_cases.py         #    SyncEtfs (write — screen+upsert then per-ticker profile enrichment) + SearchEtfs / ListEtfCategories (read) + GetEtfDetail (one fund's card: membership-gated, quote-primary, DB-read profile + live-Yahoo 3y/5y returns overlaid for the performance block, opt-in metrics/dividends/performance)
     │   └── schemas.py           #    HTTP DTOs for the read endpoints (search page + categories menu) + the detail card (base + stored profile enrichment + opt-in EtfMetrics/EtfDividends/EtfPerformance blocks); endpoints in endpoints/etf_endpoints.py
+    ├── heatmap/            # ── heat-map sub-slice (its OWN entities.py; no table/cron — built per request from the screened universe + a live board of quotes):
+    │   ├── entities.py          #    HeatMapScope + HeatMapRow (input) + HeatMapCell/Industry/Sector + HeatMap.build (group sector→industry→stock, sum caps, order largest-first)
+    │   ├── use_cases.py         #    GetStockHeatMap (universe read [primary] via StockSearchRepository + batched day-change [best-effort] via BulkQuoteProvider)
+    │   └── schemas.py           #    HTTP response DTO (nested sector→industry→stock tree; endpoint in endpoints/heatmap_endpoints.py)
     ├── index_membership/   # ── index-membership sub-slice (table-less; reconciles in_sp500/in_nasdaq100 on the anchor):
     │   ├── entities.py          #    IndexMembershipSnapshot (the two ticker sets, slice-local)
     │   ├── ports.py             #    live-source port (IndexMembershipSource)
@@ -623,6 +627,7 @@ app/
     │   ├── cron_news_endpoints.py                #  POST /internal/news/sync
     │   ├── news_endpoints.py                     #  GET /stocks/{symbol}/news
     │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol} (card) + GET /stocks/ticker (search) + GET /stocks/classifications
+    │   ├── heatmap_endpoints.py                  #  GET /market/heatmap?index=sp500|nasdaq100 (the sector→industry→stock treemap)
     │   ├── etf_endpoints.py                      #  GET /stocks/etfs (top-ETF search/filter/sort) + GET /stocks/etfs/categories (filter menu) + GET /stocks/etf/{ticker} (one fund's card: quote + facts + DB-read profile, 3y/5y returns fetched live for the performance block + opt-in ?include=metrics/dividends/performance)
     │   ├── cron_etf_endpoints.py                 #  POST /internal/etfs/sync (fire-and-forget: screen + profile enrichment)
     │   ├── cron_universe_endpoints.py            #  POST /internal/universe/sync (fire-and-forget)

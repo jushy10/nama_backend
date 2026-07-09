@@ -24,6 +24,7 @@ from app.stocks.entities import (
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AllTimeHighProvider,
+    BulkQuoteProvider,
     CandleProvider,
     MarketOverviewProvider,
     SectorPerformanceProvider,
@@ -554,8 +555,84 @@ def test_provider_implements_all_ports():
     p = AlpacaStockDataProvider("dummy-key", "dummy-secret")
     assert isinstance(p, StockDataProvider)
     assert isinstance(p, StockQuoteProvider)
+    assert isinstance(p, BulkQuoteProvider)
     assert isinstance(p, StockPerformanceProvider)
     assert isinstance(p, AllTimeHighProvider)
     assert isinstance(p, CandleProvider)
     assert isinstance(p, SectorPerformanceProvider)
     assert isinstance(p, MarketOverviewProvider)
+
+
+# --- get_quotes (the batched board feed behind the heat map) ---------------------------------
+
+
+class RecordingSnapshotClient:
+    """A data client that records each snapshot request's symbol list and serves a fixed
+    symbol->snapshot map, so a test can assert both the returned quotes and the chunking."""
+
+    def __init__(self, snapshots_by_symbol, error=None):
+        self._snapshots = snapshots_by_symbol
+        self._error = error
+        self.requested_chunks = []  # each call's symbol list, in order
+
+    def get_stock_snapshot(self, request):
+        symbols = request.symbol_or_symbols
+        self.requested_chunks.append(list(symbols))
+        if self._error is not None:
+            raise self._error
+        return {s: self._snapshots.get(s) for s in symbols}
+
+
+def test_get_quotes_returns_a_quote_per_recognized_symbol():
+    client = RecordingSnapshotClient(
+        {"AAPL": make_snapshot(), "MSFT": make_snapshot()}
+    )
+    p = provider_with(client, ExplodingTradingClient())  # no asset-metadata call
+    quotes = p.get_quotes(["AAPL", "MSFT"])
+    assert set(quotes) == {"AAPL", "MSFT"}
+    assert all(isinstance(q, Quote) for q in quotes.values())
+    assert quotes["AAPL"].change_percent == 0.6  # (297.86 - 296.07) / 296.07 * 100
+
+
+def test_get_quotes_skips_symbols_the_feed_has_no_quote_for():
+    # A missing snapshot and one without a latest_trade are both dropped, not errors —
+    # the board renders those tiles uncoloured.
+    no_trade = make_snapshot()
+    no_trade.latest_trade = None
+    client = RecordingSnapshotClient(
+        {"AAPL": make_snapshot(), "MSFT": None, "TSLA": no_trade}
+    )
+    p = provider_with(client, ExplodingTradingClient())
+    quotes = p.get_quotes(["AAPL", "MSFT", "TSLA"])
+    assert set(quotes) == {"AAPL"}
+
+
+def test_get_quotes_dedupes_and_uppercases_input():
+    client = RecordingSnapshotClient({"AAPL": make_snapshot()})
+    p = provider_with(client, ExplodingTradingClient())
+    p.get_quotes(["aapl", "AAPL", "aapl"])
+    assert client.requested_chunks == [["AAPL"]]  # one symbol, one call
+
+
+def test_get_quotes_empty_input_makes_no_call():
+    client = RecordingSnapshotClient({})
+    p = provider_with(client, ExplodingTradingClient())
+    assert p.get_quotes([]) == {}
+    assert client.requested_chunks == []
+
+
+def test_get_quotes_chunks_large_symbol_lists():
+    symbols = [f"S{i}" for i in range(450)]
+    client = RecordingSnapshotClient({s: make_snapshot() for s in symbols})
+    p = provider_with(client, ExplodingTradingClient())
+    quotes = p.get_quotes(symbols)
+    assert len(quotes) == 450
+    # 450 symbols / 200-per-chunk -> 3 requests (200, 200, 50).
+    assert [len(c) for c in client.requested_chunks] == [200, 200, 50]
+
+
+def test_get_quotes_api_error_translated_to_unavailable():
+    client = RecordingSnapshotClient({}, error=APIError("boom"))
+    p = provider_with(client, ExplodingTradingClient())
+    with pytest.raises(StockDataUnavailable):
+        p.get_quotes(["AAPL"])
