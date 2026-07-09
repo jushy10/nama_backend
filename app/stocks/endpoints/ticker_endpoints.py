@@ -378,18 +378,21 @@ def search_stocks_endpoint(
             "name OR the ticker (so 'NV' returns Nvidia and NVDA). Omit to browse the universe."
         ),
     ),
-    sector: str | None = Query(
+    sector: list[str] | None = Query(
         None,
         description=(
-            "Filter to one sector. Accepts the slug from /stocks/classifications "
-            "(e.g. 'technology') or the raw label ('Technology')."
+            "Filter by sector. Repeat to match several at once "
+            "(?sector=technology&sector=energy — an OR set). Each accepts the slug from "
+            "/stocks/classifications (e.g. 'technology') or the raw label ('Technology'). "
+            "Omit for every sector."
         ),
     ),
-    industry: str | None = Query(
+    industry: list[str] | None = Query(
         None,
         description=(
-            "Filter to one industry. Accepts the slug from /stocks/classifications "
-            "(e.g. 'semiconductors') or the raw label."
+            "Filter by industry. Repeat to match several at once (an OR set). Each accepts the "
+            "slug from /stocks/classifications (e.g. 'semiconductors') or the raw label. "
+            "Omit for every industry."
         ),
     ),
     in_sp500: bool | None = Query(
@@ -398,11 +401,12 @@ def search_stocks_endpoint(
     in_nasdaq100: bool | None = Query(
         None, description="Filter by Nasdaq-100 membership. Omit for both."
     ),
-    market_cap: MarketCapTier | None = Query(
+    market_cap: list[MarketCapTier] | None = Query(
         None,
         description=(
             "Filter by market-cap tier: mega (>= $200B), large ($10-200B), mid ($2-10B), "
-            "or small ($250M-$2B). Omit for every size."
+            "or small ($250M-$2B). Repeat to match the union of several tiers "
+            "(?market_cap=large&market_cap=mid). Omit for every size."
         ),
     ),
     sort: StockSort | None = Query(
@@ -432,11 +436,11 @@ def search_stocks_endpoint(
     try:
         page = use_case.execute(
             query=q,
-            sector=sector,
-            industry=industry,
+            sectors=sector,
+            industries=industry,
             in_sp500=in_sp500,
             in_nasdaq100=in_nasdaq100,
-            market_cap_tier=market_cap,
+            market_cap_tiers=market_cap,
             sort=sort,
             direction=order,
             limit=limit,

@@ -85,6 +85,7 @@ def test_returns_a_page_envelope_with_rows():
                 net_assets=5e11,
                 expense_ratio=0.09,
                 category="large_blend",
+                dividend_yield=1.24,
             )
         ]
     )
@@ -105,20 +106,32 @@ def test_returns_a_page_envelope_with_rows():
         "net_assets": 5e11,
         "expense_ratio": 0.09,
         "category": "large_blend",
+        "dividend_yield": 1.24,
     }
 
 
 def test_passes_query_category_sort_and_paging_to_the_use_case():
     repo = _FakeSearchRepo()
     resp = _client(repo).get(
-        "/stocks/etfs?q=gold&category=large_growth&sort=expense_ratio&order=asc&limit=5&offset=10"
+        "/stocks/etfs?q=gold&category=large_growth&sort=dividend_yield&order=asc&limit=5&offset=10"
     )
     assert resp.status_code == 200
     c = repo.criteria
     assert c.query == "gold"
-    assert c.category == "large_growth"
-    assert (c.sort, c.direction) == (EtfSort.EXPENSE_RATIO, SortDirection.ASC)
+    # A single category arrives as a one-element list the use case slugs into a tuple.
+    assert c.categories == ("large_growth",)
+    assert (c.sort, c.direction) == (EtfSort.DIVIDEND_YIELD, SortDirection.ASC)
     assert (c.limit, c.offset) == (5, 10)
+
+
+def test_passes_repeated_categories_through_as_a_tuple():
+    # The category axis repeats — several fund categories at once, ORed together.
+    repo = _FakeSearchRepo()
+    resp = _client(repo).get(
+        "/stocks/etfs?category=large_growth&category=large_blend"
+    )
+    assert resp.status_code == 200
+    assert repo.criteria.categories == ("large_growth", "large_blend")
 
 
 def test_defaults_sort_to_net_assets_desc():
@@ -126,7 +139,7 @@ def test_defaults_sort_to_net_assets_desc():
     _client(repo).get("/stocks/etfs")
     c = repo.criteria
     assert (c.sort, c.direction) == (EtfSort.NET_ASSETS, SortDirection.DESC)
-    assert c.category is None
+    assert c.categories == ()
 
 
 def test_rejects_an_unknown_sort():

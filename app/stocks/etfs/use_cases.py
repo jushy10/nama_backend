@@ -55,6 +55,17 @@ from app.stocks.progress import iter_with_progress
 
 logger = logging.getLogger(__name__)
 
+
+def _slugged(values: Sequence[str] | None) -> tuple[str, ...]:
+    """Slug each label to the stored convention, dropping blanks/non-strings and de-duplicating
+    while preserving order — the multi-select edge for the ``category`` filter. Each value may be
+    the slug or the raw label (``slugify`` normalizes both), and the param repeats to OR several at
+    once (``?category=large_growth&category=large_blend``)."""
+    if not values:
+        return ()
+    return tuple(dict.fromkeys(s for v in values if (s := slugify(v)) is not None))
+
+
 # The blocks a caller may opt into on the ETF detail card (``?include=``). Everything else — the
 # quote + day move, the stored identity facts (name/exchange/category), and the always-on Yahoo
 # enrichment (fund family, description, holdings, sector weightings) — is served regardless.
@@ -208,7 +219,7 @@ class SearchEtfs:
         self,
         *,
         query: str | None = None,
-        category: str | None = None,
+        categories: Sequence[str] | None = None,
         sort: EtfSort = EtfSort.NET_ASSETS,
         direction: SortDirection = SortDirection.DESC,
         limit: int | None = None,
@@ -216,11 +227,12 @@ class SearchEtfs:
     ) -> EtfSearchPage:
         """Normalize the inputs once, at the edge, then run the search.
 
-        ``query`` is trimmed (blank → no text filter); ``category`` is slugged to the stored
-        convention with :func:`slugify` (so both the raw label and the stored slug match, and
-        blank → no filter); ``limit`` defaults to ``DEFAULT_LIMIT`` and is clamped to
-        ``[1, MAX_LIMIT]``, ``offset`` floored at 0. The sort/direction pass through as-is
-        (already validated enums). The repository does the rest.
+        ``query`` is trimmed (blank → no text filter); ``categories`` is each slugged to the
+        stored convention with :func:`slugify` (so both the raw label and the stored slug match),
+        blanks dropped and duplicates collapsed — empty = don't filter, otherwise match *any* of
+        the slugs (an OR set, so several categories can be screened at once); ``limit`` defaults to
+        ``DEFAULT_LIMIT`` and is clamped to ``[1, MAX_LIMIT]``, ``offset`` floored at 0. The
+        sort/direction pass through as-is (already validated enums). The repository does the rest.
         """
         text = (query or "").strip()
         capped = (
@@ -228,7 +240,7 @@ class SearchEtfs:
         )
         criteria = EtfSearchCriteria(
             query=text or None,
-            category=slugify(category),
+            categories=_slugged(categories),
             sort=sort,
             direction=direction,
             limit=capped,

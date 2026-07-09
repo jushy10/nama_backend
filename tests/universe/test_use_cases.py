@@ -385,11 +385,11 @@ def test_search_normalizes_inputs_and_passes_clean_criteria():
     repo = _FakeSearchRepo()
     SearchStocks(repo).execute(
         query="  NvDa ",
-        sector="Consumer Electronics",
-        industry="  Semiconductors  ",
+        sectors=["Consumer Electronics"],
+        industries=["  Semiconductors  "],
         in_sp500=True,
         in_nasdaq100=False,
-        market_cap_tier=MarketCapTier.LARGE,
+        market_cap_tiers=[MarketCapTier.LARGE],
         sort=StockSort.REVENUE_GROWTH,
         direction=SortDirection.ASC,
         limit=10,
@@ -398,19 +398,35 @@ def test_search_normalizes_inputs_and_passes_clean_criteria():
     c = repo.criteria
     # Trimmed but NOT lower-cased — the SQL match is case-insensitive, so the raw case is kept.
     assert c.query == "NvDa"
-    assert c.sector == "consumer_electronics"  # slugged to the stored convention
-    assert c.industry == "semiconductors"  # slugged + trimmed
+    assert c.sectors == ("consumer_electronics",)  # slugged to the stored convention
+    assert c.industries == ("semiconductors",)  # slugged + trimmed
     assert (c.in_sp500, c.in_nasdaq100) == (True, False)
-    assert c.market_cap_tier is MarketCapTier.LARGE  # enum passes straight through
+    assert c.market_cap_tiers == (MarketCapTier.LARGE,)  # enum passes straight through
     assert (c.sort, c.direction) == (StockSort.REVENUE_GROWTH, SortDirection.ASC)
     assert (c.limit, c.offset) == (10, 20)
 
 
-def test_search_blank_text_and_filters_become_none():
+def test_search_multi_select_slugs_dedupes_and_drops_blanks():
     repo = _FakeSearchRepo()
-    SearchStocks(repo).execute(query="   ", sector="", industry=None)
+    SearchStocks(repo).execute(
+        sectors=["Technology", "  technology  ", "", "Energy"],
+        industries=["Semiconductors", "semiconductors"],
+        market_cap_tiers=[MarketCapTier.LARGE, MarketCapTier.MID, MarketCapTier.LARGE],
+    )
     c = repo.criteria
-    assert (c.query, c.sector, c.industry) == (None, None, None)
+    # Each label slugged; blanks dropped; duplicates collapsed with first-seen order kept.
+    assert c.sectors == ("technology", "energy")
+    assert c.industries == ("semiconductors",)
+    assert c.market_cap_tiers == (MarketCapTier.LARGE, MarketCapTier.MID)
+
+
+def test_search_blank_text_and_filters_become_empty():
+    repo = _FakeSearchRepo()
+    SearchStocks(repo).execute(query="   ", sectors=["", "   "], industries=None)
+    c = repo.criteria
+    assert c.query is None
+    # Multi-select filters normalize to an empty tuple ("don't filter on this axis").
+    assert (c.sectors, c.industries, c.market_cap_tiers) == ((), (), ())
     # Index flags default to a tri-state "don't filter".
     assert (c.in_sp500, c.in_nasdaq100) == (None, None)
 
@@ -425,7 +441,7 @@ def test_search_defaults_to_no_sort_and_the_default_page():
     assert c.direction is SortDirection.DESC
     assert (c.limit, c.offset) == (SearchStocks.DEFAULT_LIMIT, 0)
     assert c.query is None
-    assert c.market_cap_tier is None  # no tier filter unless asked
+    assert c.market_cap_tiers == ()  # no tier filter unless asked
 
 
 @pytest.mark.parametrize(
