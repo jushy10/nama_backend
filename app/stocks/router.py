@@ -19,11 +19,15 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
+from app.stocks.bedrock_market_summary_provider import BedrockMarketSummaryProvider
 from app.stocks.bedrock_sector_analysis_provider import BedrockSectorAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     CandleSeries,
     InvestmentAnalysis,
+    MarketIndexReturn,
+    MarketPeriodHighlight,
+    MarketSummary,
     SectorAnalysis,
     SectorHighlight,
     SectorPerformance,
@@ -62,6 +66,7 @@ from app.stocks.ports import (
     InvestmentAnalysisCache,
     InvestmentAnalysisProvider,
     LogoProvider,
+    MarketSummaryProvider,
     SectorAnalysisProvider,
     StockDataProvider,
     StockFundamentalsProvider,
@@ -73,6 +78,9 @@ from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
     InvestmentAnalysisResponse,
+    MarketIndexReturnResponse,
+    MarketPeriodResponse,
+    MarketSummaryResponse,
     RsiPointResponse,
     RsiResponse,
     SectorAnalysisResponse,
@@ -84,6 +92,8 @@ from app.stocks.schemas import (
     SupportLevelsResponse,
 )
 from app.stocks.use_cases import (
+    GetMarketOverview,
+    GetMarketSummary,
     GetSectorAnalysis,
     GetSectorPerformance,
     GetStockAnalysis,
@@ -299,6 +309,44 @@ def get_sector_analysis(
     return GetSectorAnalysis(sectors, analyzer)
 
 
+def get_market_overview(
+    # The Alpaca provider implements MarketOverviewProvider too, reading the S&P
+    # 500 and Nasdaq through their proxy ETFs (SPY / QQQ) — same as the sectors.
+    provider: AlpacaStockDataProvider = Depends(get_provider),
+) -> GetMarketOverview:
+    return GetMarketOverview(provider)
+
+
+@lru_cache(maxsize=1)
+def get_market_summary_provider() -> MarketSummaryProvider:
+    # The market read is short, plain output (a few sentences + three brief period
+    # notes), so it runs on the fast Haiku tier — the provider's own default —
+    # rather than inheriting BEDROCK_ANALYSIS_MODEL_ID (the per-stock analysis's
+    # larger model). It gets its own override, BEDROCK_MARKET_SUMMARY_MODEL_ID, so
+    # the model can still be swapped without a code change, exactly like the sector
+    # read. Bedrock authenticates through the process's AWS credentials, so there's
+    # no secret to gate on; a missing 'bedrock' extra surfaces as a 503.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_MARKET_SUMMARY_MODEL_ID")
+    try:
+        if model_id:
+            return BedrockMarketSummaryProvider(model_id=model_id, region=region)
+        return BedrockMarketSummaryProvider(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI analysis is not configured (install the 'bedrock' extra)."
+        ) from exc
+
+
+def get_market_summary(
+    # Reuses the index-board wiring wholesale (the Alpaca-backed
+    # GetMarketOverview), then hands the board to the analyzer.
+    overview: GetMarketOverview = Depends(get_market_overview),
+    analyzer: MarketSummaryProvider = Depends(get_market_summary_provider),
+) -> GetMarketSummary:
+    return GetMarketSummary(overview, analyzer)
+
+
 @lru_cache(maxsize=1)
 def get_logo_provider() -> LogoProvider:
     # Logo.dev keeps logos current through rebrands/symbol changes. It needs a
@@ -465,6 +513,42 @@ def _present_sector_analysis(analysis: SectorAnalysis) -> SectorAnalysisResponse
         disclaimer=_ANALYSIS_DISCLAIMER,
         model=analysis.model,
         generated_at=analysis.generated_at,
+    )
+
+
+def _present_market_index_return(
+    index_return: MarketIndexReturn,
+) -> MarketIndexReturnResponse:
+    """Presenter: one index's per-period return entity -> HTTP response DTO."""
+    return MarketIndexReturnResponse(
+        name=index_return.name,
+        symbol=index_return.symbol,
+        change_percent=index_return.change_percent,
+    )
+
+
+def _present_market_period(period: MarketPeriodHighlight) -> MarketPeriodResponse:
+    """Presenter: one market-summary period entity -> HTTP response DTO."""
+    return MarketPeriodResponse(
+        period=period.period.value,
+        indexes=[_present_market_index_return(r) for r in period.indexes],
+        note=period.note,
+    )
+
+
+def _present_market_summary(summary: MarketSummary) -> MarketSummaryResponse:
+    """Presenter: market-summary entity -> HTTP response DTO.
+
+    Same shape as ``_present_sector_analysis`` — the disclaimer is attached here,
+    at the edge, since it's a property of the service, not something the model
+    authors."""
+    return MarketSummaryResponse(
+        summary=summary.summary,
+        tone=summary.tone.value,
+        periods=[_present_market_period(p) for p in summary.periods],
+        disclaimer=_ANALYSIS_DISCLAIMER,
+        model=summary.model,
+        generated_at=summary.generated_at,
     )
 
 
@@ -689,3 +773,22 @@ def get_sector_analysis_endpoint(
     # generation rather than re-billing per request.
     response.headers["Cache-Control"] = "public, max-age=900"
     return _present_sector_analysis(analysis)
+
+
+@router.get("/market/summary", response_model=MarketSummaryResponse)
+def get_market_summary_endpoint(
+    response: Response,
+    use_case: GetMarketSummary = Depends(get_market_summary),
+) -> MarketSummaryResponse:
+    try:
+        summary = use_case.execute()
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    # Same caching stance as the sector read: the model call is slow and metered,
+    # and a market-wide overview only drifts as the index board does. This backs a
+    # homepage widget hit by every visitor, so cache generously (15 min) — a burst
+    # of viewers collapses onto one generation rather than re-billing per request.
+    response.headers["Cache-Control"] = "public, max-age=900"
+    return _present_market_summary(summary)

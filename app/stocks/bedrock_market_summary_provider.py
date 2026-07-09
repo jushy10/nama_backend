@@ -1,0 +1,335 @@
+"""Interface Adapter: AI market-overview summary via Claude on Amazon Bedrock.
+
+The whole-market sibling of ``bedrock_sector_analysis_provider.py`` (which reads
+the day's sector rotation). The only module — alongside its stock/ETF/sector
+cousins — that knows Bedrock (and the Anthropic SDK) exists. It takes the day's
+index board the use case gathered (the S&P 500 and the Nasdaq, each with its
+day move + trailing-window returns), renders it into a compact prompt, and asks
+Claude for a plain-language read of how the US market has moved over the past
+year, month and week. Swap models or vendors and only this file changes.
+
+The same two choices that keep the sector adapter robust apply here:
+
+* **Auth is the runtime's job, not ours.** Bedrock authenticates through the
+  process's AWS credentials (in production, the ECS task role), so there is no
+  API key to read or pass — only ``model_id`` and ``region``.
+* **Structured output via a forced tool call.** Claude must call
+  ``submit_market_summary``, so the model returns validated JSON arguments that
+  map straight onto the ``MarketSummary`` entity — no brittle prose parsing.
+
+One market-specific rule mirrors the sector adapter: the model never authors the
+numbers. It writes a plain note for each timeframe (year/month/week); the adapter
+builds the period rows itself from the board, attaching each index's *real*
+trailing return. So a figure on the card is always a true quote, never something
+the model recalled or invented — and all three timeframes always render (their
+numbers come from the board regardless of what the model chose to write about).
+
+The Anthropic SDK is imported lazily inside ``__init__`` so the app (and the
+offline test suite, which injects a stub client) imports cleanly without the
+``bedrock`` extra. Any Bedrock/SDK failure is translated to
+``StockDataUnavailable`` — the one error this port documents.
+
+Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
+"""
+
+from datetime import datetime, timezone
+
+from app.stocks.entities import (
+    MarketIndexPerformance,
+    MarketIndexReturn,
+    MarketPeriod,
+    MarketPeriodHighlight,
+    MarketSummary,
+    MarketTone,
+)
+from app.stocks.exceptions import StockDataUnavailable
+from app.stocks.ports import MarketSummaryProvider
+
+# The key the adapter reports failures under — there is no single symbol here, so
+# the market as a whole is named, the same convention the Alpaca overview uses.
+_MARKET_KEY = "market"
+
+# The periods rendered, in the order the card reads (year -> month -> week), each
+# mapped to the trailing-window field it reads off ``StockPerformance``.
+_PERIOD_WINDOW: dict[MarketPeriod, str] = {
+    MarketPeriod.YEAR: "one_year",
+    MarketPeriod.MONTH: "one_month",
+    MarketPeriod.WEEK: "one_week",
+}
+
+# A single forced tool pins the model to structured output: Claude must call
+# submit_market_summary, so the response comes back as validated JSON arguments
+# instead of prose. The schema mirrors the MarketSummary entity, minus the fields
+# the adapter stamps itself (model, generated_at) and the index returns the
+# adapter joins from the board rather than trusting the model to author.
+_PERIOD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "period": {
+            "type": "string",
+            "enum": [p.value for p in MarketPeriod],
+            "description": (
+                "Which timeframe this note covers: 'year' (the past year), "
+                "'month' (the past month), or 'week' (the past week)."
+            ),
+        },
+        "note": {
+            "type": "string",
+            "description": (
+                "One short, plain-language sentence on how the US market did over "
+                "this timeframe — clear to someone with no finance background."
+            ),
+        },
+    },
+    "required": ["period", "note"],
+}
+
+_SUMMARY_TOOL = {
+    "name": "submit_market_summary",
+    "description": (
+        "Record a plain, everyday-language overview of how the US stock market "
+        "has moved over the past year, month and week — the overall picture and "
+        "the mood it implies — grounded only in the figures in the prompt."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "summary": {
+                "type": "string",
+                "description": (
+                    "2-4 short sentences in plain, everyday language: the overall "
+                    "picture of how the US market (the S&P 500 and the Nasdaq) has "
+                    "done over the past year, month and week — as if to a friend "
+                    "who doesn't follow the markets. No jargon."
+                ),
+            },
+            "tone": {
+                "type": "string",
+                "enum": [t.value for t in MarketTone],
+                "description": (
+                    "The market's mood the recent moves imply: 'risk_on' when the "
+                    "market is broadly rising and the growth-heavy Nasdaq is "
+                    "leading, 'risk_off' when the market is falling or the broad "
+                    "S&P is holding up better than the Nasdaq (a defensive lean), "
+                    "'mixed' when there's no clear lean."
+                ),
+            },
+            "periods": {
+                "type": "array",
+                "items": _PERIOD_SCHEMA,
+                "description": (
+                    "One note for EACH timeframe — the past year, the past month, "
+                    "and the past week (three notes in total)."
+                ),
+            },
+        },
+        "required": ["summary", "tone", "periods"],
+    },
+}
+
+_SYSTEM_PROMPT = (
+    "You are a friendly investing assistant explaining how the US stock market "
+    "has been doing to an everyday person with no finance background. You are "
+    "given how the two headline US indices — the S&P 500 (the broad market) and "
+    "the Nasdaq (the growth-heavy, tech-leaning index) — have moved over the past "
+    "week, month and year, read through the exchange-traded fund that tracks each "
+    "one. From only those figures, give a clear, balanced read on how the market "
+    "has done over the past year, then the past month, then the past week, and "
+    "what the overall picture looks like.\n"
+    "When the market is broadly rising and the growth-heavy Nasdaq is leading, "
+    "that usually signals an optimistic, risk-taking mood; when the market is "
+    "falling, or the broad S&P is holding up better than the Nasdaq, that usually "
+    "signals a more cautious, defensive mood — explain which it looks like in "
+    "plain words.\n"
+    "Write in plain, warm, everyday language — short sentences, no jargon. Refer "
+    "to the indices by name (the S&P 500, the Nasdaq), never by their ETF ticker. "
+    "Ground every statement ONLY in the figures provided — do not use outside "
+    "knowledge, recent news, or prices you may recall, and never invent numbers. "
+    "Be honest that markets carry risk and past moves don't predict future ones. "
+    "This is general information, not personal financial advice. Respond by "
+    "calling the submit_market_summary tool."
+)
+
+
+class BedrockMarketSummaryProvider(MarketSummaryProvider):
+    """Generates a ``MarketSummary`` with Claude on Amazon Bedrock.
+
+    Structured exactly like ``BedrockSectorAnalysisProvider`` (its sector
+    sibling): defaults to the fast Haiku tier since the output is short and plain,
+    takes ``model_id``/``region`` as deploy-time config (the model id may be a
+    cross-region inference profile, env-overridable so a deploy can swap models
+    without a code change), and accepts a ``client`` injection seam so tests can
+    bypass the Anthropic SDK entirely. Otherwise the Bedrock client is built
+    lazily and authenticates through the process's AWS credentials.
+    """
+
+    # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock,
+    # so the short form 400s with "invalid model identifier". Verified ACTIVE +
+    # invokable in us-east-1. (Same default as the sector adapter.)
+    _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    _DEFAULT_REGION = "us-east-1"
+    # Short, plain output (a few sentences + three brief period notes), so a tight
+    # cap is ample — and fewer generated tokens is the main lever on latency.
+    _MAX_TOKENS = 800
+
+    def __init__(
+        self,
+        *,
+        model_id: str = _DEFAULT_MODEL_ID,
+        region: str = _DEFAULT_REGION,
+        client=None,
+    ) -> None:
+        self._model_id = model_id
+        if client is not None:
+            self._client = client
+            return
+        # Imported here, not at module load: the SDK is an optional heavyweight
+        # dependency (it pulls boto3). A missing extra raises ImportError, which
+        # the wiring (router.get_market_summary_provider) turns into a 503.
+        from anthropic import AnthropicBedrock
+
+        self._client = AnthropicBedrock(aws_region=region)
+
+    def analyze(self, indexes: list[MarketIndexPerformance]) -> MarketSummary:
+        prompt = _render_prompt(indexes)
+        try:
+            message = self._client.messages.create(
+                model=self._model_id,
+                max_tokens=self._MAX_TOKENS,
+                system=_SYSTEM_PROMPT,
+                tools=[_SUMMARY_TOOL],
+                tool_choice={"type": "tool", "name": "submit_market_summary"},
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception as exc:  # SDK/botocore raise a family of errors; map them all
+            raise StockDataUnavailable(
+                _MARKET_KEY, f"summary model call failed: {exc}"
+            ) from exc
+        payload = _tool_payload(message)
+        if payload is None:
+            raise StockDataUnavailable(
+                _MARKET_KEY, "summary model returned no structured result"
+            )
+        return _to_entity(indexes, payload, self._model_id)
+
+
+def _tool_payload(message) -> dict | None:
+    """Pull the submit_market_summary arguments out of the tool call, if any."""
+    for block in getattr(message, "content", None) or []:
+        if (
+            getattr(block, "type", None) == "tool_use"
+            and getattr(block, "name", None) == "submit_market_summary"
+        ):
+            inputs = getattr(block, "input", None)
+            if isinstance(inputs, dict):
+                return inputs
+    return None
+
+
+def _to_entity(
+    indexes: list[MarketIndexPerformance], payload: dict, model_id: str
+) -> MarketSummary:
+    """Map the validated tool arguments onto the domain entity.
+
+    The forced-tool schema constrains the shape, but a defensive guard keeps an
+    off-schema result (e.g. an unknown ``tone``) from leaking out as something
+    other than this port's documented ``StockDataUnavailable``. The period rows
+    are built here from the board so each index return is a real quote, never a
+    figure the model authored; the model only contributes the per-period note.
+    """
+    try:
+        summary = str(payload["summary"]).strip()
+        tone = MarketTone(payload["tone"])
+    except (KeyError, ValueError) as exc:
+        raise StockDataUnavailable(
+            _MARKET_KEY, f"summary model returned an unexpected result: {exc}"
+        ) from exc
+    notes = _notes_by_period(payload.get("periods"))
+    periods = tuple(
+        _period_highlight(period, notes.get(period.value, ""), indexes)
+        for period in _PERIOD_WINDOW
+    )
+    return MarketSummary(
+        summary=summary,
+        tone=tone,
+        periods=periods,
+        model=model_id,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+def _notes_by_period(value) -> dict[str, str]:
+    """Index the model's per-period notes by period name (dropping blanks)."""
+    if not isinstance(value, list):
+        return {}
+    out: dict[str, str] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        period = str(item.get("period", "")).strip().casefold()
+        note = str(item.get("note", "")).strip()
+        if period and note:
+            out[period] = note
+    return out
+
+
+def _period_highlight(
+    period: MarketPeriod, note: str, indexes: list[MarketIndexPerformance]
+) -> MarketPeriodHighlight:
+    """Build one timeframe's row: each index's real return over it, plus the note.
+
+    The returns are read straight off the board's trailing-window performance, so
+    they're true quotes; an index missing history simply carries a ``None``
+    return, the same best-effort stance the rest of the board takes.
+    """
+    returns = tuple(
+        MarketIndexReturn(
+            name=index.name,
+            symbol=index.symbol,
+            change_percent=_window_return(index, period),
+        )
+        for index in indexes
+    )
+    return MarketPeriodHighlight(period=period, note=note, indexes=returns)
+
+
+def _window_return(index: MarketIndexPerformance, period: MarketPeriod) -> float | None:
+    """The index's trailing return for one period, or ``None`` without history."""
+    performance = index.performance
+    if performance is None:
+        return None
+    return getattr(performance, _PERIOD_WINDOW[period])
+
+
+def _render_prompt(indexes: list[MarketIndexPerformance]) -> str:
+    """Render the index board into a compact, labelled block for the model.
+
+    One line per index, each carrying its day move and whatever trailing windows
+    are available (the week/month/year the summary reads over) — only present
+    figures are included, so an index missing history renders a shorter line.
+    """
+    lines = ["US market today (each index read through the ETF that tracks it):"]
+    for index in indexes:
+        parts = [f"{index.name} ({index.symbol})"]
+        if index.change_percent is not None:
+            parts.append(f"today {_num(index.change_percent)}%")
+        perf = index.performance
+        if perf is not None:
+            for label, value in (
+                ("past week", perf.one_week),
+                ("past month", perf.one_month),
+                ("past year", perf.one_year),
+            ):
+                if value is not None:
+                    parts.append(f"{label} {_num(value)}%")
+        lines.append("- " + ", ".join(parts))
+    return "\n".join(lines)
+
+
+def _num(value: object) -> str:
+    """Format a numeric field readably; pass non-numbers through unchanged."""
+    if isinstance(value, bool):  # bool is an int subclass — keep it as-is
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+    return str(value)
