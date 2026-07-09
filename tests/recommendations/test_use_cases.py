@@ -13,11 +13,18 @@ import pytest
 
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.recommendations.entities import (
+    AnalystPriceTargets,
+    AnalystRatingChanges,
     AnalystRecommendations,
+    RatingChange,
     RecommendationTrend,
 )
-from app.stocks.recommendations.ports import RecommendationProvider
+from app.stocks.recommendations.ports import (
+    RatingChangeProvider,
+    RecommendationProvider,
+)
 from app.stocks.recommendations.repository import (
+    RatingChangesRepository,
     RecommendationsRepository,
     RefreshTarget,
 )
@@ -93,6 +100,49 @@ def test_empty_run_has_no_latest_or_direction():
     assert recs.is_empty
     assert recs.latest is None
     assert recs.direction is None
+
+
+# ───────────────────────────── price targets ─────────────────────────────
+
+
+def test_price_targets_upside_percent():
+    targets = AnalystPriceTargets(mean=315.0, high=400.0, low=215.0, median=315.0)
+    # (315 - 300) / 300 * 100 = 5.0
+    assert targets.upside_percent(300.0) == 5.0
+    assert targets.upside_percent(315.0) == 0.0
+    assert targets.upside_percent(350.0) == -10.0  # below target → negative upside
+
+
+def test_price_targets_upside_percent_guards():
+    assert AnalystPriceTargets().upside_percent(300.0) is None  # no mean target
+    assert AnalystPriceTargets(mean=315.0).upside_percent(None) is None  # no price
+    assert AnalystPriceTargets(mean=315.0).upside_percent(0.0) is None  # non-positive price
+
+
+def test_price_targets_is_empty():
+    assert AnalystPriceTargets().is_empty
+    assert not AnalystPriceTargets(mean=315.0).is_empty
+
+
+# ───────────────────────────── rating changes ─────────────────────────────
+
+
+def test_rating_change_direction_flags():
+    up = RatingChange("A", date(2026, 6, 1), action="up")
+    down = RatingChange("B", date(2026, 6, 1), action="down")
+    maintain = RatingChange("C", date(2026, 6, 1), action="main")
+    assert up.is_upgrade and not up.is_downgrade
+    assert down.is_downgrade and not down.is_upgrade
+    assert not maintain.is_upgrade and not maintain.is_downgrade
+
+
+def test_rating_changes_latest_and_empty():
+    newer = RatingChange("A", date(2026, 6, 2))
+    older = RatingChange("B", date(2026, 5, 1))
+    run = AnalystRatingChanges("AAPL", (newer, older))
+    assert run.latest is newer
+    empty = AnalystRatingChanges("ZZZZ", ())
+    assert empty.is_empty and empty.latest is None
 
 
 # ───────────────────────────── GetStockRecommendations ─────────────────────────────
@@ -237,3 +287,100 @@ def test_sync_limit_is_passed_through_and_floored_at_one():
 
     SyncRecommendations(_FakeSyncProvider(), repo).execute(limit=0)
     assert repo.refresh_limit == 1  # a non-positive cap is floored to one
+
+
+# ─────────────────────── SyncRecommendations + rating changes ───────────────────────
+
+
+class _FakeRatingChangeProvider(RatingChangeProvider):
+    """Returns a canned rating-change run per symbol, an empty one, or raises."""
+
+    def __init__(self, *, empty=(), errors=None) -> None:
+        self._empty = set(empty)
+        self._errors = errors or {}
+        self.calls: list[str] = []
+
+    def get_rating_changes(self, symbol: str) -> AnalystRatingChanges:
+        self.calls.append(symbol)
+        if symbol in self._errors:
+            raise self._errors[symbol]
+        if symbol in self._empty:
+            return AnalystRatingChanges(symbol, ())
+        return AnalystRatingChanges(symbol, (RatingChange("A Firm", date(2026, 6, 1)),))
+
+
+class _FakeRatingChangesRepo(RatingChangesRepository):
+    def __init__(self, *, fail_on=()) -> None:
+        self.upserts: list[tuple[str, str | None]] = []
+        self._fail_on = set(fail_on)
+
+    def get(self, symbol: str):  # unused here
+        return None
+
+    def upsert(self, symbol, name, rating_changes) -> None:
+        if symbol in self._fail_on:
+            raise RuntimeError("db write blew up")
+        self.upserts.append((symbol, name))
+
+
+def test_sync_also_stores_rating_changes_for_refreshed_stocks():
+    repo = _FakeRepo([RefreshTarget("AAPL", "Apple Inc."), RefreshTarget("MSFT", None)])
+    rc_provider = _FakeRatingChangeProvider()
+    rc_repo = _FakeRatingChangesRepo()
+
+    report = SyncRecommendations(
+        _FakeSyncProvider(),
+        repo,
+        rating_change_provider=rc_provider,
+        rating_change_repository=rc_repo,
+    ).execute()
+
+    assert report.refreshed == 2
+    assert report.rating_changes_refreshed == 2
+    assert rc_provider.calls == ["AAPL", "MSFT"]  # carried the stored name through
+    assert rc_repo.upserts == [("AAPL", "Apple Inc."), ("MSFT", None)]
+
+
+def test_sync_skips_rating_changes_when_recommendations_are_empty():
+    # An empty recommendations result short-circuits the stock (counted failed) before the
+    # rating-change leg — so a symbol with no trend coverage isn't fetched for events either.
+    repo = _FakeRepo([RefreshTarget("GONE", None)])
+    rc_provider = _FakeRatingChangeProvider()
+
+    report = SyncRecommendations(
+        _FakeSyncProvider(empty={"GONE"}),
+        repo,
+        rating_change_provider=rc_provider,
+        rating_change_repository=_FakeRatingChangesRepo(),
+    ).execute()
+
+    assert (report.refreshed, report.rating_changes_refreshed) == (0, 0)
+    assert rc_provider.calls == []  # never reached for an uncovered stock
+
+
+def test_sync_rating_change_failure_never_sinks_the_recommendations_refresh():
+    # A rating-change provider error and a rating-change repo write error are both swallowed:
+    # the recommendations still refresh, only the rating-change count is affected.
+    repo = _FakeRepo([RefreshTarget("AAPL", None), RefreshTarget("MSFT", None)])
+    rc_provider = _FakeRatingChangeProvider(
+        errors={"AAPL": StockDataUnavailable("AAPL", "yahoo down")}
+    )
+    rc_repo = _FakeRatingChangesRepo(fail_on={"MSFT"})
+
+    report = SyncRecommendations(
+        _FakeSyncProvider(),
+        repo,
+        rating_change_provider=rc_provider,
+        rating_change_repository=rc_repo,
+    ).execute()
+
+    assert report.refreshed == 2  # both recommendations refreshed regardless
+    assert report.rating_changes_refreshed == 0  # AAPL raised, MSFT's write failed
+    assert rc_repo.upserts == []
+
+
+def test_sync_without_rating_change_ports_leaves_that_count_zero():
+    # The rating-change leg is opt-in: with no ports wired, the sweep behaves exactly as before.
+    repo = _FakeRepo([RefreshTarget("AAPL", "Apple Inc.")])
+    report = SyncRecommendations(_FakeSyncProvider(), repo).execute()
+    assert (report.refreshed, report.rating_changes_refreshed) == (1, 0)

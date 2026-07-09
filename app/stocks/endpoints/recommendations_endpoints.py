@@ -29,11 +29,13 @@ from app.stocks.adapters.yfinance_recommendations_adapter import (
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.recommendations.db_repository import SqlRecommendationsRepository
 from app.stocks.recommendations.entities import (
+    AnalystPriceTargets,
     AnalystRecommendations,
     RecommendationTrend,
 )
 from app.stocks.recommendations.ports import RecommendationProvider
 from app.stocks.recommendations.schemas import (
+    AnalystPriceTargetsResponse,
     RecommendationsResponse,
     RecommendationTrendResponse,
 )
@@ -81,14 +83,25 @@ def _present_trend(trend: RecommendationTrend) -> RecommendationTrendResponse:
     )
 
 
+def _present_targets(targets: AnalystPriceTargets) -> AnalystPriceTargetsResponse:
+    return AnalystPriceTargetsResponse(
+        mean=targets.mean,
+        high=targets.high,
+        low=targets.low,
+        median=targets.median,
+    )
+
+
 def _present(recs: AnalystRecommendations) -> RecommendationsResponse:
     """Presenter: analyst-recommendations entity -> HTTP response DTO."""
     latest = recs.latest
+    targets = recs.price_targets
     return RecommendationsResponse(
         symbol=recs.symbol,
         count=len(recs.trends),
         direction=recs.direction,
         latest=_present_trend(latest) if latest else None,
+        price_targets=_present_targets(targets) if targets else None,
         trends=[_present_trend(t) for t in recs.trends],
     )
 

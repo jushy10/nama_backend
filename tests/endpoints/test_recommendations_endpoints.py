@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from app.stocks.endpoints import recommendations_endpoints as endpoints
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.recommendations.entities import (
+    AnalystPriceTargets,
     AnalystRecommendations,
     RecommendationTrend,
 )
@@ -72,6 +73,27 @@ def test_presents_the_run_with_consensus_and_direction():
     assert body["latest"]["total"] == 44
     assert len(body["trends"]) == 2
     assert fake.calls == ["AAPL"]
+
+
+def test_presents_the_price_targets_block():
+    recs = AnalystRecommendations(
+        "AAPL",
+        (_a_trend(date(2026, 6, 1), buy=5),),
+        price_targets=AnalystPriceTargets(mean=315.5, high=400.0, low=215.0, median=315.0),
+    )
+    body = _client(_FakeUseCase(result=recs)).get("/stocks/AAPL/recommendations").json()
+    assert body["price_targets"] == {
+        "mean": 315.5,
+        "high": 400.0,
+        "low": 215.0,
+        "median": 315.0,
+    }
+
+
+def test_price_targets_is_null_when_absent():
+    recs = AnalystRecommendations("AAPL", (_a_trend(date(2026, 6, 1), buy=5),))
+    body = _client(_FakeUseCase(result=recs)).get("/stocks/AAPL/recommendations").json()
+    assert body["price_targets"] is None
 
 
 def test_sets_the_cache_header():

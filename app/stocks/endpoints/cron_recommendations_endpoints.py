@@ -29,10 +29,16 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
+from app.stocks.adapters.yfinance_rating_changes_adapter import (
+    YfinanceRatingChangeProvider,
+)
 from app.stocks.adapters.yfinance_recommendations_adapter import (
     YfinanceRecommendationProvider,
 )
-from app.stocks.recommendations.db_repository import SqlRecommendationsRepository
+from app.stocks.recommendations.db_repository import (
+    SqlRatingChangesRepository,
+    SqlRecommendationsRepository,
+)
 from app.stocks.recommendations.use_cases import (
     RecommendationsSyncReport,
     SyncRecommendations,
@@ -54,15 +60,24 @@ _sync_lock = threading.Lock()
 
 def run_recommendations_sync(limit: int | None) -> RecommendationsSyncReport:
     """Perform one full refresh run with its **own** DB session (the request-scoped
-    ``get_db`` one is closed by the time the background thread runs)."""
+    ``get_db`` one is closed by the time the background thread runs).
+
+    Wires the rating-change provider + repository alongside the recommendations pair, so the
+    single sweep also stores each renewed stock's upgrade/downgrade events (best-effort — see
+    ``SyncRecommendations``). Both live sources are keyless yfinance, so there's nothing to gate on.
+    """
     db = SessionLocal()
     try:
         report = SyncRecommendations(
-            YfinanceRecommendationProvider(), SqlRecommendationsRepository(db)
+            YfinanceRecommendationProvider(),
+            SqlRecommendationsRepository(db),
+            rating_change_provider=YfinanceRatingChangeProvider(),
+            rating_change_repository=SqlRatingChangesRepository(db),
         ).execute(limit=limit)
         logger.info(
-            "recommendations sync done: refreshed=%d failed=%d limit=%s",
+            "recommendations sync done: refreshed=%d rating_changes=%d failed=%d limit=%s",
             report.refreshed,
+            report.rating_changes_refreshed,
             report.failed,
             report.limit,
         )

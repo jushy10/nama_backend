@@ -11,6 +11,17 @@ from datetime import date
 from pydantic import BaseModel
 
 
+class AnalystPriceTargetsResponse(BaseModel):
+    """The consensus 12-month price target for the stock — the sell-side's ``mean``/``median``
+    view and the ``high``/``low`` range across estimates. Every field is ``null`` when the
+    source serves no target; the whole block is ``null`` when there's no coverage at all."""
+
+    mean: float | None = None
+    high: float | None = None
+    low: float | None = None
+    median: float | None = None
+
+
 class RecommendationTrendResponse(BaseModel):
     """Analysts' buy/hold/sell split for one monthly snapshot.
 
@@ -36,11 +47,14 @@ class RecommendationsResponse(BaseModel):
     The forward "what does the street think?" read for the stock page.
     ``latest`` is the current month's split and ``direction`` how the consensus
     shifted from the prior month ("upgraded" / "downgraded" / "unchanged" /
-    ``null``) — the predictive part. ``count`` is how many monthly snapshots are
-    returned; an empty ``trends`` means no analyst covers the symbol."""
+    ``null``) — the predictive part. ``price_targets`` is the current consensus
+    12-month target block (``null`` when the source serves none). ``count`` is how
+    many monthly snapshots are returned; an empty ``trends`` means no analyst covers
+    the symbol."""
 
     symbol: str
     count: int
     direction: str | None = None
     latest: RecommendationTrendResponse | None = None
+    price_targets: AnalystPriceTargetsResponse | None = None
     trends: list[RecommendationTrendResponse]

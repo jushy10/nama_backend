@@ -1,7 +1,10 @@
-"""Interface Adapter: analyst recommendation trends from Yahoo Finance (via ``yfinance``).
+"""Interface Adapter: analyst recommendation trends + price targets from Yahoo (via ``yfinance``).
 
 ``Ticker.recommendations`` returns the sell-side buy/hold/sell split as a small frame of
-monthly snapshots — the same recommendation-trend data Finnhub serves, but keyless. Yahoo
+monthly snapshots — the same recommendation-trend data Finnhub serves, but keyless — and
+``Ticker.analyst_price_targets`` the current consensus target (mean/high/low/median) as a
+small dict, read here as best-effort enrichment on the same run (its failure never sinks the
+trends). Yahoo
 labels the rows *relatively* (``0m`` = this month, ``-1m`` = last month, …) rather than
 with dates, so the adapter anchors them on today's month: ``0m`` becomes the first day of
 the current month, ``-1m`` the first of the month before, and so on. That derived
@@ -28,6 +31,7 @@ import yfinance as yf
 from app.stocks.adapters import yfinance_session
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.recommendations.entities import (
+    AnalystPriceTargets,
     AnalystRecommendations,
     RecommendationTrend,
 )
@@ -57,10 +61,13 @@ class YfinanceRecommendationProvider(RecommendationProvider):
 
     def get_recommendations(self, symbol: str) -> AnalystRecommendations:
         try:
-            # An empty frame is how yfinance surfaces a swallowed crumb 401, so retry once
-            # with a fresh crumb; genuine no-coverage just comes back empty after that.
+            # One Ticker reused for both reads below. An empty frame is how yfinance
+            # surfaces a swallowed crumb 401, so retry once with a fresh crumb; genuine
+            # no-coverage just comes back empty after that. Ticker construction stays inside
+            # the try so a construction failure also becomes a domain error.
+            ticker = self._ticker_factory(symbol)
             frame = yfinance_session.call(
-                lambda: self._ticker_factory(symbol).recommendations,
+                lambda: ticker.recommendations,
                 is_empty=yfinance_session.frame_is_empty,
             )
         except Exception as exc:  # noqa: BLE001 — vendor boundary: any failure → domain error
@@ -68,7 +75,48 @@ class YfinanceRecommendationProvider(RecommendationProvider):
                 symbol, f"yfinance recommendations failed ({exc})"
             ) from exc
         trends = _parse_trends(frame, self._today())
-        return AnalystRecommendations(symbol=symbol, trends=tuple(trends))
+        # Price targets are best-effort enrichment riding on the run: a separate, cheap Yahoo
+        # read whose failure must not sink the trends, so it never raises (returns None).
+        price_targets = _fetch_price_targets(ticker)
+        return AnalystRecommendations(
+            symbol=symbol, trends=tuple(trends), price_targets=price_targets
+        )
+
+
+def _fetch_price_targets(ticker) -> AnalystPriceTargets | None:
+    """The consensus price target from ``Ticker.analyst_price_targets`` (a small dict), or
+    ``None`` on any failure / no coverage. Routed through ``yfinance_session`` for the same
+    crumb-401 retry as the trend frame, but best-effort: a raised error, a non-dict payload,
+    or an all-empty block yields ``None`` rather than propagating — the trends stand alone."""
+    try:
+        raw = yfinance_session.call(lambda: ticker.analyst_price_targets)
+    except Exception:  # noqa: BLE001 — best-effort enrichment: a failure just omits targets
+        return None
+    if not isinstance(raw, dict) or not raw:
+        return None
+    targets = AnalystPriceTargets(
+        mean=_target(raw.get("mean")),
+        high=_target(raw.get("high")),
+        low=_target(raw.get("low")),
+        median=_target(raw.get("median")),
+    )
+    return None if targets.is_empty else targets
+
+
+def _target(value) -> float | None:
+    """Coerce a price-target figure to a positive float, or ``None`` for missing/NaN/non-positive."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 def _parse_trends(frame, today: date) -> list[RecommendationTrend]:

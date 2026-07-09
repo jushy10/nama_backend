@@ -22,9 +22,13 @@ _TODAY = date(2026, 7, 15)
 
 
 class _FakeTicker:
-    def __init__(self, recommendations=None, error=None) -> None:
+    def __init__(
+        self, recommendations=None, error=None, price_targets=None, targets_error=None
+    ) -> None:
         self._recommendations = recommendations
         self._error = error
+        self._price_targets = price_targets
+        self._targets_error = targets_error
 
     @property
     def recommendations(self):
@@ -32,10 +36,20 @@ class _FakeTicker:
             raise self._error
         return self._recommendations
 
+    @property
+    def analyst_price_targets(self):
+        if self._targets_error is not None:
+            raise self._targets_error
+        return self._price_targets
 
-def provider_with(frame=None, error=None) -> YfinanceRecommendationProvider:
+
+def provider_with(
+    frame=None, error=None, price_targets=None, targets_error=None
+) -> YfinanceRecommendationProvider:
     return YfinanceRecommendationProvider(
-        ticker_factory=lambda symbol: _FakeTicker(frame, error),
+        ticker_factory=lambda symbol: _FakeTicker(
+            frame, error, price_targets, targets_error
+        ),
         today=lambda: _TODAY,
     )
 
@@ -122,6 +136,42 @@ def test_missing_and_nan_counts_default_to_zero():
     t = provider_with(frame).get_recommendations("AAPL").latest
     assert t.buy == 3
     assert t.strong_buy == t.hold == t.sell == t.strong_sell == 0
+
+
+def test_attaches_price_targets_from_the_dict():
+    frame = _frame([{"period": "0m", "buy": 5}])
+    targets = {"current": 313.4, "mean": 315.5, "high": 400.0, "low": 215.0, "median": 315.0}
+    recs = provider_with(frame, price_targets=targets).get_recommendations("AAPL")
+    assert recs.price_targets is not None
+    # `current` is the live price, not a target — deliberately not carried.
+    assert (recs.price_targets.mean, recs.price_targets.high) == (315.5, 400.0)
+    assert (recs.price_targets.low, recs.price_targets.median) == (215.0, 315.0)
+
+
+def test_non_positive_and_nan_targets_drop_to_none():
+    frame = _frame([{"period": "0m", "buy": 5}])
+    targets = {"mean": 315.5, "high": float("nan"), "low": 0.0, "median": -1.0}
+    recs = provider_with(frame, price_targets=targets).get_recommendations("AAPL")
+    assert recs.price_targets.mean == 315.5
+    assert recs.price_targets.high is None  # NaN
+    assert recs.price_targets.low is None  # 0 is "no target"
+    assert recs.price_targets.median is None  # negative is junk
+
+
+def test_price_targets_absent_is_none_not_an_error():
+    frame = _frame([{"period": "0m", "buy": 5}])
+    assert provider_with(frame, price_targets={}).get_recommendations("AAPL").price_targets is None
+    assert provider_with(frame, price_targets=None).get_recommendations("AAPL").price_targets is None
+
+
+def test_price_target_failure_never_sinks_the_trends():
+    # A blocked price-target read is best-effort: the trends still come back, targets just null.
+    frame = _frame([{"period": "0m", "buy": 5}])
+    recs = provider_with(
+        frame, targets_error=RuntimeError("crumb 401")
+    ).get_recommendations("AAPL")
+    assert recs.latest.buy == 5
+    assert recs.price_targets is None
 
 
 def test_vendor_failure_raises_unavailable():
