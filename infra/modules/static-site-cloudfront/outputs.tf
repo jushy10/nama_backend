@@ -1,6 +1,6 @@
 output "url" {
-  description = "Public HTTPS URL of the site."
-  value       = "https://${var.domain_name}"
+  description = "Public HTTPS URL of the site (the canonical host when a redirect is configured)."
+  value       = "https://${coalesce(var.redirect_to_domain, var.domain_name)}"
 }
 
 output "bucket_name" {

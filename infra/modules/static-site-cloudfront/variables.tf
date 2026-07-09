@@ -19,6 +19,12 @@ variable "certificate_arn" {
   type        = string
 }
 
+variable "redirect_to_domain" {
+  description = "Canonical host: if set, any request whose Host header isn't this hostname is 301-redirected to https://<this>/<same path+query> (e.g. apex namainsights.com -> www.namainsights.com). Must be one of domain_name / additional_domain_names, so the cert covers it and the distribution serves it. Null (default) = serve every alias directly, no redirect."
+  type        = string
+  default     = null
+}
+
 variable "route53_zone_id" {
   description = "Hosted zone ID for the alias records. Null = create no DNS records."
   type        = string

@@ -38,6 +38,22 @@ resource "aws_cloudfront_origin_access_control" "this" {
   signing_protocol                  = "sigv4"
 }
 
+# Edge function that 301-redirects any non-canonical hostname to var.redirect_to_domain
+# (e.g. the apex -> www). Only created when a canonical host is set; a single
+# distribution serves both names, so the redirect lives here rather than in a
+# second distribution/bucket. CloudFront Functions run on the viewer-request path
+# and are effectively free at this scale.
+resource "aws_cloudfront_function" "canonical_redirect" {
+  count   = var.redirect_to_domain == null ? 0 : 1
+  name    = "${var.name}-canonical-redirect"
+  runtime = "cloudfront-js-2.0"
+  comment = "301 non-canonical hosts to ${var.redirect_to_domain}"
+  publish = true
+  code = templatefile("${path.module}/canonical-redirect.js.tftpl", {
+    canonical_domain = var.redirect_to_domain
+  })
+}
+
 resource "aws_cloudfront_distribution" "this" {
   enabled             = true
   is_ipv6_enabled     = true
@@ -62,6 +78,16 @@ resource "aws_cloudfront_distribution" "this" {
     # AWS managed "CachingOptimized" policy (a fixed, well-known id). Using a
     # cache policy means we must NOT also set forwarded_values.
     cache_policy_id = "658327ea-f89d-4fab-a63d-7e88639e58f6"
+
+    # Canonical-host redirect (apex -> www) at the edge, when configured. Runs
+    # before the cache/origin, so a redirected request never touches S3.
+    dynamic "function_association" {
+      for_each = var.redirect_to_domain == null ? [] : [1]
+      content {
+        event_type   = "viewer-request"
+        function_arn = aws_cloudfront_function.canonical_redirect[0].arn
+      }
+    }
   }
 
   # SPA client-side routing: a deep link like /dashboard isn't a real object, so

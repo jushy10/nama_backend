@@ -260,9 +260,14 @@ replaced an earlier setup that ran nginx on a Fargate task behind its own ALB
 
 - **Private bucket, CloudFront-only.** All public access is blocked; an Origin
   Access Control (OAC) lets only this distribution read the bucket.
-- **Apex + www.** Served at `namainsights.com` and `www.namainsights.com`. A
-  dedicated `module "dns_frontend"` issues one ACM cert covering both names, and
-  the module adds A + AAAA alias records for each, pointing at the distribution.
+- **Apex + www (www is canonical).** Served at `namainsights.com` and
+  `www.namainsights.com`. A dedicated `module "dns_frontend"` issues one ACM cert
+  covering both names, and the module adds A + AAAA alias records for each,
+  pointing at the distribution. `redirect_to_domain` (set to
+  `frontend_canonical_domain`, `www.namainsights.com`) attaches a CloudFront
+  viewer-request function that **301-redirects the apex to www**, so the site has
+  a single canonical URL. One distribution serves both — the redirect is an edge
+  function, not a second bucket/distribution.
 - **us-east-1 cert.** CloudFront only reads ACM certs from `us-east-1`. This
   stack already deploys there, so `module.dns_frontend`'s cert works as-is — but
   if you ever move the stack to another region, the cert must still be issued in
@@ -287,7 +292,8 @@ aws cloudfront create-invalidation \
 That CI needs `s3:*` on `arn:aws:s3:::nama-frontend-*` (+ `/*`) and
 `cloudfront:CreateInvalidation` — both already covered if it reuses the `nama-ci`
 keys (see the policy change below). After the first upload,
-`terraform output frontend_url` → `https://namainsights.com`.
+`terraform output frontend_url` → `https://www.namainsights.com` (the canonical
+host; the apex redirects to it).
 
 > **Migrating from the old ECS frontend:** this is a cross-repo cutover. The
 > frontend repo's deploy must switch from *docker build → push to

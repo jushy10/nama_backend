@@ -45,3 +45,9 @@ variable "frontend_additional_domains" {
   type        = list(string)
   default     = ["www.namainsights.com"]
 }
+
+variable "frontend_canonical_domain" {
+  description = "Canonical frontend hostname. Requests to any other served hostname (the apex) are 301-redirected here at the CloudFront edge — so namainsights.com sends visitors to www.namainsights.com. Must be one of frontend_domain_name / frontend_additional_domains. Null = serve every hostname directly with no redirect."
+  type        = string
+  default     = "www.namainsights.com"
+}

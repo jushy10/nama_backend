@@ -1,0 +1,37 @@
+// CloudFront viewer-request function: send every request whose Host header is
+// not the canonical hostname to it with a permanent (301) redirect — e.g. the
+// apex namainsights.com -> www.namainsights.com. Requests already on the
+// canonical host pass straight through to the origin unchanged.
+//
+// This runs at the edge on the ONE distribution that serves both names, so it
+// needs no second bucket/distribution. ${canonical_domain} is injected by
+// Terraform (templatefile) from var.redirect_to_domain.
+function handler(event) {
+  var request = event.request;
+  var host = request.headers.host.value;
+  var canonical = "${canonical_domain}";
+
+  if (host === canonical) {
+    return request;
+  }
+
+  // Rebuild the query string so a link like /x?a=1&b=2 survives the redirect.
+  // Values in request.querystring are already URL-encoded, so pass them as-is.
+  var query = "";
+  for (var name in request.querystring) {
+    var param = request.querystring[name];
+    var values = param.multiValue ? param.multiValue : [param];
+    for (var i = 0; i < values.length; i++) {
+      var value = values[i].value;
+      query += (query === "" ? "?" : "&") + name + (value === "" ? "" : "=" + value);
+    }
+  }
+
+  return {
+    statusCode: 301,
+    statusDescription: "Moved Permanently",
+    headers: {
+      location: { value: "https://" + canonical + request.uri + query },
+    },
+  };
+}

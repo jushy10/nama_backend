@@ -227,12 +227,17 @@ module "dns_frontend" {
 # frontend_distribution_id outputs). The cert comes from module.dns_frontend,
 # which issues it in us-east-1 — required, because CloudFront only reads certs
 # from there (this stack already deploys to us-east-1).
+#
+# redirect_to_domain makes www the canonical host: a CloudFront edge function
+# 301-redirects the apex (namainsights.com) to www.namainsights.com, so the site
+# has one canonical URL instead of serving identical content at both.
 module "frontend" {
   source = "../../modules/static-site-cloudfront"
 
   name                    = "nama-frontend-dev"
   domain_name             = var.frontend_domain_name
   additional_domain_names = var.frontend_additional_domains
+  redirect_to_domain      = var.frontend_canonical_domain
   certificate_arn         = module.dns_frontend.certificate_arn
   route53_zone_id         = module.dns_frontend.zone_id
 }
