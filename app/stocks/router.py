@@ -799,10 +799,10 @@ def get_stock_ema_endpoint(
         description="How far back to fetch closes. Ignored when `start`/`end` is given.",
     ),
     period: list[int] = Query(
-        [9, 21],
+        [9, 21, 50],
         description=(
             "EMA lookback(s) in candles; repeat the param for multiple overlay "
-            "lines (e.g. period=9&period=21). Defaults to 9/21."
+            "lines (e.g. period=9&period=21&period=50). Defaults to 9/21/50."
         ),
     ),
     start: datetime | None = Query(

@@ -2101,7 +2101,7 @@ def test_get_ema_returns_200_with_one_line_per_period(make_client):
     assert set(line["points"][0]) == {"time", "timestamp", "value"}
 
 
-def test_get_ema_defaults_to_9_21_over_6m_daily(make_client):
+def test_get_ema_defaults_to_9_21_50_over_6m_daily(make_client):
     fake = FakeCandleProvider(a_series())           # a single candle
     client = make_client(ema_provider=fake)
     r = client.get("/stocks/ticker/AAPL/ema")
@@ -2112,7 +2112,7 @@ def test_get_ema_defaults_to_9_21_over_6m_daily(make_client):
     # 6M visible window (183d) plus the EMA warmup reach-back before it.
     assert (end - start).days > 183
     body = r.json()
-    assert [line["period"] for line in body["lines"]] == [9, 21]
+    assert [line["period"] for line in body["lines"]] == [9, 21, 50]
     # One candle can't warm any of them: graceful empty lines, not an error.
     assert all(line["count"] == 0 and line["latest"] is None for line in body["lines"])
 
