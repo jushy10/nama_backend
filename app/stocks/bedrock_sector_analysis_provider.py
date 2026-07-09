@@ -157,7 +157,10 @@ class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
     lazily and authenticates through the process's AWS credentials.
     """
 
-    _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5"
+    # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock
+    # (unlike us.anthropic.claude-sonnet-4-6), so the short form 400s with "invalid
+    # model identifier". Verified ACTIVE + invokable in us-east-1.
+    _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     _DEFAULT_REGION = "us-east-1"
     # Short, plain output (a few sentences + two brief highlight lists), so a tight
     # cap is ample — and fewer generated tokens is the main lever on latency. Kept

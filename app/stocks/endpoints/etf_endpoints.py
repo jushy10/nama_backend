@@ -176,6 +176,7 @@ def _present_search(page: EtfSearchPage) -> EtfSearchResponse:
                 net_assets=r.net_assets,
                 expense_ratio=r.expense_ratio,
                 category=r.category,
+                dividend_yield=r.dividend_yield,
             )
             for r in page.results
         ],
@@ -298,18 +299,21 @@ def search_etfs_endpoint(
             "browse the top ETFs."
         ),
     ),
-    category: str | None = Query(
+    category: list[str] | None = Query(
         None,
         description=(
-            "Filter to one fund category (the ETF type). Accepts the slug from "
-            "/stocks/etfs/categories (e.g. 'large_growth') or the raw label ('Large Growth')."
+            "Filter by fund category (the ETF type). Repeat to match several at once "
+            "(?category=large_growth&category=large_blend — an OR set). Each accepts the slug from "
+            "/stocks/etfs/categories (e.g. 'large_growth') or the raw label ('Large Growth'). "
+            "Omit for every category."
         ),
     ),
     sort: EtfSort = Query(
         EtfSort.NET_ASSETS,
         description=(
-            "Sort field: net_assets (assets under management, default — the biggest/top funds) "
-            "or expense_ratio (pair with order=asc for cheapest first)."
+            "Sort field: net_assets (assets under management, default — the biggest/top funds), "
+            "expense_ratio (pair with order=asc for cheapest first), or dividend_yield "
+            "(highest-income first with the default order=desc)."
         ),
     ),
     order: SortDirection = Query(
@@ -327,7 +331,7 @@ def search_etfs_endpoint(
     try:
         page = use_case.execute(
             query=q,
-            category=category,
+            categories=category,
             sort=sort,
             direction=order,
             limit=limit,

@@ -484,18 +484,42 @@ def test_search_passes_query_params_through_to_the_use_case():
     )
 
     assert resp.status_code == 200
+    # A single value of each repeatable filter arrives as a one-element list (the use case, not
+    # the endpoint, slugs/normalizes it).
     assert fake.kwargs == {
         "query": "nv",
-        "sector": "Technology",
-        "industry": "semiconductors",
+        "sectors": ["Technology"],
+        "industries": ["semiconductors"],
         "in_sp500": True,
         "in_nasdaq100": False,
-        "market_cap_tier": MarketCapTier.LARGE,
+        "market_cap_tiers": [MarketCapTier.LARGE],
         "sort": StockSort.REVENUE_GROWTH,
         "direction": SortDirection.ASC,
         "limit": 10,
         "offset": 20,
     }
+
+
+def test_search_passes_repeated_filters_through_as_lists():
+    # The multi-select axes repeat: several sectors and several cap tiers at once, each binding
+    # to a list the use case ORs together.
+    fake = _FakeSearch(page=_a_page())
+    resp = _search_client(search=fake).get(
+        "/stocks/ticker",
+        params=[
+            ("sector", "technology"),
+            ("sector", "energy"),
+            ("industry", "semiconductors"),
+            ("industry", "oil_gas_integrated"),
+            ("market_cap", "large"),
+            ("market_cap", "mid"),
+        ],
+    )
+
+    assert resp.status_code == 200
+    assert fake.kwargs["sectors"] == ["technology", "energy"]
+    assert fake.kwargs["industries"] == ["semiconductors", "oil_gas_integrated"]
+    assert fake.kwargs["market_cap_tiers"] == [MarketCapTier.LARGE, MarketCapTier.MID]
 
 
 def test_search_uses_defaults_when_no_params_given():
@@ -504,11 +528,11 @@ def test_search_uses_defaults_when_no_params_given():
 
     assert fake.kwargs == {
         "query": None,
-        "sector": None,
-        "industry": None,
+        "sectors": None,
+        "industries": None,
         "in_sp500": None,
         "in_nasdaq100": None,
-        "market_cap_tier": None,
+        "market_cap_tiers": None,
         # No ?sort= => no sort (the use case orders an unsorted browse by ticker); the
         # direction default rides along unused until a sort is chosen.
         "sort": None,

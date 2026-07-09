@@ -163,11 +163,12 @@ class StockSearchCriteria:
     """A normalized universe-search request — the shape the use case hands the repository.
 
     Every field is already cleaned at the use-case edge: ``query`` is trimmed (``None`` when
-    blank) and matched as a case-insensitive substring against name *or* ticker; ``sector`` /
-    ``industry`` are slugged to the stored convention (``None`` when blank); the index flags
-    are tri-state (``None`` = don't filter, else match the boolean); ``market_cap_tier`` narrows
-    to one cap bucket (``None`` = every size); ``limit`` is clamped to a sane page and ``offset``
-    floored at zero. The adapter turns this into one SQL query.
+    blank) and matched as a case-insensitive substring against name *or* ticker; ``sectors`` /
+    ``industries`` are slugged to the stored convention (empty = don't filter, else match *any*
+    of the given slugs — an OR set, so a client can screen several at once); the index flags
+    are tri-state (``None`` = don't filter, else match the boolean); ``market_cap_tiers`` narrows
+    to the union of the given cap buckets (empty = every size); ``limit`` is clamped to a sane
+    page and ``offset`` floored at zero. The adapter turns this into one SQL query.
 
     ``sort`` is ``None`` for an unsorted search — the adapter then orders by ticker alone (a
     neutral, stable A→Z), the default when a client omits ``?sort=``; a ``StockSort`` value picks
@@ -176,15 +177,15 @@ class StockSearchCriteria:
     """
 
     query: str | None
-    sector: str | None
-    industry: str | None
+    sectors: tuple[str, ...]
+    industries: tuple[str, ...]
     in_sp500: bool | None
     in_nasdaq100: bool | None
     sort: StockSort | None
     direction: SortDirection
     limit: int
     offset: int
-    market_cap_tier: MarketCapTier | None = None
+    market_cap_tiers: tuple[MarketCapTier, ...] = ()
 
 
 @dataclass(frozen=True)

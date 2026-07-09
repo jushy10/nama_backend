@@ -19,8 +19,10 @@ class EtfSearchItemResponse(BaseModel):
 
     ``net_assets`` is raw USD (assets under management); ``expense_ratio`` is a percent;
     ``category`` is the fund's Yahoo category slug (e.g. ``large_growth``), ``null`` until the
-    enrichment pass reaches the fund (or when Yahoo doesn't categorise it). The FE fetches a live
-    quote per row on demand via the shared ``GET /stocks/{symbol}/quote`` (which serves ETFs too).
+    enrichment pass reaches the fund (or when Yahoo doesn't categorise it); ``dividend_yield`` is
+    the trailing distribution yield as a percent (``1.03`` = 1.03%), ``null`` for a
+    non-distributing or not-yet-enriched fund. The FE fetches a live quote per row on demand via
+    the shared ``GET /stocks/{symbol}/quote`` (which serves ETFs too).
     """
 
     ticker: str
@@ -29,6 +31,7 @@ class EtfSearchItemResponse(BaseModel):
     net_assets: float | None = None  # raw USD (AUM)
     expense_ratio: float | None = None  # percent
     category: str | None = None  # Yahoo fund-category slug
+    dividend_yield: float | None = None  # percent (trailing distribution yield)
 
 
 class EtfSearchResponse(BaseModel):

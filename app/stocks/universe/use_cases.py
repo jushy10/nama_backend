@@ -22,6 +22,7 @@ and knows nothing of Yahoo, HTTP, or SQLAlchemy:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from app.stocks.earnings.quarterly.repository import QuarterlyEarningsRepository
@@ -66,6 +67,16 @@ class UniverseSyncReport:
     enriched: int
     enrich_failed: int
     valued: int
+
+
+def _slugged(values: Sequence[str] | None) -> tuple[str, ...]:
+    """Slug each label to the stored convention, dropping blanks/non-strings and de-duplicating
+    while preserving order — the multi-select edge for the ``sector`` / ``industry`` filters. Each
+    value may be the slug or the raw label (``slugify`` normalizes both), and the param repeats to
+    OR several at once (``?sector=technology&sector=energy``)."""
+    if not values:
+        return ()
+    return tuple(dict.fromkeys(s for v in values if (s := slugify(v)) is not None))
 
 
 def _pe_ratio(price: float | None, ttm_eps: float | None) -> float | None:
@@ -226,11 +237,11 @@ class SearchStocks:
         self,
         *,
         query: str | None = None,
-        sector: str | None = None,
-        industry: str | None = None,
+        sectors: Sequence[str] | None = None,
+        industries: Sequence[str] | None = None,
         in_sp500: bool | None = None,
         in_nasdaq100: bool | None = None,
-        market_cap_tier: MarketCapTier | None = None,
+        market_cap_tiers: Sequence[MarketCapTier] | None = None,
         sort: StockSort | None = None,
         direction: SortDirection = SortDirection.DESC,
         limit: int | None = None,
@@ -238,24 +249,28 @@ class SearchStocks:
     ) -> StockSearchPage:
         """Normalize the inputs once, at the edge, then run the search.
 
-        ``query`` is trimmed (blank → no text filter); ``sector`` / ``industry`` are slugged to
-        the stored convention with :func:`slugify` (so both the raw label and the stored slug
-        match, and blank → no filter); ``limit`` defaults to ``DEFAULT_LIMIT`` and is clamped to
-        ``[1, MAX_LIMIT]``, ``offset`` floored at 0. The index flags and ``market_cap_tier`` pass
-        through as-is (already validated enums / tri-state booleans, ``None`` = don't filter).
-        ``sort`` defaults to ``None`` — an unsorted browse the repository orders by ticker (A→Z);
-        a ``StockSort`` value sorts by that column, ``direction`` (default descending) then
-        applying. The repository does the rest.
+        ``query`` is trimmed (blank → no text filter); ``sectors`` / ``industries`` are each
+        slugged to the stored convention with :func:`slugify` (so both the raw label and the
+        stored slug match), blanks dropped and duplicates collapsed — an empty result means "don't
+        filter", otherwise the search matches *any* of the slugs (an OR set, so several sectors or
+        industries can be screened at once). ``market_cap_tiers`` is deduplicated to the union of
+        the given cap buckets (empty = every size). ``limit`` defaults to ``DEFAULT_LIMIT`` and is
+        clamped to ``[1, MAX_LIMIT]``, ``offset`` floored at 0. The index flags pass through as-is
+        (tri-state booleans, ``None`` = don't filter). ``sort`` defaults to ``None`` — an unsorted
+        browse the repository orders by ticker (A→Z); a ``StockSort`` value sorts by that column,
+        ``direction`` (default descending) then applying. The repository does the rest.
         """
         text = (query or "").strip()
         capped = self.DEFAULT_LIMIT if limit is None else min(max(1, limit), self.MAX_LIMIT)
         criteria = StockSearchCriteria(
             query=text or None,
-            sector=slugify(sector),
-            industry=slugify(industry),
+            sectors=_slugged(sectors),
+            industries=_slugged(industries),
             in_sp500=in_sp500,
             in_nasdaq100=in_nasdaq100,
-            market_cap_tier=market_cap_tier,
+            market_cap_tiers=tuple(
+                dict.fromkeys(t for t in (market_cap_tiers or ()) if t is not None)
+            ),
             sort=sort,
             direction=direction,
             limit=capped,

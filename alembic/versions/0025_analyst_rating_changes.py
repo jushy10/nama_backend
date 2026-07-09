@@ -9,8 +9,8 @@ accumulates a longer history than Yahoo serves at once and starts empty. ``firm`
 ``published_at`` are non-null (the identity); grades, action label, and price targets are
 nullable. The ``stocks`` anchor already exists (created in 0002), so this only adds the child.
 
-Revision ID: 0024_analyst_rating_changes
-Revises: 0023_analyst_trends
+Revision ID: 0025_analyst_rating_changes
+Revises: 0024_analyst_trends
 Create Date: 2026-07-08
 
 """
@@ -21,8 +21,8 @@ import sqlalchemy as sa
 
 # Keep the revision id <= 32 chars: alembic_version.version_num is VARCHAR(32). Postgres
 # (RDS) enforces the length even though SQLite ignores it, so a verbose id fails the deploy.
-revision: str = "0024_analyst_rating_changes"
-down_revision: Union[str, None] = "0023_analyst_trends"
+revision: str = "0025_analyst_rating_changes"
+down_revision: Union[str, None] = "0024_analyst_trends"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

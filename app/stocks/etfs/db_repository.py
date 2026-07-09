@@ -147,6 +147,7 @@ class SqlEtfRepository(EtfRepository):
 _SORT_COLUMNS = {
     EtfSort.NET_ASSETS: EtfRecord.net_assets,
     EtfSort.EXPENSE_RATIO: EtfRecord.expense_ratio,
+    EtfSort.DIVIDEND_YIELD: EtfRecord.dividend_yield,
 }
 
 
@@ -166,6 +167,7 @@ def _to_result(row: EtfRecord) -> EtfSearchResult:
         net_assets=row.net_assets,
         expense_ratio=row.expense_ratio,
         category=row.category,
+        dividend_yield=row.dividend_yield,
     )
 
 
@@ -235,8 +237,10 @@ class SqlEtfSearchRepository(EtfSearchRepository):
                     EtfRecord.ticker.ilike(like, escape="\\"),
                 )
             )
-        if criteria.category:
-            conditions.append(EtfRecord.category == criteria.category)
+        # Multi-select: match ANY of the chosen categories (an IN set — one value still renders a
+        # plain `= :x`). An empty tuple adds no term (don't filter on category).
+        if criteria.categories:
+            conditions.append(EtfRecord.category.in_(criteria.categories))
         return conditions
 
 

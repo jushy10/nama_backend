@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
-from sqlalchemy import func, nulls_last, or_, select
+from sqlalchemy import and_, func, nulls_last, or_, select
 from sqlalchemy.orm import Session
 
 from app.stocks.stocks.models import StockRecord, get_or_create_stock
@@ -178,6 +178,17 @@ _TIER_BOUNDS = {
 }
 
 
+def _tier_range(tier: MarketCapTier):
+    """One market-cap tier as a SQL predicate over its half-open bounds — ``>= low`` always
+    (every tier is bounded below), plus ``< high`` unless the tier is open-ended above (MEGA).
+    OR several of these together for a multi-tier filter (see ``_conditions``)."""
+    low, high = _TIER_BOUNDS[tier]
+    bounds = [StockRecord.market_cap >= low]
+    if high is not None:
+        bounds.append(StockRecord.market_cap < high)
+    return and_(*bounds)
+
+
 def _escape_like(term: str) -> str:
     """Escape the LIKE metacharacters in a user's search term so a literal ``%`` / ``_``
     matches itself instead of acting as a wildcard. Paired with ``escape="\\"`` on the
@@ -301,20 +312,23 @@ class SqlStockSearchRepository(StockSearchRepository):
                     StockRecord.ticker.ilike(like, escape="\\"),
                 )
             )
-        if criteria.sector:
-            conditions.append(StockRecord.sector == criteria.sector)
-        if criteria.industry:
-            conditions.append(StockRecord.industry == criteria.industry)
+        # Multi-select: match ANY of the chosen sectors/industries (an IN set — one term still
+        # renders a plain `= :x`, so a single-value filter is unchanged). An empty tuple adds no
+        # term (don't filter on that axis).
+        if criteria.sectors:
+            conditions.append(StockRecord.sector.in_(criteria.sectors))
+        if criteria.industries:
+            conditions.append(StockRecord.industry.in_(criteria.industries))
         if criteria.in_sp500 is not None:
             conditions.append(StockRecord.in_sp500 == criteria.in_sp500)
         if criteria.in_nasdaq100 is not None:
             conditions.append(StockRecord.in_nasdaq100 == criteria.in_nasdaq100)
-        if criteria.market_cap_tier is not None:
-            low, high = _TIER_BOUNDS[criteria.market_cap_tier]
-            if low is not None:
-                conditions.append(StockRecord.market_cap >= low)
-            if high is not None:
-                conditions.append(StockRecord.market_cap < high)
+        if criteria.market_cap_tiers:
+            # Union of the chosen tiers: OR one half-open range per tier. The tiers are
+            # contiguous, so selecting adjacent ones (mid + large) yields their merged span, and
+            # non-adjacent ones (mega + small) their disjoint union — every tier has a lower
+            # bound, so each range term always carries at least the `>=` leg.
+            conditions.append(or_(*(_tier_range(t) for t in criteria.market_cap_tiers)))
         return conditions
 
     def _distinct(self, column) -> tuple[str, ...]:

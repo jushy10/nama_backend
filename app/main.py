@@ -1,5 +1,6 @@
 """A lightweight FastAPI backend backed by SQLite."""
 
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -22,12 +23,14 @@ from app.stocks.endpoints.cron_quarterly_earnings_endpoints import (
 from app.stocks.endpoints.cron_recommendations_endpoints import (
     router as recommendations_cron_router,
 )
+from app.stocks.endpoints.cron_news_endpoints import router as news_cron_router
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     router as quarterly_earnings_router,
 )
 from app.stocks.endpoints.recommendations_endpoints import (
     router as recommendations_router,
 )
+from app.stocks.endpoints.news_endpoints import router as news_router
 from app.stocks.endpoints.cron_universe_endpoints import (
     router as universe_cron_router,
 )
@@ -38,6 +41,21 @@ from app.stocks.endpoints.cron_etf_endpoints import router as etf_cron_router
 from app.stocks.endpoints.etf_endpoints import router as etf_router
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.router import router as stocks_router
+
+# The web server (uvicorn/gunicorn) installs handlers only on its own `uvicorn*`
+# loggers and leaves the root logger at its default WARNING level, so an app-level
+# `logger.info(...)` — e.g. the sector-analysis timing line — is filtered out before
+# it is ever emitted. Install a root stream handler and raise just our own `app`
+# logger tree to INFO: our INFO lines reach CloudWatch without turning on the noisy
+# INFO chatter of third-party libraries (botocore, httpx, yfinance). Root records
+# only gate what's logged *to* root; a child's INFO record still propagates to the
+# root handler regardless of root's level. This mirrors the `logging.basicConfig`
+# call in app/sync/__main__.py that does the same for the `python -m app.sync` tasks.
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logging.getLogger("app").setLevel(logging.INFO)
 
 # Browser origins allowed to call this API (cross-origin). Comma-separated env
 # var so prod and local dev differ without a code change; defaults to the
@@ -119,6 +137,10 @@ app.include_router(annual_earnings_router)
 # sell-side buy/hold/sell split by month, served from the DB cache over yfinance. See
 # app/stocks/endpoints/recommendations_endpoints.py.
 app.include_router(recommendations_router)
+# The news read endpoint (GET /stocks/{symbol}/news): the stock's recent headlines
+# (title/publisher/link/published time), served from the DB cache over yfinance. See
+# app/stocks/endpoints/news_endpoints.py.
+app.include_router(news_router)
 # The quarterly-earnings refresh cron endpoint (POST /internal/earnings/quarterly/sync);
 # it drives the SyncQuarterlyEarnings use case out of band. See
 # app/stocks/endpoints/cron_quarterly_earnings_endpoints.py.
@@ -140,6 +162,10 @@ app.include_router(ticker_router)
 # drives the SyncRecommendations use case out of band. See
 # app/stocks/endpoints/cron_recommendations_endpoints.py.
 app.include_router(recommendations_cron_router)
+# The news refresh cron endpoint (POST /internal/news/sync); it drives the SyncStockNews
+# use case out of band (yfinance -> DB), seeding + refreshing each stock's recent
+# headlines. See app/stocks/endpoints/cron_news_endpoints.py.
+app.include_router(news_cron_router)
 # The universe refresh cron endpoint (POST /internal/universe/sync); it drives the
 # SyncUniverse use case out of band (yfinance screen -> stocks anchor, then per-ticker
 # sector/industry enrichment), populating the stocks table with the ≥$1B US universe.

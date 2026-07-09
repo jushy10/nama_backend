@@ -10,8 +10,8 @@ and every existing row starts null). A pure rename otherwise — data, uniquenes
 name (a cosmetic legacy label, not worth a table rebuild to change). The add uses SQLite's
 native ADD COLUMN; the downgrade drops via batch (table rebuild) so it works on SQLite too.
 
-Revision ID: 0023_analyst_trends
-Revises: 0022_analysis_cache
+Revision ID: 0024_analyst_trends
+Revises: 0023_stock_news
 Create Date: 2026-07-08
 
 """
@@ -22,8 +22,8 @@ import sqlalchemy as sa
 
 # Keep the revision id <= 32 chars: alembic_version.version_num is VARCHAR(32). Postgres
 # (RDS) enforces the length even though SQLite ignores it, so a verbose id fails the deploy.
-revision: str = "0023_analyst_trends"
-down_revision: Union[str, None] = "0022_analysis_cache"
+revision: str = "0024_analyst_trends"
+down_revision: Union[str, None] = "0023_stock_news"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
