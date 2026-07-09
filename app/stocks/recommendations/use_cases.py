@@ -19,7 +19,10 @@ from dataclasses import dataclass
 
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.progress import iter_with_progress
-from app.stocks.recommendations.entities import AnalystRecommendations
+from app.stocks.recommendations.entities import (
+    AnalystRatingChanges,
+    AnalystRecommendations,
+)
 from app.stocks.recommendations.ports import (
     RatingChangeProvider,
     RecommendationProvider,
@@ -57,6 +60,22 @@ class GetStockRecommendations:
 
     def execute(self, symbol: str) -> AnalystRecommendations:
         return self._provider.get_recommendations(_normalize_symbol(symbol))
+
+
+class GetStockRatingChanges:
+    """Use case: retrieve a stock's analyst rating actions (upgrades/downgrades) by symbol.
+
+    The read counterpart of the events the recommendations sweep stores. Best-effort like
+    the trends read: a symbol with no published actions yields an empty run rather than an
+    error, so the endpoint presents an empty result instead of a 404. In production the
+    provider is the DB cache over yfinance, so the read hits Yahoo only on a cold miss.
+    """
+
+    def __init__(self, provider: RatingChangeProvider) -> None:
+        self._provider = provider
+
+    def execute(self, symbol: str) -> AnalystRatingChanges:
+        return self._provider.get_rating_changes(_normalize_symbol(symbol))
 
 
 @dataclass(frozen=True)

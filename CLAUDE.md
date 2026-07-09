@@ -250,7 +250,7 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > (`POST /internal/recommendations/sync`, driven by the **daily** `sync-recommendations`
 > workflow — daily rather than weekly because the current month's counts drift as analysts
 > revise and the read cache has no TTL); table `stock_analyst_trends` (renamed from
-> `stock_recommendation_trends` by migration 0023, which also added the four `target_*`
+> `stock_recommendation_trends` by migration 0024, which also added the four `target_*`
 > columns), a time series unique on `stock_id` + `period` (first-of-month). **One deliberate
 > divergence from the earnings slices: the upsert *merges* instead of rewriting** — it
 > replaces the months the source served and keeps earlier stored months, because a past
@@ -271,16 +271,20 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > pure `upside_percent(price)` entity method for a future price-anchored consumer (ticker card /
 > analysis). *Rating changes* (the upgrade/downgrade feed) are the **discrete events** behind the
 > trend — a different shape (per-firm, keyed `(stock_id, firm, published_at)`), so they live in a
-> **sibling table `stock_analyst_rating_changes`** (migration 0024), not the trend table.
+> **sibling table `stock_analyst_rating_changes`** (migration 0025), not the trend table.
 > `adapters/yfinance_rating_changes_adapter.py` reads `Ticker.upgrades_downgrades` (keyless),
 > keeping the most recent 50 of Yahoo's full multi-year log; `SqlRatingChangesRepository` is
 > **insert-only** (each event is frozen, so a refresh adds only new events and accumulates
 > history). Folded into the **same** recommendations sweep — `SyncRecommendations` takes an
 > optional rating-change provider + repository and, after a stock's trends refresh succeeds,
 > stores its events too (best-effort: its own failure is swallowed) — rather than a second pass
-> over the anchor, which would double the rate-limited Yahoo round-trips. There is **no read
-> endpoint for rating changes yet** — they're stored/reachable via the repository; surfacing them
-> is an easy follow-up.
+> over the anchor, which would double the rate-limited Yahoo round-trips. The read endpoint
+> `GET /stocks/{symbol}/rating-changes` (`endpoints/rating_changes_endpoints.py`,
+> `GetStockRatingChanges` use case) serves the events newest-first with derived
+> `is_upgrade`/`is_downgrade` flags, behind the same **read-through** DB cache as the trends read
+> (`adapters/db_cached_rating_changes_adapter.py` — DB-first, lazy-fill on a cold miss); the
+> DTO carries no consensus, just the per-firm actions. Best-effort like the trends read: a
+> symbol with no published actions is a 200 with an empty `changes` list, not a 404.
 
 > **The news sub-slice — `app/stocks/news/`.** A stock's recent news headlines, built on the
 > same skeleton as the recommendations sub-slice: its **own `entities.py`** (`NewsArticle` +
@@ -615,6 +619,7 @@ app/
     │   ├── annual_earnings_endpoints.py          #  GET /stocks/{symbol}/earnings/annual
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
     │   ├── recommendations_endpoints.py          #  GET /stocks/{symbol}/recommendations
+    │   ├── rating_changes_endpoints.py           #  GET /stocks/{symbol}/rating-changes (upgrade/downgrade feed)
     │   ├── cron_news_endpoints.py                #  POST /internal/news/sync
     │   ├── news_endpoints.py                     #  GET /stocks/{symbol}/news
     │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol} (card) + GET /stocks/ticker (search) + GET /stocks/classifications

@@ -29,6 +29,7 @@ from app.stocks.recommendations.repository import (
     RefreshTarget,
 )
 from app.stocks.recommendations.use_cases import (
+    GetStockRatingChanges,
     GetStockRecommendations,
     RecommendationsSyncReport,
     SyncRecommendations,
@@ -181,6 +182,43 @@ def test_get_rejects_obviously_invalid_symbols():
         with pytest.raises(ValueError):
             GetStockRecommendations(provider).execute(bad)
     assert provider.calls == []
+
+
+# ───────────────────────────── GetStockRatingChanges ─────────────────────────────
+
+
+class _FakeRatingChangeReadProvider(RatingChangeProvider):
+    def __init__(self, rating_changes: AnalystRatingChanges) -> None:
+        self._rating_changes = rating_changes
+        self.calls: list[str] = []
+
+    def get_rating_changes(self, symbol: str) -> AnalystRatingChanges:
+        self.calls.append(symbol)
+        return self._rating_changes
+
+
+def test_get_rating_changes_normalizes_the_symbol_before_calling_the_provider():
+    changes = AnalystRatingChanges("AAPL", (RatingChange("A Firm", date(2026, 6, 1)),))
+    provider = _FakeRatingChangeReadProvider(changes)
+
+    out = GetStockRatingChanges(provider).execute("  aapl ")
+
+    assert out is changes
+    assert provider.calls == ["AAPL"]  # trimmed + upper-cased once, at the edge
+
+
+def test_get_rating_changes_returns_empty_coverage_as_is():
+    empty = AnalystRatingChanges("ZZZZ", ())
+    provider = _FakeRatingChangeReadProvider(empty)
+    out = GetStockRatingChanges(provider).execute("ZZZZ")
+    assert out.is_empty  # no coverage is not an error
+
+
+def test_get_rating_changes_rejects_a_blank_symbol():
+    provider = _FakeRatingChangeReadProvider(AnalystRatingChanges("", ()))
+    with pytest.raises(ValueError):
+        GetStockRatingChanges(provider).execute("   ")
+    assert provider.calls == []  # rejected before the provider is touched
 
 
 # ───────────────────────────── SyncRecommendations ─────────────────────────────
