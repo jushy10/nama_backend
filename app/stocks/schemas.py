@@ -78,6 +78,41 @@ class RsiResponse(BaseModel):
     points: list[RsiPointResponse]
 
 
+class EmaPointResponse(BaseModel):
+    """One EMA reading. `time` is UNIX epoch seconds (UTC) for charting libs;
+    `timestamp` is the same instant in ISO 8601. Unlike RSI's 0–100 `value`, an
+    EMA rides the price axis, so `value` is in the quote currency — an overlay
+    drawn straight on the candles."""
+
+    time: int
+    timestamp: datetime
+    value: float
+
+
+class EmaLineResponse(BaseModel):
+    """One EMA overlay line at a single period (e.g. the 50-EMA).
+
+    `latest` is the final value (the end that matters for a trend read); a short
+    window can leave `points` empty (and `latest` null) when there isn't enough
+    history to warm this period up."""
+
+    period: int
+    count: int
+    latest: float | None = None
+    points: list[EmaPointResponse]
+
+
+class EmaResponse(BaseModel):
+    """EMA overlay for a symbol — one line per requested period.
+
+    `lines` are in the order the periods were requested (the classic 20/50/200
+    overlay), each an independent line drawn on the candle chart's price axis."""
+
+    symbol: str
+    timeframe: str
+    lines: list[EmaLineResponse]
+
+
 class SupportLevelResponse(BaseModel):
     """One horizontal support level — a price zone where the stock has repeatedly
     found buyers (clustered swing lows).

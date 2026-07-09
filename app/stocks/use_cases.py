@@ -7,6 +7,7 @@ framework or a concrete provider.
 
 import logging
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -34,8 +35,10 @@ from app.stocks.entities import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import (
+    EmaSeries,
     RsiSeries,
     SupportLevelSeries,
+    ema_series,
     rsi_series,
     support_levels,
 )
@@ -251,6 +254,38 @@ class GetStockRsi:
             _normalize_symbol(symbol), timeframe, start=start, end=end
         )
         return rsi_series(series, period)
+
+
+class GetStockEma:
+    """Use case: compute EMA overlay line(s) for a symbol from its price history.
+
+    Reuses the CandleProvider port — EMA is derived from the same OHLC bars the
+    chart endpoint uses, so no extra data source is needed. The indicator math is
+    pure domain logic (``ema_series``); this use case only fetches the window and
+    delegates. One or more periods can be requested in a single call (the classic
+    20/50/200 overlay), each returned as its own line. Too little history for a
+    given period yields an empty line rather than an error: the symbol exists, that
+    line just can't warm up.
+    """
+
+    def __init__(self, provider: CandleProvider) -> None:
+        self._provider = provider
+
+    def execute(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        periods: Sequence[int],
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> EmaSeries:
+        if start is not None and end is not None and start >= end:
+            raise ValueError("'start' must be earlier than 'end'.")
+        series = self._provider.get_candles(
+            _normalize_symbol(symbol), timeframe, start=start, end=end
+        )
+        return ema_series(series, periods)
 
 
 class GetStockSupportLevels:

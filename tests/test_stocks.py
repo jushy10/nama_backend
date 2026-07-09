@@ -87,6 +87,7 @@ from app.stocks.router import (
     get_sector_performance,
     get_stock_analysis,
     get_stock_candles,
+    get_stock_ema,
     get_stock_logo,
     get_stock_rsi,
     get_stock_support_levels,
@@ -98,6 +99,7 @@ from app.stocks.use_cases import (
     GetSectorPerformance,
     GetStockAnalysis,
     GetStockCandles,
+    GetStockEma,
     GetStockInfo,
     GetStockLogo,
     GetStockRsi,
@@ -1134,6 +1136,50 @@ def test_rsi_use_case_computes_from_fetched_candles():
     assert result.signal is RsiSignal.OVERBOUGHT
 
 
+# --------------------------- EMA use case ---------------------------
+
+def test_ema_use_case_normalizes_symbol_and_forwards_window():
+    fake = FakeCandleProvider(series=a_rising_series())
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    GetStockEma(fake).execute(
+        "  aapl ", Timeframe.HOUR_1, periods=[2, 3], start=start, end=end
+    )
+    assert fake.received == [("AAPL", Timeframe.HOUR_1, start, end)]
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "123", "AA1", "AA.B", "TOOLONG"])
+def test_ema_use_case_rejects_invalid_symbols(bad):
+    fake = FakeCandleProvider(series=a_rising_series())
+    with pytest.raises(ValueError):
+        GetStockEma(fake).execute(bad, Timeframe.DAY_1, periods=[20])
+    assert fake.received == []  # provider untouched on invalid input
+
+
+def test_ema_use_case_rejects_inverted_window():
+    fake = FakeCandleProvider(series=a_rising_series())
+    start = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with pytest.raises(ValueError):
+        GetStockEma(fake).execute(
+            "AAPL", Timeframe.DAY_1, periods=[20], start=start, end=end
+        )
+    assert fake.received == []
+
+
+def test_ema_use_case_propagates_not_found():
+    fake = FakeCandleProvider(raises=StockNotFound("ZZZZ"))
+    with pytest.raises(StockNotFound):
+        GetStockEma(fake).execute("ZZZZ", Timeframe.DAY_1, periods=[20])
+
+
+def test_ema_use_case_computes_one_line_per_period():
+    result = GetStockEma(FakeCandleProvider(series=a_rising_series())).execute(
+        "AAPL", Timeframe.DAY_1, periods=[2, 3]
+    )
+    assert [line.period for line in result.lines] == [2, 3]
+
+
 # --------------------------- support-levels use case ---------------------------
 
 def test_support_levels_use_case_normalizes_symbol_and_forwards_window():
@@ -1226,6 +1272,7 @@ def make_client():
         estimates_provider: AnalystEstimatesProvider | None = None,
         candle_provider: CandleProvider | None = None,
         rsi_provider: CandleProvider | None = None,
+        ema_provider: CandleProvider | None = None,
         support_levels_provider: CandleProvider | None = None,
         sector_provider: SectorPerformanceProvider | None = None,
         earnings_provider: QuarterlyEarningsProvider | None = None,
@@ -1245,6 +1292,8 @@ def make_client():
             )
         if rsi_provider is not None:
             app.dependency_overrides[get_stock_rsi] = lambda: GetStockRsi(rsi_provider)
+        if ema_provider is not None:
+            app.dependency_overrides[get_stock_ema] = lambda: GetStockEma(ema_provider)
         if support_levels_provider is not None:
             app.dependency_overrides[get_stock_support_levels] = (
                 lambda: GetStockSupportLevels(support_levels_provider)
@@ -2007,6 +2056,88 @@ def test_get_rsi_upstream_failure_502(make_client):
     fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
     client = make_client(rsi_provider=fake)
     assert client.get("/stocks/AAPL/rsi").status_code == 502
+
+
+# --------------------------- EMA endpoint ---------------------------
+
+def test_get_ema_returns_200_with_one_line_per_period(make_client):
+    client = make_client(ema_provider=FakeCandleProvider(a_rising_series()))
+    r = client.get("/stocks/ticker/AAPL/ema", params={"period": [2, 3]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["symbol"] == "AAPL"
+    assert body["timeframe"] == "1Day"
+    assert [line["period"] for line in body["lines"]] == [2, 3]
+    line = body["lines"][0]
+    assert line["count"] == 3                       # 4 candles, period 2
+    assert line["latest"] is not None
+    assert set(line["points"][0]) == {"time", "timestamp", "value"}
+
+
+def test_get_ema_defaults_to_20_50_200_over_6m_daily(make_client):
+    fake = FakeCandleProvider(a_series())           # a single candle
+    client = make_client(ema_provider=fake)
+    r = client.get("/stocks/ticker/AAPL/ema")
+    assert r.status_code == 200, r.text
+    symbol, timeframe, start, end = fake.received[0]
+    assert symbol == "AAPL"
+    assert timeframe is Timeframe.DAY_1
+    assert (end - start).days == 183                 # default range = 6M
+    body = r.json()
+    assert [line["period"] for line in body["lines"]] == [20, 50, 200]
+    # One candle can't warm any of them: graceful empty lines, not an error.
+    assert all(line["count"] == 0 and line["latest"] is None for line in body["lines"])
+
+
+def test_get_ema_dedupes_periods_keeping_order(make_client):
+    client = make_client(ema_provider=FakeCandleProvider(a_rising_series()))
+    r = client.get("/stocks/ticker/AAPL/ema", params={"period": [50, 20, 50]})
+    assert r.status_code == 200, r.text
+    assert [line["period"] for line in r.json()["lines"]] == [50, 20]
+
+
+def test_get_ema_honors_timeframe_and_range(make_client):
+    fake = FakeCandleProvider(a_rising_series(timeframe=Timeframe.HOUR_1))
+    client = make_client(ema_provider=fake)
+    r = client.get(
+        "/stocks/ticker/AAPL/ema",
+        params={"timeframe": "1Hour", "range": "5D", "period": 3},
+    )
+    assert r.status_code == 200, r.text
+    _, timeframe, start, end = fake.received[0]
+    assert timeframe is Timeframe.HOUR_1
+    assert (end - start).days == 5
+
+
+@pytest.mark.parametrize("bad_period", [1, 0, -5, 401])
+def test_get_ema_out_of_range_period_400(make_client, bad_period):
+    client = make_client(ema_provider=FakeCandleProvider(a_rising_series()))
+    r = client.get("/stocks/ticker/AAPL/ema", params={"period": bad_period})
+    assert r.status_code == 400
+
+
+def test_get_ema_too_many_lines_400(make_client):
+    client = make_client(ema_provider=FakeCandleProvider(a_rising_series()))
+    r = client.get(
+        "/stocks/ticker/AAPL/ema", params={"period": [5, 10, 20, 50, 100, 200]}
+    )
+    assert r.status_code == 400
+
+
+def test_get_ema_invalid_symbol_400(make_client):
+    client = make_client(ema_provider=FakeCandleProvider(a_rising_series()))
+    assert client.get("/stocks/ticker/123/ema").status_code == 400
+
+
+def test_get_ema_unknown_symbol_404(make_client):
+    client = make_client(ema_provider=FakeCandleProvider(raises=StockNotFound("ZZZZ")))
+    assert client.get("/stocks/ticker/ZZZZ/ema").status_code == 404
+
+
+def test_get_ema_upstream_failure_502(make_client):
+    fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
+    client = make_client(ema_provider=fake)
+    assert client.get("/stocks/ticker/AAPL/ema").status_code == 502
 
 
 # --------------------------- support-levels endpoint ---------------------------

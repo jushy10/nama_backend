@@ -5,7 +5,8 @@ indicator is a fact about a price series, so it lives in the domain next to the
 Candle it's computed from. Outer layers fetch the candles (through a port) and
 hand them here; nothing in this module reaches out for data.
 
-Currently: RSI (Relative Strength Index, Wilder's original formulation) and
+Currently: RSI (Relative Strength Index, Wilder's original formulation), EMA
+(exponential moving average — the classic 20/50/200 chart overlay), and
 swing-low support levels.
 """
 
@@ -144,6 +145,111 @@ def rsi_series(series: CandleSeries, period: int = 14) -> RsiSeries:
         timeframe=series.timeframe,
         period=period,
         points=points,
+    )
+
+
+# --------------------------- EMA (exponential moving average) ---------------------------
+
+
+@dataclass(frozen=True)
+class EmaPoint:
+    """One EMA value at the close it was computed for (timestamp is that bar's).
+
+    Unlike RSI (a bounded 0–100 oscillator), an EMA rides on the price scale, so
+    ``value`` is in the quote currency — an overlay drawn straight on the candle
+    chart's price axis.
+    """
+
+    timestamp: datetime
+    value: float
+
+
+@dataclass(frozen=True)
+class EmaLine:
+    """One EMA overlay line at a single period (e.g. the 50-EMA).
+
+    Seeded from the simple average of the first ``period`` closes, so ``points``
+    is shorter than the input series by ``period - 1`` (and empty when there
+    isn't enough history). ``latest`` is a convenience view of the final point.
+    """
+
+    period: int
+    points: tuple[EmaPoint, ...]
+
+    @property
+    def latest(self) -> EmaPoint | None:
+        """The most recent EMA point, or None when there wasn't enough history."""
+        return self.points[-1] if self.points else None
+
+
+@dataclass(frozen=True)
+class EmaSeries:
+    """One or more EMA lines for a symbol at one timeframe, one per requested
+    period — the classic 20/50/200 overlay drawn on a single chart.
+
+    ``lines`` preserves the order the periods were requested in.
+    """
+
+    symbol: str
+    timeframe: Timeframe
+    lines: tuple[EmaLine, ...]
+
+
+def compute_ema(closes: Sequence[float], period: int) -> list[float]:
+    """Exponential moving average over a chronological (oldest-first) close series.
+
+    Seeded with the simple average of the first ``period`` closes (the
+    conventional seed), then smoothed with multiplier ``k = 2 / (period + 1)``:
+    each later value weights the newest close by ``k`` and carries the rest from
+    the prior EMA. Returns one value per close from index ``period - 1`` onward —
+    the first ``period - 1`` closes only seed the initial average — so the result
+    has ``len(closes) - period + 1`` values. Returns ``[]`` when there isn't
+    enough history (fewer than ``period`` closes).
+
+    Raises:
+        ValueError: period < 1.
+    """
+    if period < 1:
+        raise ValueError("EMA period must be at least 1.")
+    if len(closes) < period:
+        return []
+    k = 2 / (period + 1)
+    ema = sum(closes[:period]) / period  # SMA seed
+    values = [round(ema, 4)]
+    for close in closes[period:]:
+        ema = close * k + ema * (1 - k)
+        values.append(round(ema, 4))
+    return values
+
+
+def ema_line(series: CandleSeries, period: int) -> EmaLine:
+    """Compute one EMA line for a candle series, aligning each value to its close's
+    bar.
+
+    The math runs on close prices; timestamps come from the candles those values
+    land on (``candles[period - 1:]``, since the seed consumes the first
+    ``period`` closes and its value dates the last of them). Pure.
+    """
+    closes = [candle.close for candle in series.candles]
+    values = compute_ema(closes, period)
+    points = tuple(
+        EmaPoint(timestamp=candle.timestamp, value=value)
+        for candle, value in zip(series.candles[period - 1 :], values)
+    )
+    return EmaLine(period=period, points=points)
+
+
+def ema_series(series: CandleSeries, periods: Sequence[int]) -> EmaSeries:
+    """Compute an EMA overlay (one line per period) for a candle series.
+
+    Each period is computed independently over the same closes; ``lines`` keeps
+    the caller's period order. Pure — given the same series it always returns the
+    same result.
+    """
+    return EmaSeries(
+        symbol=series.symbol,
+        timeframe=series.timeframe,
+        lines=tuple(ema_line(series, period) for period in periods),
     )
 
 
