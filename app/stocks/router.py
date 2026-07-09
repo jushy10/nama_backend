@@ -294,12 +294,15 @@ def get_stock_analysis(
 
 @lru_cache(maxsize=1)
 def get_sector_analysis_provider() -> SectorAnalysisProvider:
-    # Same wiring as get_analysis_provider — Bedrock authenticates through the
-    # process's AWS credentials, so there's no secret to gate on; region + model id
-    # are env config with sane defaults, sharing the same env vars so one deploy
-    # config drives every analyser. A missing 'bedrock' extra surfaces as a 503.
+    # The sector read is short, plain output (a few sentences + two brief highlight
+    # lists), so it runs on the fast Haiku tier — the provider's own default —
+    # rather than inheriting BEDROCK_ANALYSIS_MODEL_ID, which the deploy points at a
+    # larger, slower model for the per-stock analysis. It gets its own override,
+    # BEDROCK_SECTOR_ANALYSIS_MODEL_ID, so the model can still be swapped without a
+    # code change. Bedrock authenticates through the process's AWS credentials, so
+    # there's no secret to gate on; a missing 'bedrock' extra surfaces as a 503.
     region = os.environ.get("BEDROCK_REGION", "us-east-1")
-    model_id = os.environ.get("BEDROCK_ANALYSIS_MODEL_ID")
+    model_id = os.environ.get("BEDROCK_SECTOR_ANALYSIS_MODEL_ID")
     try:
         if model_id:
             return BedrockSectorAnalysisProvider(model_id=model_id, region=region)

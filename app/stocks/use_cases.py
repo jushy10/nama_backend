@@ -5,6 +5,8 @@ provider for the data. Depend only on the entity and the port — never on a
 framework or a concrete provider.
 """
 
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -56,6 +58,8 @@ from app.stocks.recommendations.entities import AnalystRecommendations
 from app.stocks.recommendations.ports import RecommendationProvider
 from app.stocks.universe.entities import IndustryValuation
 from app.stocks.universe.repository import StockSearchRepository
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -520,5 +524,24 @@ class GetSectorAnalysis:
         self._analyzer = analyzer
 
     def execute(self) -> SectorAnalysis:
+        # Timed in two halves so the logs decompose the endpoint's latency into its
+        # only two moving parts: the multi-source board gather (Alpaca) and the
+        # model call (Bedrock). This is the ground truth for "where do the seconds
+        # go", rather than guessing which leg dominates.
+        gather_start = time.perf_counter()
         board = self._sectors.execute()
-        return self._analyzer.analyze(board)
+        gather_ms = (time.perf_counter() - gather_start) * 1000
+
+        model_start = time.perf_counter()
+        analysis = self._analyzer.analyze(board)
+        model_ms = (time.perf_counter() - model_start) * 1000
+
+        logger.info(
+            "sector analysis timing: board_gather=%.0fms model_call=%.0fms "
+            "total=%.0fms (model=%s)",
+            gather_ms,
+            model_ms,
+            gather_ms + model_ms,
+            analysis.model,
+        )
+        return analysis
