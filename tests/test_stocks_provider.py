@@ -665,3 +665,22 @@ def test_get_quotes_raises_only_when_every_chunk_fails():
     p = provider_with(client, ExplodingTradingClient())
     with pytest.raises(StockDataUnavailable):
         p.get_quotes(["AAPL"])
+
+
+def test_to_alpaca_symbol_maps_share_class_dash_to_dot():
+    # Our universe stores Yahoo's dash form; Alpaca lists the dot form. Plain tickers pass
+    # through untouched.
+    assert AlpacaStockDataProvider._to_alpaca_symbol("BRK-B") == "BRK.B"
+    assert AlpacaStockDataProvider._to_alpaca_symbol("BF-B") == "BF.B"
+    assert AlpacaStockDataProvider._to_alpaca_symbol("AAPL") == "AAPL"
+
+
+def test_get_quotes_requests_class_shares_in_alpaca_symbology():
+    # A dashed ticker must go out to Alpaca as the dot form (else it's rejected and takes
+    # its whole chunk down), but come back keyed by our original dash form.
+    client = RecordingSnapshotClient({"BRK.B": make_snapshot()})
+    p = provider_with(client, ExplodingTradingClient())
+    quotes = p.get_quotes(["BRK-B"])
+    assert client.requested_chunks == [["BRK.B"]]  # requested in Alpaca's symbology
+    assert set(quotes) == {"BRK-B"}  # returned in ours
+    assert quotes["BRK-B"].symbol == "BRK-B"
