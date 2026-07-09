@@ -107,11 +107,11 @@ class AlpacaStockDataProvider(
     bars, and historical OHLC candles for charting.
     """
 
-    # Symbols per batched snapshot request (get_quotes). Alpaca rejects an oversized
-    # multi-symbol snapshot: in prod a 200-symbol chunk failed outright while a
-    # ~100-symbol board went through, so the S&P 500 (~500 names) came back entirely
-    # uncoloured. Cap well under that — a ~500-name map is then ~5 chunks — and pair it
-    # with per-chunk best-effort below so one rejected chunk can never blank the board.
+    # Symbols per batched snapshot request (get_quotes). One rejected symbol fails the
+    # *whole* multi-symbol snapshot it rides in (see _to_alpaca_symbol for the class-share
+    # case that first surfaced this), so this caps the blast radius of a bad name: with
+    # per-chunk best-effort below, a poisoned chunk drops ~this many tiles, not the board.
+    # Smaller = safer but more calls; 100 keeps a ~500-name S&P 500 map to ~5 chunks.
     _SNAPSHOT_CHUNK = 100
 
     # Lookback long enough to cover the 1-year window with margin for
@@ -195,8 +195,13 @@ class AlpacaStockDataProvider(
         failures = 0
         for start in range(0, len(unique), self._SNAPSHOT_CHUNK):
             chunk = unique[start : start + self._SNAPSHOT_CHUNK]
+            # Ask Alpaca in its own symbology (BRK-B -> BRK.B); keep the map back so the
+            # returned quote is keyed by the caller's original symbol.
+            alpaca_of = {s: self._to_alpaca_symbol(s) for s in chunk}
             try:
-                request = StockSnapshotRequest(symbol_or_symbols=chunk, feed=self._feed)
+                request = StockSnapshotRequest(
+                    symbol_or_symbols=list(alpaca_of.values()), feed=self._feed
+                )
                 snapshots = self._data.get_stock_snapshot(request)
             except APIError as exc:
                 # One chunk's failure must not blank the board — skip it and keep the rest.
@@ -204,7 +209,7 @@ class AlpacaStockDataProvider(
                 logger.warning("snapshot chunk of %d symbols failed: %s", len(chunk), exc)
                 continue
             for symbol in chunk:
-                snapshot = snapshots.get(symbol)
+                snapshot = snapshots.get(alpaca_of[symbol])
                 if snapshot is None or snapshot.latest_trade is None:
                     continue
                 quotes[symbol] = self._to_quote(symbol, snapshot)
@@ -212,6 +217,18 @@ class AlpacaStockDataProvider(
         if failures and not quotes:
             raise StockDataUnavailable("quotes", "every snapshot chunk failed")
         return quotes
+
+    @staticmethod
+    def _to_alpaca_symbol(symbol: str) -> str:
+        """Map our stored ticker onto Alpaca's symbology.
+
+        Our universe carries Yahoo's convention, which writes a share class with a dash
+        (``BRK-B``, ``BF-B``); Alpaca's asset symbols use a dot (``BRK.B``, ``BF.B``). A
+        dash in a US ticker only ever marks a share class, so a straight ``-`` -> ``.`` is
+        safe and touches only those few names. Left unmapped, Alpaca rejects the dash form
+        and — since one bad symbol fails the whole multi-symbol snapshot — takes its entire
+        chunk down with it (the megacap ``BRK-B`` did exactly that to the S&P 500 board)."""
+        return symbol.replace("-", ".")
 
     def get_performance(self, symbol: str) -> StockPerformance:
         return self._compute_performance(self._fetch_daily_bars(symbol))
