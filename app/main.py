@@ -1,5 +1,6 @@
 """A lightweight FastAPI backend backed by SQLite."""
 
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -38,6 +39,21 @@ from app.stocks.endpoints.cron_etf_endpoints import router as etf_cron_router
 from app.stocks.endpoints.etf_endpoints import router as etf_router
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.router import router as stocks_router
+
+# The web server (uvicorn/gunicorn) installs handlers only on its own `uvicorn*`
+# loggers and leaves the root logger at its default WARNING level, so an app-level
+# `logger.info(...)` — e.g. the sector-analysis timing line — is filtered out before
+# it is ever emitted. Install a root stream handler and raise just our own `app`
+# logger tree to INFO: our INFO lines reach CloudWatch without turning on the noisy
+# INFO chatter of third-party libraries (botocore, httpx, yfinance). Root records
+# only gate what's logged *to* root; a child's INFO record still propagates to the
+# root handler regardless of root's level. This mirrors the `logging.basicConfig`
+# call in app/sync/__main__.py that does the same for the `python -m app.sync` tasks.
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logging.getLogger("app").setLevel(logging.INFO)
 
 # Browser origins allowed to call this API (cross-origin). Comma-separated env
 # var so prod and local dev differ without a code change; defaults to the
