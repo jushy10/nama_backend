@@ -15,6 +15,7 @@ from app.stocks.entities import (
     AnalystEstimates,
     CandleSeries,
     CompanyProfile,
+    EarningsAnalysis,
     InvestmentAnalysis,
     Logo,
     MarketIndexPerformance,
@@ -372,6 +373,40 @@ class MarketSummaryProvider(ABC):
         Args:
             indexes: the day's headline indices, each carrying its daily move and
                 best-effort trailing-window returns.
+
+        Raises:
+            StockDataUnavailable: the model call failed or returned no usable
+                result.
+        """
+        raise NotImplementedError
+
+
+class EarningsAnalysisProvider(ABC):
+    """A gateway that turns a stock's earnings timelines into a short,
+    AI-generated read of its earnings story.
+
+    The earnings-focused sibling of ``InvestmentAnalysisProvider``: the use case
+    has already gathered the quarterly and annual earnings timelines, and the
+    adapter reasons only over what it's handed (the beats/misses, EPS and revenue
+    trajectory, and the forward consensus) — it fetches nothing itself. This backs
+    a dedicated endpoint (its own reason to exist, not best-effort enrichment), so
+    a failure surfaces as an error rather than being swallowed.
+    """
+
+    @abstractmethod
+    def analyze(
+        self,
+        symbol: str,
+        quarterly: QuarterlyEarningsTimeline | None = None,
+        annual: AnnualEarningsTimeline | None = None,
+    ) -> EarningsAnalysis:
+        """Return an earnings analysis built from the supplied timelines.
+
+        Args:
+            symbol: the ticker being analysed (for labelling and error context).
+            quarterly: the recent quarterly earnings timeline, else ``None``.
+            annual: the recent annual (fiscal-year) earnings timeline, else
+                ``None``.
 
         Raises:
             StockDataUnavailable: the model call failed or returned no usable

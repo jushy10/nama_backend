@@ -12,6 +12,9 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
+from app.stocks.bedrock_earnings_analysis_provider import (
+    BedrockEarningsAnalysisProvider,
+)
 from app.stocks.bedrock_market_summary_provider import BedrockMarketSummaryProvider
 from app.stocks.bedrock_sector_analysis_provider import BedrockSectorAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
@@ -22,6 +25,7 @@ from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     Confidence,
+    EarningsTrend,
     GrowthMetrics,
     InvestmentAnalysis,
     KeyMetrics,
@@ -2441,6 +2445,89 @@ def test_market_summary_rejects_an_offschema_tone():
     client = _StubClient(_market_tool_message(tone="euphoric"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
         BedrockMarketSummaryProvider(client=client).analyze(_a_market_board())
+
+
+# ------------------------- earnings AI analysis -------------------------
+
+# Reuses the Bedrock stub client, forcing the earnings tool
+# (submit_earnings_analysis) with a plain summary, a trend, and highlights.
+def _earnings_tool_message(**input_overrides) -> _StubMessage:
+    payload = dict(
+        summary="It keeps beating expectations and profit is climbing fast.",
+        trend="accelerating",
+        highlights=[
+            "Beat estimates every recent quarter",
+            "Profit and sales are both growing",
+        ],
+    )
+    payload.update(input_overrides)
+    return _StubMessage(
+        [_StubBlock("tool_use", name="submit_earnings_analysis", input=payload)]
+    )
+
+
+def test_earnings_analysis_parses_tool_call_into_entity():
+    client = _StubClient(_earnings_tool_message())
+    provider = BedrockEarningsAnalysisProvider(client=client, model_id="test-model")
+
+    analysis = provider.analyze(
+        "aapl", a_quarterly_timeline(), an_annual_timeline()
+    )
+
+    assert analysis.symbol == "AAPL"  # normalized by the adapter
+    assert analysis.summary.startswith("It keeps beating")
+    assert analysis.trend is EarningsTrend.ACCELERATING
+    assert analysis.highlights == (
+        "Beat estimates every recent quarter",
+        "Profit and sales are both growing",
+    )
+    assert analysis.model == "test-model"
+    # The model was actually pinned to the earnings tool.
+    assert client.calls[0]["tool_choice"] == {
+        "type": "tool",
+        "name": "submit_earnings_analysis",
+    }
+
+
+def test_earnings_analysis_renders_timelines_into_prompt():
+    client = _StubClient(_earnings_tool_message())
+    BedrockEarningsAnalysisProvider(client=client).analyze(
+        "AAPL", a_quarterly_timeline(), an_annual_timeline()
+    )
+
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "Earnings for AAPL" in prompt
+    # The reported quarter's real figures — beat tally, EPS vs estimate, revenue.
+    assert "beat or met the estimate in 1 of 1" in prompt
+    assert "EPS $2.18 vs est $2.10" in prompt
+    assert "revenue $95.0B" in prompt
+    # The reported fiscal year (consensus-basis EPS) and the forward consensus.
+    assert "FY25: EPS $6.50" in prompt
+    assert "Upcoming fiscal years" in prompt
+    assert "est EPS $8.00" in prompt
+
+
+def test_earnings_analysis_raises_when_model_does_not_call_the_tool():
+    client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
+    with pytest.raises(StockDataUnavailable):
+        BedrockEarningsAnalysisProvider(client=client).analyze(
+            "AAPL", a_quarterly_timeline()
+        )
+
+
+def test_earnings_analysis_maps_a_client_error_to_a_domain_error():
+    with pytest.raises(StockDataUnavailable):
+        BedrockEarningsAnalysisProvider(client=_BoomClient()).analyze(
+            "AAPL", a_quarterly_timeline()
+        )
+
+
+def test_earnings_analysis_rejects_an_offschema_trend():
+    client = _StubClient(_earnings_tool_message(trend="exploding"))  # not in enum
+    with pytest.raises(StockDataUnavailable):
+        BedrockEarningsAnalysisProvider(client=client).analyze(
+            "AAPL", a_quarterly_timeline()
+        )
 
 
 def test_market_summary_use_case_hands_over_the_board():

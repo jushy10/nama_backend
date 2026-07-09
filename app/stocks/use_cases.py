@@ -20,6 +20,7 @@ from app.stocks.entities import (
     AnalystEstimates,
     CandleSeries,
     CompanyProfile,
+    EarningsAnalysis,
     InvestmentAnalysis,
     Logo,
     MarketIndexPerformance,
@@ -43,6 +44,7 @@ from app.stocks.ports import (
     AnalystEstimatesProvider,
     CandleProvider,
     CompanyProfileProvider,
+    EarningsAnalysisProvider,
     InvestmentAnalysisCache,
     InvestmentAnalysisProvider,
     LogoProvider,
@@ -431,6 +433,60 @@ class GetStockAnalysis:
             return None
         valuation = IndustryValuation.from_pe_ratios(industry, pe_ratios)
         return valuation if valuation.is_representative else None
+
+
+class GetEarningsAnalysis:
+    """Use case: an AI-generated, plain-language read of a stock's earnings story.
+
+    The earnings-focused sibling of ``GetStockAnalysis``. Gathers the quarterly and
+    annual earnings timelines — read **DB-only** (via the slices' repositories, not
+    their read-through providers), so a cache miss never triggers a synchronous,
+    rate-limited Yahoo fetch mid-request — and hands them to the injected analyzer.
+    The analysis is the primary data, so a model failure propagates; a symbol with
+    no earnings on file surfaces as ``StockDataUnavailable`` rather than an analysis
+    of nothing. The analyzer reasons only over what it's handed; it fetches nothing
+    itself. Unlike the per-stock buy/hold/sell analysis this has no DB result cache
+    — the endpoint leans on a short HTTP ``Cache-Control`` instead, matching the
+    market read.
+    """
+
+    def __init__(
+        self,
+        analyzer: EarningsAnalysisProvider,
+        quarterly_provider: QuarterlyEarningsProvider | None = None,
+        annual_provider: AnnualEarningsProvider | None = None,
+    ) -> None:
+        self._analyzer = analyzer
+        self._quarterly_provider = quarterly_provider
+        self._annual_provider = annual_provider
+
+    def execute(self, symbol: str) -> EarningsAnalysis:
+        normalized = _normalize_symbol(symbol)
+        quarterly = self._quarterly(normalized)
+        annual = self._annual(normalized)
+        # Nothing on file for either timeline — an uncovered/unknown symbol. Fail
+        # rather than ask the model to reason over an empty slate.
+        if quarterly is None and annual is None:
+            raise StockDataUnavailable(normalized, "no earnings data to analyse")
+        return self._analyzer.analyze(normalized, quarterly, annual)
+
+    def _quarterly(self, symbol: str) -> QuarterlyEarningsTimeline | None:
+        if self._quarterly_provider is None:
+            return None
+        try:
+            timeline = self._quarterly_provider.get_quarterly_earnings(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None
+        return None if timeline.is_empty else timeline
+
+    def _annual(self, symbol: str) -> AnnualEarningsTimeline | None:
+        if self._annual_provider is None:
+            return None
+        try:
+            timeline = self._annual_provider.get_annual_earnings(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None
+        return None if timeline.is_empty else timeline
 
 
 class GetSectorPerformance:
