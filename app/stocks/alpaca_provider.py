@@ -32,6 +32,7 @@ from app.stocks.entities import (
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AllTimeHighProvider,
+    BulkQuoteProvider,
     CandleProvider,
     MarketOverviewProvider,
     SectorPerformanceProvider,
@@ -90,6 +91,7 @@ _INDEX_ETFS: dict[str, str] = {
 class AlpacaStockDataProvider(
     StockDataProvider,
     StockQuoteProvider,
+    BulkQuoteProvider,
     StockPerformanceProvider,
     AllTimeHighProvider,
     CandleProvider,
@@ -101,6 +103,12 @@ class AlpacaStockDataProvider(
     Also derives trailing-window performance and the all-time high from daily
     bars, and historical OHLC candles for charting.
     """
+
+    # Symbols per batched snapshot request (get_quotes). Alpaca serves a multi-symbol
+    # snapshot in one call; chunking a several-hundred-name board keeps each request's
+    # symbol list (a query-string param) well within limits — a ~500-name S&P 500 map is
+    # a handful of chunks. Purely a request-size guard; every chunk hits the same endpoint.
+    _SNAPSHOT_CHUNK = 200
 
     # Lookback long enough to cover the 1-year window with margin for
     # weekends/holidays, so a bar exists at or before each target date.
@@ -168,6 +176,30 @@ class AlpacaStockDataProvider(
         # Snapshot only: one data call, no asset-metadata lookup. Cheap enough to
         # back a poll-every-few-seconds endpoint.
         return self._to_quote(symbol, self._fetch_snapshot(symbol))
+
+    def get_quotes(self, symbols) -> dict[str, Quote]:
+        # One batched snapshot for the whole board — the same call the sector/index
+        # boards make, just over an arbitrary symbol list (chunked so a several-hundred
+        # -name universe stays within Alpaca's per-request symbol/URL limits). Best-effort
+        # per symbol: a symbol the free IEX feed doesn't carry (no snapshot, or no
+        # latest_trade) is skipped rather than failing the board, so the caller sizes that
+        # tile from stored facts and leaves it uncoloured. Only a chunk's hard APIError is
+        # fatal. Dedupe + uppercase once so a repeated/lowercase symbol maps cleanly.
+        unique = list(dict.fromkeys(s.upper() for s in symbols if s))
+        quotes: dict[str, Quote] = {}
+        for start in range(0, len(unique), self._SNAPSHOT_CHUNK):
+            chunk = unique[start : start + self._SNAPSHOT_CHUNK]
+            try:
+                request = StockSnapshotRequest(symbol_or_symbols=chunk, feed=self._feed)
+                snapshots = self._data.get_stock_snapshot(request)
+            except APIError as exc:
+                raise StockDataUnavailable("quotes", str(exc)) from exc
+            for symbol in chunk:
+                snapshot = snapshots.get(symbol)
+                if snapshot is None or snapshot.latest_trade is None:
+                    continue
+                quotes[symbol] = self._to_quote(symbol, snapshot)
+        return quotes
 
     def get_performance(self, symbol: str) -> StockPerformance:
         return self._compute_performance(self._fetch_daily_bars(symbol))
