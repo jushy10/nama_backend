@@ -36,6 +36,9 @@ from app.stocks.endpoints.cron_quarterly_earnings_endpoints import (
     run_quarterly_earnings_sync,
 )
 from app.stocks.endpoints.cron_recommendations_endpoints import run_recommendations_sync
+from app.stocks.endpoints.cron_revenue_segments_endpoints import (
+    run_revenue_segments_sync,
+)
 from app.stocks.endpoints.cron_universe_endpoints import run_universe_sync
 
 logger = logging.getLogger("app.sync")
@@ -51,6 +54,7 @@ RUNNERS: dict[str, Callable[[int | None], object]] = {
     "annual-earnings": run_annual_earnings_sync,
     "recommendations": run_recommendations_sync,
     "news": run_news_sync,
+    "revenue-segments": run_revenue_segments_sync,
     "universe": run_universe_sync,
     "index-membership": run_index_membership_sync,
     "etfs": run_etf_sync,

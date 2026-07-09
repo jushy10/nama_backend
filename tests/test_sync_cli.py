@@ -63,6 +63,12 @@ def test_etfs_dispatches_too(monkeypatch):
     assert recorders["etfs"].calls == [None]
 
 
+def test_revenue_segments_dispatches_too(monkeypatch):
+    recorders = _patch_runners(monkeypatch)
+    assert cli.main(["revenue-segments"]) == 0
+    assert recorders["revenue-segments"].calls == [None]
+
+
 def test_unknown_slice_is_a_usage_error_and_runs_nothing(monkeypatch):
     recorders = _patch_runners(monkeypatch)
     assert cli.main(["does-not-exist"]) == 2
