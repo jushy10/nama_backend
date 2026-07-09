@@ -209,13 +209,7 @@ def _to_entity(symbol: str, payload: dict, model_id: str) -> EarningsAnalysis:
         raise StockDataUnavailable(
             symbol, f"earnings analysis model returned an unexpected result: {exc}"
         ) from exc
-    highlights = tuple(
-        note
-        for note in (
-            str(item).strip() for item in payload.get("highlights", []) or []
-        )
-        if note
-    )
+    highlights = _string_tuple(payload.get("highlights"))
     return EarningsAnalysis(
         symbol=symbol.upper(),
         summary=summary,
@@ -224,6 +218,21 @@ def _to_entity(symbol: str, payload: dict, model_id: str) -> EarningsAnalysis:
         model=model_id,
         generated_at=datetime.now(timezone.utc),
     )
+
+
+def _string_tuple(value) -> tuple[str, ...]:
+    """Coerce the model's ``highlights`` field into non-empty, stripped strings.
+
+    Guards against a non-list: the forced tool constrains the schema, but Bedrock
+    does not strictly enforce it, and Haiku occasionally returns ``highlights`` as
+    a single string (e.g. a leaked ``<parameter name="highlights">[...]`` value).
+    Iterating a ``str`` would split it into characters — a wall of one-character
+    "notes" — so anything that isn't a list yields no highlights instead. Mirrors
+    ``bedrock_analysis_provider._string_tuple``.
+    """
+    if not isinstance(value, list):
+        return ()
+    return tuple(text for item in value if (text := str(item).strip()))
 
 
 def _fmt_eps(value: float | None) -> str:

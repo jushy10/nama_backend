@@ -2530,6 +2530,23 @@ def test_earnings_analysis_rejects_an_offschema_trend():
         )
 
 
+def test_earnings_analysis_drops_string_highlights_instead_of_char_splitting():
+    # Bedrock does not strictly enforce the tool schema, and Haiku occasionally
+    # returns `highlights` as a single string (a leaked tool-call parameter)
+    # rather than an array. Iterating a str would split it into characters, so
+    # the coercion must reject a non-list — summary/trend still parse.
+    leaked = '<parameter name="highlights">["Beat every quarter", "Profit climbing"]'
+    client = _StubClient(_earnings_tool_message(highlights=leaked))
+
+    analysis = BedrockEarningsAnalysisProvider(client=client).analyze(
+        "AAPL", a_quarterly_timeline()
+    )
+
+    assert analysis.highlights == ()  # not a wall of single characters
+    assert analysis.trend is EarningsTrend.ACCELERATING
+    assert analysis.summary.startswith("It keeps beating")
+
+
 def test_market_summary_use_case_hands_over_the_board():
     analyzer = FakeMarketSummaryProvider(a_market_summary())
     use_case = GetMarketSummary(
