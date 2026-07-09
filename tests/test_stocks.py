@@ -1138,14 +1138,41 @@ def test_rsi_use_case_computes_from_fetched_candles():
 
 # --------------------------- EMA use case ---------------------------
 
-def test_ema_use_case_normalizes_symbol_and_forwards_window():
+def test_ema_use_case_warms_up_before_the_window():
     fake = FakeCandleProvider(series=a_rising_series())
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     end = datetime(2026, 6, 1, tzinfo=timezone.utc)
     GetStockEma(fake).execute(
         "  aapl ", Timeframe.HOUR_1, periods=[2, 3], start=start, end=end
     )
-    assert fake.received == [("AAPL", Timeframe.HOUR_1, start, end)]
+    # Symbol normalized; the fetch reaches back a warmup before `start` (max
+    # period 3 × 1-hour bars × the 3× factor = 9h) so the EMA is warm on screen.
+    symbol, timeframe, fetch_start, fetch_end = fake.received[0]
+    assert symbol == "AAPL"
+    assert timeframe is Timeframe.HOUR_1
+    assert fetch_end == end
+    assert fetch_start == start - timedelta(hours=9)
+
+
+def test_ema_use_case_trims_warmup_bars_to_the_visible_window():
+    # Ten daily candles; the fake ignores the window and returns them all, so the
+    # EMA is computed across the lot and then trimmed back to the visible start.
+    base = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    candles = tuple(
+        a_candle(close=100.0 + i, timestamp=base + timedelta(days=i)) for i in range(10)
+    )
+    fake = FakeCandleProvider(series=a_series(candles))
+    visible_start = base + timedelta(days=5)
+    result = GetStockEma(fake).execute(
+        "AAPL",
+        Timeframe.DAY_1,
+        periods=[3],
+        start=visible_start,
+        end=base + timedelta(days=9),
+    )
+    points = result.lines[0].points
+    assert points  # some survive the trim
+    assert all(p.timestamp >= visible_start for p in points)  # warmup bars dropped
 
 
 @pytest.mark.parametrize("bad", ["", "   ", "123", "AA1", "AA.B", "TOOLONG"])
@@ -2074,7 +2101,7 @@ def test_get_ema_returns_200_with_one_line_per_period(make_client):
     assert set(line["points"][0]) == {"time", "timestamp", "value"}
 
 
-def test_get_ema_defaults_to_20_50_200_over_6m_daily(make_client):
+def test_get_ema_defaults_to_9_21_over_6m_daily(make_client):
     fake = FakeCandleProvider(a_series())           # a single candle
     client = make_client(ema_provider=fake)
     r = client.get("/stocks/ticker/AAPL/ema")
@@ -2082,9 +2109,10 @@ def test_get_ema_defaults_to_20_50_200_over_6m_daily(make_client):
     symbol, timeframe, start, end = fake.received[0]
     assert symbol == "AAPL"
     assert timeframe is Timeframe.DAY_1
-    assert (end - start).days == 183                 # default range = 6M
+    # 6M visible window (183d) plus the EMA warmup reach-back before it.
+    assert (end - start).days > 183
     body = r.json()
-    assert [line["period"] for line in body["lines"]] == [20, 50, 200]
+    assert [line["period"] for line in body["lines"]] == [9, 21]
     # One candle can't warm any of them: graceful empty lines, not an error.
     assert all(line["count"] == 0 and line["latest"] is None for line in body["lines"])
 
