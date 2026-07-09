@@ -136,6 +136,7 @@ only this one file changes.
 - `adapters/yfinance_annual_earnings_adapter.py` — live source for the annual-earnings slice: **Yahoo via `yfinance`**, building the 4-recent + up-to-2-upcoming *fiscal-year* timeline (the yearly analogue of the quarterly adapter). **Past** years come from `income_stmt` (annual) — `Diluted EPS` (falling back to `Basic EPS`) as the actual, plus `Total Revenue` and `Net Income`. **Upcoming** years come from the `0y`/`+1y` rows of `earnings_estimate` + `revenue_estimate` (EPS + revenue) — Yahoo's forward ceiling (so ≤2). Forward years are labelled by `info['nextFiscalYearEnd']` (0y), falling back to one year past the latest reported year. **No annual surprise/beat** — Yahoo's estimate-vs-actual history is per-quarter, so a reported year carries an actual with no estimate. Reported years also carry `eps_actual_consensus` — the year's actual EPS on the **analyst-consensus (adjusted) basis**, i.e. the sum of its four quarterly "Reported EPS" values from a deeper `get_earnings_dates` fetch (quarters assigned to a fiscal year by their derived calendar quarter-end falling within the year ending at the true fiscal-year-end; summed only when all four slots are filled, else `None`). It exists because `eps_actual` (GAAP diluted) and the forward `eps_estimate` (adjusted consensus) are on different bases — a client anchoring a P/E walk needs both ends on one basis. Best-effort enrichment, like revenue. Key caveat: `income_stmt` is the **fundamentals endpoint Yahoo IP-gates hardest from data-centre IPs** (intermittently — prod has fetched it successfully), so it's fetched best-effort: a blocked fetch drops the reported years but leaves the forward ones, and the **merge-preserving sync** keeps the stored reported rows when that happens. `adapters/db_cached_annual_earnings_adapter.py` — the same **read-through** DB cache as quarterly (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `adapters/annual_earnings_estimates_adapter.py` — implements the `AnalystEstimatesProvider` port by **projecting the annual-earnings slice's stored forward years** into an `AnalystEstimates` block (first upcoming year → FY1, next → FY2); it feeds the enriched stock snapshot (`GetStockInfo`, now the AI analysis context — the standalone `GET /stocks/{symbol}` endpoint was removed) and the ticker card's forward PEG. **DB-only, no live fall-through**: estimates are best-effort enrichment, so an uncached symbol just omits the forward metrics until the annual read path (lazy fill) or its cron populates the rows. This replaced the dedicated `stock_analyst_estimates` table + its own Yahoo fetch and cron — the annual slice stores the *same* `earnings_estimate`/`revenue_estimate` consensus, so the forward consensus has one source of truth (the FY1 low/high range and analyst counts were dropped with the table; the entities keep the full block, feeding `forward_pe`, the growth block, and the Bedrock analysis context)
 - `adapters/yfinance_recommendations_adapter.py` — live source for the recommendations slice: **Yahoo via `yfinance`** (`Ticker.recommendations`), the sell-side buy/hold/sell split as monthly snapshots (the same recommendation-trend data Finnhub serves, but keyless — this replaced `finnhub_recommendation_provider.py` and the `FINNHUB_API_KEY` gate on the endpoint). Yahoo labels the rows *relatively* (`0m` = this month, `-1m`, …), so the adapter anchors them on today's month into first-of-month `period` dates — the identity the DB cache keys on. `adapters/db_cached_recommendations_adapter.py` — the same **read-through** DB cache as the earnings slices (DB-first, fetch-on-miss, no TTL/serve-stale)
+- `adapters/yfinance_news_adapter.py` — live source for the news slice: **Yahoo via `yfinance`** (`Ticker.news`), a stock's recent headlines, keyless. Recent yfinance nests each item under `content` (`title`, `summary`, `pubDate`, `contentType` STORY/VIDEO, `provider.displayName`, `canonicalUrl`/`clickThroughUrl`, `thumbnail.originalUrl`); the top-level `id` (Yahoo's UUID) is the identity the DB cache keys and dedupes on. An article missing an id/title/parseable publish-time is dropped (nothing to key or order on); everything past those three is best-effort and left `None` when absent. `adapters/db_cached_news_adapter.py` — the same **read-through** DB cache as the earnings/recommendations slices (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `adapters/db_only_context_providers.py` — DB-only (no live fall-through) views of the quarterly / annual / recommendations caches, used **only by the AI-analysis path**. Each wraps the slice's persistence repository and implements the slice's *provider* port, serving stored rows and returning an **empty** timeline on a miss (never a live fetch). The read endpoints keep the read-through `db_cached_*` adapters (a miss there *should* fetch); the analysis path swaps in these so best-effort context can't add a synchronous, rate-limited Yahoo round-trip to a user request. Keeping the caches current stays the crons' job
 - `analysis/db_repository.py` (the tiny `analysis/` sub-slice) — `SqlInvestmentAnalysisCache`, the **read-through result cache** behind *both* AI-analysis endpoints, over the `investment_analysis_cache` table (migration 0022; one row per `(kind, symbol)`, `kind` ∈ `stock`/`etf` so a stock and a fund sharing a ticker never collide). The use case returns a stored read while it's within `ANALYSIS_CACHE_TTL_MINUTES` of its `generated_at`, else regenerates and upserts. Best-effort both ways (a read failure is a miss, a write failure is swallowed), so it only ever makes the endpoint faster, never wrong. Deliberately **not** a `stocks` child — an analysis is served for any valid ticker, and forcing an anchor row per analysed symbol would leak arbitrary tickers into the screened universe (so it stands alone, like `etfs`)
 - `adapters/yfinance_options_adapter.py` — live source for the ticker card's `options_metrics` block: **Yahoo via `yfinance`** (`Ticker.options` for the expiration list, `Ticker.option_chain(date)` for one expiry's calls/puts), keyless, implementing the ticker slice's `OptionChainProvider` port. Maps chain rows → `OptionContract` entities (strike, bid/ask/last, volume, open interest, IV); every *derived* figure (ATM IV, expected move, insurance cost, put/call) is entity logic, not adapter logic. **No DB cache or cron** — options prices decay by the hour, so the no-TTL read-through pattern doesn't fit; the read is live per request (the endpoint's 5-min Cache-Control is the only damping) and best-effort even when requested, since Yahoo intermittently blocks data-centre IPs
@@ -255,6 +256,29 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > Caveat: the derived `period` is only as true as the relative labels — a symbol fetched
 > near a month boundary can label a snapshot one month off; cosmetic, same spirit as the
 > earnings slices' calendar-derived fiscal labels.
+
+> **The news sub-slice — `app/stocks/news/`.** A stock's recent news headlines, built on the
+> same skeleton as the recommendations sub-slice: its **own `entities.py`** (`NewsArticle` +
+> `StockNews`; `NewsArticle.is_video` is the one intrinsic rule — ordering newest-first is a
+> promise the adapter and repository keep, not entity logic), plus
+> `ports` / `repository` / `db_repository` / `models` / `use_cases` / `schemas` (both HTTP
+> endpoints live in `app/stocks/endpoints/`: the read `news_endpoints.py` and the
+> `cron_news_endpoints.py`). Serves `GET /stocks/{symbol}/news`, newest article first. Live
+> source is **yfinance (Yahoo)** via `Ticker.news` (`adapters/yfinance_news_adapter.py`),
+> keyless, behind the same persistent **read-through** DB cache + out-of-band cron
+> (`POST /internal/news/sync`, driven by the **daily** `sync-news` workflow — daily because a
+> news feed turns over constantly and the read cache has no TTL); table `stock_news`
+> (migration 0023), a time series unique on `stock_id` + `article_id` (Yahoo's stable UUID).
+> Like recommendations the upsert **merges** instead of rewriting (a published article is a
+> frozen fact, and Yahoo serves only its latest ~10, so the store accumulates a longer feed
+> than the source), and `refresh_targets` orders staleness by the **max** `fetched_at` per
+> stock. **One divergence from recommendations: the feed is pruned to the newest
+> `_MAX_STORED_ARTICLES` (50) per stock on every upsert**, so the far-higher-volume news
+> history stays bounded (recommendations' slow monthly series is left unpruned). The sync
+> skips an empty live result (nothing to merge; the stock's refresh stamp must not stall the
+> stale queue). Best-effort throughout: a symbol Yahoo carries no news for is a 200 with an
+> empty run, not a 404, and behind the cache a Yahoo-blocked fetch just serves the stored
+> articles.
 
 > **The ticker sub-slice — `app/stocks/ticker/`.** A stock's **ticker card** at
 > `GET /stocks/ticker/{ticker}`. Always served: the live quote
@@ -521,6 +545,14 @@ app/
     │   ├── models.py            #    stock_recommendation_trends ORM + query fns (anchor from stocks/)
     │   ├── use_cases.py         #    GetStockRecommendations + SyncRecommendations
     │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
+    ├── news/               # ── news sub-slice (its OWN entities.py; merge-upsert cache, pruned to newest 50/stock):
+    │   ├── entities.py          #    NewsArticle (is_video) + StockNews (slice-local)
+    │   ├── ports.py             #    live-source port (NewsProvider)
+    │   ├── repository.py        #    abstract persistence port
+    │   ├── db_repository.py     #    concrete repo: maps rows⇄entities, merge + prune, calls models
+    │   ├── models.py            #    stock_news ORM + query fns (anchor from stocks/)
+    │   ├── use_cases.py         #    GetStockNews + SyncStockNews
+    │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
     ├── ticker/             # ── ticker-card sub-slice (its OWN entities.py; no table/cron —
     │   │                   #    computed per request from live quote + stored consensus + live chain):
     │   ├── entities.py          #    TickerValuation (trailing_pe + forward_peg properties); OptionContract +
@@ -558,6 +590,8 @@ app/
     │   ├── annual_earnings_endpoints.py          #  GET /stocks/{symbol}/earnings/annual
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
     │   ├── recommendations_endpoints.py          #  GET /stocks/{symbol}/recommendations
+    │   ├── cron_news_endpoints.py                #  POST /internal/news/sync
+    │   ├── news_endpoints.py                     #  GET /stocks/{symbol}/news
     │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol} (card) + GET /stocks/ticker (search) + GET /stocks/classifications
     │   ├── etf_endpoints.py                      #  GET /stocks/etfs (top-ETF search/filter/sort) + GET /stocks/etfs/categories (filter menu) + GET /stocks/etf/{ticker} (one fund's card: quote + facts + DB-read profile, 3y/5y returns fetched live for the performance block + opt-in ?include=metrics/dividends/performance)
     │   ├── cron_etf_endpoints.py                 #  POST /internal/etfs/sync (fire-and-forget: screen + profile enrichment)
