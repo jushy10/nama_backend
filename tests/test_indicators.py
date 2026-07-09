@@ -18,8 +18,11 @@ from app.stocks.indicators import (
     RsiSeries,
     RsiSignal,
     SupportStrength,
+    compute_ema,
     compute_rsi,
     compute_support_levels,
+    ema_line,
+    ema_series,
     rsi_series,
     support_levels,
 )
@@ -100,6 +103,67 @@ def test_rsi_series_empty_points_when_history_too_short():
     assert result.points == ()
     assert result.latest is None
     assert result.signal is None
+
+
+# --------------------------- compute_ema (pure math) ---------------------------
+
+
+def test_compute_ema_rejects_period_below_one():
+    with pytest.raises(ValueError):
+        compute_ema([1.0, 2.0, 3.0], period=0)
+
+
+def test_compute_ema_empty_when_not_enough_history():
+    # Need at least `period` closes to seed the average.
+    assert compute_ema([5.0], period=2) == []
+    assert compute_ema([], period=2) == []
+
+
+def test_compute_ema_matches_hand_computation():
+    # closes [2,4,6,8], period 2, k = 2/(2+1) = 2/3:
+    #   seed = (2+4)/2 = 3.0
+    #   6*2/3 + 3*1/3 = 5.0
+    #   8*2/3 + 5*1/3 = 7.0
+    assert compute_ema([2.0, 4.0, 6.0, 8.0], period=2) == [3.0, 5.0, 7.0]
+
+
+def test_compute_ema_flat_series_holds_the_level():
+    assert compute_ema([5.0, 5.0, 5.0], period=2) == [5.0, 5.0]
+
+
+def test_compute_ema_period_one_is_the_price_itself():
+    # k = 1 -> every value is just that bar's close.
+    assert compute_ema([2.0, 4.0, 6.0], period=1) == [2.0, 4.0, 6.0]
+
+
+# --------------------------- ema_series (assembly over candles) ---------------------------
+
+
+def test_ema_line_aligns_values_to_their_candle():
+    series = _candles([2.0, 4.0, 6.0, 8.0])
+    line = ema_line(series, period=2)
+    # The seed consumes the first `period` closes; its value dates the last of
+    # them (candles[period - 1]).
+    assert [p.value for p in line.points] == [3.0, 5.0, 7.0]
+    assert [p.timestamp for p in line.points] == [
+        series.candles[1].timestamp,
+        series.candles[2].timestamp,
+        series.candles[3].timestamp,
+    ]
+    assert line.latest.value == 7.0
+
+
+def test_ema_line_empty_points_when_history_too_short():
+    line = ema_line(_candles([10.0, 11.0]), period=50)
+    assert line.points == ()
+    assert line.latest is None
+
+
+def test_ema_series_one_line_per_period_in_request_order():
+    result = ema_series(_candles([1.0, 2.0, 3.0, 4.0], Timeframe.HOUR_1), periods=[3, 2])
+    assert result.symbol == "AAPL"
+    assert result.timeframe is Timeframe.HOUR_1
+    assert [line.period for line in result.lines] == [3, 2]  # order preserved
 
 
 # --------------------------- signal bands ---------------------------

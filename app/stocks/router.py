@@ -42,6 +42,7 @@ from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import (
     RSI_OVERBOUGHT,
     RSI_OVERSOLD,
+    EmaSeries,
     RsiSeries,
     SupportLevelSeries,
 )
@@ -77,6 +78,9 @@ from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
+    EmaLineResponse,
+    EmaPointResponse,
+    EmaResponse,
     InvestmentAnalysisResponse,
     MarketIndexReturnResponse,
     MarketPeriodResponse,
@@ -98,6 +102,7 @@ from app.stocks.use_cases import (
     GetSectorPerformance,
     GetStockAnalysis,
     GetStockCandles,
+    GetStockEma,
     GetStockInfo,
     GetStockLogo,
     GetStockRsi,
@@ -192,6 +197,14 @@ def get_stock_rsi(
     provider: AlpacaStockDataProvider = Depends(get_provider),
 ) -> GetStockRsi:
     return GetStockRsi(provider)
+
+
+def get_stock_ema(
+    # EMA rides on the same CandleProvider as candles and RSI — it's derived from
+    # the OHLC bars, so the Alpaca instance backs this endpoint too.
+    provider: AlpacaStockDataProvider = Depends(get_provider),
+) -> GetStockEma:
+    return GetStockEma(provider)
 
 
 def get_stock_support_levels(
@@ -450,6 +463,30 @@ def _present_rsi(series: RsiSeries) -> RsiResponse:
     )
 
 
+def _present_ema(series: EmaSeries) -> EmaResponse:
+    """Presenter: EMA series entity -> HTTP response DTO (one line per period)."""
+    return EmaResponse(
+        symbol=series.symbol,
+        timeframe=series.timeframe.value,
+        lines=[
+            EmaLineResponse(
+                period=line.period,
+                count=len(line.points),
+                latest=line.latest.value if line.latest else None,
+                points=[
+                    EmaPointResponse(
+                        time=int(point.timestamp.timestamp()),
+                        timestamp=point.timestamp,
+                        value=point.value,
+                    )
+                    for point in line.points
+                ],
+            )
+            for line in series.lines
+        ],
+    )
+
+
 def _present_support_levels(series: SupportLevelSeries) -> SupportLevelsResponse:
     """Presenter: support-level series entity -> HTTP response DTO."""
     return SupportLevelsResponse(
@@ -654,6 +691,85 @@ def get_stock_rsi_endpoint(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present_rsi(series)
+
+
+# EMA overlay bounds: a chart draws a handful of moving-average lines, each a
+# lookback of at least a couple of bars and no longer than a few hundred (the
+# 200-EMA is the deepest common one; leave headroom above it).
+_EMA_MIN_PERIOD = 2
+_EMA_MAX_PERIOD = 400
+_EMA_MAX_LINES = 5
+
+
+def _normalize_ema_periods(periods: list[int]) -> list[int]:
+    """Validate + de-duplicate the requested EMA periods, preserving request order.
+
+    Rejects an out-of-range period, an empty set, or more lines than a chart
+    should carry — a 400, since these are client inputs.
+    """
+    seen: dict[int, None] = {}
+    for period in periods:
+        if not _EMA_MIN_PERIOD <= period <= _EMA_MAX_PERIOD:
+            raise HTTPException(
+                400,
+                f"EMA period must be between {_EMA_MIN_PERIOD} and {_EMA_MAX_PERIOD}.",
+            )
+        seen[period] = None  # dict keeps insertion order and drops duplicates
+    unique = list(seen)
+    if not unique:
+        raise HTTPException(400, "At least one EMA period is required.")
+    if len(unique) > _EMA_MAX_LINES:
+        raise HTTPException(
+            400, f"At most {_EMA_MAX_LINES} EMA periods can be requested at once."
+        )
+    return unique
+
+
+@router.get("/stocks/ticker/{ticker}/ema", response_model=EmaResponse)
+def get_stock_ema_endpoint(
+    ticker: str,
+    timeframe: Timeframe = Query(
+        Timeframe.DAY_1, description="Granularity each EMA is computed over."
+    ),
+    range_: ChartRange = Query(
+        ChartRange.MONTH_6,
+        alias="range",
+        description="How far back to fetch closes. Ignored when `start`/`end` is given.",
+    ),
+    period: list[int] = Query(
+        [20, 50, 200],
+        description=(
+            "EMA lookback(s) in candles; repeat the param for multiple overlay "
+            "lines (e.g. period=20&period=50&period=200). Defaults to 20/50/200."
+        ),
+    ),
+    start: datetime | None = Query(
+        None, description="Explicit window start (ISO 8601, UTC). Overrides `range`."
+    ),
+    end: datetime | None = Query(
+        None, description="Explicit window end (ISO 8601, UTC). Defaults to now."
+    ),
+    use_case: GetStockEma = Depends(get_stock_ema),
+) -> EmaResponse:
+    periods = _normalize_ema_periods(period)
+    start, end = _as_utc(start), _as_utc(end)
+    # Explicit start/end win; otherwise derive the window from the range preset.
+    if start is None and end is None:
+        start, end = resolve_window(range_, now=datetime.now(timezone.utc))
+    elif end is None:
+        end = datetime.now(timezone.utc)
+
+    try:
+        series = use_case.execute(
+            ticker, timeframe, periods=periods, start=start, end=end
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return _present_ema(series)
 
 
 @router.get(
