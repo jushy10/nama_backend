@@ -120,6 +120,33 @@ class TickerCardResponse(BaseModel):
     options_metrics: OptionsMetricsResponse | None = None  # opt-in: ?include=options_metrics
 
 
+class PeHistoryPointResponse(BaseModel):
+    """One point on the trailing-P/E walk: the P/E at a past earnings release.
+
+    ``date`` is the announcement date, ``price`` the close then, ``ttm_eps`` the
+    trailing-twelve-month EPS the market knew (the just-reported quarter plus the three
+    before it), and ``pe`` their ratio. All rounded to 2 decimals at the presenter."""
+
+    date: date  # the announcement date the P/E is anchored on
+    price: float  # close on/near that date
+    ttm_eps: float  # trailing 4 reported quarters' EPS
+    pe: float  # price / ttm_eps
+
+
+class PeHistoryResponse(BaseModel):
+    """A stock's trailing P/E over time — one point per reported quarter, oldest first.
+
+    Derived, not stored: each release's close (Alpaca) over the trailing-twelve-month
+    reported EPS (Yahoo) at that date. ``points`` is empty (a 200, not a 404) when the
+    EPS history is uncovered or Yahoo blocked the read — the walk is a best-effort card
+    extra. The *current* live P/E stays on the card's ``metrics.pe``; this is the
+    backward-looking series that pairs with it."""
+
+    ticker: str
+    count: int  # number of points (may be fewer than the reported quarters)
+    points: list[PeHistoryPointResponse]  # oldest first
+
+
 class TickerTypeResponse(BaseModel):
     """A ticker's asset type, from a single ETF-universe membership check.
 

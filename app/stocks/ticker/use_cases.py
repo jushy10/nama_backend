@@ -34,7 +34,7 @@ fresh anyway.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Sequence
 
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
@@ -43,19 +43,27 @@ from app.stocks.entities import (
     Quote,
     StockFundamentals,
     StockPerformance,
+    Timeframe,
 )
 from app.stocks.etfs.repository import EtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AnalystEstimatesProvider,
+    CandleProvider,
     CompanyProfileProvider,
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
     StockQuoteProvider,
 )
-from app.stocks.ticker.entities import TickerOptionsMetrics, TickerValuation
-from app.stocks.ticker.ports import OptionChainProvider
+from app.stocks.ticker.entities import (
+    PeHistory,
+    ReportedEps,
+    TTM_QUARTERS,
+    TickerOptionsMetrics,
+    TickerValuation,
+)
+from app.stocks.ticker.ports import EpsHistoryProvider, OptionChainProvider
 from app.stocks.ticker.repository import StoredTickerFacts, TickerRepository
 
 # The card's asset-type discriminator: an ETF (in the stored ETF universe) or a plain equity.
@@ -405,3 +413,59 @@ class ClassifyTicker:
             ASSET_TYPE_ETF if self._etfs.is_etf(normalized) else ASSET_TYPE_EQUITY
         )
         return TickerClassification(ticker=normalized, asset_type=asset_type)
+
+
+class GetStockPeHistory:
+    """Use case: a stock's trailing P/E sampled at each earnings release.
+
+    Derives the walk from two legs the entity combines: the *reported-EPS run* (through
+    ``EpsHistoryProvider`` — the deep Yahoo read) rolled into a trailing-twelve-month
+    series, and the *daily closes* (through the shared ``CandleProvider``, i.e. Alpaca)
+    that price each release. One point per reported quarter, oldest first.
+
+    The two legs split the way the card splits primary from enrichment. The closes are
+    the reliable leg — Alpaca serves from data-centre IPs — so a failure there
+    propagates (the endpoint maps it to HTTP). The EPS history is the best-effort leg —
+    Yahoo intermittently blocks data-centre IPs — so a blocked read degrades to an
+    *empty* history: a 200 with no points, the same "no data ≠ error" stance the rest of
+    the slice takes. With fewer than a full trailing year of reported quarters there's
+    nothing to anchor, so it returns empty without even paying the price fetch.
+    """
+
+    def __init__(
+        self,
+        candles: CandleProvider,
+        eps_history: EpsHistoryProvider,
+    ) -> None:
+        self._candles = candles
+        self._eps_history = eps_history
+
+    def execute(self, symbol: str) -> PeHistory:
+        normalized = _normalize_symbol(symbol)
+        eps = self._get_eps_history(normalized)
+        if len(eps) < TTM_QUARTERS:
+            # Not enough reported quarters to form even one trailing-year point — skip
+            # the price fetch entirely (an uncovered/blocked symbol, or a fresh listing).
+            return PeHistory(symbol=normalized, points=())
+        closes = self._get_closes(normalized, since=eps[0].report_date)
+        return PeHistory.build(normalized, eps, closes)
+
+    def _get_eps_history(self, symbol: str) -> tuple[ReportedEps, ...]:
+        # Best-effort leg: a Yahoo-blocked read is an empty history, not a 502 — the P/E
+        # walk is a card-adjacent extra, so "no coverage" and "blocked" both degrade the
+        # same way (an empty series), never sinking the request.
+        try:
+            return self._eps_history.get_eps_history(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return ()
+
+    def _get_closes(self, symbol: str, *, since: date) -> dict[date, float]:
+        # Primary leg: daily closes spanning the reported window (its earliest quarter to
+        # now). Errors propagate — Alpaca is the reliable source, so a failure here is a
+        # real one worth surfacing rather than silently emptying the chart. Early quarters
+        # outside the feed's range simply find no close and drop out in ``build``.
+        start = datetime(since.year, since.month, since.day, tzinfo=timezone.utc)
+        series = self._candles.get_candles(
+            symbol, Timeframe.DAY_1, start=start, end=None
+        )
+        return {candle.timestamp.date(): candle.close for candle in series.candles}

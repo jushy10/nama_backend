@@ -53,10 +53,13 @@ request — freshness of the consensus legs is the annual-earnings slice's job
 (lazy fill + its sync cron).
 """
 
+from functools import lru_cache
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.stocks.adapters.yfinance_eps_history_adapter import YfinanceEpsHistoryProvider
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     get_quarterly_earnings_provider,
@@ -79,16 +82,23 @@ from app.stocks.router import (
 )
 from app.stocks.schemas import StockPerformanceResponse
 from app.stocks.ticker.db_repository import SqlTickerRepository
-from app.stocks.ticker.entities import TickerOptionsMetrics
+from app.stocks.ticker.entities import PeHistory, TickerOptionsMetrics
 from app.stocks.ticker.ports import OptionChainProvider
 from app.stocks.ticker.schemas import (
     DividendResponse,
     OptionsMetricsResponse,
+    PeHistoryPointResponse,
+    PeHistoryResponse,
     TickerCardResponse,
     TickerMetricsResponse,
     TickerTypeResponse,
 )
-from app.stocks.ticker.use_cases import ClassifyTicker, GetTickerCard, TickerCard
+from app.stocks.ticker.use_cases import (
+    ClassifyTicker,
+    GetStockPeHistory,
+    GetTickerCard,
+    TickerCard,
+)
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.universe.entities import (
     Classifications,
@@ -271,6 +281,69 @@ def get_ticker_card_endpoint(
     # a burst of viewers collapses onto one response.
     response.headers["Cache-Control"] = "public, max-age=300"
     return _present(card)
+
+
+@lru_cache
+def _eps_history_provider() -> YfinanceEpsHistoryProvider:
+    # Keyless yfinance singleton (like the options provider): it shares the module-level
+    # pacing state and is best-effort at read, so it's always constructable — no key gate.
+    return YfinanceEpsHistoryProvider()
+
+
+def get_pe_history_use_case(
+    provider=Depends(get_provider),
+) -> GetStockPeHistory:
+    # The Alpaca singleton supplies the daily closes (it implements CandleProvider — the
+    # same instance the candle chart uses), and the deep reported-EPS history rides the
+    # keyless yfinance adapter. The card's Alpaca 503 gate is inherited (the closes are
+    # primary here); the EPS leg is best-effort, so no extra key to gate on.
+    return GetStockPeHistory(provider, _eps_history_provider())
+
+
+def _present_pe_history(history: PeHistory) -> PeHistoryResponse:
+    """Presenter: P/E-history entity -> HTTP response DTO. Rounds the display figures at
+    the edge (``pe`` is already 2-dp from the entity; price/EPS carry feed float noise)."""
+    return PeHistoryResponse(
+        ticker=history.symbol,
+        count=len(history.points),
+        points=[
+            PeHistoryPointResponse(
+                date=point.report_date,
+                price=round(point.price, 2),
+                ttm_eps=round(point.ttm_eps, 2),
+                pe=point.pe,
+            )
+            for point in history.points
+        ],
+    )
+
+
+@router.get(
+    "/stocks/ticker/{ticker}/pe-history", response_model=PeHistoryResponse
+)
+def get_pe_history_endpoint(
+    ticker: str,
+    response: Response,
+    use_case: GetStockPeHistory = Depends(get_pe_history_use_case),
+) -> PeHistoryResponse:
+    """A stock's trailing P/E sampled at each earnings release (oldest first): the close
+    on each announcement date over the trailing-twelve-month reported EPS then known. The
+    backward-looking companion to the card's live ``metrics.pe`` — how the multiple has
+    moved over time. The EPS leg is best-effort (keyless Yahoo, which blocks data-centre
+    IPs intermittently), so an uncovered or blocked symbol is a 200 with an empty
+    ``points``, never a 404/502; only the Alpaca price leg can raise."""
+    try:
+        history = use_case.execute(ticker)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    # A historical series that only extends when a new quarter reports (its latest point
+    # tailed by today's close) — cache an hour, like the other slow-moving card reads.
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return _present_pe_history(history)
 
 
 def get_classify_ticker_use_case(db: Session = Depends(get_db)) -> ClassifyTicker:

@@ -27,9 +27,10 @@ these four derived figures and not the contracts themselves.
 
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass
 from datetime import date
-from typing import Sequence
+from typing import Mapping, Sequence
 
 # Below this forward EPS-growth rate (percent) the forward PEG stops being a stable
 # read and is suppressed. PEG = P/E ÷ growth, so as growth approaches zero the ratio
@@ -40,6 +41,14 @@ from typing import Sequence
 # a 25.8 forward P/E over 2.1% expected growth, an arithmetically-correct-but-useless
 # PEG of 12.2 that reads as "wildly overvalued". Better to serve nothing than that.
 _MIN_FORWARD_EPS_GROWTH = 5.0  # percent
+
+# A trailing-twelve-month EPS is the sum of this many reported quarters — the window the
+# P/E-history walk rolls over the reported-EPS run (and the warm-up before its first point).
+TTM_QUARTERS = 4
+
+# How stale a close may be to price an earnings release: a release can land on a weekend or
+# holiday, so the P/E point takes the most recent session's close within this many days.
+_MAX_PRICE_LAG_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -233,3 +242,104 @@ class TickerOptionsMetrics:
 def _nearest_strike(side: dict[float, OptionContract], price: float) -> float:
     """The strike closest to the money on one side of a chain."""
     return min(side, key=lambda strike: abs(strike - price))
+
+
+@dataclass(frozen=True)
+class ReportedEps:
+    """One quarter's reported (actual) EPS, keyed by its announcement date.
+
+    The raw material of a trailing-P/E walk: a chronological run of these sums into a
+    rolling trailing-twelve-month EPS. Announcement-dated (not fiscal-period-dated) on
+    purpose — the market re-prices the multiple the day the number is released, so that's
+    the date each P/E point is anchored to.
+    """
+
+    report_date: date
+    eps: float  # the reported (actual) diluted/consensus EPS for that quarter
+
+
+@dataclass(frozen=True)
+class PeHistoryPoint:
+    """The trailing P/E at one earnings release.
+
+    The close on the announcement date over the trailing-twelve-month EPS the market
+    knew then (the just-reported quarter plus the three before it). One dot on the P/E
+    line the FE draws.
+    """
+
+    report_date: date  # the announcement date the P/E is anchored on
+    price: float  # the close on/near the announcement date
+    ttm_eps: float  # sum of the trailing 4 reported quarters
+    pe: float  # price / ttm_eps, rounded to 2
+
+
+@dataclass(frozen=True)
+class PeHistory:
+    """A symbol's trailing P/E sampled at each earnings release — one point per reported
+    quarter, oldest first.
+
+    Pure derivation (``build``), the same stance as ``TickerOptionsMetrics.from_chains``:
+    the use case fetches the two legs (the reported-EPS run and the daily closes) and the
+    entity owns the rule that combines them. A quarter yields a point only when it has a
+    full trailing year of EPS behind it (the first ``TTM_QUARTERS - 1`` are warm-up), a
+    *positive* trailing sum (a trailing loss makes the multiple meaningless — the same
+    guard as ``TickerValuation.trailing_pe``), and a close on/near its announcement date
+    (early quarters outside the price feed's range are dropped). So the series can be
+    shorter than the EPS run — a 200 with an empty ``points`` is a valid "no coverage".
+    """
+
+    symbol: str
+    points: tuple[PeHistoryPoint, ...]
+
+    @classmethod
+    def build(
+        cls,
+        symbol: str,
+        eps: Sequence[ReportedEps],
+        closes: Mapping[date, float],
+        *,
+        max_price_lag_days: int = _MAX_PRICE_LAG_DAYS,
+    ) -> "PeHistory":
+        """Roll the reported-EPS run into a trailing-twelve-month series and divide each
+        release's close by it. ``eps`` in any order (sorted here); ``closes`` maps a
+        trading day to that day's close."""
+        ordered = sorted(eps, key=lambda e: e.report_date)
+        trading_days = sorted(closes)
+        points: list[PeHistoryPoint] = []
+        for i in range(TTM_QUARTERS - 1, len(ordered)):
+            window = ordered[i - TTM_QUARTERS + 1 : i + 1]
+            ttm = sum(q.eps for q in window)
+            if ttm <= 0:
+                continue  # a trailing loss has no meaningful P/E
+            report_date = ordered[i].report_date
+            price = _close_asof(trading_days, closes, report_date, max_price_lag_days)
+            if price is None or price <= 0:
+                continue  # no price near this release (feed range or a data gap)
+            points.append(
+                PeHistoryPoint(
+                    report_date=report_date,
+                    price=price,
+                    ttm_eps=ttm,
+                    pe=round(price / ttm, 2),
+                )
+            )
+        return cls(symbol=symbol, points=tuple(points))
+
+
+def _close_asof(
+    trading_days: Sequence[date],
+    closes: Mapping[date, float],
+    target: date,
+    max_lag_days: int,
+) -> float | None:
+    """The close on ``target`` or the most recent trading day before it, within
+    ``max_lag_days`` — a release can land on a weekend/holiday, and the prior session's
+    close is the price the market carried into it. ``None`` when nothing is near enough
+    (``trading_days`` must be sorted ascending)."""
+    idx = bisect.bisect_right(trading_days, target)
+    if idx == 0:
+        return None
+    day = trading_days[idx - 1]
+    if (target - day).days > max_lag_days:
+        return None
+    return closes[day]

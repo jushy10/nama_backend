@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import date
 
-from app.stocks.ticker.entities import OptionContract
+from app.stocks.ticker.entities import OptionContract, ReportedEps
 
 
 class OptionChainProvider(ABC):
@@ -40,6 +40,30 @@ class OptionChainProvider(ABC):
         """Return every contract (calls and puts) for one expiration.
 
         Empty when the expiry has no quotable contracts.
+
+        Raises:
+            StockDataUnavailable: the upstream source failed.
+        """
+        raise NotImplementedError
+
+
+class EpsHistoryProvider(ABC):
+    """A gateway for a stock's deep reported-EPS history — the trailing leg of the
+    P/E-history walk.
+
+    Distinct from the quarterly-earnings slice's provider (which serves a 4-recent +
+    2-upcoming *timeline*): this returns as many *reported* quarters as the source
+    publishes (~7 years), the depth a multi-year trailing-P/E series needs. Best-effort
+    like the options read — the P/E history is a card-adjacent extra, and the live
+    source (Yahoo) intermittently blocks data-centre IPs.
+    """
+
+    @abstractmethod
+    def get_eps_history(self, symbol: str) -> tuple[ReportedEps, ...]:
+        """Return the symbol's reported quarterly EPS, oldest first.
+
+        Actuals only — quarters with no reported figure yet are omitted. Empty when the
+        symbol has no earnings history (not an error for best-effort enrichment).
 
         Raises:
             StockDataUnavailable: the upstream source failed.
