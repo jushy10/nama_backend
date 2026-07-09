@@ -23,12 +23,14 @@ from app.stocks.endpoints.cron_quarterly_earnings_endpoints import (
 from app.stocks.endpoints.cron_recommendations_endpoints import (
     router as recommendations_cron_router,
 )
+from app.stocks.endpoints.cron_news_endpoints import router as news_cron_router
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     router as quarterly_earnings_router,
 )
 from app.stocks.endpoints.recommendations_endpoints import (
     router as recommendations_router,
 )
+from app.stocks.endpoints.news_endpoints import router as news_router
 from app.stocks.endpoints.cron_universe_endpoints import (
     router as universe_cron_router,
 )
@@ -135,6 +137,10 @@ app.include_router(annual_earnings_router)
 # sell-side buy/hold/sell split by month, served from the DB cache over yfinance. See
 # app/stocks/endpoints/recommendations_endpoints.py.
 app.include_router(recommendations_router)
+# The news read endpoint (GET /stocks/{symbol}/news): the stock's recent headlines
+# (title/publisher/link/published time), served from the DB cache over yfinance. See
+# app/stocks/endpoints/news_endpoints.py.
+app.include_router(news_router)
 # The quarterly-earnings refresh cron endpoint (POST /internal/earnings/quarterly/sync);
 # it drives the SyncQuarterlyEarnings use case out of band. See
 # app/stocks/endpoints/cron_quarterly_earnings_endpoints.py.
@@ -156,6 +162,10 @@ app.include_router(ticker_router)
 # drives the SyncRecommendations use case out of band. See
 # app/stocks/endpoints/cron_recommendations_endpoints.py.
 app.include_router(recommendations_cron_router)
+# The news refresh cron endpoint (POST /internal/news/sync); it drives the SyncStockNews
+# use case out of band (yfinance -> DB), seeding + refreshing each stock's recent
+# headlines. See app/stocks/endpoints/cron_news_endpoints.py.
+app.include_router(news_cron_router)
 # The universe refresh cron endpoint (POST /internal/universe/sync); it drives the
 # SyncUniverse use case out of band (yfinance screen -> stocks anchor, then per-ticker
 # sector/industry enrichment), populating the stocks table with the ≥$1B US universe.
