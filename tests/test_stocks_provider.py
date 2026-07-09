@@ -627,11 +627,40 @@ def test_get_quotes_chunks_large_symbol_lists():
     p = provider_with(client, ExplodingTradingClient())
     quotes = p.get_quotes(symbols)
     assert len(quotes) == 450
-    # 450 symbols / 200-per-chunk -> 3 requests (200, 200, 50).
-    assert [len(c) for c in client.requested_chunks] == [200, 200, 50]
+    # 450 symbols / 100-per-chunk -> 5 requests (100 x4, 50).
+    assert [len(c) for c in client.requested_chunks] == [100, 100, 100, 100, 50]
 
 
-def test_get_quotes_api_error_translated_to_unavailable():
+class OneChunkFailsClient:
+    """Fails the Nth snapshot call (0-indexed) with an APIError, serves the rest — so a test
+    can prove a single rejected chunk doesn't discard the other chunks' quotes."""
+
+    def __init__(self, snapshots_by_symbol, fail_index):
+        self._snapshots = snapshots_by_symbol
+        self._fail_index = fail_index
+        self.calls = 0
+
+    def get_stock_snapshot(self, request):
+        i = self.calls
+        self.calls += 1
+        if i == self._fail_index:
+            raise APIError("boom")
+        return {s: self._snapshots.get(s) for s in request.symbol_or_symbols}
+
+
+def test_get_quotes_skips_a_failed_chunk_and_keeps_the_rest():
+    # 150 symbols -> two chunks of (100, 50); fail the first, and the second's 50 still return.
+    symbols = [f"S{i}" for i in range(150)]
+    client = OneChunkFailsClient({s: make_snapshot() for s in symbols}, fail_index=0)
+    p = provider_with(client, ExplodingTradingClient())
+    quotes = p.get_quotes(symbols)
+    assert client.calls == 2  # kept going after the failure
+    assert len(quotes) == 50  # only the surviving chunk's symbols
+    assert set(quotes) == {f"S{i}" for i in range(100, 150)}
+
+
+def test_get_quotes_raises_only_when_every_chunk_fails():
+    # A single chunk that fails yields nothing -> a hard feed failure.
     client = RecordingSnapshotClient({}, error=APIError("boom"))
     p = provider_with(client, ExplodingTradingClient())
     with pytest.raises(StockDataUnavailable):
