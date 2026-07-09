@@ -123,8 +123,8 @@ def get_ticker_card_use_case(
     db: Session = Depends(get_db),
 ) -> GetTickerCard:
     # The Alpaca singleton backs the quote, the trailing performance windows, and the
-    # one-time exchange lookup (same instance as the snapshot/quote endpoints), and
-    # the estimates are the same DB-only projection the snapshot's forward P/E uses —
+    # one-time exchange lookup (the same instance every other price view uses), and
+    # the estimates are the same DB-only projection the AI analysis context uses —
     # one source of truth for every leg the card carries. The profile provider
     # supplies the display name (the slim quote carries none), TTL-cached like on the
     # snapshot; the repository serves the stored exchange off the stocks row. The

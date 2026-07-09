@@ -5,10 +5,10 @@ fund's detail card.
   the ``etfs`` table: a free-text ``q`` matched case-insensitively against name *or* ticker, a
   ``category`` slug filter (the fund type), and a ``sort`` (net assets — the "top" default — or
   expense ratio) with an ``order``. Rows are stored facts only — no live price; a client opens
-  the shared ``GET /stocks/{symbol}/quote`` for a live ETF quote (Alpaca serves ETFs too).
+  ``GET /stocks/etf/{ticker}`` (below) for a live ETF quote (Alpaca serves ETFs too).
 - ``GET /stocks/etfs/categories`` — the distinct category slugs, for the FE's filter menu.
 - ``GET /stocks/etf/{ticker}`` — one fund's detail card: the **live quote** (Alpaca, primary —
-  the same feed the quote endpoint uses, so a quote failure is the same 502), the stored
+  the same Alpaca feed every price view uses, so a quote failure is a 502), the stored
   ``etfs``-table facts (name/exchange/category), and the stored profile (fund family, description,
   top holdings, sector weightings) read straight from the DB — populated out-of-band by the sync,
   so the base card makes no live Yahoo call. Then **opt-in blocks** via ``?include=`` (repeat

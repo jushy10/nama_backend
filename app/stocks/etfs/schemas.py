@@ -22,7 +22,7 @@ class EtfSearchItemResponse(BaseModel):
     enrichment pass reaches the fund (or when Yahoo doesn't categorise it); ``dividend_yield`` is
     the trailing distribution yield as a percent (``1.03`` = 1.03%), ``null`` for a
     non-distributing or not-yet-enriched fund. The FE fetches a live quote per row on demand via
-    the shared ``GET /stocks/{symbol}/quote`` (which serves ETFs too).
+    the fund's detail card ``GET /stocks/etf/{ticker}`` (whose quote is Alpaca-backed and serves ETFs).
     """
 
     ticker: str

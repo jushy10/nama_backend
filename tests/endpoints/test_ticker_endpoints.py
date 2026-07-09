@@ -149,7 +149,7 @@ def test_presents_the_core_card_with_null_optin_blocks_by_default():
     assert body["exchange"] == "NASDAQ"  # DB-backed, always served
     assert body["asset_type"] == "equity"  # always present; a stock here
     assert body["price"] == 975.56
-    assert body["change"] == 12.3  # vs the previous close, same rule as /quote
+    assert body["change"] == 12.3  # vs the previous close, same rule as every price view
     assert body["change_percent"] == 1.28
     assert body["market_cap"] == 1_090_000_000_000.0  # off the anchor, not fundamentals
     assert body["sector"] == "technology"  # universe-screen fact off the anchor

@@ -22,7 +22,6 @@ from app.stocks.entities import (
     CompanyProfile,
     InvestmentAnalysis,
     Logo,
-    Quote,
     SectorAnalysis,
     SectorPerformance,
     Stock,
@@ -50,7 +49,6 @@ from app.stocks.ports import (
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
-    StockQuoteProvider,
 )
 from app.stocks.recommendations.entities import AnalystRecommendations
 from app.stocks.recommendations.ports import RecommendationProvider
@@ -186,22 +184,6 @@ class GetStockInfo:
         except (StockNotFound, StockDataUnavailable):
             return None  # best-effort: never sink the price response
         return None if estimates.is_empty else estimates
-
-
-class GetStockQuote:
-    """Use case: retrieve a stock's minimal live quote by its symbol.
-
-    Backs the high-frequency polling endpoint — only the snapshot-derived price
-    and day change, no best-effort enrichment. The quote is the primary data, so
-    a not-found / upstream failure propagates rather than being swallowed,
-    mirroring the candles and earnings endpoints.
-    """
-
-    def __init__(self, provider: StockQuoteProvider) -> None:
-        self._provider = provider
-
-    def execute(self, symbol: str) -> Quote:
-        return self._provider.get_quote(_normalize_symbol(symbol))
 
 
 class GetStockLogo:
