@@ -290,7 +290,7 @@ def test_search_normalizes_inputs_and_passes_clean_criteria():
     repo = _FakeSearchRepo()
     SearchEtfs(repo).execute(
         query="  Gold ",
-        category="Large Growth",
+        categories=["Large Growth"],
         sort=EtfSort.EXPENSE_RATIO,
         direction=SortDirection.ASC,
         limit=10,
@@ -299,16 +299,26 @@ def test_search_normalizes_inputs_and_passes_clean_criteria():
     c = repo.criteria
     # Trimmed but NOT lower-cased — the SQL match is case-insensitive, so the raw case is kept.
     assert c.query == "Gold"
-    assert c.category == "large_growth"  # slugged to the stored convention
+    assert c.categories == ("large_growth",)  # slugged to the stored convention
     assert (c.sort, c.direction) == (EtfSort.EXPENSE_RATIO, SortDirection.ASC)
     assert (c.limit, c.offset) == (10, 20)
 
 
-def test_search_blank_text_and_category_become_none():
+def test_search_multi_select_categories_slugs_dedupes_and_drops_blanks():
     repo = _FakeSearchRepo()
-    SearchEtfs(repo).execute(query="   ", category="")
+    SearchEtfs(repo).execute(
+        categories=["Large Growth", "large_growth", "", "Large Blend"]
+    )
+    # Each label slugged; blanks dropped; duplicates collapsed with first-seen order kept.
+    assert repo.criteria.categories == ("large_growth", "large_blend")
+
+
+def test_search_blank_text_and_category_become_empty():
+    repo = _FakeSearchRepo()
+    SearchEtfs(repo).execute(query="   ", categories=["", "  "])
     c = repo.criteria
-    assert (c.query, c.category) == (None, None)
+    assert c.query is None
+    assert c.categories == ()
 
 
 def test_search_defaults_to_net_assets_desc_and_the_default_page():
@@ -317,7 +327,8 @@ def test_search_defaults_to_net_assets_desc_and_the_default_page():
     c = repo.criteria
     assert (c.sort, c.direction) == (EtfSort.NET_ASSETS, SortDirection.DESC)
     assert (c.limit, c.offset) == (SearchEtfs.DEFAULT_LIMIT, 0)
-    assert (c.query, c.category) == (None, None)
+    assert c.query is None
+    assert c.categories == ()
 
 
 @pytest.mark.parametrize(

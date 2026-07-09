@@ -60,12 +60,15 @@ class EtfSort(str, Enum):
     A ``str`` enum so FastAPI binds it straight from the ``?sort=`` query param (an unknown
     value is a 422, like ``StockSort``) and it serialises back as its value. ``NET_ASSETS`` is
     the natural default (biggest fund first — the "top" ETFs); ``EXPENSE_RATIO`` sorts by cost
-    (cheapest first with ``order=asc``). Category is a *filter*, not a sort — it's a label, not a
-    number. The value → column mapping is the adapter's job.
+    (cheapest first with ``order=asc``); ``DIVIDEND_YIELD`` sorts by the trailing distribution
+    yield (highest-income first with the default ``order=desc``) — a best-effort figure off the
+    fund profile, so a fund without one sorts last. Category is a *filter*, not a sort — it's a
+    label, not a number. The value → column mapping is the adapter's job.
     """
 
     NET_ASSETS = "net_assets"
     EXPENSE_RATIO = "expense_ratio"
+    DIVIDEND_YIELD = "dividend_yield"
 
 
 class SortDirection(str, Enum):
@@ -86,8 +89,9 @@ class EtfSearchResult:
     shared ``GET /stocks/{symbol}/quote``, which serves ETFs too).
 
     Everything but the ``ticker`` is nullable — a screened ETF always has ``net_assets`` (the
-    screen's selection figure) but may still lack a name, an expense ratio, or a ``category``
-    until the enrichment pass reaches it (or forever, for a fund Yahoo doesn't categorise).
+    screen's selection figure) but may still lack a name, an expense ratio, a ``category``, or a
+    ``dividend_yield`` until the enrichment pass reaches it (or forever, for a fund Yahoo doesn't
+    categorise / a non-distributing fund). ``dividend_yield`` is a percent (``1.03`` = 1.03%).
     """
 
     ticker: str
@@ -96,6 +100,7 @@ class EtfSearchResult:
     net_assets: float | None
     expense_ratio: float | None
     category: str | None
+    dividend_yield: float | None = None
 
 
 @dataclass(frozen=True)
@@ -103,13 +108,14 @@ class EtfSearchCriteria:
     """A normalized ETF-search request — the shape the use case hands the repository.
 
     Every field is already cleaned at the use-case edge: ``query`` is trimmed (``None`` when
-    blank) and matched as a case-insensitive substring against name *or* ticker; ``category`` is
-    slugged to the stored convention (``None`` when blank = don't filter); ``limit`` is clamped
-    to a sane page and ``offset`` floored at zero. The adapter turns this into one SQL query.
+    blank) and matched as a case-insensitive substring against name *or* ticker; ``categories`` is
+    slugged to the stored convention (empty = don't filter, else match *any* of the given slugs —
+    an OR set, so several fund categories can be screened at once); ``limit`` is clamped to a sane
+    page and ``offset`` floored at zero. The adapter turns this into one SQL query.
     """
 
     query: str | None
-    category: str | None
+    categories: tuple[str, ...]
     sort: EtfSort
     direction: SortDirection
     limit: int

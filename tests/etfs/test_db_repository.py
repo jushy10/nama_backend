@@ -323,6 +323,7 @@ def _seed(
     net_assets=1e10,
     expense_ratio=None,
     category=None,
+    dividend_yield=None,
 ):
     """Insert an ``etfs`` row directly — whatever the sync would have written."""
     session.add(
@@ -333,6 +334,7 @@ def _seed(
             net_assets=net_assets,
             expense_ratio=expense_ratio,
             category=category,
+            dividend_yield=dividend_yield,
             screened_at=_NOW,
         )
     )
@@ -342,7 +344,7 @@ def _seed(
 def _criteria(**overrides) -> EtfSearchCriteria:
     base = dict(
         query=None,
-        category=None,
+        categories=(),
         sort=EtfSort.NET_ASSETS,
         direction=SortDirection.DESC,
         limit=50,
@@ -380,12 +382,44 @@ def test_search_filters_by_category(session):
     _seed(session, "GLD", category="commodities_focused")
     r = SqlEtfSearchRepository(session)
 
-    assert set(_tickers(r.search(_criteria(category="large_blend")))) == {"SPY", "IVV"}
-    assert _tickers(r.search(_criteria(category="commodities_focused"))) == ["GLD"]
+    assert set(_tickers(r.search(_criteria(categories=("large_blend",))))) == {"SPY", "IVV"}
+    assert _tickers(r.search(_criteria(categories=("commodities_focused",)))) == ["GLD"]
     # The category ANDs with the text filter.
     assert _tickers(
-        r.search(_criteria(query="qqq", category="large_growth"))
+        r.search(_criteria(query="qqq", categories=("large_growth",)))
     ) == ["QQQ"]
+
+
+def test_search_matches_any_of_several_categories(session):
+    _seed(session, "SPY", category="large_blend")
+    _seed(session, "QQQ", category="large_growth")
+    _seed(session, "GLD", category="commodities_focused")
+    r = SqlEtfSearchRepository(session)
+
+    # Several categories OR together — the union of the two large-cap buckets, not the commodity.
+    assert set(
+        _tickers(r.search(_criteria(categories=("large_blend", "large_growth"))))
+    ) == {"SPY", "QQQ"}
+
+
+def test_search_sorts_by_dividend_yield_with_nulls_last_either_direction(session):
+    _seed(session, "HIGH", dividend_yield=3.5)
+    _seed(session, "MIDY", dividend_yield=1.8)
+    _seed(session, "NONE", dividend_yield=None)  # non-distributing sinks to the bottom
+    _seed(session, "LOWY", dividend_yield=0.6)
+    r = SqlEtfSearchRepository(session)
+
+    # Descending (highest income first): 3.5, 1.8, 0.6, then the null.
+    assert _tickers(r.search(_criteria(sort=EtfSort.DIVIDEND_YIELD))) == [
+        "HIGH",
+        "MIDY",
+        "LOWY",
+        "NONE",
+    ]
+    # Ascending: 0.6, 1.8, 3.5, and the null is STILL last (nulls_last, not just reversed).
+    assert _tickers(
+        r.search(_criteria(sort=EtfSort.DIVIDEND_YIELD, direction=SortDirection.ASC))
+    ) == ["LOWY", "MIDY", "HIGH", "NONE"]
 
 
 def test_search_sorts_by_net_assets_both_directions(session):
@@ -454,6 +488,7 @@ def test_search_maps_every_row_field(session):
         net_assets=5e11,
         expense_ratio=0.09,
         category="large_blend",
+        dividend_yield=1.24,
     )
     (result,) = SqlEtfSearchRepository(session).search(_criteria()).results
 
@@ -462,10 +497,11 @@ def test_search_maps_every_row_field(session):
         "SPDR S&P 500 ETF Trust",
         "NYSE",
     )
-    assert (result.net_assets, result.expense_ratio, result.category) == (
+    assert (result.net_assets, result.expense_ratio, result.category, result.dividend_yield) == (
         5e11,
         0.09,
         "large_blend",
+        1.24,
     )
 
 

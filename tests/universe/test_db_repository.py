@@ -331,8 +331,8 @@ def _seed(
 def _criteria(**overrides) -> StockSearchCriteria:
     base = dict(
         query=None,
-        sector=None,
-        industry=None,
+        sectors=(),
+        industries=(),
         in_sp500=None,
         in_nasdaq100=None,
         sort=StockSort.MARKET_CAP,
@@ -375,12 +375,40 @@ def test_search_filters_by_sector_and_industry(session):
     _seed(session, "XOM", sector="energy", industry="oil_gas_integrated")
     r = SqlStockSearchRepository(session)
 
-    assert set(_tickers(r.search(_criteria(sector="technology")))) == {"NVDA", "MSFT"}
-    assert _tickers(r.search(_criteria(industry="semiconductors"))) == ["NVDA"]
-    # Both filters AND together.
+    assert set(_tickers(r.search(_criteria(sectors=("technology",))))) == {"NVDA", "MSFT"}
+    assert _tickers(r.search(_criteria(industries=("semiconductors",)))) == ["NVDA"]
+    # Sector and industry AND together (across axes).
     assert _tickers(
-        r.search(_criteria(sector="technology", industry="software_infrastructure"))
+        r.search(_criteria(sectors=("technology",), industries=("software_infrastructure",)))
     ) == ["MSFT"]
+
+
+def test_search_matches_any_of_several_sectors_or_industries(session):
+    _seed(session, "NVDA", sector="technology", industry="semiconductors")
+    _seed(session, "MSFT", sector="technology", industry="software_infrastructure")
+    _seed(session, "XOM", sector="energy", industry="oil_gas_integrated")
+    _seed(session, "JPM", sector="financials", industry="banks_diversified")
+    r = SqlStockSearchRepository(session)
+
+    # Several sectors OR within the axis — the union of technology and energy.
+    assert set(_tickers(r.search(_criteria(sectors=("technology", "energy"))))) == {
+        "NVDA",
+        "MSFT",
+        "XOM",
+    }
+    # Several industries likewise.
+    assert set(
+        _tickers(r.search(_criteria(industries=("semiconductors", "oil_gas_integrated"))))
+    ) == {"NVDA", "XOM"}
+    # The two axes still AND: (technology OR energy) AND (semiconductors OR banks) == NVDA.
+    assert _tickers(
+        r.search(
+            _criteria(
+                sectors=("technology", "energy"),
+                industries=("semiconductors", "banks_diversified"),
+            )
+        )
+    ) == ["NVDA"]
 
 
 def test_search_filters_by_index_membership(session):
@@ -409,21 +437,38 @@ def test_search_filters_by_market_cap_tier(session):
     _seed(session, "SMALL", market_cap=1.5e9)
     r = SqlStockSearchRepository(session)
 
-    assert set(_tickers(r.search(_criteria(market_cap_tier=MarketCapTier.MEGA)))) == {
+    assert set(_tickers(r.search(_criteria(market_cap_tiers=(MarketCapTier.MEGA,))))) == {
         "MEGA",
         "AT200B",
     }
-    assert set(_tickers(r.search(_criteria(market_cap_tier=MarketCapTier.LARGE)))) == {
+    assert set(_tickers(r.search(_criteria(market_cap_tiers=(MarketCapTier.LARGE,))))) == {
         "LARGE",
         "AT10B",
     }
-    assert set(_tickers(r.search(_criteria(market_cap_tier=MarketCapTier.MID)))) == {
+    assert set(_tickers(r.search(_criteria(market_cap_tiers=(MarketCapTier.MID,))))) == {
         "MID",
         "AT2B",
     }
-    assert _tickers(r.search(_criteria(market_cap_tier=MarketCapTier.SMALL))) == ["SMALL"]
+    assert _tickers(r.search(_criteria(market_cap_tiers=(MarketCapTier.SMALL,)))) == ["SMALL"]
     # No tier => every screened size is returned.
     assert len(r.search(_criteria()).results) == 7
+
+
+def test_search_filters_by_multiple_market_cap_tiers_as_a_union(session):
+    _seed(session, "MEGA", market_cap=250e9)
+    _seed(session, "LARGE", market_cap=50e9)
+    _seed(session, "MID", market_cap=5e9)
+    _seed(session, "SMALL", market_cap=1.5e9)
+    r = SqlStockSearchRepository(session)
+
+    # Two adjacent tiers merge into one contiguous span ($2B–$200B).
+    assert set(
+        _tickers(r.search(_criteria(market_cap_tiers=(MarketCapTier.LARGE, MarketCapTier.MID))))
+    ) == {"LARGE", "MID"}
+    # Non-adjacent tiers are a disjoint union — the ends without the middle.
+    assert set(
+        _tickers(r.search(_criteria(market_cap_tiers=(MarketCapTier.MEGA, MarketCapTier.SMALL))))
+    ) == {"MEGA", "SMALL"}
 
 
 def test_search_sorts_by_market_cap_both_directions(session):
