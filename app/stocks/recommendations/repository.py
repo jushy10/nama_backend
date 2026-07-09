@@ -14,7 +14,10 @@ this way keeps the endpoint off Yahoo, which rate-limits data-centre IPs.
 from abc import ABC, abstractmethod
 from typing import NamedTuple
 
-from app.stocks.recommendations.entities import AnalystRecommendations
+from app.stocks.recommendations.entities import (
+    AnalystRatingChanges,
+    AnalystRecommendations,
+)
 
 
 class RefreshTarget(NamedTuple):
@@ -68,4 +71,33 @@ class RecommendationsRepository(ABC):
         Includes stocks not yet cached, so the out-of-band sync both *seeds* new coverage and
         renews stale rows. ``limit`` caps the batch; ``None`` returns every anchor stock (one
         sweep seeds them all). Lazy fill on first access still covers a symbol between sweeps."""
+        raise NotImplementedError
+
+
+class RatingChangesRepository(ABC):
+    """A persistent store for a stock's individual rating actions (upgrades/downgrades).
+
+    The sibling of ``RecommendationsRepository`` for the discrete-event feed. It has no
+    ``refresh_targets`` of its own — the sync drives it off the recommendations repository's
+    target walk (one pass over the anchor renews both), so this port is just read + write.
+    """
+
+    @abstractmethod
+    def get(self, symbol: str) -> AnalystRatingChanges | None:
+        """Return the stored rating actions for the (already-normalized) symbol, newest
+        first, or ``None`` when nothing is stored yet. A miss is not an error."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def upsert(
+        self, symbol: str, name: str | None, rating_changes: AnalystRatingChanges
+    ) -> None:
+        """Insert any of ``rating_changes``' events not already stored, stamping the fetch
+        time; existing ``(firm, published_at)`` rows are left untouched.
+
+        *Insert-only*, not rewrite — each rating action is a frozen historical fact, and the
+        source serves only a recent window, so the store accumulates a longer history than
+        it ever returns at once. Ensures the parent ``stocks`` row exists, setting its display
+        name when one is supplied (never overwriting a known name with ``None``).
+        """
         raise NotImplementedError

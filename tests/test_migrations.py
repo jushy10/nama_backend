@@ -50,6 +50,36 @@ def test_upgrade_creates_the_etfs_table(alembic):
     assert "etfs" not in inspect(create_engine(url)).get_table_names()
 
 
+def test_upgrade_renames_trends_and_adds_analyst_coverage_tables(alembic):
+    # 0023 renames stock_recommendation_trends -> stock_analyst_trends and adds the four
+    # price-target columns; 0024 adds the sibling stock_analyst_rating_changes events table.
+    config, url = alembic
+
+    command.upgrade(config, "head")
+    inspector = inspect(create_engine(url))
+    tables = set(inspector.get_table_names())
+    assert "stock_analyst_trends" in tables
+    assert "stock_recommendation_trends" not in tables  # renamed, not duplicated
+    assert "stock_analyst_rating_changes" in tables
+    trend_columns = {c["name"] for c in inspector.get_columns("stock_analyst_trends")}
+    assert {
+        "target_mean",
+        "target_high",
+        "target_low",
+        "target_median",
+    } <= trend_columns
+    change_columns = {
+        c["name"] for c in inspector.get_columns("stock_analyst_rating_changes")
+    }
+    assert {"firm", "published_at", "to_grade", "target_current"} <= change_columns
+
+    command.downgrade(config, "base")
+    remaining = set(inspect(create_engine(url)).get_table_names())
+    assert not (
+        {"stock_analyst_trends", "stock_analyst_rating_changes"} & remaining
+    )
+
+
 def test_upgrade_adds_the_etf_profile_columns_and_child_tables(alembic):
     # 0020 adds the profile scalars onto `etfs` and the two child tables the sync persists; 0021
     # then drops the trailing-return ladder (served live from Yahoo instead), so at head those

@@ -1,17 +1,23 @@
-"""Database model + queries for the recommendations cache.
+"""Database models + queries for the analyst-coverage cache.
 
-The persistence primitives for the slice: the SQLAlchemy model for the
-``stock_recommendation_trends`` table this feature owns, plus simple, entity-free query
-functions over it. The shared ``stocks`` anchor these rows hang off of lives in its own
-slice, ``app/stocks/stocks/models.py`` (owned by no single feature), and is imported
-here. The concrete repository (``db_repository.py``) is the only caller; it maps these
-rows to and from the ``RecommendationTrend`` entity. Nothing here knows the domain entity
-— this layer deals only in rows and columns, so it stays a thin data-access layer.
+The persistence primitives for the slice: the SQLAlchemy models for the two tables this
+feature owns — ``stock_analyst_trends`` (the monthly buy/hold/sell series, which also
+carries the current consensus price target on its latest row) and its sibling
+``stock_analyst_rating_changes`` (the discrete upgrade/downgrade events) — plus simple,
+entity-free query functions over them. The shared ``stocks`` anchor these rows hang off of
+lives in its own slice, ``app/stocks/stocks/models.py`` (owned by no single feature), and
+is imported here. The concrete repository (``db_repository.py``) is the only caller; it maps
+these rows to and from the domain entities. Nothing here knows the entities — this layer
+deals only in rows and columns, so it stays a thin data-access layer.
 
-A time series: many rows per stock, one per monthly snapshot, keyed unique on
-``(stock_id, period)``. Unlike the earnings tables, a refresh *merges* — it replaces the
-months the source served and keeps earlier ones — so rows for one stock can carry
-different ``fetched_at`` stamps; a stock's last refresh is the *max* stamp over its rows.
+Both are time series: many rows per stock. ``stock_analyst_trends`` is keyed unique on
+``(stock_id, period)`` (one row per monthly snapshot); ``stock_analyst_rating_changes`` on
+``(stock_id, firm, published_at)`` (one row per firm action). Unlike the earnings tables,
+a refresh *merges* — trends replace the months the source served and keep earlier ones,
+rating changes are insert-only (each event is a frozen fact) — so rows for one stock can
+carry different ``fetched_at`` stamps; a stock's last refresh is the *max* stamp over its
+rows. (The tables keep the ``uq_recommendation_trends_*`` constraint name from before the
+0023 rename — a cosmetic legacy label, not worth a table rebuild to change.)
 """
 
 from __future__ import annotations
@@ -23,8 +29,10 @@ from typing import Sequence
 from sqlalchemy import (
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
+    String,
     UniqueConstraint,
     Uuid,
     delete,
@@ -46,9 +54,15 @@ class StockRecommendationTrendRecord(Base):
     The five counts are how many sell-side analysts held each stance that month; all are
     non-null (an uncovered bucket is 0, and a symbol with no coverage at all simply has
     no row). ``period`` is the first day of the month the snapshot covers.
+
+    The four ``target_*`` columns carry the current consensus price target (mean/high/low/
+    median). They are a single *current* snapshot, not a per-month history, so they are set
+    only on the stock's **latest** row and left null on older ones; a refresh rewrites the
+    latest month's row (and thus its targets) each run. All nullable — a stock with no
+    price-target coverage simply carries nulls.
     """
 
-    __tablename__ = "stock_recommendation_trends"
+    __tablename__ = "stock_analyst_trends"
     __table_args__ = (
         UniqueConstraint(
             "stock_id",
@@ -67,6 +81,46 @@ class StockRecommendationTrendRecord(Base):
     hold: Mapped[int] = mapped_column(Integer, nullable=False)
     sell: Mapped[int] = mapped_column(Integer, nullable=False)
     strong_sell: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Consensus 12-month price target — set on the latest row only, nullable elsewhere.
+    target_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_high: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_low: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_median: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class StockAnalystRatingChangeRecord(Base):
+    """One published sell-side rating action on a stock (an upgrade/downgrade event).
+
+    Keyed unique on ``(stock_id, firm, published_at)`` — one row per firm action per day.
+    ``firm`` and ``published_at`` are non-null (they form the identity); the grades, action
+    label, and price targets are nullable (an initiation has no prior grade, a rating-only
+    note no target). Insert-only: each event is a frozen fact, so a refresh only adds newly
+    published rows and never rewrites stored ones — the table accumulates a longer history
+    than Yahoo serves at once, the same way the trends table does.
+    """
+
+    __tablename__ = "stock_analyst_rating_changes"
+    __table_args__ = (
+        UniqueConstraint(
+            "stock_id",
+            "firm",
+            "published_at",
+            name="uq_analyst_rating_changes_stock_firm_date",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    stock_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("stocks.id", ondelete="CASCADE"), nullable=False
+    )
+    firm: Mapped[str] = mapped_column(String(length=128), nullable=False)
+    published_at: Mapped[date] = mapped_column(Date, nullable=False)
+    action: Mapped[str | None] = mapped_column(String(length=16), nullable=True)
+    from_grade: Mapped[str | None] = mapped_column(String(length=64), nullable=True)
+    to_grade: Mapped[str | None] = mapped_column(String(length=64), nullable=True)
+    target_current: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_prior: Mapped[float | None] = mapped_column(Float, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -97,6 +151,25 @@ def delete_trends_for_periods(
             StockRecommendationTrendRecord.stock_id == stock_id,
             StockRecommendationTrendRecord.period.in_(periods),
         )
+    )
+
+
+def rating_changes_by_symbol(
+    session: Session, symbol: str
+) -> list[StockAnalystRatingChangeRecord]:
+    """All stored rating-change rows for ``symbol`` (joined through the ``stocks`` anchor),
+    newest action first. Empty when nothing is stored for it yet. The repository's
+    insert-only upsert reads these to skip events it already holds."""
+    return list(
+        session.execute(
+            select(StockAnalystRatingChangeRecord)
+            .join(
+                StockRecord,
+                StockAnalystRatingChangeRecord.stock_id == StockRecord.id,
+            )
+            .where(StockRecord.ticker == symbol)
+            .order_by(StockAnalystRatingChangeRecord.published_at.desc())
+        ).scalars()
     )
 
 

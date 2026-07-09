@@ -135,7 +135,8 @@ only this one file changes.
 - `adapters/yfinance_quarterly_earnings_adapter.py` — live source for the quarterly-earnings slice: **Yahoo via `yfinance`**, building the 4-recent + up-to-2-upcoming quarter timeline. **Past** quarters come from `earnings_dates` (reported EPS vs the estimate that preceded it; surprise computed here, not from Yahoo's `Surprise(%)`). **Upcoming** quarters come from the `0q`/`+1q` rows of `earnings_estimate` + `revenue_estimate` — the reliable source of *two* forward quarters (EPS + revenue), so a stock surfaces both even when `earnings_dates` lists only one scheduled future date; a scheduled date is attached when it lines up. **Reported revenue** (`revenue_actual`) is matched onto the past quarters from `quarterly_income_stmt` (Total Revenue, whose columns carry the *true* fiscal period-end dates: each quarter takes the column most recently preceding its announcement date — never the calendar-derived label, which for off-calendar filers like MU names a different fiscal quarter than the EPS) — best-effort enrichment, so a failure fetching it drops the actual without sinking the timeline. Fiscal labels are derived from the announcement date (calendar best-effort; the offset is cosmetic — a row's EPS and revenue always belong to the same fiscal quarter). `adapters/db_cached_quarterly_earnings_adapter.py` — a **read-through** DB cache in front of it: serves stored rows if present, else fetches from Yahoo **once on a miss** and stores. **No TTL/staleness or serve-stale**; a populated symbol is always served straight from the DB, and keeping rows current is entirely the cron's job
 - `adapters/yfinance_annual_earnings_adapter.py` — live source for the annual-earnings slice: **Yahoo via `yfinance`**, building the 4-recent + up-to-2-upcoming *fiscal-year* timeline (the yearly analogue of the quarterly adapter). **Past** years come from `income_stmt` (annual) — `Diluted EPS` (falling back to `Basic EPS`) as the actual, plus `Total Revenue` and `Net Income`. **Upcoming** years come from the `0y`/`+1y` rows of `earnings_estimate` + `revenue_estimate` (EPS + revenue) — Yahoo's forward ceiling (so ≤2). Forward years are labelled by `info['nextFiscalYearEnd']` (0y), falling back to one year past the latest reported year. **No annual surprise/beat** — Yahoo's estimate-vs-actual history is per-quarter, so a reported year carries an actual with no estimate. Reported years also carry `eps_actual_consensus` — the year's actual EPS on the **analyst-consensus (adjusted) basis**, i.e. the sum of its four quarterly "Reported EPS" values from a deeper `get_earnings_dates` fetch (quarters assigned to a fiscal year by their derived calendar quarter-end falling within the year ending at the true fiscal-year-end; summed only when all four slots are filled, else `None`). It exists because `eps_actual` (GAAP diluted) and the forward `eps_estimate` (adjusted consensus) are on different bases — a client anchoring a P/E walk needs both ends on one basis. Best-effort enrichment, like revenue. Key caveat: `income_stmt` is the **fundamentals endpoint Yahoo IP-gates hardest from data-centre IPs** (intermittently — prod has fetched it successfully), so it's fetched best-effort: a blocked fetch drops the reported years but leaves the forward ones, and the **merge-preserving sync** keeps the stored reported rows when that happens. `adapters/db_cached_annual_earnings_adapter.py` — the same **read-through** DB cache as quarterly (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `adapters/annual_earnings_estimates_adapter.py` — implements the `AnalystEstimatesProvider` port by **projecting the annual-earnings slice's stored forward years** into an `AnalystEstimates` block (first upcoming year → FY1, next → FY2); it feeds the enriched stock snapshot (`GetStockInfo`, now the AI analysis context — the standalone `GET /stocks/{symbol}` endpoint was removed) and the ticker card's forward PEG. **DB-only, no live fall-through**: estimates are best-effort enrichment, so an uncached symbol just omits the forward metrics until the annual read path (lazy fill) or its cron populates the rows. This replaced the dedicated `stock_analyst_estimates` table + its own Yahoo fetch and cron — the annual slice stores the *same* `earnings_estimate`/`revenue_estimate` consensus, so the forward consensus has one source of truth (the FY1 low/high range and analyst counts were dropped with the table; the entities keep the full block, feeding `forward_pe`, the growth block, and the Bedrock analysis context)
-- `adapters/yfinance_recommendations_adapter.py` — live source for the recommendations slice: **Yahoo via `yfinance`** (`Ticker.recommendations`), the sell-side buy/hold/sell split as monthly snapshots (the same recommendation-trend data Finnhub serves, but keyless — this replaced `finnhub_recommendation_provider.py` and the `FINNHUB_API_KEY` gate on the endpoint). Yahoo labels the rows *relatively* (`0m` = this month, `-1m`, …), so the adapter anchors them on today's month into first-of-month `period` dates — the identity the DB cache keys on. `adapters/db_cached_recommendations_adapter.py` — the same **read-through** DB cache as the earnings slices (DB-first, fetch-on-miss, no TTL/serve-stale)
+- `adapters/yfinance_recommendations_adapter.py` — live source for the recommendations slice: **Yahoo via `yfinance`** (`Ticker.recommendations` + `Ticker.analyst_price_targets`), the sell-side buy/hold/sell split as monthly snapshots (the same recommendation-trend data Finnhub serves, but keyless — this replaced `finnhub_recommendation_provider.py` and the `FINNHUB_API_KEY` gate on the endpoint) **plus** the current consensus price target (mean/high/low/median), attached to the returned run as best-effort enrichment (a separate cheap read whose failure never sinks the trends). Yahoo labels the rows *relatively* (`0m` = this month, `-1m`, …), so the adapter anchors them on today's month into first-of-month `period` dates — the identity the DB cache keys on. `adapters/db_cached_recommendations_adapter.py` — the same **read-through** DB cache as the earnings slices (DB-first, fetch-on-miss, no TTL/serve-stale)
+- `adapters/yfinance_rating_changes_adapter.py` — live source for the upgrade/downgrade feed: **Yahoo via `yfinance`** (`Ticker.upgrades_downgrades`), keyless, implementing the recommendations slice's `RatingChangeProvider` port. The sell-side's individual rating actions (firm, date, from/to grade, action, old/new price target) — the discrete events behind the monthly trend. Keeps only the most recent 50 of Yahoo's full multi-year log; drops firmless/undated/duplicate rows; coerces Yahoo's `0.0` "no target" to `None`. Stored **insert-only** into the sibling `stock_analyst_rating_changes` table by `SqlRatingChangesRepository`, and fetched in the **same** recommendations sweep (not a second anchor pass)
 - `adapters/db_only_context_providers.py` — DB-only (no live fall-through) views of the quarterly / annual / recommendations caches, used **only by the AI-analysis path**. Each wraps the slice's persistence repository and implements the slice's *provider* port, serving stored rows and returning an **empty** timeline on a miss (never a live fetch). The read endpoints keep the read-through `db_cached_*` adapters (a miss there *should* fetch); the analysis path swaps in these so best-effort context can't add a synchronous, rate-limited Yahoo round-trip to a user request. Keeping the caches current stays the crons' job
 - `analysis/db_repository.py` (the tiny `analysis/` sub-slice) — `SqlInvestmentAnalysisCache`, the **read-through result cache** behind *both* AI-analysis endpoints, over the `investment_analysis_cache` table (migration 0022; one row per `(kind, symbol)`, `kind` ∈ `stock`/`etf` so a stock and a fund sharing a ticker never collide). The use case returns a stored read while it's within `ANALYSIS_CACHE_TTL_MINUTES` of its `generated_at`, else regenerates and upserts. Best-effort both ways (a read failure is a miss, a write failure is swallowed), so it only ever makes the endpoint faster, never wrong. Deliberately **not** a `stocks` child — an analysis is served for any valid ticker, and forcing an anchor row per analysed symbol would leak arbitrary tickers into the screened universe (so it stands alone, like `etfs`)
 - `adapters/yfinance_options_adapter.py` — live source for the ticker card's `options_metrics` block: **Yahoo via `yfinance`** (`Ticker.options` for the expiration list, `Ticker.option_chain(date)` for one expiry's calls/puts), keyless, implementing the ticker slice's `OptionChainProvider` port. Maps chain rows → `OptionContract` entities (strike, bid/ask/last, volume, open interest, IV); every *derived* figure (ATM IV, expected move, insurance cost, put/call) is entity logic, not adapter logic. **No DB cache or cron** — options prices decay by the hour, so the no-TTL read-through pattern doesn't fit; the read is live per request (the endpoint's 5-min Cache-Control is the only damping) and best-effort even when requested, since Yahoo intermittently blocks data-centre IPs
@@ -229,22 +230,27 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > `null` if a degraded window leaves fewer than two reported years). One figure per stock, not
 > a per-year history — the anchor is one row per stock.
 
-> **The recommendations sub-slice — `app/stocks/recommendations/`.** Analyst
-> recommendation trends (the sell-side buy/hold/sell split by month), built on the same
-> skeleton as the earnings sub-slices: its **own `entities.py`** (`RecommendationTrend` +
+> **The recommendations sub-slice — `app/stocks/recommendations/`.** The slice's broader
+> **analyst coverage**: recommendation trends (the sell-side buy/hold/sell split by month),
+> the current **consensus price target**, and the **upgrade/downgrade events**. (The package
+> keeps its `recommendations/` name; only the *table* was renamed — see below.) Built on the
+> same skeleton as the earnings sub-slices: its **own `entities.py`** (`RecommendationTrend` +
 > `AnalystRecommendations`, which carry the consensus `score`/`consensus` bands and the
-> month-over-month `direction` as entity properties), plus
+> month-over-month `direction` as entity properties; plus `AnalystPriceTargets` and
+> `RatingChange`/`AnalystRatingChanges`), plus
 > `ports` / `repository` / `db_repository` / `models` / `use_cases` / `schemas` (both HTTP
 > endpoints live in `app/stocks/endpoints/`: the read `recommendations_endpoints.py` and the
 > `cron_recommendations_endpoints.py`). Serves `GET /stocks/{symbol}/recommendations`,
-> newest snapshot first. Live source is **yfinance (Yahoo)** via `Ticker.recommendations`
+> newest snapshot first, now with a `price_targets` block. Live source is **yfinance (Yahoo)**
+> via `Ticker.recommendations` + `Ticker.analyst_price_targets`
 > (`adapters/yfinance_recommendations_adapter.py`) — this replaced Finnhub's
 > `/stock/recommendation`, dropping the endpoint's `FINNHUB_API_KEY` 503 gate — behind the
 > same persistent **read-through** DB cache + out-of-band cron
 > (`POST /internal/recommendations/sync`, driven by the **daily** `sync-recommendations`
 > workflow — daily rather than weekly because the current month's counts drift as analysts
-> revise and the read cache has no TTL); table `stock_recommendation_trends` (migration
-> 0007), a time series unique on `stock_id` + `period` (first-of-month). **One deliberate
+> revise and the read cache has no TTL); table `stock_analyst_trends` (renamed from
+> `stock_recommendation_trends` by migration 0023, which also added the four `target_*`
+> columns), a time series unique on `stock_id` + `period` (first-of-month). **One deliberate
 > divergence from the earnings slices: the upsert *merges* instead of rewriting** — it
 > replaces the months the source served and keeps earlier stored months, because a past
 > month's split is a frozen fact and Yahoo serves only ~4 months at once, so the table
@@ -255,6 +261,25 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > Caveat: the derived `period` is only as true as the relative labels — a symbol fetched
 > near a month boundary can label a snapshot one month off; cosmetic, same spirit as the
 > earnings slices' calendar-derived fiscal labels.
+>
+> *Price targets* are a single **current** consensus snapshot (mean/high/low/median; Yahoo
+> publishes no history), so they're stamped onto the stock's **latest** monthly row only —
+> the read reconstructs the block off the newest row, and the merge rewrites the newest
+> month each run so they stay current. Best-effort enrichment riding on `AnalystRecommendations`
+> (a separate, cheap Yahoo read whose failure nulls the block, never sinks the trends), with a
+> pure `upside_percent(price)` entity method for a future price-anchored consumer (ticker card /
+> analysis). *Rating changes* (the upgrade/downgrade feed) are the **discrete events** behind the
+> trend — a different shape (per-firm, keyed `(stock_id, firm, published_at)`), so they live in a
+> **sibling table `stock_analyst_rating_changes`** (migration 0024), not the trend table.
+> `adapters/yfinance_rating_changes_adapter.py` reads `Ticker.upgrades_downgrades` (keyless),
+> keeping the most recent 50 of Yahoo's full multi-year log; `SqlRatingChangesRepository` is
+> **insert-only** (each event is frozen, so a refresh adds only new events and accumulates
+> history). Folded into the **same** recommendations sweep — `SyncRecommendations` takes an
+> optional rating-change provider + repository and, after a stock's trends refresh succeeds,
+> stores its events too (best-effort: its own failure is swallowed) — rather than a second pass
+> over the anchor, which would double the rate-limited Yahoo round-trips. There is **no read
+> endpoint for rating changes yet** — they're stored/reachable via the repository; surfacing them
+> is an easy follow-up.
 
 > **The ticker sub-slice — `app/stocks/ticker/`.** A stock's **ticker card** at
 > `GET /stocks/ticker/{ticker}`. Always served: the live quote
@@ -513,14 +538,14 @@ app/
     │   ├── models.py            #    stock_annual_earnings ORM + query fns (anchor from stocks/)
     │   ├── use_cases.py         #    GetAnnualEarnings + SyncAnnualEarnings
     │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
-    ├── recommendations/    # ── recommendations sub-slice (its OWN entities.py; merge-upsert cache):
-    │   ├── entities.py          #    RecommendationTrend + AnalystRecommendations (slice-local)
-    │   ├── ports.py             #    live-source port (RecommendationProvider)
-    │   ├── repository.py        #    abstract persistence port
-    │   ├── db_repository.py     #    concrete repo: maps rows⇄entities, calls models
-    │   ├── models.py            #    stock_recommendation_trends ORM + query fns (anchor from stocks/)
-    │   ├── use_cases.py         #    GetStockRecommendations + SyncRecommendations
-    │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
+    ├── recommendations/    # ── analyst-coverage sub-slice (its OWN entities.py; trends merge-upsert + rating-changes insert-only):
+    │   ├── entities.py          #    RecommendationTrend + AnalystRecommendations (+ AnalystPriceTargets) + RatingChange/AnalystRatingChanges (slice-local)
+    │   ├── ports.py             #    live-source ports (RecommendationProvider [trends+targets] + RatingChangeProvider [upgrades/downgrades])
+    │   ├── repository.py        #    abstract persistence ports (RecommendationsRepository + RatingChangesRepository)
+    │   ├── db_repository.py     #    concrete repos: map rows⇄entities, call models (targets on latest trend row; rating changes insert-only)
+    │   ├── models.py            #    stock_analyst_trends (+ target_* cols) & stock_analyst_rating_changes ORM + query fns (anchor from stocks/)
+    │   ├── use_cases.py         #    GetStockRecommendations + SyncRecommendations (one sweep stores trends+targets AND rating changes)
+    │   └── schemas.py           #    HTTP response DTOs incl. price_targets (the HTTP endpoints live in endpoints/)
     ├── ticker/             # ── ticker-card sub-slice (its OWN entities.py; no table/cron —
     │   │                   #    computed per request from live quote + stored consensus + live chain):
     │   ├── entities.py          #    TickerValuation (trailing_pe + forward_peg properties); OptionContract +
