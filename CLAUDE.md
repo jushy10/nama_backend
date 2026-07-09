@@ -138,6 +138,7 @@ only this one file changes.
 - `adapters/yfinance_recommendations_adapter.py` — live source for the recommendations slice: **Yahoo via `yfinance`** (`Ticker.recommendations` + `Ticker.analyst_price_targets`), the sell-side buy/hold/sell split as monthly snapshots (the same recommendation-trend data Finnhub serves, but keyless — this replaced `finnhub_recommendation_provider.py` and the `FINNHUB_API_KEY` gate on the endpoint) **plus** the current consensus price target (mean/high/low/median), attached to the returned run as best-effort enrichment (a separate cheap read whose failure never sinks the trends). Yahoo labels the rows *relatively* (`0m` = this month, `-1m`, …), so the adapter anchors them on today's month into first-of-month `period` dates — the identity the DB cache keys on. `adapters/db_cached_recommendations_adapter.py` — the same **read-through** DB cache as the earnings slices (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `adapters/yfinance_rating_changes_adapter.py` — live source for the upgrade/downgrade feed: **Yahoo via `yfinance`** (`Ticker.upgrades_downgrades`), keyless, implementing the recommendations slice's `RatingChangeProvider` port. The sell-side's individual rating actions (firm, date, from/to grade, action, old/new price target) — the discrete events behind the monthly trend. Keeps only the most recent 50 of Yahoo's full multi-year log; drops firmless/undated/duplicate rows; coerces Yahoo's `0.0` "no target" to `None`. Stored **insert-only** into the sibling `stock_analyst_rating_changes` table by `SqlRatingChangesRepository`, and fetched in the **same** recommendations sweep (not a second anchor pass)
 - `adapters/yfinance_news_adapter.py` — live source for the news slice: **Yahoo via `yfinance`** (`Ticker.news`), a stock's recent headlines, keyless. Recent yfinance nests each item under `content` (`title`, `summary`, `pubDate`, `contentType` STORY/VIDEO, `provider.displayName`, `canonicalUrl`/`clickThroughUrl`, `thumbnail.originalUrl`); the top-level `id` (Yahoo's UUID) is the identity the DB cache keys and dedupes on. An article missing an id/title/parseable publish-time is dropped (nothing to key or order on); everything past those three is best-effort and left `None` when absent. `adapters/db_cached_news_adapter.py` — the same **read-through** DB cache as the earnings/recommendations slices (DB-first, fetch-on-miss, no TTL/serve-stale)
+- `adapters/sec_edgar_revenue_segments_adapter.py` — live source for the revenue-segments slice: **SEC EDGAR** (`SecEdgarRevenueSegmentsProvider`), **keyless**, implementing `RevenueSegmentsProvider`. Walks ticker → CIK (`company_tickers.json`) → latest 10-K (`submissions`) → the filing's `_htm.xml` XBRL instance, and parses the dimensioned revenue facts into `RevenueSegment` entities on three axes (`StatementBusinessSegmentsAxis` → business, `ProductOrServiceAxis` → product, `StatementGeographicalAxis` → geography). Only *annual-duration* facts count (the quarterly facts a 10-K also carries are dropped by a ≥350-day period filter); the consolidated total (no member) is excluded. `_aggregate_axis` is the crux: it takes both **flat** single-axis facts (Apple's `iPhoneMember`) and **segment-nested** two-axis facts (Google's product members tagged under both `ProductOrServiceAxis` *and* the segment axis — summed across segments to the product total), which a naive single-axis filter would drop entirely. Prefers the most-specific revenue concept (`RevenueFromContractWithCustomerExcludingAssessedTax` > … > `Revenues`) on a duplicate. Sends a descriptive `User-Agent` (SEC asks) and **paces** its requests (`min_request_interval_seconds`, set by the wiring) under EDGAR's ~10 req/s ceiling — SEC welcomes data-centre IPs, so no IP-block retry machinery (unlike the Yahoo sources). `_parse_revenue_segments` is a pure function the tests drive on a canned instance; `_http` is the fake seam. `adapters/db_cached_revenue_segments_adapter.py` — the same **read-through** DB cache as the earnings/recommendations/news slices (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `adapters/db_only_context_providers.py` — DB-only (no live fall-through) views of the quarterly / annual / recommendations caches, used **only by the AI-analysis path**. Each wraps the slice's persistence repository and implements the slice's *provider* port, serving stored rows and returning an **empty** timeline on a miss (never a live fetch). The read endpoints keep the read-through `db_cached_*` adapters (a miss there *should* fetch); the analysis path swaps in these so best-effort context can't add a synchronous, rate-limited Yahoo round-trip to a user request. Keeping the caches current stays the crons' job
 - `analysis/db_repository.py` (the tiny `analysis/` sub-slice) — `SqlInvestmentAnalysisCache`, the **read-through result cache** behind *both* AI-analysis endpoints, over the `investment_analysis_cache` table (migration 0022; one row per `(kind, symbol)`, `kind` ∈ `stock`/`etf` so a stock and a fund sharing a ticker never collide). The use case returns a stored read while it's within `ANALYSIS_CACHE_TTL_MINUTES` of its `generated_at`, else regenerates and upserts. Best-effort both ways (a read failure is a miss, a write failure is swallowed), so it only ever makes the endpoint faster, never wrong. Deliberately **not** a `stocks` child — an analysis is served for any valid ticker, and forcing an anchor row per analysed symbol would leak arbitrary tickers into the screened universe (so it stands alone, like `etfs`)
 - `adapters/yfinance_options_adapter.py` — live source for the ticker card's `options_metrics` block: **Yahoo via `yfinance`** (`Ticker.options` for the expiration list, `Ticker.option_chain(date)` for one expiry's calls/puts), keyless, implementing the ticker slice's `OptionChainProvider` port. Maps chain rows → `OptionContract` entities (strike, bid/ask/last, volume, open interest, IV); every *derived* figure (ATM IV, expected move, insurance cost, put/call) is entity logic, not adapter logic. **No DB cache or cron** — options prices decay by the hour, so the no-TTL read-through pattern doesn't fit; the read is live per request (the endpoint's 5-min Cache-Control is the only damping) and best-effort even when requested, since Yahoo intermittently blocks data-centre IPs
@@ -308,6 +309,45 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > stale queue). Best-effort throughout: a symbol Yahoo carries no news for is a 200 with an
 > empty run, not a 404, and behind the cache a Yahoo-blocked fetch just serves the stored
 > articles.
+
+> **The revenue-segments sub-slice — `app/stocks/revenue_segments/`.** *What* a company makes
+> its money on — its revenue disaggregated by **operating segment** (Google Services vs. Google
+> Cloud), **product/service line** (Search, YouTube ads, iPhone, Data Center), and **geography**
+> (US, EMEA, APAC), at `GET /stocks/{symbol}/revenue-segments`. Where the earnings slices carry
+> the *total* revenue per period, this carries its breakdown. Built on the same skeleton as the
+> news/recommendations slices: its **own `entities.py`** (`SegmentAxis` enum +
+> `RevenueSegment` + `RevenueSegmentation`; `RevenueSegment.label` humanizes the raw XBRL member
+> on access, not stored — the views `for_axis` / `latest_for_axis` slice by cut), plus
+> `ports` / `repository` / `db_repository` / `models` / `use_cases` / `schemas` (both HTTP endpoints
+> live in `app/stocks/endpoints/`: the read `revenue_segments_endpoints.py` and the
+> `cron_revenue_segments_endpoints.py`). Live source is **SEC EDGAR** — **keyless**, unlike the
+> paid segment APIs (Financial Modeling Prep gates this behind a subscription) — via
+> `adapters/sec_edgar_revenue_segments_adapter.py`, behind the same persistent **read-through** DB
+> cache (`adapters/db_cached_revenue_segments_adapter.py`) + out-of-band cron
+> (`POST /internal/revenue-segments/sync`, driven by the **monthly** `sync-revenue-segments`
+> workflow — segment data changes ~once a year on a filing); table `stock_revenue_segments`
+> (migration 0026), a time series unique on `stock_id` + `fiscal_year` + `axis` + `member`. Like
+> recommendations/news the upsert **merges** — it replaces the fiscal years the newest filing
+> restated and keeps earlier ones (a reported year's disaggregation is a frozen fact; a 10-K
+> restates only its most-recent ~3 years, so the store accumulates a longer history), pruned to
+> the newest `_MAX_STORED_YEARS` (6) fiscal years; `refresh_targets` orders staleness by the
+> **max** `fetched_at`. **Why the raw filing, not EDGAR's clean JSON:** the `companyconcept` /
+> `companyfacts` / `frames` APIs return only the *consolidated* value of a concept — they drop
+> the dimensional (segment) breakdown, which lives only in the filing's XBRL instance document.
+> So the adapter walks ticker → CIK (`company_tickers.json`) → latest 10-K (`submissions`) → the
+> filing's `_htm.xml` instance → the dimensioned revenue facts. **The one real subtlety:** filers
+> commonly disaggregate revenue *by product within a segment*, tagging those facts with **two**
+> axes (`ProductOrServiceAxis` + `StatementBusinessSegmentsAxis`), so a naive single-axis filter
+> drops the whole product cut — `_aggregate_axis` handles both flat facts (Apple's `iPhoneMember`,
+> single-axis) and segment-nested ones (Google's `GoogleSearchOtherMember` inside a segment,
+> summed across segments to the product total). Serial sync (no thread pool) + adapter request
+> pacing keep it under EDGAR's ~10 req/s ask; SEC welcomes data-centre IPs (works from Fargate
+> where Yahoo blocks us), so no IP-block retry machinery. **Members are the filer's own labels** —
+> comparable within a company over time but **not aggregatable across companies** (there's no
+> cross-company segment taxonomy, the way there is for sectors); and a filer's product members can
+> include *subtotals* it defines (e.g. Google's advertising subtotal over Search+YouTube+Network),
+> so the axis's values aren't a clean partition. Best-effort throughout: a single-segment or
+> foreign (20-F) filer with no disaggregation is a 200 with an empty list, not a 404.
 
 > **The ticker sub-slice — `app/stocks/ticker/`.** A stock's **ticker card** at
 > `GET /stocks/ticker/{ticker}`. Always served: the live quote
@@ -543,7 +583,7 @@ app/
     ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/Logo.dev)
     ├── adapters/           # ── vendor adapters as *_adapter.py (earnings: yfinance + caches; estimates projection;
     │                       #    universe screen + ETF screen/profile: yfinance; index membership: wikipedia;
-    │                       #    db_only_context_providers: DB-only earnings/recs views for the analysis path)
+    │                       #    revenue segments: SEC EDGAR + cache; db_only_context_providers: DB-only earnings/recs views for the analysis path)
     ├── analysis/           # ── AI-analysis result cache (read-through, shared by the stock + ETF analysis):
     │   ├── models.py            #    AnalysisCacheRecord (`investment_analysis_cache`, keyed (kind, symbol); standalone)
     │   └── db_repository.py     #    SqlInvestmentAnalysisCache (get latest / upsert; best-effort both ways)
@@ -581,6 +621,14 @@ app/
     │   ├── db_repository.py     #    concrete repo: maps rows⇄entities, merge + prune, calls models
     │   ├── models.py            #    stock_news ORM + query fns (anchor from stocks/)
     │   ├── use_cases.py         #    GetStockNews + SyncStockNews
+    │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
+    ├── revenue_segments/   # ── revenue-segments sub-slice (its OWN entities.py; merge-by-year cache, pruned to newest 6 yrs; SEC EDGAR source):
+    │   ├── entities.py          #    SegmentAxis + RevenueSegment (label derived) + RevenueSegmentation (for_axis/latest_for_axis views)
+    │   ├── ports.py             #    live-source port (RevenueSegmentsProvider)
+    │   ├── repository.py        #    abstract persistence port
+    │   ├── db_repository.py     #    concrete repo: maps rows⇄entities, merge-by-fiscal-year + prune, calls models
+    │   ├── models.py            #    stock_revenue_segments ORM + query fns (anchor from stocks/)
+    │   ├── use_cases.py         #    GetRevenueSegments + SyncRevenueSegments (serial; SEC keyless)
     │   └── schemas.py           #    HTTP response DTOs (the HTTP endpoints live in endpoints/)
     ├── ticker/             # ── ticker-card sub-slice (its OWN entities.py; no table/cron —
     │   │                   #    computed per request from live quote + stored consensus + live chain):
@@ -622,6 +670,8 @@ app/
     │   ├── rating_changes_endpoints.py           #  GET /stocks/{symbol}/rating-changes (upgrade/downgrade feed)
     │   ├── cron_news_endpoints.py                #  POST /internal/news/sync
     │   ├── news_endpoints.py                     #  GET /stocks/{symbol}/news
+    │   ├── cron_revenue_segments_endpoints.py    #  POST /internal/revenue-segments/sync
+    │   ├── revenue_segments_endpoints.py         #  GET /stocks/{symbol}/revenue-segments (revenue by segment/product/geography, from SEC 10-K)
     │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol} (card) + GET /stocks/ticker (search) + GET /stocks/classifications
     │   ├── etf_endpoints.py                      #  GET /stocks/etfs (top-ETF search/filter/sort) + GET /stocks/etfs/categories (filter menu) + GET /stocks/etf/{ticker} (one fund's card: quote + facts + DB-read profile, 3y/5y returns fetched live for the performance block + opt-in ?include=metrics/dividends/performance)
     │   ├── cron_etf_endpoints.py                 #  POST /internal/etfs/sync (fire-and-forget: screen + profile enrichment)
