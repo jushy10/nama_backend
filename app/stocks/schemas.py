@@ -230,3 +230,23 @@ class InvestmentAnalysisResponse(BaseModel):
     disclaimer: str
     model: str  # the model that produced the analysis
     generated_at: datetime
+
+
+class EarningsAnalysisResponse(BaseModel):
+    """An AI-generated, plain-language read of a stock's earnings story.
+
+    ``summary`` is the plain-language headline of how earnings have gone and where
+    they look headed; ``trend`` is the direction ("accelerating"/"steady"/
+    "slowing"); ``highlights`` are a few short takeaways. ``disclaimer`` is a fixed
+    reminder that this is informational, not financial advice — authored by the
+    service, not the model. ``model`` and ``generated_at`` record what produced the
+    analysis and when. Reasoned only over the recent earnings timelines;
+    descriptive, not advice."""
+
+    symbol: str
+    summary: str
+    trend: str  # "accelerating" | "steady" | "slowing"
+    highlights: list[str]
+    disclaimer: str
+    model: str  # the model that produced the analysis
+    generated_at: datetime
