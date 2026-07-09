@@ -214,8 +214,8 @@ def _present_performance(detail: EtfDetail) -> EtfPerformanceResponse:
         six_month=perf.six_month if perf else None,
         ytd=perf.ytd if perf else None,
         one_year=perf.one_year if perf else None,
-        three_year_return=p.three_year_return,
-        five_year_return=p.five_year_return,
+        three_year=p.three_year_return,
+        five_year=p.five_year_return,
     )
 
 

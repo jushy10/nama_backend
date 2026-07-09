@@ -9,7 +9,7 @@ slices keep). These back ``GET /stocks/etfs`` (the search list), ``GET /stocks/e
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.stocks.schemas import StockPerformanceResponse
 
@@ -106,12 +106,12 @@ class EtfPerformanceResponse(StockPerformanceResponse):
 
     Extends the shared trailing-window shape (``1w`` / ``1m`` / ``3m`` / ``6m`` / ``ytd`` / ``1y``,
     the same price-return gains the stock endpoints serve, from Alpaca) with the two longer horizons
-    Yahoo publishes: ``three_year_return`` / ``five_year_return`` (annualized average returns, off
+    Yahoo publishes: ``3y`` / ``5y`` (annualized average returns, off
     the profile). Every figure is a human percent; any window without enough history — or a
     horizon Yahoo doesn't cover — is ``null``."""
 
-    three_year_return: float | None = None  # percent (annualized avg, Yahoo)
-    five_year_return: float | None = None  # percent (annualized avg, Yahoo)
+    three_year: float | None = Field(default=None, alias="3y")  # percent (annualized avg, Yahoo)
+    five_year: float | None = Field(default=None, alias="5y")  # percent (annualized avg, Yahoo)
 
 
 class EtfDetailResponse(BaseModel):

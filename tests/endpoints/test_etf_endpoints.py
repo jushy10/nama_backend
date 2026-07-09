@@ -275,8 +275,8 @@ def test_detail_returns_the_full_json_shape_with_all_includes():
             "6m": 6.5,
             "ytd": 8.9,  # the Alpaca window, not Yahoo's ytd_return
             "1y": 12.3,
-            "three_year_return": 20.41,  # Yahoo annualized
-            "five_year_return": 13.01,
+            "3y": 20.41,  # Yahoo annualized
+            "5y": 13.01,
         },
     }
     assert fake.calls == ["VOO"]
@@ -379,8 +379,8 @@ def test_detail_serves_null_within_the_blocks_when_the_profile_is_empty():
         "6m": None,
         "ytd": None,
         "1y": None,
-        "three_year_return": None,
-        "five_year_return": None,
+        "3y": None,
+        "5y": None,
     }
 
 
