@@ -532,16 +532,29 @@ class GetSectorAnalysis:
         board = self._sectors.execute()
         gather_ms = (time.perf_counter() - gather_start) * 1000
 
+        # Log in a `finally` so a failing/slow model call (e.g. a 502 from an
+        # unentitled model) still records the split — a line that only fires on
+        # success would go missing in exactly the case we most want to diagnose.
         model_start = time.perf_counter()
-        analysis = self._analyzer.analyze(board)
-        model_ms = (time.perf_counter() - model_start) * 1000
-
-        logger.info(
-            "sector analysis timing: board_gather=%.0fms model_call=%.0fms "
-            "total=%.0fms (model=%s)",
-            gather_ms,
-            model_ms,
-            gather_ms + model_ms,
-            analysis.model,
-        )
-        return analysis
+        analysis: SectorAnalysis | None = None
+        try:
+            analysis = self._analyzer.analyze(board)
+            return analysis
+        finally:
+            model_ms = (time.perf_counter() - model_start) * 1000
+            if analysis is not None:
+                logger.info(
+                    "sector analysis timing: board_gather=%.0fms model_call=%.0fms "
+                    "total=%.0fms (model=%s)",
+                    gather_ms,
+                    model_ms,
+                    gather_ms + model_ms,
+                    analysis.model,
+                )
+            else:
+                logger.info(
+                    "sector analysis timing: board_gather=%.0fms model_call=%.0fms "
+                    "-> model call failed",
+                    gather_ms,
+                    model_ms,
+                )

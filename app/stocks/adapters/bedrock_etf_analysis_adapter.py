@@ -125,7 +125,9 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
     (same defaults, same env), so one deploy config drives both analysers.
     """
 
-    _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5"
+    # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock,
+    # so the short us.anthropic.claude-haiku-4-5 400s with "invalid model identifier".
+    _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     _DEFAULT_REGION = "us-east-1"
     # The output is short and plain by design (a few sentences + two brief bullet lists), so a tight
     # cap is ample — and fewer generated tokens is the main lever on this endpoint's latency.

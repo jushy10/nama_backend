@@ -27,7 +27,7 @@ to ``StockDataUnavailable`` — the one error this port documents.
 
 Operational note: model access must be enabled for the Anthropic model in the
 target region, and the model id may need to be a cross-region inference profile
-(e.g. ``us.anthropic.claude-haiku-4-5``). Both are deploy-time config, surfaced
+(e.g. ``us.anthropic.claude-haiku-4-5-20251001-v1:0``). Both are deploy-time config, surfaced
 through the constructor / env (see ``router.get_analysis_provider``).
 
 Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
@@ -141,8 +141,10 @@ class BedrockAnalysisProvider(InvestmentAnalysisProvider):
     # generates markedly faster, the whole point of this endpoint. The id is a
     # cross-region inference profile (the form Bedrock wants for current Claude
     # models) and is env-overridable, so a deploy can point BEDROCK_ANALYSIS_MODEL_ID
-    # at whatever model the account is entitled to (prod has run Sonnet).
-    _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5"
+    # at whatever model the account is entitled to (prod has run Sonnet). Haiku 4.5
+    # has no bare alias on Bedrock, so this is the full versioned id (the short
+    # us.anthropic.claude-haiku-4-5 400s with "invalid model identifier").
+    _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     _DEFAULT_REGION = "us-east-1"
     # The output is short and plain by design (a few sentences + two brief bullet
     # lists), so a tight cap is ample — and fewer generated tokens is the main
