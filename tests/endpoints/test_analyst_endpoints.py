@@ -19,6 +19,7 @@ from app.stocks.recommendations.entities import (
     AnalystPriceTargets,
     AnalystRatingChanges,
     AnalystRecommendations,
+    FirmRating,
     RatingChange,
     RecommendationTrend,
 )
@@ -58,11 +59,14 @@ def _a_trend(period, *, strong_buy=0, buy=0, hold=0, sell=0, strong_sell=0):
     )
 
 
-def _an_info(symbol="AAPL", *, trends=(), price_targets=None, changes=()) -> AnalystInfo:
+def _an_info(
+    symbol="AAPL", *, trends=(), price_targets=None, changes=(), top_firms=()
+) -> AnalystInfo:
     return AnalystInfo(
         symbol=symbol,
         recommendations=AnalystRecommendations(symbol, tuple(trends), price_targets),
         rating_changes=AnalystRatingChanges(symbol, tuple(changes)),
+        top_firms=tuple(top_firms),
     )
 
 
@@ -130,6 +134,48 @@ def test_presents_rating_changes_with_derived_direction_flags():
     assert first["target_current"] == 350.0 and first["target_prior"] == 335.0
     assert first["is_upgrade"] is True and first["is_downgrade"] is False
     assert changes[1]["is_downgrade"] is True
+
+
+def test_presents_the_top_firms_block():
+    info = _an_info(
+        trends=(_a_trend(date(2026, 6, 1), buy=5),),
+        top_firms=(
+            FirmRating(
+                firm="RBC Capital",
+                rank=1,
+                rating="Outperform",
+                action="main",
+                target=270.0,
+                published_at=date(2026, 5, 21),
+            ),
+            FirmRating(
+                firm="Evercore ISI Group",
+                rank=2,
+                rating="Outperform",
+                action="main",
+                target=413.0,
+                published_at=date(2026, 5, 21),
+            ),
+        ),
+    )
+    body = _client(_FakeUseCase(result=info)).get("/stocks/ticker/AAPL/analyst-info").json()
+    top = body["top_firms"]
+    assert len(top) == 2
+    assert top[0] == {
+        "firm": "RBC Capital",
+        "rank": 1,
+        "rating": "Outperform",
+        "action": "main",
+        "target": 270.0,
+        "published_at": "2026-05-21",
+    }
+    assert top[1]["firm"] == "Evercore ISI Group"
+
+
+def test_top_firms_is_an_empty_list_when_none():
+    info = _an_info(trends=(_a_trend(date(2026, 6, 1), buy=5),))
+    body = _client(_FakeUseCase(result=info)).get("/stocks/ticker/AAPL/analyst-info").json()
+    assert body["top_firms"] == []
 
 
 def test_sets_the_cache_header():

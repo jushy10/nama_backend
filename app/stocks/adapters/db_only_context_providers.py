@@ -27,9 +27,18 @@ from app.stocks.earnings.annual.repository import AnnualEarningsRepository
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.earnings.quarterly.repository import QuarterlyEarningsRepository
-from app.stocks.recommendations.entities import AnalystRecommendations
-from app.stocks.recommendations.ports import RecommendationProvider
-from app.stocks.recommendations.repository import RecommendationsRepository
+from app.stocks.recommendations.entities import (
+    AnalystRatingChanges,
+    AnalystRecommendations,
+)
+from app.stocks.recommendations.ports import (
+    RatingChangeProvider,
+    RecommendationProvider,
+)
+from app.stocks.recommendations.repository import (
+    RatingChangesRepository,
+    RecommendationsRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,3 +90,20 @@ class DbOnlyRecommendationsProvider(RecommendationProvider):
             )
             stored = None
         return stored if stored is not None else AnalystRecommendations(symbol, ())
+
+
+class DbOnlyRatingChangesProvider(RatingChangeProvider):
+    """Serve the stored rating-change events; a miss (or read error) yields empty."""
+
+    def __init__(self, repo: RatingChangesRepository) -> None:
+        self._repo = repo
+
+    def get_rating_changes(self, symbol: str) -> AnalystRatingChanges:
+        try:
+            stored = self._repo.get(symbol)
+        except Exception:  # noqa: BLE001 — best-effort context, never sink the analysis
+            logger.warning(
+                "rating-changes cache read failed for %s", symbol, exc_info=True
+            )
+            stored = None
+        return stored if stored is not None else AnalystRatingChanges(symbol, ())

@@ -721,3 +721,42 @@ class EarningsAnalysis:
     highlights: tuple[str, ...]
     model: str
     generated_at: datetime
+
+
+class RatingsVerdict(str, Enum):
+    """The overall read of a stock's analyst coverage.
+
+    ``bullish`` when the sell-side leans clearly positive (a lopsided Buy/Overweight split,
+    rising targets, upgrades), ``cautious`` when it leans negative or is deteriorating (Holds and
+    Sells, downgrades, falling targets), ``mixed`` when it's split or sending conflicting signals.
+    The string values double as the JSON the model returns and the API serves, the same
+    convention as ``EarningsTrend``.
+    """
+
+    BULLISH = "bullish"
+    MIXED = "mixed"
+    CAUTIOUS = "cautious"
+
+
+@dataclass(frozen=True)
+class RatingsAnalysis:
+    """An AI-generated, plain-language read of a stock's *analyst coverage*.
+
+    The analyst-ratings sibling of ``EarningsAnalysis``: produced by a language model from the
+    coverage the recommendations slice already gathers — the buy/hold/sell consensus and how it's
+    shifting, the consensus price target and its spread, and the most credible covering firms'
+    current stances — never from outside data the model happens to recall. ``verdict`` is the
+    overall read and ``confidence`` how firmly it's held; ``summary`` is the plain-language
+    headline and ``findings`` a few short, concrete takeaways (e.g. a lopsided Buy split, a wide
+    target spread, the most credible firms sitting below consensus). Informational, not advice —
+    the model fills in the substance and the presenter attaches the disclaimer.
+    ``model``/``generated_at`` keep a read traceable, as with ``EarningsAnalysis``.
+    """
+
+    symbol: str
+    verdict: RatingsVerdict
+    confidence: Confidence
+    summary: str
+    findings: tuple[str, ...]
+    model: str
+    generated_at: datetime

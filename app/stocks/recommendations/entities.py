@@ -16,6 +16,7 @@ what the sell-side thinks:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
 
@@ -177,6 +178,132 @@ class AnalystRecommendations:
         return "unchanged"
 
 
+# --- Firm credibility: the analyst card's "top firms" ranking -----------------------------
+#
+# A curated, best→worst ranking of sell-side research firms by track record and standing,
+# seeded from published analyst-accuracy league tables (TipRanks-style success-rate + average-
+# return rankings). It is deliberately *subjective and editable* reference data — not derived
+# from anything in this repo — and it exists so the analyst card can surface the most credible
+# firms covering a stock instead of a raw newest-first event feed. The names here are the
+# canonical labels; the messier strings the vendor actually publishes fold onto them through
+# ``_FIRM_ALIASES`` + ``_normalize_firm`` (e.g. "B of A Securities" → "Bank of America").
+FIRM_CREDIBILITY: tuple[str, ...] = (
+    "KBW",
+    "RBC Capital",
+    "Evercore ISI",
+    "UBS",
+    "Truist",
+    "Morgan Stanley",
+    "Goldman Sachs",
+    "JP Morgan",
+    "Bank of America",
+    "Bernstein",
+    "MoffettNathanson",
+    "Barclays",
+    "Raymond James",
+    "Jefferies",
+    "Wells Fargo",
+    "Baird",
+    "Wolfe Research",
+    "Piper Sandler",
+    "Mizuho",
+    "Deutsche Bank",
+    "Citigroup",
+    "BMO Capital",
+    "TD Cowen",
+    "Guggenheim",
+    "Stifel",
+    "Oppenheimer",
+    "William Blair",
+    "Needham",
+    "Canaccord Genuity",
+)
+
+# Vendor label (normalized) → canonical name in ``FIRM_CREDIBILITY``, for the strings that don't
+# already normalize onto a canonical one. Note KeyBanc is intentionally absent: "KeyBanc" is a
+# different firm from "KBW" (Keefe, Bruyette & Woods) and must never fold onto it.
+_FIRM_ALIASES: dict[str, str] = {
+    "keefe bruyette and woods": "KBW",
+    "evercore isi group": "Evercore ISI",
+    "evercore": "Evercore ISI",
+    "truist securities": "Truist",
+    "truist financial": "Truist",
+    "rbc capital markets": "RBC Capital",
+    "rbc": "RBC Capital",
+    "b of a securities": "Bank of America",
+    "bofa securities": "Bank of America",
+    "bofa": "Bank of America",
+    "b of a": "Bank of America",
+    "merrill lynch": "Bank of America",
+    "jpmorgan": "JP Morgan",
+    "j p morgan": "JP Morgan",
+    "cowen": "TD Cowen",
+    "cowen and co": "TD Cowen",
+    "stifel nicolaus": "Stifel",
+    "bmo capital markets": "BMO Capital",
+    "bmo": "BMO Capital",
+    "piper jaffray": "Piper Sandler",
+    "moffett nathanson": "MoffettNathanson",
+    "sanford c bernstein": "Bernstein",
+    "sanford bernstein": "Bernstein",
+    "alliancebernstein": "Bernstein",
+    "canaccord": "Canaccord Genuity",
+    "citi": "Citigroup",
+    "robert w baird": "Baird",
+    "goldman": "Goldman Sachs",
+}
+
+
+def _normalize_firm(name: str) -> str:
+    """Fold a firm label to a comparison key: lower-cased, ``&`` → ``and``, punctuation dropped,
+    whitespace collapsed. So ``"Keefe, Bruyette & Woods"`` and ``"Keefe Bruyette and Woods"``
+    land on the same key."""
+    lowered = (name or "").lower().replace("&", " and ")
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", lowered).split())
+
+
+_CREDIBILITY_RANK: dict[str, int] = {
+    _normalize_firm(name): rank for rank, name in enumerate(FIRM_CREDIBILITY)
+}
+
+
+def _credibility_rank(firm: str) -> int | None:
+    """This firm's position in ``FIRM_CREDIBILITY`` (0 = most credible), or ``None`` when it
+    isn't a ranked firm. Resolves a known vendor alias first, then matches on the normalized
+    label."""
+    key = _normalize_firm(firm)
+    canonical = _FIRM_ALIASES.get(key)
+    if canonical is not None:
+        key = _normalize_firm(canonical)
+    return _CREDIBILITY_RANK.get(key)
+
+
+@dataclass(frozen=True)
+class FirmRating:
+    """One credible firm's current stance on a stock — a row of the analyst card's "top firms".
+
+    Built from that firm's most recent ``RatingChange``: ``rating`` is the grade it now holds
+    (the change's ``to_grade``), ``action`` the move that set it, and ``target`` its current
+    price target. ``rank`` is the firm's position in ``FIRM_CREDIBILITY`` (0 = most credible),
+    so a client can order or badge by standing, and ``published_at`` is when the firm last acted.
+    """
+
+    firm: str
+    rank: int
+    rating: str | None
+    action: str | None
+    target: float | None
+    published_at: date
+
+    def upside_percent(self, price: float | None) -> float | None:
+        """How far this firm's ``target`` sits above (or below) ``price``, in percent —
+        ``(target - price) / price * 100``. ``None`` without a target or a positive price to
+        anchor on. Mirrors ``AnalystPriceTargets.upside_percent`` for the consensus."""
+        if self.target is None or price is None or price <= 0:
+            return None
+        return round((self.target - price) / price * 100, 2)
+
+
 @dataclass(frozen=True)
 class RatingChange:
     """One sell-side rating action on a stock — the discrete event behind the trend.
@@ -230,3 +357,33 @@ class AnalystRatingChanges:
     def latest(self) -> RatingChange | None:
         """The most recent action, or ``None`` when there are none."""
         return self.changes[0] if self.changes else None
+
+    def top_credible_firms(self, limit: int = 5) -> tuple[FirmRating, ...]:
+        """The most credible firms covering the stock, each with its current stance.
+
+        Walks the newest-first ``changes`` keeping the first (newest) action seen per firm,
+        drops firms not in ``FIRM_CREDIBILITY``, orders the rest by credibility (most credible
+        first), and takes ``limit``. Fewer than ``limit`` — or none — when the stock has that
+        few credible firms with a stored action. Pure: the ranking is curated reference data
+        (``FIRM_CREDIBILITY``), no I/O. Dedup is by credibility identity (rank), so the same
+        firm published under two labels (``Cowen`` / ``TD Cowen``) collapses to one row.
+        """
+        seen: set[int] = set()
+        ranked: list[FirmRating] = []
+        for change in self.changes:  # newest first
+            rank = _credibility_rank(change.firm)
+            if rank is None or rank in seen:
+                continue
+            seen.add(rank)
+            ranked.append(
+                FirmRating(
+                    firm=change.firm,
+                    rank=rank,
+                    rating=change.to_grade,
+                    action=change.action,
+                    target=change.target_current,
+                    published_at=change.published_at,
+                )
+            )
+        ranked.sort(key=lambda fr: fr.rank)
+        return tuple(ranked[: max(0, limit)])

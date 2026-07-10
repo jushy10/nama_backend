@@ -26,6 +26,7 @@ from app.stocks.entities import (
     Logo,
     MarketIndexPerformance,
     MarketSummary,
+    RatingsAnalysis,
     SectorAnalysis,
     SectorPerformance,
     Stock,
@@ -51,14 +52,21 @@ from app.stocks.ports import (
     LogoProvider,
     MarketOverviewProvider,
     MarketSummaryProvider,
+    RatingsAnalysisProvider,
     SectorAnalysisProvider,
     SectorPerformanceProvider,
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
 )
-from app.stocks.recommendations.entities import AnalystRecommendations
-from app.stocks.recommendations.ports import RecommendationProvider
+from app.stocks.recommendations.entities import (
+    AnalystRatingChanges,
+    AnalystRecommendations,
+)
+from app.stocks.recommendations.ports import (
+    RatingChangeProvider,
+    RecommendationProvider,
+)
 from app.stocks.universe.entities import IndustryValuation
 from app.stocks.universe.repository import StockSearchRepository
 
@@ -544,6 +552,67 @@ class GetEarningsAnalysis:
         except (StockNotFound, StockDataUnavailable):
             return None
         return None if timeline.is_empty else timeline
+
+
+class GetRatingsFindings:
+    """Use case: an AI-generated, plain-language read of a stock's analyst coverage.
+
+    The analyst-ratings sibling of ``GetEarningsAnalysis``. Gathers the recommendation
+    consensus (trends + price targets) and the discrete rating-change events — both read
+    **DB-only** (via the recommendations slice's repositories, not their read-through
+    providers), so a cache miss never triggers a synchronous, rate-limited Yahoo fetch
+    mid-request — derives the most credible covering firms from the events, and hands the lot
+    to the injected analyzer. The analysis is the primary data, so a model failure propagates;
+    a symbol with no coverage to render (no consensus trends and no credible covering firm)
+    surfaces as ``StockDataUnavailable`` rather than an analysis of nothing. The analyzer
+    reasons only over what it's handed; it fetches nothing itself. Like the earnings read, no
+    DB result cache — the endpoint leans on a short HTTP ``Cache-Control`` instead.
+    """
+
+    # How many credible covering firms to surface for the model — matches the card's top-firms.
+    _TOP_FIRMS = 5
+
+    def __init__(
+        self,
+        analyzer: RatingsAnalysisProvider,
+        recommendations_provider: RecommendationProvider | None = None,
+        rating_change_provider: RatingChangeProvider | None = None,
+    ) -> None:
+        self._analyzer = analyzer
+        self._recommendations_provider = recommendations_provider
+        self._rating_change_provider = rating_change_provider
+
+    def execute(self, symbol: str) -> RatingsAnalysis:
+        normalized = _normalize_symbol(symbol)
+        recommendations = self._recommendations(normalized)
+        rating_changes = self._rating_changes(normalized)
+        top_firms = rating_changes.top_credible_firms(self._TOP_FIRMS)
+        # Nothing the prompt can render — no consensus trends and no credible covering firm.
+        # Fail rather than ask the model to analyse an empty slate. (Top firms derive from the
+        # events, so this also covers a symbol with only uncredited firms' actions.)
+        if (recommendations is None or recommendations.is_empty) and not top_firms:
+            raise StockDataUnavailable(normalized, "no analyst coverage to analyse")
+        return self._analyzer.analyze(normalized, recommendations, top_firms)
+
+    def _recommendations(self, symbol: str) -> AnalystRecommendations | None:
+        # Best-effort context, DB-only: the sell-side consensus, or None on a miss/empty run.
+        if self._recommendations_provider is None:
+            return None
+        try:
+            recs = self._recommendations_provider.get_recommendations(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None
+        return None if recs.is_empty else recs
+
+    def _rating_changes(self, symbol: str) -> AnalystRatingChanges:
+        # Best-effort context, DB-only: the rating-change events the top firms derive from, or
+        # an empty run on a miss so the top-firms read is simply empty.
+        if self._rating_change_provider is None:
+            return AnalystRatingChanges(symbol)
+        try:
+            return self._rating_change_provider.get_rating_changes(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return AnalystRatingChanges(symbol)
 
 
 class GetSectorPerformance:
