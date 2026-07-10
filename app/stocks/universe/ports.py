@@ -9,8 +9,13 @@ separate — the repository port lives in ``repository.py``.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
-from app.stocks.universe.entities import CompanyClassification, ScreenedStock
+from app.stocks.universe.entities import (
+    CompanyClassification,
+    ScreenedStock,
+    ScreenIntent,
+)
 
 
 class StockScreener(ABC):
@@ -53,5 +58,45 @@ class CompanyClassificationProvider(ABC):
             StockDataUnavailable: the upstream lookup failed (an outage or a data-centre-IP
                 block). The sync counts it as a lost symbol for the run and moves on; the
                 next run retries it.
+        """
+        raise NotImplementedError
+
+
+class ScreenerQueryTranslator(ABC):
+    """A gateway that turns a plain-English screen request into structured search filters.
+
+    The abstraction the ``AiScreenStocks`` use case depends on so a user can screen the
+    universe by asking ("mega-cap technology stocks", "top S&P 500 names by revenue growth")
+    instead of setting each control by hand. Dependency Inversion as ever — the core hands
+    the request (and the vocabulary of valid slugs) to this interface and gets back a
+    ``ScreenIntent`` in domain terms, never touching an LLM/vendor directly, so the source is
+    swappable (Claude on Bedrock today) and the tests run offline against a hand-written fake.
+
+    The translation is *primary* data for the AI-screen endpoint (its reason to exist), so
+    unlike the enrichment ports a failure here **propagates** rather than degrading to a
+    neutral result.
+    """
+
+    @abstractmethod
+    def translate(
+        self,
+        query: str,
+        *,
+        sectors: Sequence[str],
+        industries: Sequence[str],
+    ) -> ScreenIntent:
+        """Translate ``query`` into a ``ScreenIntent`` of search filters.
+
+        ``sectors`` / ``industries`` are the slugs currently present in the universe — the
+        allowed vocabulary the translator constrains its sector/industry choices to, so the
+        result maps onto values the search can actually match (an implementation may also
+        leave those filters unset when the request names neither). The intent is *advisory*:
+        the use case still normalizes every field through the ordinary search, so an
+        off-vocabulary or nonsensical value degrades to "matches nothing", never an error.
+
+        Raises:
+            StockDataUnavailable: the upstream translation failed (a model/vendor error).
+                The endpoint surfaces it as a 502 — the request couldn't be understood this
+                time, distinct from a well-understood request that simply matched no stocks.
         """
         raise NotImplementedError

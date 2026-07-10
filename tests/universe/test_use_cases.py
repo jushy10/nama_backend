@@ -20,19 +20,25 @@ from app.stocks.universe.entities import (
     CompanyClassification,
     MarketCapTier,
     ScreenedStock,
+    ScreenIntent,
     SortDirection,
     StockSearchCriteria,
     StockSearchPage,
     StockSearchResult,
     StockSort,
 )
-from app.stocks.universe.ports import CompanyClassificationProvider, StockScreener
+from app.stocks.universe.ports import (
+    CompanyClassificationProvider,
+    ScreenerQueryTranslator,
+    StockScreener,
+)
 from app.stocks.universe.repository import (
     StockSearchRepository,
     UniverseRepository,
     UniverseSyncCounts,
 )
 from app.stocks.universe.use_cases import (
+    AiScreenStocks,
     GetIndustryValuation,
     ListClassifications,
     SearchStocks,
@@ -592,3 +598,114 @@ def test_industry_valuation_empty_when_no_peers():
 def test_industry_valuation_rejects_a_blank_industry():
     with pytest.raises(ValueError):
         GetIndustryValuation(_FakeSearchRepo()).execute("   ")
+
+
+# --- AiScreenStocks (the AI-driven screen) ------------------------------------------------
+
+
+class _FakeTranslator(ScreenerQueryTranslator):
+    """Records the request + allowed vocabulary it was handed and returns a canned intent
+    (or raises, to drive the failure path)."""
+
+    def __init__(self, *, intent: ScreenIntent | None = None, boom: bool = False) -> None:
+        self._intent = intent or ScreenIntent()
+        self._boom = boom
+        self.query: str | None = None
+        self.sectors: tuple[str, ...] | None = None
+        self.industries: tuple[str, ...] | None = None
+
+    def translate(self, query, *, sectors, industries):
+        self.query = query
+        self.sectors = tuple(sectors)
+        self.industries = tuple(industries)
+        if self._boom:
+            raise StockDataUnavailable(query, "model down")
+        return self._intent
+
+
+def _ai_use_case(translator, repo):
+    """Wire an AiScreenStocks over the shared fake read repo (search + vocabulary)."""
+    return AiScreenStocks(translator, SearchStocks(repo), repo)
+
+
+def test_ai_screen_feeds_the_intent_into_the_search():
+    # "mega-cap technology stocks" -> sector + tier filters, biggest first.
+    intent = ScreenIntent(
+        sectors=("technology",),
+        market_cap_tiers=(MarketCapTier.MEGA,),
+        sort=StockSort.MARKET_CAP,
+        direction=SortDirection.DESC,
+    )
+    repo = _FakeSearchRepo()
+    _ai_use_case(_FakeTranslator(intent=intent), repo).execute(query="mega cap tech stocks")
+    c = repo.criteria
+    assert c.sectors == ("technology",)
+    assert c.market_cap_tiers == (MarketCapTier.MEGA,)
+    assert (c.sort, c.direction) == (StockSort.MARKET_CAP, SortDirection.DESC)
+    # No explicit endpoint limit and no AI limit -> the search's own default page.
+    assert c.limit == SearchStocks.DEFAULT_LIMIT
+
+
+def test_ai_screen_maps_a_growth_request():
+    # "top S&P 500 names by revenue growth" -> membership + sort, descending.
+    intent = ScreenIntent(
+        in_sp500=True,
+        sort=StockSort.REVENUE_GROWTH,
+        direction=SortDirection.DESC,
+    )
+    repo = _FakeSearchRepo()
+    _ai_use_case(_FakeTranslator(intent=intent), repo).execute(
+        query="top sp500 stocks with good revenue growth"
+    )
+    c = repo.criteria
+    assert c.in_sp500 is True
+    assert (c.sort, c.direction) == (StockSort.REVENUE_GROWTH, SortDirection.DESC)
+
+
+def test_ai_screen_passes_the_universe_vocabulary_to_the_translator():
+    # The translator is handed the universe's current slugs as its allowed vocabulary.
+    classifications = Classifications(
+        ("energy", "technology"), ("oil_gas", "semiconductors")
+    )
+    repo = _FakeSearchRepo(classifications=classifications)
+    translator = _FakeTranslator()
+    _ai_use_case(translator, repo).execute(query="anything")
+    assert translator.sectors == ("energy", "technology")
+    assert translator.industries == ("oil_gas", "semiconductors")
+    assert translator.query == "anything"  # trimmed request
+
+
+def test_ai_screen_trims_the_request_and_rejects_a_blank_one():
+    repo = _FakeSearchRepo()
+    translator = _FakeTranslator()
+    _ai_use_case(translator, repo).execute(query="  find me tech  ")
+    assert translator.query == "find me tech"  # trimmed before translation
+    with pytest.raises(ValueError):
+        _ai_use_case(_FakeTranslator(), _FakeSearchRepo()).execute(query="   ")
+
+
+def test_ai_screen_endpoint_limit_overrides_the_ai_choice():
+    # An explicit caller limit wins over the AI's; omitting it honours the AI's "top N".
+    intent = ScreenIntent(limit=5)
+    repo = _FakeSearchRepo()
+    _ai_use_case(_FakeTranslator(intent=intent), repo).execute(query="top 5", limit=None)
+    assert repo.criteria.limit == 5  # AI's count honoured
+    repo2 = _FakeSearchRepo()
+    _ai_use_case(_FakeTranslator(intent=intent), repo2).execute(query="top 5", limit=20)
+    assert repo2.criteria.limit == 20  # caller override wins
+
+
+def test_ai_screen_returns_the_intent_and_the_page():
+    page = StockSearchPage(results=(_RESULT,), total=1, limit=25, offset=0)
+    intent = ScreenIntent(sectors=("technology",))
+    result = _ai_use_case(
+        _FakeTranslator(intent=intent), _FakeSearchRepo(page=page)
+    ).execute(query="tech")
+    assert result.intent is intent
+    assert result.page is page
+
+
+def test_ai_screen_propagates_a_translation_failure():
+    # A model/vendor failure isn't "no matches" — it propagates (a 502 at the edge).
+    with pytest.raises(StockDataUnavailable):
+        _ai_use_case(_FakeTranslator(boom=True), _FakeSearchRepo()).execute(query="tech")

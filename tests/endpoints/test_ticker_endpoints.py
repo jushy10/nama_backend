@@ -32,9 +32,11 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ticker.entities import TickerOptionsMetrics, TickerValuation
 from app.stocks.ticker.use_cases import TickerCard, TickerClassification
 from app.stocks.universe.entities import (
+    AiScreenResult,
     Classifications,
     IndustryValuation,
     MarketCapTier,
+    ScreenIntent,
     SortDirection,
     StockSearchPage,
     StockSearchResult,
@@ -706,4 +708,109 @@ def test_industry_pe_maps_value_error_to_400():
 def test_industry_pe_sets_a_short_cache_header():
     fake = _FakeIndustryValuation(result=IndustryValuation("x", 1, 20.0, 20.0, 20.0))
     resp = _search_client(industry_valuation=fake).get("/stocks/industries/x/pe")
+    assert resp.headers["cache-control"] == "public, max-age=60"
+
+
+# --- The AI-driven screen (GET /stocks/ai-search) -----------------------------------------
+
+
+class _FakeAiScreen:
+    """Stands in for AiScreenStocks; records the kwargs, returns an AiScreenResult (or raises)."""
+
+    def __init__(self, *, result=None, error=None) -> None:
+        self._result = result
+        self._error = error
+        self.kwargs: dict | None = None
+
+    def execute(self, **kwargs):
+        self.kwargs = kwargs
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def _ai_client(use_case) -> TestClient:
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    app.dependency_overrides[endpoints.get_ai_search_use_case] = lambda: use_case
+    return TestClient(app)
+
+
+def _an_ai_result(intent: ScreenIntent) -> AiScreenResult:
+    return AiScreenResult(intent=intent, page=_a_page())
+
+
+def test_ai_search_returns_interpreted_filters_and_the_page():
+    intent = ScreenIntent(
+        sectors=("technology",),
+        market_cap_tiers=(MarketCapTier.MEGA,),
+        sort=StockSort.MARKET_CAP,
+        direction=SortDirection.DESC,
+    )
+    resp = _ai_client(_FakeAiScreen(result=_an_ai_result(intent))).get(
+        "/stocks/ai-search", params={"q": "mega cap tech stocks"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["interpreted"] == {
+        "query": None,
+        "sectors": ["technology"],
+        "industries": [],
+        "in_sp500": None,
+        "in_nasdaq100": None,
+        "market_cap_tiers": ["mega"],
+        "sort": "market_cap",
+        "direction": "desc",
+        "limit": None,
+    }
+    # The results block is the same shape the manual search returns.
+    assert body["results"]["total"] == 1
+    assert body["results"]["results"][0]["ticker"] == "NVDA"
+
+
+def test_ai_search_passes_the_query_and_limit_through():
+    fake = _FakeAiScreen(result=_an_ai_result(ScreenIntent()))
+    resp = _ai_client(fake).get(
+        "/stocks/ai-search", params={"q": "  top 5 banks ", "limit": "5", "offset": "10"}
+    )
+    assert resp.status_code == 200
+    assert fake.kwargs == {"query": "  top 5 banks ", "limit": 5, "offset": 10}
+
+
+def test_ai_search_omitted_limit_is_none():
+    # Omitting limit lets the AI decide (the use case passes None straight through).
+    fake = _FakeAiScreen(result=_an_ai_result(ScreenIntent()))
+    _ai_client(fake).get("/stocks/ai-search", params={"q": "tech"})
+    assert fake.kwargs["limit"] is None
+
+
+def test_ai_search_requires_a_query():
+    # Missing q -> 422 (the param is required); blank q -> the use case's 400.
+    resp = _ai_client(_FakeAiScreen(result=_an_ai_result(ScreenIntent()))).get(
+        "/stocks/ai-search"
+    )
+    assert resp.status_code == 422
+
+
+def test_ai_search_blank_query_is_a_400():
+    fake = _FakeAiScreen(error=ValueError("A search request is required."))
+    resp = _ai_client(fake).get("/stocks/ai-search", params={"q": "x"})
+    assert resp.status_code == 400
+
+
+def test_ai_search_translation_failure_is_a_502():
+    fake = _FakeAiScreen(error=StockDataUnavailable("q", "model down"))
+    resp = _ai_client(fake).get("/stocks/ai-search", params={"q": "tech"})
+    assert resp.status_code == 502
+
+
+def test_ai_search_rejects_an_out_of_range_limit():
+    fake = _FakeAiScreen(result=_an_ai_result(ScreenIntent()))
+    resp = _ai_client(fake).get("/stocks/ai-search", params={"q": "tech", "limit": "101"})
+    assert resp.status_code == 422
+
+
+def test_ai_search_sets_a_short_cache_header():
+    fake = _FakeAiScreen(result=_an_ai_result(ScreenIntent()))
+    resp = _ai_client(fake).get("/stocks/ai-search", params={"q": "tech"})
     assert resp.headers["cache-control"] == "public, max-age=60"

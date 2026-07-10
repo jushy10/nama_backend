@@ -19,6 +19,9 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
 from app.stocks.adapters.bedrock.analysis_adapter import BedrockAnalysisProvider
+from app.stocks.adapters.bedrock.screener_query_adapter import (
+    BedrockScreenerQueryTranslator,
+)
 from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
     BedrockEarningsAnalysisProvider,
 )
@@ -90,6 +93,7 @@ from app.stocks.recommendations.db_repository import (
     SqlRecommendationsRepository,
 )
 from app.stocks.universe.db_repository import SqlStockSearchRepository
+from app.stocks.universe.ports import ScreenerQueryTranslator
 from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
@@ -248,6 +252,27 @@ def get_analysis_provider() -> InvestmentAnalysisProvider:
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
+        ) from exc
+
+
+@lru_cache(maxsize=1)
+def get_screener_translator() -> ScreenerQueryTranslator:
+    # The AI screener's translation is its primary data (its reason to exist), so it's
+    # required — but like the analysis providers there's no secret to gate on: Bedrock
+    # authenticates through the process's AWS credentials (the ECS task role in
+    # production). Region + model id are config with sane defaults (the id may be a
+    # cross-region inference profile); BEDROCK_SCREENER_MODEL_ID overrides the model
+    # independently of the analysis providers. A missing 'bedrock' extra surfaces as a
+    # clean 503 here rather than a 500.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_SCREENER_MODEL_ID")
+    try:
+        if model_id:
+            return BedrockScreenerQueryTranslator(model_id=model_id, region=region)
+        return BedrockScreenerQueryTranslator(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI stock screening is not configured (install the 'bedrock' extra)."
         ) from exc
 
 

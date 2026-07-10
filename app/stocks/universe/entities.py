@@ -205,6 +205,32 @@ class StockSearchCriteria:
 
 
 @dataclass(frozen=True)
+class ScreenIntent:
+    """A plain-English screen request translated into the search's own filters.
+
+    The shape an AI translator returns and the ``AiScreenStocks`` use case feeds straight
+    into ``SearchStocks.execute`` — every field maps one-to-one onto a search parameter, so
+    the AI leg only decides *which filters to set* and the ordinary search does the querying
+    (no new query engine, no way to reach a stock outside the screened universe). All fields
+    default to "not set" (an empty request is a neutral browse): ``sectors`` / ``industries``
+    are OR sets of stored slugs, the index flags tri-state, ``market_cap_tiers`` a union of
+    size buckets, ``sort`` optional with ``direction`` only biting once it's set, and ``limit``
+    the count the user asked for (``None`` to let the search default apply). The use case
+    still runs each field through the search's normalization, so an off-vocabulary slug the
+    model invents simply matches nothing rather than erroring."""
+
+    query: str | None = None
+    sectors: tuple[str, ...] = ()
+    industries: tuple[str, ...] = ()
+    in_sp500: bool | None = None
+    in_nasdaq100: bool | None = None
+    market_cap_tiers: tuple[MarketCapTier, ...] = ()
+    sort: StockSort | None = None
+    direction: SortDirection = SortDirection.DESC
+    limit: int | None = None
+
+
+@dataclass(frozen=True)
 class StockSearchPage:
     """A page of search results plus the total number of matches.
 
@@ -217,6 +243,21 @@ class StockSearchPage:
     total: int
     limit: int
     offset: int
+
+
+@dataclass(frozen=True)
+class AiScreenResult:
+    """The outcome of an AI-driven screen: the filters the model chose plus the page they
+    matched.
+
+    Carries the ``intent`` alongside the ``page`` on purpose — the FE renders the interpreted
+    filters back to the user (so an AI screen isn't a black box: they see it ran "mega-cap +
+    technology" and can tweak it in the manual controls), and the ``page`` is the same
+    ``StockSearchPage`` the manual search returns, so both paths present identically.
+    """
+
+    intent: ScreenIntent
+    page: StockSearchPage
 
 
 @dataclass(frozen=True)

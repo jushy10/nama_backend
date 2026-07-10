@@ -500,7 +500,8 @@ translates them.
 wiring functions (`APCA_API_KEY_ID`, `FINNHUB_API_KEY`, `LOGODEV_TOKEN`,
 `DATABASE_URL`, `CRON_SYNC_TOKEN`; the Bedrock analysers add `BEDROCK_REGION` /
 `BEDROCK_ANALYSIS_MODEL_ID` — plus per-analyser model overrides like
-`BEDROCK_EARNINGS_ANALYSIS_MODEL_ID` / `BEDROCK_RATINGS_ANALYSIS_MODEL_ID` — and the analysis
+`BEDROCK_EARNINGS_ANALYSIS_MODEL_ID` / `BEDROCK_RATINGS_ANALYSIS_MODEL_ID`, and the AI screener's
+`BEDROCK_SCREENER_MODEL_ID` — and the analysis
 result cache adds the optional `ANALYSIS_CACHE_TTL_MINUTES`, default 30). The `/internal/*/sync` cron endpoints are guarded
 by a shared bearer token: each `@router.post` depends on `require_cron_token`
 (`app/stocks/endpoints/cron_auth.py`), which requires `Authorization: Bearer
@@ -605,6 +606,7 @@ app/
     │   │                   #    yfinance_session: crumb-retry/pacing seam; yfinance_currency: foreign-ADR reporting→trading currency normalizer)
     │   └── bedrock/        #    the six Claude-on-Bedrock AI analysers as <concern>_adapter.py
     │                       #    (analysis / etf_analysis / earnings_analysis / ratings_analysis / sector_analysis / market_summary)
+    │                       #    + screener_query_adapter (translates a plain-English screen request into ScreenIntent filters — the AI screener, not an analyser)
     ├── analysis/           # ── AI-analysis result cache (read-through, shared by the stock + ETF analysis):
     │   ├── models.py            #    AnalysisCacheRecord (`investment_analysis_cache`, keyed (kind, symbol); standalone)
     │   └── db_repository.py     #    SqlInvestmentAnalysisCache (get latest / upsert; best-effort both ways)
@@ -661,12 +663,12 @@ app/
     │   ├── use_cases.py         #    GetTickerCard + TickerCard composite (quote/estimates/fundamentals/performance/options/quarterly-earnings ports)
     │   └── schemas.py           #    HTTP response DTO (quote + enrichment + opt-in dividend/performance/metrics/options_metrics; endpoint in endpoints/)
     ├── universe/           # ── universe sub-slice (table-less; screens the ≥$1B US universe onto the stocks anchor AND reads it back):
-    │   ├── entities.py          #    ScreenedStock + slugify; read-side shapes (StockSearchCriteria/Result/Page, StockSort/SortDirection, Classifications)
-    │   ├── ports.py             #    live-source port (StockScreener)
+    │   ├── entities.py          #    ScreenedStock + slugify; read-side shapes (StockSearchCriteria/Result/Page, StockSort/SortDirection, Classifications); ScreenIntent + AiScreenResult (the AI-screen shapes)
+    │   ├── ports.py             #    live-source ports: StockScreener + ScreenerQueryTranslator (plain-English request → ScreenIntent; primary, implemented by adapters/bedrock/screener_query_adapter)
     │   ├── repository.py        #    abstract persistence ports: UniverseRepository (write) + StockSearchRepository (read)
     │   ├── db_repository.py     #    SqlUniverseRepository (upsert_screen + set_pe_ratios) + SqlStockSearchRepository (search/classifications; screened-only)
-    │   ├── use_cases.py         #    SyncUniverse (write: screen + classify + value pe, from quarterly TTM × screen price) + SearchStocks / ListClassifications (read)
-    │   └── schemas.py           #    HTTP DTOs for the read endpoints (search page + classifications; endpoints in endpoints/ticker_endpoints.py)
+    │   ├── use_cases.py         #    SyncUniverse (write: screen + classify + value pe, from quarterly TTM × screen price) + SearchStocks / AiScreenStocks (translate NL → filters, then delegate to SearchStocks) / ListClassifications (read)
+    │   └── schemas.py           #    HTTP DTOs for the read endpoints (search page + classifications + AiScreenResponse [interpreted filters + page]; endpoints in endpoints/ticker_endpoints.py)
     ├── etfs/               # ── ETF sub-slice (owns its OWN `etfs` table + 2 child tables — an ETF is not a company; screens the top US ETFs, enriches each with its full profile, reads them back, AND serves one fund's detail card):
     │   ├── entities.py          #    ScreenedEtf (AUM/expense) + EtfProfile (category/family/dividend/NAV/description/returns) + EtfHolding + EtfSectorWeight + EtfDetail (quote+facts+profile composite, carries the requested `include` set + best-effort performance) + slugify; read-side shapes (EtfSearchCriteria/Result/Page, EtfSort/SortDirection, EtfCategories)
     │   ├── ports.py             #    live-source ports: EtfScreener (bulk screen, no criteria) + EtfProfileProvider (per-ticker full profile — the screen carries none; raises on a hard read)
@@ -696,7 +698,7 @@ app/
     │   ├── news_endpoints.py                     #  GET /stocks/{symbol}/news
     │   ├── cron_revenue_segments_endpoints.py    #  POST /internal/revenue-segments/sync
     │   ├── revenue_segments_endpoints.py         #  GET /stocks/{symbol}/revenue-segments (revenue by segment/product/geography, from SEC 10-K)
-    │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol} (card) + GET /stocks/ticker/{symbol}/pe-history (trailing-P/E series + valuation-vs-history stats: percentile, median/IQR band, cheap/fair/expensive signal) + GET /stocks/ticker (search) + GET /stocks/classifications
+    │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol} (card) + GET /stocks/ticker/{symbol}/pe-history (trailing-P/E series + valuation-vs-history stats: percentile, median/IQR band, cheap/fair/expensive signal) + GET /stocks/ticker (search) + GET /stocks/ai-search (plain-English AI screen → interpreted filters + page) + GET /stocks/classifications
     │   ├── heatmap_endpoints.py                  #  GET /market/heatmap?index=sp500|nasdaq100 (the sector→industry→stock treemap)
     │   ├── etf_endpoints.py                      #  GET /stocks/etfs (top-ETF search/filter/sort) + GET /stocks/etfs/categories (filter menu) + GET /stocks/etf/{ticker} (one fund's card: quote + facts + DB-read profile, 3y/5y returns fetched live for the performance block + opt-in ?include=metrics/dividends/performance)
     │   ├── cron_etf_endpoints.py                 #  POST /internal/etfs/sync (fire-and-forget: screen + profile enrichment)
