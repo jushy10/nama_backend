@@ -148,11 +148,12 @@ class StockSearchRepository(ABC):
 
     @abstractmethod
     def pe_ratios_for_industry(self, industry: str) -> tuple[float, ...]:
-        """Return the *positive* trailing P/Es of the screened stocks in ``industry`` — the
-        sample a peer-valuation benchmark is built from.
+        """Return the *positive* trailing P/Es of the **mid-cap-and-up** screened stocks in
+        ``industry`` — the sample a peer-valuation benchmark is built from.
 
         Only usable multiples: null and non-positive P/Es are excluded (a P/E off a loss is
-        meaningless), so the caller gets a clean list to summarize. ``industry`` is a stored
+        meaningless), and the $1–2B tail is dropped (a market-cap floor of $2B), so the
+        caller gets a clean list of comparable names to summarize. ``industry`` is a stored
         slug; an unknown one (or one with no valued members yet) yields an empty tuple — no
         coverage, not an error.
         """

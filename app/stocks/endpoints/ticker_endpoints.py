@@ -563,9 +563,10 @@ def industry_pe_endpoint(
     use_case: GetIndustryValuation = Depends(get_industry_valuation_use_case),
 ) -> IndustryValuationResponse:
     """The trailing-P/E benchmark for one industry — the median plus the interquartile range
-    of its screened peers' P/Es, for judging whether a stock's multiple is rich or cheap for
-    its industry. ``industry`` accepts the slug from /stocks/classifications (e.g.
-    'semiconductors') or the raw label. An unknown industry is a 200 with count 0, not a 404."""
+    of its **mid-cap-and-up** peers' P/Es (a $2B market-cap floor drops the noisy $1–2B
+    tail), for judging whether a stock's multiple is rich or cheap for its industry.
+    ``industry`` accepts the slug from /stocks/classifications (e.g. 'semiconductors') or
+    the raw label. An unknown industry is a 200 with count 0, not a 404."""
     try:
         valuation = use_case.execute(industry)
     except ValueError as exc:
