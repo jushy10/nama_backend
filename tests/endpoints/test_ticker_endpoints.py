@@ -84,8 +84,6 @@ def _a_card(
             TickerValuation(
                 symbol="MU",
                 price=975.56,
-                forward_pe=13.3,
-                forward_eps_growth=104.1,
                 # Consensus-basis TTM: trailing_pe = 975.56 / 43.55 -> 22.4.
                 ttm_eps=43.55,
             )
@@ -107,7 +105,6 @@ def _a_card(
             dividend_yield=0.047123,
             metrics=KeyMetrics(
                 pe=22.4,
-                eps_growth_yoy=700.7,  # peg property -> 0.03
                 gross_margin=52.1,
                 operating_margin=38.9,
                 net_margin=33.5,
@@ -192,16 +189,13 @@ def test_presents_the_optin_blocks_when_included():
         "1w": 1.5, "1m": 8.0, "3m": 40.0, "6m": 90.0, "ytd": 120.0, "1y": 150.0,
     }
     # The trailing P/E rides the valuation's consensus-basis TTM (not the
-    # vendor's KeyMetrics.pe); PEG + margins ride the fundamentals; forward PEG
-    # the stored consensus.
+    # vendor's KeyMetrics.pe); the margins ride the fundamentals.
     assert body["metrics"] == {
         "pe": 22.4,  # 975.56 / 43.55 — the valuation's trailing_pe
-        "peg": 0.03,  # 22.4 / 700.7 — the degenerate trailing read, for contrast
-        "forward_peg": 0.13,
         "gross_margin": 52.1,
         "operating_margin": 38.9,
         "net_margin": 33.5,
-        "revenue_growth_yoy": 61.6,  # off the anchor, alongside the forward legs
+        "revenue_growth_yoy": 61.6,  # off the anchor
         "eps_growth_yoy": 587.4,
     }
     # The options figures are rounded at the edge; the sampled expiries are dates.
@@ -248,13 +242,11 @@ def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
     assert body["market_cap"] is None
     assert body["dividend"] is None  # requested, but nothing to serve
     # The metrics block still appears (it was requested) with its
-    # fundamentals-backed half null; the valuation-backed pair — the trailing
-    # P/E (quarterly TTM) and the forward PEG (stored consensus) — and the
-    # anchor-backed growth pair still serve, since none of them ride Finnhub.
+    # fundamentals-backed margins null; the valuation-backed trailing P/E
+    # (quarterly TTM) and the anchor-backed growth pair still serve, since
+    # neither rides Finnhub.
     assert body["metrics"] == {
         "pe": 22.4,
-        "peg": None,
-        "forward_peg": 0.13,
         "gross_margin": None,
         "operating_margin": None,
         "net_margin": None,

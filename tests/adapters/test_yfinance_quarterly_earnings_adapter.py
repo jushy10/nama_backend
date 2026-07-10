@@ -55,13 +55,27 @@ class FakeTicker:
     """Stands in for ``yfinance.Ticker``; serves canned frames, or raises."""
 
     def __init__(
-        self, *, earnings_dates=None, eps_estimate=None, revenue=None, income_stmt=None, error=None
+        self,
+        *,
+        earnings_dates=None,
+        eps_estimate=None,
+        revenue=None,
+        income_stmt=None,
+        info=None,
+        error=None,
     ):
         self._earnings_dates = earnings_dates
         self._eps_estimate = eps_estimate
         self._revenue = revenue
         self._income_stmt = income_stmt
+        self._info = info if info is not None else {}
         self._error = error
+
+    @property
+    def info(self):
+        if isinstance(self._info, Exception):
+            raise self._info
+        return self._info
 
     @property
     def earnings_dates(self):
@@ -355,3 +369,142 @@ def test_vendor_error_raises_unavailable():
     ticker = FakeTicker(error=RuntimeError("yahoo down"))
     with pytest.raises(StockDataUnavailable):
         provider_with(ticker).get_quarterly_earnings("AAPL")
+
+
+# --- foreign ADRs: reporting→trading currency normalization -------------------------------
+
+
+class _FxTicker:
+    """A Yahoo FX-pair ticker fake: exposes a ``fast_info`` last price (empty ⇒ unavailable)."""
+
+    def __init__(self, rate):
+        self.fast_info = {} if rate is None else {"last_price": rate}
+
+
+def provider_with_currency(
+    ticker: FakeTicker, *, fx_rate
+) -> YfinanceQuarterlyEarningsProvider:
+    """A provider whose factory returns the fake for the issuer and an FX fake for the
+    ``{reporting}{trading}=X`` pair symbol the normalizer requests."""
+    fx_ticker = _FxTicker(fx_rate)
+
+    def factory(symbol):
+        return fx_ticker if symbol.endswith("=X") else ticker
+
+    return YfinanceQuarterlyEarningsProvider(ticker_factory=factory)
+
+
+def _adr_info(*, financial_currency, forward_eps, currency="USD"):
+    """``info`` for a foreign ADR: the trading/reporting currencies plus the trading-currency
+    ``forwardEps`` the market-EPS detection compares the ``0y`` estimate against."""
+    return {
+        "currency": currency,
+        "financialCurrency": financial_currency,
+        "forwardEps": forward_eps,
+    }
+
+
+# CNY-scale reported announcements for a BABA-like issuer whose market EPS is reporting
+# currency: (announce_date, EPS Estimate, Reported EPS).
+def _reported_dates_cny() -> list[tuple[str, float, float]]:
+    return [
+        ("2025-02-01", 13.0, 14.0),  # fy2024 q4 — oldest, dropped
+        ("2025-05-01", 12.0, 13.0),  # fy2025 q1
+        ("2025-08-01", 11.0, 15.0),  # fy2025 q2
+        ("2025-11-01", 14.0, 16.0),  # fy2025 q3
+        ("2026-02-01", 15.0, 18.0),  # fy2025 q4 — newest reported
+    ]
+
+
+def test_foreign_adr_converts_reporting_currency_revenue_leaving_usd_eps():
+    # TSM-like: the market EPS is already USD (0y estimate ~ forwardEps), so both the reported
+    # EPS/surprise and the forward EPS estimate are left alone; only the income-statement
+    # revenue and the (TWD) revenue estimate are converted. fx = 1/32 = 0.03125.
+    ticker = FakeTicker(
+        earnings_dates=_earnings_dates(_reported_dates() + [("2026-05-01", 3.1, _NAN)]),
+        eps_estimate=_estimate_frame({"0q": 3.1, "+1q": 3.3, "0y": 12.0}),  # USD
+        revenue=_estimate_frame({"0q": 3.2e12, "+1q": 3.5e12}),  # TWD — must convert
+        income_stmt=_income_stmt(
+            {  # Total Revenue in TWD, by fiscal period end
+                "2025-12-31": 1.6e11,  # → 5.0e9 USD
+                "2025-09-30": 1.28e11,
+                "2025-06-30": 9.6e10,
+                "2025-03-31": 6.4e10,
+            }
+        ),
+        info=_adr_info(financial_currency="TWD", forward_eps=13.0),
+    )
+    tl = provider_with_currency(ticker, fx_rate=0.03125).get_quarterly_earnings("TSM")
+
+    by_quarter = {(q.fiscal_year, q.fiscal_quarter): q for q in tl.past}
+    q4 = by_quarter[(2025, 4)]
+    assert q4.revenue_actual == pytest.approx(1.6e11 * 0.03125)  # 5.0e9 USD
+    assert q4.eps_actual == 3.3 and q4.eps_estimate == 3.0  # earnings_dates USD, untouched
+    assert q4.eps_surprise == pytest.approx(0.3)  # surprise still single-currency
+
+    q0, q1 = tl.future
+    assert q0.eps_estimate == 3.1 and q1.eps_estimate == 3.3  # USD estimate, untouched
+    assert q0.revenue_estimate == pytest.approx(3.2e12 * 0.03125)  # TWD → USD
+    assert q1.revenue_estimate == pytest.approx(3.5e12 * 0.03125)
+
+
+def test_foreign_adr_converts_reporting_currency_market_eps():
+    # BABA-like: every market EPS surface is in the reporting currency (CNY) — the reported
+    # actuals (earnings_dates), their preceding estimates, and the forward estimate. Detected
+    # once from the 0y estimate against forwardEps (both USD-scale) and all converted. fx = 0.15.
+    ticker = FakeTicker(
+        earnings_dates=_earnings_dates(_reported_dates_cny() + [("2026-05-01", 16.0, _NAN)]),
+        eps_estimate=_estimate_frame({"0q": 20.0, "+1q": 22.0, "0y": 80.0}),  # CNY
+        revenue=_estimate_frame({"0q": 1.1e12}),  # CNY — must convert
+        income_stmt=_income_stmt({"2025-12-31": 2.4e11}),  # CNY revenue → 3.6e10 USD
+        info=_adr_info(financial_currency="CNY", forward_eps=12.0),
+    )
+    tl = provider_with_currency(ticker, fx_rate=0.15).get_quarterly_earnings("BABA")
+
+    by_quarter = {(q.fiscal_year, q.fiscal_quarter): q for q in tl.past}
+    q4 = by_quarter[(2025, 4)]
+    assert q4.eps_actual == pytest.approx(18.0 * 0.15)  # 2.7 USD (CNY market EPS converted)
+    assert q4.eps_estimate == pytest.approx(15.0 * 0.15)  # preceding estimate also converted
+    assert q4.eps_surprise_percent == pytest.approx(20.0)  # (18-15)/15 — invariant under fx
+    assert q4.revenue_actual == pytest.approx(2.4e11 * 0.15)  # CNY → USD
+
+    q0, q1 = tl.future
+    assert q0.eps_estimate == pytest.approx(20.0 * 0.15)  # 3.0 USD
+    assert q1.eps_estimate == pytest.approx(22.0 * 0.15)
+    assert q0.revenue_estimate == pytest.approx(1.1e12 * 0.15)
+
+
+def test_foreign_adr_without_an_fx_rate_leaves_figures_unconverted():
+    ticker = FakeTicker(
+        earnings_dates=_earnings_dates(_reported_dates()),
+        eps_estimate=_estimate_frame({"0q": 3.1, "+1q": 3.3, "0y": 12.0}),
+        revenue=_estimate_frame({"0q": 3.2e12}),
+        income_stmt=_income_stmt({"2025-12-31": 1.6e11}),
+        info=_adr_info(financial_currency="TWD", forward_eps=13.0),
+    )
+    tl = provider_with_currency(ticker, fx_rate=None).get_quarterly_earnings("TSM")
+    by_quarter = {(q.fiscal_year, q.fiscal_quarter): q for q in tl.past}
+    assert by_quarter[(2025, 4)].revenue_actual == 1.6e11  # unconverted
+    assert tl.future[0].revenue_estimate == 3.2e12  # unconverted
+
+
+def test_domestic_issuer_makes_no_fx_call():
+    ticker = FakeTicker(
+        earnings_dates=_earnings_dates(_reported_dates()),
+        eps_estimate=_estimate_frame({"0q": 3.1, "+1q": 3.3, "0y": 12.0}),
+        revenue=_estimate_frame({"0q": 100e9, "+1q": 110e9}),
+        income_stmt=_income_stmt({"2025-12-31": 5.0e9}),
+        info=_adr_info(financial_currency="USD", forward_eps=12.0),  # == currency
+    )
+
+    def factory(symbol):
+        if symbol.endswith("=X"):
+            raise AssertionError("a domestic issuer must not fetch an FX rate")
+        return ticker
+
+    tl = YfinanceQuarterlyEarningsProvider(ticker_factory=factory).get_quarterly_earnings(
+        "AAPL"
+    )
+    by_quarter = {(q.fiscal_year, q.fiscal_quarter): q for q in tl.past}
+    assert by_quarter[(2025, 4)].revenue_actual == 5.0e9  # unchanged
+    assert tl.future[0].revenue_estimate == 100e9  # unchanged

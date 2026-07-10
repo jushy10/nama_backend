@@ -1,7 +1,7 @@
 """Interface Adapter: AI analyst-coverage read via Claude on Amazon Bedrock.
 
-The analyst-ratings sibling of ``bedrock_earnings_analysis_provider.py`` (the
-earnings read) and ``bedrock_analysis_provider.py`` (the full buy/hold/sell
+The analyst-ratings sibling of ``earnings_analysis_adapter.py`` (the
+earnings read) and ``analysis_adapter.py`` (the full buy/hold/sell
 read). The only module — alongside its earnings/stock/ETF/sector/market cousins
 — that knows Bedrock (and the Anthropic SDK) exists. It takes the recommendation
 consensus and the most credible covering firms the use case gathered, renders
@@ -234,7 +234,7 @@ def _string_tuple(value) -> tuple[str, ...]:
     strictly enforce it, and Haiku occasionally returns a list field as a single string.
     Iterating a ``str`` would split it into characters — a wall of one-character "findings" —
     so anything that isn't a list yields none instead. Mirrors
-    ``bedrock_earnings_analysis_provider._string_tuple``.
+    ``earnings_analysis_adapter._string_tuple``.
     """
     if not isinstance(value, list):
         return ()

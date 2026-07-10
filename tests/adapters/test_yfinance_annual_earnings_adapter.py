@@ -453,3 +453,160 @@ def test_vendor_error_raises_unavailable():
     ticker = FakeTicker(error=RuntimeError("yahoo down"))
     with pytest.raises(StockDataUnavailable):
         provider_with(ticker).get_annual_earnings("AAPL")
+
+
+# --- foreign ADRs: reporting→trading currency normalization -------------------------------
+
+
+class _FxTicker:
+    """A Yahoo FX-pair ticker fake: exposes a ``fast_info`` last price (empty ⇒ unavailable)."""
+
+    def __init__(self, rate):
+        self.fast_info = {} if rate is None else {"last_price": rate}
+
+
+def provider_with_currency(
+    ticker: FakeTicker, *, fx_rate
+) -> YfinanceAnnualEarningsProvider:
+    """A provider whose factory returns the fake for the issuer and an FX fake for the
+    ``{reporting}{trading}=X`` pair symbol the normalizer requests."""
+    fx_ticker = _FxTicker(fx_rate)
+
+    def factory(symbol):
+        return fx_ticker if symbol.endswith("=X") else ticker
+
+    return YfinanceAnnualEarningsProvider(ticker_factory=factory)
+
+
+def _adr_info(next_fiscal_year_end: date, *, financial_currency, forward_eps, currency="USD"):
+    """``info`` for a foreign ADR: the fiscal-year-end anchor plus the trading/reporting
+    currencies and the trading-currency ``forwardEps`` reference the normalizer needs."""
+    return {
+        "nextFiscalYearEnd": _epoch(next_fiscal_year_end),
+        "currency": currency,
+        "financialCurrency": financial_currency,
+        "forwardEps": forward_eps,
+    }
+
+
+def test_foreign_adr_converts_reporting_currency_figures_to_trading():
+    # TSM-like: income_stmt is in TWD (the reporting currency), the EPS estimate in USD (the
+    # trading currency), the revenue estimate in TWD. fx = 1/32 = 0.03125 (TWD→USD).
+    ticker = FakeTicker(
+        income_stmt=_income_stmt(
+            ["2025-12-31"],
+            diluted_eps=[320.0],  # TWD → 10.0 USD
+            total_revenue=[3.2e12],  # TWD → 1.0e11 USD
+            net_income=[8.0e11],  # TWD → 2.5e10 USD
+        ),
+        eps_estimate=_estimate_frame({"0y": 16.0, "+1y": 20.0}),  # USD — must stay
+        revenue=_estimate_frame({"0y": 3.5e12, "+1y": 3.8e12}),  # TWD — must convert
+        info=_adr_info(date(2026, 12, 31), financial_currency="TWD", forward_eps=20.0),
+    )
+    tl = provider_with_currency(ticker, fx_rate=0.03125).get_annual_earnings("TSM")
+
+    reported = tl.past[0]
+    assert reported.eps_actual == 10.0  # 320 TWD × 0.03125
+    assert reported.revenue_actual == 1.0e11  # 3.2e12 TWD × 0.03125
+    assert reported.net_income == 2.5e10  # 8.0e11 TWD × 0.03125
+
+    y0, y1 = tl.future
+    # EPS estimate detected as already-trading-currency (USD) → unchanged.
+    assert y0.eps_estimate == 16.0 and y1.eps_estimate == 20.0
+    # Revenue estimate converted from the reporting currency (TWD → USD).
+    assert y0.revenue_estimate == pytest.approx(3.5e12 * 0.03125)
+    assert y1.revenue_estimate == pytest.approx(3.8e12 * 0.03125)
+
+
+def test_foreign_adr_converts_a_reporting_currency_market_eps():
+    # BABA-like: the market EPS surfaces (earnings_dates → the consensus actual, and
+    # earnings_estimate → the forward EPS) are themselves in the reporting currency (CNY),
+    # unlike TSM's. Detected once from the 0y estimate against forwardEps (both USD) and
+    # converted, while the GAAP income-statement EPS converts via the reliable rate. fx = 0.15.
+    ticker = FakeTicker(
+        income_stmt=_income_stmt(
+            ["2025-12-31"], diluted_eps=[60.0], total_revenue=[1.0e12], net_income=[2.0e11]
+        ),
+        eps_estimate=_estimate_frame({"0y": 45.0, "+1y": 50.0}),  # CNY — must convert
+        revenue=_estimate_frame({"0y": 1.1e12}),  # CNY — must convert
+        info=_adr_info(date(2026, 12, 31), financial_currency="CNY", forward_eps=9.0),
+        # fy2025's four quarterly Reported EPS (CNY): sum 52.0, on the consensus basis.
+        earnings_dates=_earnings_dates(
+            {
+                "2026-01-28": 16.0,  # fy2025 Q4
+                "2025-10-30": 14.0,  # fy2025 Q3
+                "2025-07-30": 12.0,  # fy2025 Q2
+                "2025-04-30": 10.0,  # fy2025 Q1
+            }
+        ),
+    )
+    tl = provider_with_currency(ticker, fx_rate=0.15).get_annual_earnings("BABA")
+
+    reported = tl.past[0]
+    assert reported.eps_actual == pytest.approx(60.0 * 0.15)  # 9.0 USD (GAAP, reliable rate)
+    # Consensus actual (summed earnings_dates, CNY) converted via the detected market rate.
+    assert reported.eps_actual_consensus == pytest.approx(52.0 * 0.15)  # 7.8 USD
+
+    y0, y1 = tl.future
+    assert y0.eps_estimate == pytest.approx(45.0 * 0.15)  # 6.75 USD (detected reporting)
+    assert y1.eps_estimate == pytest.approx(50.0 * 0.15)  # 7.5 USD
+    assert y0.revenue_estimate == pytest.approx(1.1e12 * 0.15)
+
+
+def test_foreign_adr_with_trading_currency_market_eps_keeps_the_consensus():
+    # TSM-like: the market EPS is already trading currency (0y estimate ~ forwardEps), so the
+    # consensus actual is left as-is while the income-statement EPS still converts.
+    ticker = FakeTicker(
+        income_stmt=_income_stmt(["2025-12-31"], diluted_eps=[320.0], total_revenue=[3.2e12]),
+        eps_estimate=_estimate_frame({"0y": 16.0, "+1y": 20.0}),  # USD
+        revenue=_estimate_frame({"0y": 3.5e12}),
+        info=_adr_info(date(2026, 12, 31), financial_currency="TWD", forward_eps=20.0),
+        earnings_dates=_earnings_dates(
+            {  # already-USD quarterly Reported EPS, sum 10.0 — must not be converted
+                "2026-01-28": 3.0,
+                "2025-10-30": 2.5,
+                "2025-07-30": 2.3,
+                "2025-04-30": 2.2,
+            }
+        ),
+    )
+    tl = provider_with_currency(ticker, fx_rate=0.03125).get_annual_earnings("TSM")
+    reported = tl.past[0]
+    assert reported.eps_actual == pytest.approx(320.0 * 0.03125)  # 10.0 USD (converted)
+    assert reported.eps_actual_consensus == pytest.approx(10.0)  # left as-is (already USD)
+
+
+def test_foreign_adr_without_an_fx_rate_leaves_figures_unconverted():
+    # The FX pair yields no rate: fall back to the identity normalizer (never-worse) rather
+    # than a wrong conversion — the reporting-currency figures pass through unchanged.
+    ticker = FakeTicker(
+        income_stmt=_income_stmt(["2025-12-31"], diluted_eps=[320.0], total_revenue=[3.2e12]),
+        eps_estimate=_estimate_frame({"0y": 16.0}),
+        revenue=_estimate_frame({"0y": 3.5e12}),
+        info=_adr_info(date(2026, 12, 31), financial_currency="TWD", forward_eps=20.0),
+    )
+    tl = provider_with_currency(ticker, fx_rate=None).get_annual_earnings("TSM")
+    assert tl.past[0].eps_actual == 320.0  # unconverted
+    assert tl.future[0].revenue_estimate == 3.5e12  # unconverted
+
+
+def test_domestic_issuer_is_not_converted_and_makes_no_fx_call():
+    # currency == financialCurrency (a US company): the normalizer short-circuits to the
+    # identity without ever fetching an FX pair.
+    ticker = FakeTicker(
+        income_stmt=_income_stmt(
+            ["2025-12-31"], diluted_eps=[6.0], total_revenue=[400e9], net_income=[100e9]
+        ),
+        eps_estimate=_estimate_frame({"0y": 6.5}),
+        revenue=_estimate_frame({"0y": 420e9}),
+        info=_adr_info(date(2026, 12, 31), financial_currency="USD", forward_eps=6.5),
+    )
+
+    def factory(symbol):
+        if symbol.endswith("=X"):
+            raise AssertionError("a domestic issuer must not fetch an FX rate")
+        return ticker
+
+    tl = YfinanceAnnualEarningsProvider(ticker_factory=factory).get_annual_earnings("AAPL")
+    assert tl.past[0].eps_actual == 6.0  # unchanged
+    assert tl.future[0].revenue_estimate == 420e9  # unchanged

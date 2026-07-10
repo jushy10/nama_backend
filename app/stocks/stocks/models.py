@@ -45,9 +45,10 @@ class StockRecord(Base):
     reported years cached (and EPS best-effort, since the consensus basis often isn't).
 
     ``forward_revenue_growth_yoy`` / ``forward_eps_growth_yoy`` are the *forward* mirror
-    of that pair — the analyst-consensus FY1 -> FY2 change (percent), the same figures the
-    ticker card's forward PEG is built on. Written the same way (the annual slice
-    overwrites both on every refresh from its stored forward years), and both legs sit on
+    of that pair — the analyst-consensus FY1 -> FY2 change (percent), feeding the universe
+    search's forward-growth sorts and the AI analysis context. Written the same way (the
+    annual slice overwrites both on every refresh from its stored forward years), and both
+    legs sit on
     the consensus basis so neither carries a basis caveat. Nullable and more often unset
     than the trailing pair: they need *two* upcoming years and Yahoo frequently publishes
     only FY1 (0018).

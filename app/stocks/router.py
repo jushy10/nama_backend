@@ -18,12 +18,19 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
-from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
-from app.stocks.bedrock_earnings_analysis_provider import (
+from app.stocks.adapters.bedrock.analysis_adapter import BedrockAnalysisProvider
+from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
     BedrockEarningsAnalysisProvider,
 )
-from app.stocks.bedrock_market_summary_provider import BedrockMarketSummaryProvider
-from app.stocks.bedrock_sector_analysis_provider import BedrockSectorAnalysisProvider
+from app.stocks.adapters.bedrock.market_summary_adapter import (
+    BedrockMarketSummaryProvider,
+)
+from app.stocks.adapters.bedrock.ratings_analysis_adapter import (
+    BedrockRatingsAnalysisProvider,
+)
+from app.stocks.adapters.bedrock.sector_analysis_adapter import (
+    BedrockSectorAnalysisProvider,
+)
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     CandleSeries,
@@ -50,9 +57,6 @@ from app.stocks.indicators import (
 )
 from app.stocks.adapters.annual_earnings_estimates_adapter import (
     AnnualEarningsEstimatesProvider,
-)
-from app.stocks.adapters.bedrock_ratings_analysis_adapter import (
-    BedrockRatingsAnalysisProvider,
 )
 from app.stocks.adapters.db_only_context_providers import (
     DbOnlyAnnualEarningsProvider,
@@ -168,8 +172,8 @@ def get_options_provider() -> YfinanceOptionChainProvider:
 def get_estimates_provider(
     db: Session = Depends(get_db),
 ) -> AnalystEstimatesProvider:
-    # Forward analyst estimates back the ticker card's forward PEG and the AI
-    # analysis context — best-effort enrichment. They're projected from the
+    # Forward analyst estimates back the AI analysis context — best-effort
+    # enrichment. They're projected from the
     # annual-earnings slice's stored forward years (the same Yahoo consensus that
     # timeline serves), DB-only: a symbol whose timeline isn't cached yet just
     # omits the forward metrics until the annual read path or its cron fills the

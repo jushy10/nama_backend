@@ -45,7 +45,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.bedrock_etf_analysis_adapter import BedrockEtfAnalysisProvider
+from app.stocks.adapters.bedrock.etf_analysis_adapter import BedrockEtfAnalysisProvider
 from app.stocks.adapters.yfinance_etf_profile_adapter import (
     YfinanceEtfProfileProvider,
 )

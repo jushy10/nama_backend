@@ -106,9 +106,9 @@ fake provider.
 The card also carries best-effort enrichment: the company **name** and
 **exchange** (served DB-first from the `stocks` table once filled), **market
 cap** from [Finnhub](https://finnhub.io), and opt-in `dividend`, `performance`,
-and `metrics` blocks via `?include=` (the metrics block adds the trailing and
-forward PEG, the latter built on the annual-earnings cache's stored Yahoo
-consensus). Enrichment never fails the request — if a source is down, unkeyed,
+and `metrics` blocks via `?include=` (the metrics block adds the trailing P/E on
+the consensus-EPS basis, the profit margins, and the latest trailing YoY
+growth). Enrichment never fails the request — if a source is down, unkeyed,
 or doesn't cover the symbol, that field comes back `null` and the quote still
 returns.
 
