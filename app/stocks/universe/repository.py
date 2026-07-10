@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from app.stocks.universe.entities import (
     Classifications,
     CompanyClassification,
+    MarketCapTier,
     ScreenedStock,
     StockSearchCriteria,
     StockSearchPage,
@@ -168,5 +169,31 @@ class StockSearchRepository(ABC):
         whose P/E benchmark to build via :meth:`pe_ratios_for_industry` — resolving the
         ticker's own industry and summarizing its peers is the use case's job, so this stays a
         single-column read on the same taxonomy the search filters and the benchmark group on.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def tier_for_ticker(self, ticker: str) -> MarketCapTier | None:
+        """Return the market-cap size tier of ``ticker``, or ``None`` when its cap is unknown.
+
+        The companion to :meth:`industry_for_ticker` for a *tier-anchored* peer comparison —
+        it lets a ticker-driven caller scope the benchmark to the stock's own size class
+        (a mega-cap against other mega-caps). Bucketing dollars into a tier is the adapter's
+        job (the same tier ⇄ bounds mapping the ``market_cap`` search filter uses), so the
+        use case gets a tier back, never a dollar figure.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def industry_peers(
+        self, industry: str
+    ) -> tuple[tuple[float, MarketCapTier], ...]:
+        """Return the mid-cap-and-up peers of ``industry`` as ``(positive_pe, tier)`` pairs.
+
+        The tier-tagged form of :meth:`pe_ratios_for_industry` — same sample (positive P/Es,
+        the $2B floor), but each peer carries its size tier so a caller can build a
+        tier-scoped cohort (see :meth:`IndustryValuation.for_stock_peers`). An unknown
+        industry (or one with no valued members) yields an empty tuple — no coverage, not an
+        error.
         """
         raise NotImplementedError

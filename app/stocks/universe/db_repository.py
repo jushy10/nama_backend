@@ -189,6 +189,19 @@ def _tier_range(tier: MarketCapTier):
     return and_(*bounds)
 
 
+def _tier_for_market_cap(market_cap: float | None) -> MarketCapTier | None:
+    """Bucket a dollar market cap into its ``MarketCapTier`` — the in-Python inverse of
+    ``_tier_range``, over the same ``_TIER_BOUNDS``. ``None`` for a null cap or one below the
+    smallest tier's floor (nothing to compare it as). Keeps the tier ⇄ dollars mapping in the
+    adapter, so the entity's cohort logic works on tiers alone."""
+    if market_cap is None:
+        return None
+    for tier, (low, high) in _TIER_BOUNDS.items():
+        if market_cap >= low and (high is None or market_cap < high):
+            return tier
+    return None
+
+
 def _escape_like(term: str) -> str:
     """Escape the LIKE metacharacters in a user's search term so a literal ``%`` / ``_``
     matches itself instead of acting as a wildcard. Paired with ``escape="\\"`` on the
@@ -306,6 +319,34 @@ class SqlStockSearchRepository(StockSearchRepository):
         return self._session.execute(
             select(StockRecord.industry).where(StockRecord.ticker == ticker)
         ).scalar_one_or_none()
+
+    def tier_for_ticker(self, ticker: str) -> MarketCapTier | None:
+        # The anchor's cap, bucketed to its tier. Same null-collapsing as
+        # `industry_for_ticker`: no row / null cap -> None, so the caller falls back to the
+        # whole-industry benchmark rather than a tier-scoped one.
+        cap = self._session.execute(
+            select(StockRecord.market_cap).where(StockRecord.ticker == ticker)
+        ).scalar_one_or_none()
+        return _tier_for_market_cap(cap)
+
+    def industry_peers(
+        self, industry: str
+    ) -> tuple[tuple[float, MarketCapTier], ...]:
+        # The tier-tagged sibling of `pe_ratios_for_industry` — same WHERE (positive P/E, the
+        # mid-cap-and-up floor), but it also selects the cap so each peer carries its tier.
+        # Every row clears the $2B floor, so `_tier_for_market_cap` never returns None here.
+        rows = self._session.execute(
+            select(StockRecord.pe_ratio, StockRecord.market_cap).where(
+                StockRecord.industry == industry,
+                StockRecord.pe_ratio > 0,
+                StockRecord.market_cap >= self._BENCHMARK_MIN_MARKET_CAP,
+            )
+        ).all()
+        return tuple(
+            (pe, _tier_for_market_cap(cap))
+            for pe, cap in rows
+            if _tier_for_market_cap(cap) is not None
+        )
 
     def _conditions(self, criteria: StockSearchCriteria) -> list:
         """The WHERE terms shared by the count and the page query — the screened gate plus
