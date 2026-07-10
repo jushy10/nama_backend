@@ -707,6 +707,19 @@ def test_pe_ratios_for_industry_returns_positive_pes_of_that_industry(session):
     assert sorted(pes) == [30.0, 46.5]
 
 
+def test_pe_ratios_for_industry_drops_the_small_cap_tail(session):
+    # Mid-cap-and-up only: the benchmark sample excludes the $1–2B slice, whose thin,
+    # noisy multiples aren't good comparables — but keeps everything from $2B up.
+    _seed(session, "NVDA", industry="semiconductors", market_cap=3e12, pe_ratio=46.5)
+    _seed(session, "ATFLOOR", industry="semiconductors", market_cap=2e9, pe_ratio=25.0)  # $2B — kept
+    _seed(session, "SMALL", industry="semiconductors", market_cap=1.5e9, pe_ratio=90.0)  # <$2B — dropped
+    r = SqlStockSearchRepository(session)
+
+    pes = r.pe_ratios_for_industry("semiconductors")
+
+    assert sorted(pes) == [25.0, 46.5]
+
+
 def test_pe_ratios_for_industry_empty_for_an_unknown_industry(session):
     _seed(session, "NVDA", industry="semiconductors", pe_ratio=46.5)
     assert SqlStockSearchRepository(session).pe_ratios_for_industry("nonesuch") == ()

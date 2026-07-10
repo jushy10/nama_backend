@@ -274,16 +274,24 @@ class SqlStockSearchRepository(StockSearchRepository):
             industries=self._distinct(StockRecord.industry),
         )
 
+    # Mid-cap-and-up floor for the benchmark sample: the $1–2B slice (the screen floor is
+    # $1B, so "small" in practice) carries the noisiest trailing P/Es and the weakest
+    # comparables, so a peer benchmark reads cleaner off MID + LARGE + MEGA. Matches the
+    # MarketCapTier MID lower bound (2e9); mega-caps stay in (this is a floor, not a range).
+    _BENCHMARK_MIN_MARKET_CAP = 2e9
+
     def pe_ratios_for_industry(self, industry: str) -> tuple[float, ...]:
         # Positive P/Es only: `pe_ratio > 0` already drops NULLs (in SQL `NULL > 0` is not
         # true) and non-positive figures (a trailing loss the sync stored as None, or a stray
         # <= 0). `pe_ratio` is only ever written on screened rows, so no separate screened
-        # gate is needed — a non-null P/E implies a screened member.
+        # gate is needed — a non-null P/E implies a screened member. The market-cap floor
+        # keeps the sample to mid-cap-and-up (see `_BENCHMARK_MIN_MARKET_CAP`).
         rows = (
             self._session.execute(
                 select(StockRecord.pe_ratio).where(
                     StockRecord.industry == industry,
                     StockRecord.pe_ratio > 0,
+                    StockRecord.market_cap >= self._BENCHMARK_MIN_MARKET_CAP,
                 )
             )
             .scalars()
