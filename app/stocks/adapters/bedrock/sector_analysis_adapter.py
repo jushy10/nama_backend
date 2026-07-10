@@ -176,7 +176,7 @@ class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
     # Bedrock does not enforce the tool schema's minItems, and the fast Haiku tier
     # occasionally returns empty leaders/laggards anyway. Re-issue the forced call
     # up to this many *extra* times to recover them. Only fires on the miss.
-    _MAX_EMPTY_RETRIES = 2
+    _MAX_EMPTY_RETRIES = 4
 
     def __init__(
         self,

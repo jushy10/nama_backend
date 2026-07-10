@@ -143,7 +143,7 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
     # empty strengths/risks anyway. Re-issue the forced call up to this many *extra* times to recover
     # the bullets; paired with the use case refusing to cache an incomplete read, an empty result is
     # effectively never served (and never frozen for the TTL). Only fires on the miss.
-    _MAX_EMPTY_RETRIES = 2
+    _MAX_EMPTY_RETRIES = 4
 
     def __init__(
         self,
