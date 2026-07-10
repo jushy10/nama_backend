@@ -1,6 +1,6 @@
 """Interface Adapter: AI market-sector analysis via Claude on Amazon Bedrock.
 
-The market-wide sibling of ``bedrock_analysis_provider.py`` (which reads one
+The market-wide sibling of ``analysis_adapter.py`` (which reads one
 stock). The only module — alongside its stock/ETF cousins — that knows Bedrock
 (and the Anthropic SDK) exists. It takes the day's ranked sector board the use
 case already gathered (each sector's move on the day + its trailing-window

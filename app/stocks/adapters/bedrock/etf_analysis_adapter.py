@@ -1,6 +1,6 @@
 """Interface Adapter: AI analysis of an ETF via Claude on Amazon Bedrock.
 
-The ETF sibling of ``app/stocks/bedrock_analysis_provider.py`` (the stock analyser) — the only
+The ETF sibling of ``analysis_adapter.py`` (the stock analyser) — the only
 module that knows Bedrock (and the Anthropic SDK) exists for the fund read. It takes the
 ``EtfDetail`` the use case already assembled — the live quote, the fund's size (AUM), yearly cost
 (expense ratio), yield, NAV, its trailing and long-term returns, its top holdings, and its sector

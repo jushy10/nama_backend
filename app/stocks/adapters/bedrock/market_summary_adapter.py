@@ -1,6 +1,6 @@
 """Interface Adapter: AI market-overview summary via Claude on Amazon Bedrock.
 
-The whole-market sibling of ``bedrock_sector_analysis_provider.py`` (which reads
+The whole-market sibling of ``sector_analysis_adapter.py`` (which reads
 the day's sector rotation). The only module — alongside its stock/ETF/sector
 cousins — that knows Bedrock (and the Anthropic SDK) exists. It takes the day's
 index board the use case gathered (the S&P 500 and the Nasdaq, each with its

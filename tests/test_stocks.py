@@ -11,12 +11,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.bedrock_analysis_provider import BedrockAnalysisProvider
-from app.stocks.bedrock_earnings_analysis_provider import (
+from app.stocks.adapters.bedrock.analysis_adapter import BedrockAnalysisProvider
+from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
     BedrockEarningsAnalysisProvider,
 )
-from app.stocks.bedrock_market_summary_provider import BedrockMarketSummaryProvider
-from app.stocks.bedrock_sector_analysis_provider import BedrockSectorAnalysisProvider
+from app.stocks.adapters.bedrock.market_summary_adapter import (
+    BedrockMarketSummaryProvider,
+)
+from app.stocks.adapters.bedrock.sector_analysis_adapter import (
+    BedrockSectorAnalysisProvider,
+)
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     AllTimeHigh,

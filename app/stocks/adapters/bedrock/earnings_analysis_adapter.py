@@ -1,7 +1,7 @@
 """Interface Adapter: AI earnings summary via Claude on Amazon Bedrock.
 
-The earnings-focused sibling of ``bedrock_analysis_provider.py`` (the full
-buy/hold/sell read) and ``bedrock_market_summary_provider.py`` (the whole-market
+The earnings-focused sibling of ``analysis_adapter.py`` (the full
+buy/hold/sell read) and ``market_summary_adapter.py`` (the whole-market
 read). The only module — alongside its stock/ETF/sector/market cousins — that
 knows Bedrock (and the Anthropic SDK) exists. It takes the quarterly and annual
 earnings timelines the use case gathered, renders them into a compact prompt,
@@ -245,7 +245,7 @@ def _string_tuple(value) -> tuple[str, ...]:
     a single string (e.g. a leaked ``<parameter name="highlights">[...]`` value).
     Iterating a ``str`` would split it into characters — a wall of one-character
     "notes" — so anything that isn't a list yields no highlights instead. Mirrors
-    ``bedrock_analysis_provider._string_tuple``.
+    ``analysis_adapter._string_tuple``.
     """
     if not isinstance(value, list):
         return ()
