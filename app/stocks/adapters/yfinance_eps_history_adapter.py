@@ -12,6 +12,18 @@ best-effort: any failure becomes ``StockDataUnavailable`` for the use case to sw
 and an uncovered symbol is an empty tuple (no history, not an error). Routed through
 ``yfinance_session`` for request pacing + a fresh-crumb retry on a 401, the same seam the
 sibling adapters share; ``_ticker_factory`` is the fake seam the offline tests drive.
+
+**Currency (foreign ADRs).** ``get_earnings_dates`` "Reported EPS" is a *market* EPS
+surface, which Yahoo quotes per-ADR in a currency that varies by issuer — USD for TSM but
+the reporting currency (CNY) for BABA and many Chinese ADRs — while the P/E-history prices
+this EPS divides into are always the trading currency (USD). Dividing a USD close by a CNY
+EPS understates the multiple ~7×, so each reported EPS is run through the shared
+``yfinance_currency`` normalizer onto the trading currency. Its currency is detected once —
+the ``earnings_estimate`` ``0y`` forward annual estimate against the trading-currency
+``info['forwardEps']`` — exactly as the quarterly / annual earnings adapters do. The extra
+``info`` / ``earnings_estimate`` reads are best-effort enrichment: a blocked one yields the
+identity normalizer (no conversion) rather than sinking the history, and it's a no-op for
+every US issuer.
 """
 
 from __future__ import annotations
@@ -22,7 +34,8 @@ from datetime import date, datetime
 import pandas as pd
 import yfinance as yf
 
-from app.stocks.adapters import yfinance_session
+from app.stocks.adapters import yfinance_currency, yfinance_session
+from app.stocks.adapters.yfinance_currency import CurrencyNormalizer
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.ticker.entities import ReportedEps
 from app.stocks.ticker.ports import EpsHistoryProvider
@@ -57,15 +70,39 @@ class YfinanceEpsHistoryProvider(EpsHistoryProvider):
             raise StockDataUnavailable(
                 symbol, f"yfinance EPS history failed ({exc})"
             ) from exc
-        return _parse(frame)
+        # A foreign ADR's "Reported EPS" may be quoted in its reporting currency (CNY for
+        # BABA) while the P/E-history prices are USD, so normalize each reported EPS onto the
+        # trading currency. Best-effort — a blocked info/estimate read degrades to the
+        # identity normalizer (no conversion), never sinking the (primary) history.
+        return _parse(frame, self._currency_normalizer(ticker))
+
+    def _currency_normalizer(self, ticker) -> CurrencyNormalizer:
+        """The currency normalizer for this issuer, mirroring the quarterly / annual earnings
+        adapters: detect the *market* EPS currency once from the ``earnings_estimate`` ``0y``
+        forward annual estimate against the trading-currency ``info['forwardEps']``. Every read
+        here is best-effort — a failure degrades to the identity normalizer — and it's a no-op
+        (no FX call) for a domestic issuer."""
+        info = yfinance_currency.read_info(ticker)
+        try:
+            eps_estimate = yfinance_session.call(lambda: ticker.earnings_estimate)
+        except Exception:  # noqa: BLE001 — detection input only: degrade to no conversion
+            eps_estimate = None
+        return yfinance_currency.build(
+            self._ticker_factory,
+            info,
+            market_eps_sample=_cell(eps_estimate, "0y", "avg"),
+            market_eps_reference=_num(info.get("forwardEps")),
+        )
 
 
-def _parse(frame) -> tuple[ReportedEps, ...]:
+def _parse(frame, normalizer: CurrencyNormalizer) -> tuple[ReportedEps, ...]:
     """``get_earnings_dates`` → the reported quarters, oldest first.
 
     Keeps only rows with a real announcement date AND a reported (actual) EPS — future
     quarters carry a NaN ``Reported EPS`` and are dropped. Deduped by date (Yahoo can list
-    a boundary quarter twice), keeping the last reported figure for a date."""
+    a boundary quarter twice), keeping the last reported figure for a date. Each reported EPS
+    is normalized onto the trading currency (``market_to_trading`` — a no-op for a domestic
+    issuer) so it divides cleanly into the USD P/E-history prices."""
     if frame is None or getattr(frame, "empty", True):
         return ()
     try:
@@ -80,7 +117,7 @@ def _parse(frame) -> tuple[ReportedEps, ...]:
         eps = _num(_series_get(series, "Reported EPS"))
         if eps is None:
             continue  # a future/unreported quarter — nothing to anchor a P/E on
-        by_date[report_date] = eps
+        by_date[report_date] = normalizer.market_to_trading(eps)
     return tuple(ReportedEps(report_date=d, eps=by_date[d]) for d in sorted(by_date))
 
 
@@ -89,6 +126,20 @@ def _series_get(series, key: str):
     try:
         return series.get(key)
     except Exception:  # noqa: BLE001 — a frame quirk must not escape the adapter
+        return None
+
+
+def _cell(frame, period: str, column: str) -> float | None:
+    """One numeric cell of a period-indexed estimate frame as a float, or ``None`` (missing
+    row/column, NaN, non-numeric) — reads the ``0y`` forward estimate for currency detection.
+    The same helper the quarterly / annual adapters use on the estimate frames."""
+    try:
+        if frame is None or getattr(frame, "empty", True):
+            return None
+        if period not in frame.index or column not in frame.columns:
+            return None
+        return _num(frame.loc[period, column])
+    except Exception:  # noqa: BLE001 — never let a frame quirk escape the adapter
         return None
 
 
