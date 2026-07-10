@@ -36,6 +36,8 @@ def _to_entity(row: StockAnnualEarningsRecord) -> AnnualEarnings:
         revenue_estimate=row.revenue_estimate,
         net_income=row.net_income,
         eps_actual_consensus=row.eps_actual_consensus,
+        fcf_per_share=row.fcf_per_share,
+        ocf_per_share=row.ocf_per_share,
     )
 
 
@@ -85,6 +87,14 @@ class SqlAnnualEarningsRepository(AnnualEarningsRepository):
         stock.eps_growth_yoy = timeline.latest_eps_growth_yoy
         stock.forward_revenue_growth_yoy = timeline.forward_revenue_growth_yoy
         stock.forward_eps_growth_yoy = timeline.forward_eps_growth_yoy
+        # The free/operating cash-flow per share (newest reported year) and the trailing
+        # FCF-per-share growth — the same overwrite-every-refresh snapshot as the growth
+        # pair. The per-share cash figures feed the ticker card's live FCF multiples
+        # (priced on the quote, not stored); fcf_growth_yoy is served directly. Each drops
+        # to None when the window can't support it (no reported year / fewer than two).
+        stock.fcf_per_share = timeline.latest_fcf_per_share
+        stock.ocf_per_share = timeline.latest_ocf_per_share
+        stock.fcf_growth_yoy = timeline.latest_fcf_growth_yoy
 
         # Rewrite the whole window: clear the stock's rows, then insert the new set.
         # Simpler and correct for a variable-length set of years than diffing.
@@ -102,6 +112,8 @@ class SqlAnnualEarningsRepository(AnnualEarningsRepository):
                     revenue_estimate=year.revenue_estimate,
                     net_income=year.net_income,
                     eps_actual_consensus=year.eps_actual_consensus,
+                    fcf_per_share=year.fcf_per_share,
+                    ocf_per_share=year.ocf_per_share,
                     fetched_at=now,
                 )
             )

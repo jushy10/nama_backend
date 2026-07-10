@@ -34,6 +34,8 @@ def _income_stmt(
     basic_eps=None,
     total_revenue=None,
     net_income=None,
+    diluted_average_shares=None,
+    basic_average_shares=None,
 ) -> pd.DataFrame:
     """An annual income statement like ``Ticker.income_stmt``: metrics as rows, fiscal-year-end
     dates as columns. Each metric arg is a list aligned to ``periods``."""
@@ -47,7 +49,28 @@ def _income_stmt(
         data["Total Revenue"] = total_revenue
     if net_income is not None:
         data["Net Income"] = net_income
+    if diluted_average_shares is not None:
+        data["Diluted Average Shares"] = diluted_average_shares
+    if basic_average_shares is not None:
+        data["Basic Average Shares"] = basic_average_shares
     return pd.DataFrame(data, index=columns).T  # -> rows=metrics, columns=period ends
+
+
+def _cash_flow(
+    periods: list[str],
+    *,
+    free_cash_flow=None,
+    operating_cash_flow=None,
+) -> pd.DataFrame:
+    """An annual cash-flow statement like ``Ticker.cashflow``: rows keyed by concept,
+    fiscal-year-end dates as columns (the same columns as ``income_stmt``)."""
+    columns = pd.DatetimeIndex([pd.Timestamp(p) for p in periods])
+    data = {}
+    if free_cash_flow is not None:
+        data["Free Cash Flow"] = free_cash_flow
+    if operating_cash_flow is not None:
+        data["Operating Cash Flow"] = operating_cash_flow
+    return pd.DataFrame(data, index=columns).T  # -> rows=concepts, columns=period ends
 
 
 def _estimate_frame(avgs: dict) -> pd.DataFrame:
@@ -89,6 +112,7 @@ class FakeTicker:
         revenue=None,
         info=None,
         earnings_dates=None,
+        cashflow=None,
         error=None,
     ):
         self._income_stmt = income_stmt
@@ -96,6 +120,7 @@ class FakeTicker:
         self._revenue = revenue
         self._info = info if info is not None else {}
         self._earnings_dates = earnings_dates
+        self._cashflow = cashflow
         self._error = error
         self.earnings_dates_limits: list[int] = []
 
@@ -124,6 +149,14 @@ class FakeTicker:
         if isinstance(self._info, Exception):
             raise self._info
         return self._info
+
+    @property
+    def cashflow(self):
+        if self._error is not None:
+            raise self._error
+        if isinstance(self._cashflow, Exception):  # a selective cash-flow failure
+            raise self._cashflow
+        return self._cashflow
 
     def get_earnings_dates(self, limit: int):
         self.earnings_dates_limits.append(limit)
@@ -187,6 +220,56 @@ def test_reported_years_carry_actuals():
     assert by_year[2025].revenue_actual == 400e9
     assert by_year[2025].net_income == 100e9
     assert by_year[2025].period_end == date(2025, 12, 31)
+
+
+def _ticker_with_cashflow() -> FakeTicker:
+    # Two reported years with a cash-flow statement + diluted share counts, so per-share cash
+    # and its YoY growth are checkable. fy2025: FCF 60e9 / 20e9 sh = 3.0, OCF 90e9 / 20e9 = 4.5;
+    # fy2024: FCF 50e9 / 20e9 = 2.5 → fcf/share growth = (3.0-2.5)/2.5 = 20%.
+    return FakeTicker(
+        income_stmt=_income_stmt(
+            ["2025-12-31", "2024-12-31"],
+            diluted_eps=[6.0, 5.5],
+            total_revenue=[400e9, 380e9],
+            net_income=[100e9, 95e9],
+            diluted_average_shares=[20e9, 20e9],
+        ),
+        cashflow=_cash_flow(
+            ["2025-12-31", "2024-12-31"],
+            free_cash_flow=[60e9, 50e9],
+            operating_cash_flow=[90e9, 80e9],
+        ),
+        eps_estimate=_estimate_frame({"0y": 6.5, "+1y": 7.0}),
+        revenue=_estimate_frame({"0y": 420e9, "+1y": 450e9}),
+        info=_info(date(2026, 12, 31)),
+    )
+
+
+def test_reported_years_carry_cash_flow_per_share():
+    tl = provider_with(_ticker_with_cashflow()).get_annual_earnings("AAPL")
+    by_year = {y.fiscal_year: y for y in tl.past}
+    assert by_year[2025].fcf_per_share == pytest.approx(3.0)  # 60e9 / 20e9 shares
+    assert by_year[2025].ocf_per_share == pytest.approx(4.5)  # 90e9 / 20e9 shares
+    assert by_year[2024].fcf_per_share == pytest.approx(2.5)  # 50e9 / 20e9 shares
+
+
+def test_timeline_exposes_latest_cash_flow_and_growth():
+    tl = provider_with(_ticker_with_cashflow()).get_annual_earnings("AAPL")
+    assert tl.latest_fcf_per_share == pytest.approx(3.0)  # newest reported year
+    assert tl.latest_ocf_per_share == pytest.approx(4.5)
+    assert tl.latest_fcf_growth_yoy == pytest.approx(20.0)  # (3.0 - 2.5) / 2.5 * 100
+
+
+def test_blocked_cash_flow_leaves_reported_years_intact_without_cash():
+    # cashflow is the same hard-gated fundamentals class as income_stmt: a blocked fetch
+    # drops the per-share cash but never sinks the year (best-effort enrichment).
+    ticker = _ticker_with_cashflow()
+    ticker._cashflow = RuntimeError("cash flow blocked")
+    tl = provider_with(ticker).get_annual_earnings("AAPL")
+    by_year = {y.fiscal_year: y for y in tl.past}
+    assert by_year[2025].eps_actual == 6.0  # the year still serves
+    assert by_year[2025].fcf_per_share is None  # cash dropped
+    assert tl.latest_fcf_per_share is None
     # a reported year carries actuals only — no estimate side (there's no annual surprise)
     assert by_year[2025].eps_estimate is None and by_year[2025].revenue_estimate is None
 

@@ -30,8 +30,10 @@ class StockSearchItemResponse(BaseModel):
     industry: str | None = None
     market_cap: float | None = None  # raw USD
     pe_ratio: float | None = None  # trailing P/E, consensus basis (matches the card)
+    fcf_yield: float | None = None  # percent, materialized FCF yield (signed; sortable)
     revenue_growth_yoy: float | None = None  # percent, latest trailing YoY
     eps_growth_yoy: float | None = None  # percent, latest trailing YoY, consensus basis
+    fcf_growth_yoy: float | None = None  # percent, latest trailing FCF/share YoY
     forward_revenue_growth_yoy: float | None = None  # percent, forward FY1→FY2 consensus
     forward_eps_growth_yoy: float | None = None  # percent, forward FY1→FY2 consensus
     in_sp500: bool

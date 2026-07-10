@@ -88,22 +88,25 @@ class StockSort(str, Enum):
     so there is no default member. ``MARKET_CAP`` orders biggest-first; ``REVENUE_GROWTH`` /
     ``EPS_GROWTH`` are the annual slice's latest *trailing* year-over-year figures on the anchor
     and ``FORWARD_REVENUE_GROWTH`` / ``FORWARD_EPS_GROWTH`` their *forward* (FY1→FY2 consensus)
-    counterparts; ``GROWTH`` / ``FORWARD_GROWTH`` each blend a pair (its equal-weight average) so
-    one control ranks the fastest all-round growers, trailing or expected; ``PE`` orders by the
-    stored trailing P/E (the consensus-basis figure the universe sync writes) — ascending
-    surfaces the cheapest on earnings first. The value → ORM
-    column/expression mapping is the adapter's job — the enum just names the choices in domain
-    terms.
+    counterparts; ``FCF_GROWTH`` is the trailing FCF-per-share growth; ``GROWTH`` /
+    ``FORWARD_GROWTH`` each blend a pair (its equal-weight average) so one control ranks the
+    fastest all-round growers, trailing or expected; ``PE`` orders by the stored trailing P/E
+    (the consensus-basis figure the universe sync writes) — ascending surfaces the cheapest on
+    earnings first; ``FCF_YIELD`` orders by the materialized free-cash-flow yield — descending
+    surfaces the cheapest on cash (highest yield) first. The value → ORM column/expression
+    mapping is the adapter's job — the enum just names the choices in domain terms.
     """
 
     MARKET_CAP = "market_cap"
     REVENUE_GROWTH = "revenue_growth"
     EPS_GROWTH = "eps_growth"
+    FCF_GROWTH = "fcf_growth"
     GROWTH = "growth"
     FORWARD_REVENUE_GROWTH = "forward_revenue_growth"
     FORWARD_EPS_GROWTH = "forward_eps_growth"
     FORWARD_GROWTH = "forward_growth"
     PE = "pe"
+    FCF_YIELD = "fcf_yield"
 
 
 class SortDirection(str, Enum):
@@ -150,8 +153,10 @@ class StockSearchResult:
     industry: str | None
     market_cap: float | None
     pe_ratio: float | None
+    fcf_yield: float | None
     revenue_growth_yoy: float | None
     eps_growth_yoy: float | None
+    fcf_growth_yoy: float | None
     forward_revenue_growth_yoy: float | None
     forward_eps_growth_yoy: float | None
     in_sp500: bool

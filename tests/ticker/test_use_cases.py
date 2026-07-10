@@ -172,6 +172,9 @@ class _FakeRepo(TickerRepository):
         industry: str | None = None,
         revenue_growth_yoy: float | None = None,
         eps_growth_yoy: float | None = None,
+        fcf_per_share: float | None = None,
+        ocf_per_share: float | None = None,
+        fcf_growth_yoy: float | None = None,
     ) -> None:
         self._name = name
         self._exchange = exchange
@@ -180,6 +183,9 @@ class _FakeRepo(TickerRepository):
         self._industry = industry
         self._revenue_growth_yoy = revenue_growth_yoy
         self._eps_growth_yoy = eps_growth_yoy
+        self._fcf_per_share = fcf_per_share
+        self._ocf_per_share = ocf_per_share
+        self._fcf_growth_yoy = fcf_growth_yoy
         self.name_saves: list[tuple[str, str]] = []
         self.exchange_saves: list[tuple[str, str]] = []
 
@@ -192,6 +198,9 @@ class _FakeRepo(TickerRepository):
             industry=self._industry,
             revenue_growth_yoy=self._revenue_growth_yoy,
             eps_growth_yoy=self._eps_growth_yoy,
+            fcf_per_share=self._fcf_per_share,
+            ocf_per_share=self._ocf_per_share,
+            fcf_growth_yoy=self._fcf_growth_yoy,
         )
 
     def save_name(self, symbol: str, name: str) -> None:
@@ -780,43 +789,58 @@ def test_unwired_earnings_provider_leaves_the_trailing_pe_none():
     assert card.valuation.trailing_pe is None
 
 
-def test_metrics_carries_the_fcf_multiples_off_the_fundamentals():
-    # The FCF/share on the fundamentals metrics block flows into the valuation and
-    # is priced at the live quote: $4 FCF/share against $100 is a 25x P/FCF, 4% yield.
-    fundamentals = _FakeFundamentals(
-        fundamentals=StockFundamentals(
-            market_cap=1_000_000_000.0,
-            dividend_per_share=None,
-            dividend_yield=None,
-            metrics=KeyMetrics(fcf_per_share=4.0),
-        )
-    )
+def test_metrics_carries_the_fcf_multiples_off_the_anchor():
+    # FCF/OCF per share come from the stored anchor (the annual slice's write), not the
+    # fundamentals call, and are priced at the live quote: $4 FCF/share and $6 OCF/share
+    # against $100 is a 25x P/FCF, a 4% FCF yield and a 6% OCF yield.
+    repo = _FakeRepo(fcf_per_share=4.0, ocf_per_share=6.0)
 
     card = GetTickerCard(
-        _FakeQuotes(price=100.0), fundamentals=fundamentals
+        _FakeQuotes(price=100.0), repository=repo
     ).execute("MU", include=["metrics"])
 
-    assert fundamentals.calls == ["MU"]
     assert card.valuation.fcf_per_share == pytest.approx(4.0)
+    assert card.valuation.ocf_per_share == pytest.approx(6.0)
     assert card.valuation.price_to_fcf == pytest.approx(25.0)
     assert card.valuation.fcf_yield == pytest.approx(4.0)
+    assert card.valuation.ocf_yield == pytest.approx(6.0)
 
 
-def test_fcf_multiples_are_none_when_fundamentals_is_unavailable():
-    # Best-effort: a blocked fundamentals call leaves the FCF leg null without
-    # sinking the card or the trailing P/E (which rides the separate earnings read).
-    fundamentals = _FakeFundamentals(
-        error=StockDataUnavailable("MU", "finnhub down")
-    )
+def test_fcf_multiples_survive_a_blocked_fundamentals_because_they_ride_the_anchor():
+    # The FCF leg no longer depends on Finnhub: a blocked fundamentals call leaves it
+    # intact (it's read off the anchor, the same read that serves the growth pair), so
+    # the FCF/OCF yields still serve and the trailing P/E rides the separate earnings read.
+    fundamentals = _FakeFundamentals(error=StockDataUnavailable("MU", "finnhub down"))
+    repo = _FakeRepo(fcf_per_share=4.0, ocf_per_share=6.0)
     earnings = _FakeEarnings(_four_quarters(1.5, 2.0, 2.5, 3.0))
 
     card = GetTickerCard(
-        _FakeQuotes(price=100.0), fundamentals=fundamentals, earnings=earnings
+        _FakeQuotes(price=100.0),
+        fundamentals=fundamentals,
+        repository=repo,
+        earnings=earnings,
+    ).execute("MU", include=["metrics"])
+
+    assert card.valuation.fcf_yield == pytest.approx(4.0)  # served despite Finnhub down
+    assert card.valuation.ocf_yield == pytest.approx(6.0)
+    assert card.valuation.trailing_pe == pytest.approx(11.11)
+
+
+def test_fcf_multiples_are_none_when_the_anchor_lacks_cash_figures():
+    # Best-effort: an uncovered symbol (the annual slice hasn't reached it, so the anchor
+    # carries no per-share cash) yields null FCF/OCF reads without sinking the card or the
+    # trailing P/E (which rides the separate earnings read).
+    earnings = _FakeEarnings(_four_quarters(1.5, 2.0, 2.5, 3.0))
+
+    card = GetTickerCard(
+        _FakeQuotes(price=100.0), earnings=earnings
     ).execute("MU", include=["metrics"])
 
     assert card.valuation.fcf_per_share is None
+    assert card.valuation.ocf_per_share is None
     assert card.valuation.price_to_fcf is None
     assert card.valuation.fcf_yield is None
+    assert card.valuation.ocf_yield is None
     assert card.valuation.trailing_pe == pytest.approx(11.11)  # the card still serves
 
 

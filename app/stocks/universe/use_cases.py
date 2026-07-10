@@ -92,6 +92,20 @@ def _pe_ratio(price: float | None, ttm_eps: float | None) -> float | None:
     return round(price / ttm_eps, 2)
 
 
+def _fcf_yield(price: float | None, fcf_per_share: float | None) -> float | None:
+    """The ticker card's free-cash-flow yield, materialized for the sortable anchor column.
+
+    The exact figure ``TickerValuation.fcf_yield`` serves — free cash flow per share over the
+    price, as a signed percent — off the screen-time price and the annual slice's stored
+    ``fcf_per_share``. Unlike ``_pe_ratio`` it keeps its **sign** (only a live price is
+    required): a negative yield is a real "burning cash" reading, so a cash-burner ranks below
+    zero rather than dropping out. ``None`` only when a leg is missing or the price is
+    degenerate."""
+    if price is None or fcf_per_share is None or price <= 0:
+        return None
+    return round(fcf_per_share / price * 100, 2)
+
+
 class SyncUniverse:
     """Populate/refresh the searchable universe from a live market screen, classify the stocks
     that still lack a sector/industry, and value each screened stock with a trailing P/E."""
@@ -193,27 +207,36 @@ class SyncUniverse:
         return enriched, failed
 
     def _value_screened(self, screened: tuple[ScreenedStock, ...]) -> int:
-        """Recompute and persist every screened stock's trailing P/E, returning how many got a
-        non-null figure.
+        """Recompute and persist every screened stock's trailing P/E **and** materialized FCF
+        yield, returning how many got a non-null P/E.
 
         Values the *whole* screened set every run — it's cheap: the price already rode in on
-        the screen, and the TTM read is DB-only (no Yahoo call). For each stock it pairs the
-        screen-time price with the quarterly slice's stored TTM consensus EPS and applies the
-        card's rule (:func:`_pe_ratio`), overwriting the anchor's ``pe_ratio`` in one commit. A
-        stock with no price this sweep is skipped, so a rare missing price never nulls a good
-        prior figure; a stock with a price but no cached TTM (or a trailing loss) is written
-        ``None`` — genuinely no P/E, the same way the growth pair drops to null. A no-op (0)
-        when no quarterly cache was wired — the P/E is best-effort enrichment."""
-        if self._quarterly is None:
-            return 0
+        the screen, the TTM read is DB-only (no Yahoo call), and ``fcf_per_share`` is one
+        batched anchor read. For each stock it pairs the screen-time price with the quarterly
+        slice's stored TTM consensus EPS (the card's :func:`_pe_ratio`) and with the annual
+        slice's stored ``fcf_per_share`` (:func:`_fcf_yield`), overwriting the anchor's
+        ``pe_ratio`` / ``fcf_yield``. A stock with no price this sweep is skipped, so a rare
+        missing price never nulls a good prior figure; a stock with a price but no cached TTM
+        (or a trailing loss) is written a ``None`` P/E, and one with no stored ``fcf_per_share``
+        a ``None`` yield — genuinely no figure. The P/E leg is a no-op when no quarterly cache
+        was wired (best-effort enrichment); the FCF yield needs only the anchor read, so it
+        materializes regardless. The returned count stays the P/E tally (the report's
+        ``valued``), the FCF yield riding along as a silent enrichment like the growth pair."""
         pe_by_ticker: dict[str, float | None] = {}
+        fcf_yield_by_ticker: dict[str, float | None] = {}
+        fcf_per_share = self._repository.fcf_per_share_by_ticker()
         for stock in screened:
             if stock.price is None:
-                continue  # no price this sweep — leave any prior P/E untouched
-            stored = self._quarterly.get(stock.ticker)
-            ttm_eps = stored.ttm_eps if stored is not None else None
-            pe_by_ticker[stock.ticker] = _pe_ratio(stock.price, ttm_eps)
-        return self._repository.set_pe_ratios(pe_by_ticker)
+                continue  # no price this sweep — leave any prior figures untouched
+            if self._quarterly is not None:
+                stored = self._quarterly.get(stock.ticker)
+                ttm_eps = stored.ttm_eps if stored is not None else None
+                pe_by_ticker[stock.ticker] = _pe_ratio(stock.price, ttm_eps)
+            fcf_yield_by_ticker[stock.ticker] = _fcf_yield(
+                stock.price, fcf_per_share.get(stock.ticker)
+            )
+        self._repository.set_fcf_yields(fcf_yield_by_ticker)
+        return self._repository.set_pe_ratios(pe_by_ticker) if pe_by_ticker else 0
 
 
 class SearchStocks:

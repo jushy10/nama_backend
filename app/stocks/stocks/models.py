@@ -10,7 +10,9 @@ analyst-estimates feature was the first to need the anchor); migration 0009 adde
 still say "symbol" — the rename is a table-vocabulary choice), 0011 added the trailing
 year-over-year growth columns, 0012 the three universe-screen columns, 0013 the
 ``industry`` column, 0014 the ``in_sp500`` / ``in_nasdaq100`` index-membership flags,
-0017 the ``pe_ratio`` column, and 0018 the forward year-over-year growth columns (all below).
+0017 the ``pe_ratio`` column, 0018 the forward year-over-year growth columns, and 0027 the
+free-cash-flow columns (``fcf_per_share`` / ``ocf_per_share`` / ``fcf_growth_yoy`` /
+``fcf_yield``) — all below.
 """
 
 from __future__ import annotations
@@ -76,6 +78,22 @@ class StockRecord(Base):
     meaningless). It exists to make the universe *sortable* by valuation; the card still serves
     its own live P/E off the quote, so the two share a basis but not a freshness.
 
+    ``fcf_per_share`` / ``ocf_per_share`` are the newest reported fiscal year's free- and
+    operating-cash-flow *per share* (trading currency), written by the annual-earnings slice
+    from its stored timeline alongside the growth pair — a moving snapshot, **overwritten**
+    every refresh (each drops to null when no reported year carries it). They're quasi-static
+    inputs (they move once a year on a filing), stored so the ticker card can price them against
+    its *live* quote into ``price_to_fcf`` / ``fcf_yield`` / an OCF yield — the same split
+    ``pe_ratio`` uses (store the input, price it live), so the card never needs a live cash-flow
+    fetch. ``fcf_growth_yoy`` is the trailing YoY growth of ``fcf_per_share`` (percent, newest
+    reported year over the prior), the cash-flow sibling of ``revenue_growth_yoy`` / served
+    directly. ``fcf_yield`` is the *materialized* free-cash-flow yield (percent) — the universe
+    sync's valuation pass divides ``fcf_per_share`` into the screen-time price the same way it
+    derives ``pe_ratio``, so the search list is sortable by cash cheapness; a *drifting,
+    price-derived snapshot* (overwritten every run, null until ``fcf_per_share`` is filled), and
+    unlike the card's live ``fcf_yield`` it keeps its sign (a cash-burner reads negative). All
+    four nullable, all written by their sync (0027).
+
     ``in_sp500`` / ``in_nasdaq100`` are index-membership flags, reconciled by the
     index-membership sync (Finnhub → this anchor). Unlike the screen facts these are
     ``NOT NULL`` (default ``False``): membership is a known yes/no — absent from the
@@ -101,6 +119,10 @@ class StockRecord(Base):
         DateTime(timezone=True), nullable=True
     )
     pe_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fcf_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ocf_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fcf_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fcf_yield: Mapped[float | None] = mapped_column(Float, nullable=True)
     in_sp500: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=false(), default=False
     )
@@ -136,10 +158,11 @@ def anchor_facts(session: Session, ticker: str) -> Row | None:
     ``None`` when the row doesn't exist yet.
 
     Returns a ``Row`` with named columns (``name``, ``exchange``, ``market_cap``,
-    ``sector``, ``industry``, ``revenue_growth_yoy``, ``eps_growth_yoy``); per-field
-    ``None`` for whatever the row hasn't learned. Widened past name/exchange because
-    the card also serves the universe-screen facts and the annual slice's trailing
-    growth straight off the anchor — the caller maps it into ``StoredTickerFacts``."""
+    ``sector``, ``industry``, ``revenue_growth_yoy``, ``eps_growth_yoy``,
+    ``fcf_per_share``, ``ocf_per_share``, ``fcf_growth_yoy``); per-field ``None`` for
+    whatever the row hasn't learned. Widened past name/exchange because the card also
+    serves the universe-screen facts and the annual slice's trailing growth + cash-flow
+    per share straight off the anchor — the caller maps it into ``StoredTickerFacts``."""
     return session.execute(
         select(
             StockRecord.name,
@@ -149,6 +172,9 @@ def anchor_facts(session: Session, ticker: str) -> Row | None:
             StockRecord.industry,
             StockRecord.revenue_growth_yoy,
             StockRecord.eps_growth_yoy,
+            StockRecord.fcf_per_share,
+            StockRecord.ocf_per_share,
+            StockRecord.fcf_growth_yoy,
         ).where(StockRecord.ticker == ticker)
     ).one_or_none()
 

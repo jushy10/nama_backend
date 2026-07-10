@@ -214,17 +214,20 @@ def _present(card: TickerCard) -> TickerCardResponse:
         trailing = fundamentals.metrics if fundamentals else None
         metrics = TickerMetricsResponse(
             pe=card.valuation.trailing_pe if card.valuation else None,
-            # The FCF pair rides the valuation too (price / the vendor's trailing
-            # FCF/share), so it's on the same live quote as the P/E.
+            # The FCF/OCF reads ride the valuation too (live price / the annual slice's
+            # stored per-share cash off the anchor), so they're on the same live quote as
+            # the P/E — and, unlike the margins, independent of the fundamentals call.
             price_to_fcf=card.valuation.price_to_fcf if card.valuation else None,
             fcf_yield=card.valuation.fcf_yield if card.valuation else None,
+            ocf_yield=card.valuation.ocf_yield if card.valuation else None,
             gross_margin=trailing.gross_margin if trailing else None,
             operating_margin=trailing.operating_margin if trailing else None,
             net_margin=trailing.net_margin if trailing else None,
-            # The trailing YoY pair rides the anchor read (already rounded percent),
-            # not the fundamentals call — so it serves even when Finnhub is down.
+            # The trailing YoY figures ride the anchor read (already rounded percent),
+            # not the fundamentals call — so they serve even when Finnhub is down.
             revenue_growth_yoy=card.revenue_growth_yoy,
             eps_growth_yoy=card.eps_growth_yoy,
+            fcf_growth_yoy=card.fcf_growth_yoy,
         )
     return TickerCardResponse(
         ticker=card.quote.symbol,
@@ -423,8 +426,10 @@ def _present_search(page: StockSearchPage) -> StockSearchResponse:
                 industry=r.industry,
                 market_cap=r.market_cap,
                 pe_ratio=r.pe_ratio,
+                fcf_yield=r.fcf_yield,
                 revenue_growth_yoy=r.revenue_growth_yoy,
                 eps_growth_yoy=r.eps_growth_yoy,
+                fcf_growth_yoy=r.fcf_growth_yoy,
                 forward_revenue_growth_yoy=r.forward_revenue_growth_yoy,
                 forward_eps_growth_yoy=r.forward_eps_growth_yoy,
                 in_sp500=r.in_sp500,

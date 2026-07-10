@@ -47,11 +47,12 @@ class TickerValuation:
     """One symbol's trailing valuation multiples at today's price.
 
     The per-share legs arrive precomputed (the use case derives ``ttm_eps`` from
-    the quarterly-earnings timeline and takes ``fcf_per_share`` off the
-    fundamentals call); the entity owns the rules that turn them into multiples.
-    Each leg is optional — the TTM sum needs four cached quarters, and the FCF
-    figure needs a covering fundamentals vendor — so a symbol missing one simply
-    carries ``None`` around a live price.
+    the quarterly-earnings timeline and reads ``fcf_per_share`` / ``ocf_per_share``
+    off the ``stocks`` anchor, where the annual-earnings slice stores them); the
+    entity owns the rules that turn them into multiples. Each leg is optional — the
+    TTM sum needs four cached quarters, and the cash figures need the annual slice
+    to have reached the stock — so a symbol missing one simply carries ``None``
+    around a live price.
 
     ``ttm_eps`` is deliberately on the *consensus (adjusted)* basis — the sum of
     the 4 newest reported quarters' "Reported EPS" — not GAAP diluted, so the
@@ -59,16 +60,21 @@ class TickerValuation:
     AI analysis context is built on (a GAAP trailing leg would make any walk
     between them a basis artifact rather than a story about growth).
 
-    ``fcf_per_share`` is the vendor's trailing free-cash-flow per share (the same
-    ``KeyMetrics.fcf_per_share`` the snapshot carries). Pricing it here — rather
-    than trusting the vendor's own P/FCF snapshot — keeps the FCF multiples on the
-    card's *live* quote, exactly as ``trailing_pe`` prices the consensus EPS.
+    ``fcf_per_share`` / ``ocf_per_share`` are the newest reported fiscal year's
+    free- and operating-cash-flow per share, sourced from the annual-earnings slice
+    (Yahoo cash-flow statement) and stored on the anchor. Pricing them here against
+    the card's *live* quote — rather than materializing a multiple at store time —
+    keeps the FCF/OCF reads on the current price, exactly as ``trailing_pe`` prices
+    the consensus EPS. The OCF yield sits beside the FCF yield so the gap between
+    them reads as the capex drag (a heavy capex-spender's OCF yield runs well above
+    its FCF yield).
     """
 
     symbol: str
     price: float  # the live price the multiples were taken at
     ttm_eps: float | None = None  # trailing 12m EPS, consensus basis (4 reported quarters)
-    fcf_per_share: float | None = None  # trailing free cash flow per share (fundamentals vendor)
+    fcf_per_share: float | None = None  # trailing free cash flow per share (annual slice, anchor)
+    ocf_per_share: float | None = None  # trailing operating cash flow per share (annual slice, anchor)
 
     @property
     def trailing_pe(self) -> float | None:
@@ -112,6 +118,21 @@ class TickerValuation:
         if self.fcf_per_share is None or self.price <= 0:
             return None
         return round(self.fcf_per_share / self.price * 100, 2)
+
+    @property
+    def ocf_yield(self) -> float | None:
+        """Operating-cash-flow yield (percent): ``ocf_per_share`` over price — the
+        *pre-capex* companion to ``fcf_yield``.
+
+        The gap between this and ``fcf_yield`` is what capital spending consumes: a
+        heavy capex-spender (a company mid-build-out) shows a healthy OCF yield and a
+        thin FCF yield, which separates "weak cash generation" from "generating cash
+        but reinvesting it". Like ``fcf_yield`` it keeps its sign and guards only on a
+        live price — operating cash flow can be negative for a genuinely cash-negative
+        business, and that reading is informative, not meaningless."""
+        if self.ocf_per_share is None or self.price <= 0:
+            return None
+        return round(self.ocf_per_share / self.price * 100, 2)
 
 
 @dataclass(frozen=True)

@@ -47,6 +47,8 @@ def _reported(
     revenue_actual: float | None = None,
     net_income: float | None = None,
     eps_actual_consensus: float | None = None,
+    fcf_per_share: float | None = None,
+    ocf_per_share: float | None = None,
 ) -> AnnualEarnings:
     return AnnualEarnings(
         fiscal_year=fy,
@@ -57,6 +59,8 @@ def _reported(
         revenue_estimate=None,
         net_income=net_income,
         eps_actual_consensus=eps_actual_consensus,
+        fcf_per_share=fcf_per_share,
+        ocf_per_share=ocf_per_share,
     )
 
 
@@ -204,6 +208,44 @@ def test_upsert_writes_the_latest_trailing_yoy_snapshot(session):
     rev, eps = _stock_growth(session)
     # revenue (360-300)/300 = +20%; eps on the consensus basis (6.0-5.0)/5.0 = +20%
     assert rev == 20.0 and eps == 20.0
+
+
+def _stock_cash(session, ticker: str = "AAPL"):
+    """The (fcf_per_share, ocf_per_share, fcf_growth_yoy) snapshot on the stocks anchor."""
+    return session.execute(
+        select(
+            StockRecord.fcf_per_share,
+            StockRecord.ocf_per_share,
+            StockRecord.fcf_growth_yoy,
+        ).where(StockRecord.ticker == ticker)
+    ).one()
+
+
+def test_upsert_persists_cash_per_year_and_writes_the_anchor_snapshot(session):
+    # Two reported years carrying per-share cash: the rows persist it, and the anchor gets the
+    # newest year's figures plus the trailing FCF/share growth.
+    r = repo(session)
+    r.upsert(
+        "AAPL",
+        "Apple Inc.",
+        AnnualEarningsTimeline(
+            "AAPL",
+            (
+                _reported(2023, 5.5, fcf_per_share=2.0, ocf_per_share=3.0),
+                _reported(2024, 6.0, fcf_per_share=2.5, ocf_per_share=3.6),
+                _upcoming(2025, 6.5, 420e9),  # upcoming: no cash
+            ),
+        ),
+    )
+    # Per-year rows round-trip the cash figures.
+    by_year = {y.fiscal_year: y for y in r.get("AAPL").past}
+    assert (by_year[2024].fcf_per_share, by_year[2024].ocf_per_share) == (2.5, 3.6)
+    assert (by_year[2023].fcf_per_share, by_year[2023].ocf_per_share) == (2.0, 3.0)
+    # Anchor snapshot: newest reported year's per-share cash + trailing FCF/share growth.
+    fcf_ps, ocf_ps, fcf_growth = _stock_cash(session)
+    assert fcf_ps == 2.5
+    assert ocf_ps == 3.6
+    assert fcf_growth == 25.0  # (2.5 - 2.0) / 2.0 * 100
 
 
 def test_upsert_overwrites_the_growth_snapshot_each_refresh(session):

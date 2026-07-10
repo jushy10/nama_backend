@@ -177,6 +177,7 @@ class TickerCard:
     industry: str | None = None  # classification slug, from the universe screen
     revenue_growth_yoy: float | None = None  # percent, annual slice's latest trailing YoY
     eps_growth_yoy: float | None = None  # percent (consensus basis), annual slice's latest trailing YoY
+    fcf_growth_yoy: float | None = None  # percent, annual slice's latest trailing FCF/share YoY
     options_metrics: TickerOptionsMetrics | None = None  # only with 'options_metrics'
 
 
@@ -239,9 +240,10 @@ class GetTickerCard:
             else StoredTickerFacts()
         )
         # Fundamentals is opt-in now that market cap comes off the anchor: it's fetched
-        # only for the blocks that still need it (dividend, and the metrics' margins +
-        # FCF multiples) — a bare card costs no fundamentals call. Fetched once here so
-        # the valuation can price its FCF leg off the same call the margins ride.
+        # only for the blocks that still need it (dividend, and the metrics' margins) —
+        # a bare card costs no fundamentals call. The FCF/OCF multiples no longer ride it
+        # (they price the annual slice's stored per-share cash off the anchor read), so a
+        # keyless/blocked Finnhub still serves them.
         fundamentals = (
             self._get_fundamentals(normalized)
             if wanted & {"dividend", "metrics"}
@@ -252,7 +254,7 @@ class GetTickerCard:
             include=wanted,
             asset_type=self._get_asset_type(normalized),
             valuation=(
-                self._get_valuation(normalized, quote, fundamentals)
+                self._get_valuation(normalized, quote, stored)
                 if "metrics" in wanted
                 else None
             ),
@@ -267,6 +269,7 @@ class GetTickerCard:
             industry=stored.industry,
             revenue_growth_yoy=stored.revenue_growth_yoy,
             eps_growth_yoy=stored.eps_growth_yoy,
+            fcf_growth_yoy=stored.fcf_growth_yoy,
             options_metrics=(
                 self._get_options_metrics(normalized, quote)
                 if "options_metrics" in wanted
@@ -284,19 +287,20 @@ class GetTickerCard:
         return ASSET_TYPE_EQUITY
 
     def _get_valuation(
-        self, symbol: str, quote: Quote, fundamentals: StockFundamentals | None
+        self, symbol: str, quote: Quote, stored: StoredTickerFacts
     ) -> TickerValuation:
         # The trailing multiples at today's quote: the P/E off the quarterly slice's
-        # consensus TTM (the timeline owns the TTM rule), and the FCF multiples off the
-        # fundamentals vendor's trailing FCF/share (already fetched for the margins).
-        # Both legs best-effort — an uncovered/blocked symbol yields null multiples,
-        # never a failed card (see _get_ttm_eps; fundamentals degrades to None upstream).
-        metrics = fundamentals.metrics if fundamentals else None
+        # consensus TTM (the timeline owns the TTM rule), and the FCF/OCF multiples off the
+        # annual slice's stored per-share cash figures on the anchor (already read once, no
+        # extra call — deliberately not Finnhub, so they survive a keyless/blocked vendor).
+        # Every leg best-effort — a symbol the annual/quarterly slices haven't reached yields
+        # null multiples, never a failed card (the entity owns the positivity guards).
         return TickerValuation(
             symbol=symbol,
             price=quote.price,
             ttm_eps=self._get_ttm_eps(symbol),
-            fcf_per_share=metrics.fcf_per_share if metrics else None,
+            fcf_per_share=stored.fcf_per_share,
+            ocf_per_share=stored.ocf_per_share,
         )
 
     def _get_ttm_eps(self, symbol: str) -> float | None:

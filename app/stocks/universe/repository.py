@@ -114,6 +114,33 @@ class UniverseRepository(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def fcf_per_share_by_ticker(self) -> Mapping[str, float]:
+        """Return ``{ticker: fcf_per_share}`` for every anchor row carrying a non-null
+        ``fcf_per_share`` — the annual slice's stored newest-reported-year figure.
+
+        The divisor the valuation pass pairs with the screen-time price to materialize
+        ``fcf_yield``, the exact analogue of the quarterly TTM the P/E pass reads. A read (not
+        a write), but it lives on the write-side repository because it feeds the sync's
+        valuation pass; a ticker the annual slice hasn't reached is simply absent, so its
+        ``fcf_yield`` stays null.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_fcf_yields(self, fcf_yield_by_ticker: Mapping[str, float | None]) -> int:
+        """Overwrite each ticker's materialized ``fcf_yield`` on the anchor in one commit, and
+        return how many were written with a non-null value.
+
+        The FCF sibling of :meth:`set_pe_ratios` — the screen-time price over the stored
+        ``fcf_per_share``, as a signed percent, so the search list is sortable by cash
+        cheapness. Overwrites (a price-derived snapshot), and a ``None`` clears a prior figure
+        (the annual slice dropped ``fcf_per_share``, or there was no price this sweep). Unlike
+        the P/E it keeps its sign — a cash-burner reads negative. A ticker with no anchor row
+        is skipped. Commits once.
+        """
+        raise NotImplementedError
+
 
 class StockSearchRepository(ABC):
     """A read-only view over the screened universe on the ``stocks`` anchor — what the

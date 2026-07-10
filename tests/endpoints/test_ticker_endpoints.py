@@ -86,9 +86,10 @@ def _a_card(
                 price=975.56,
                 # Consensus-basis TTM: trailing_pe = 975.56 / 43.55 -> 22.4.
                 ttm_eps=43.55,
-                # FCF/share -> price_to_fcf = 975.56 / 48.7 -> 20.03,
-                # fcf_yield = 48.7 / 975.56 * 100 -> 4.99.
+                # Per-share cash off the anchor -> price_to_fcf = 975.56 / 48.7 -> 20.03,
+                # fcf_yield = 48.7 / 975.56 * 100 -> 4.99; ocf_yield = 60 / 975.56 * 100 -> 6.15.
                 fcf_per_share=48.7,
+                ocf_per_share=60.0,
             )
             if "metrics" in include
             else None
@@ -101,6 +102,7 @@ def _a_card(
         industry="semiconductors",
         revenue_growth_yoy=61.6,
         eps_growth_yoy=587.4,
+        fcf_growth_yoy=42.0,  # off the anchor (annual slice), like the growth pair
         fundamentals=StockFundamentals(
             market_cap=999.0,  # sentinel: presenter reads card.market_cap, not this
             # Vendor-noisy on purpose: the presenter must round both to 2 decimals.
@@ -191,18 +193,21 @@ def test_presents_the_optin_blocks_when_included():
     assert body["performance"] == {
         "1w": 1.5, "1m": 8.0, "3m": 40.0, "6m": 90.0, "ytd": 120.0, "1y": 150.0,
     }
-    # The trailing P/E and the FCF pair ride the valuation (P/E off the
-    # consensus-basis TTM, the FCF multiples off the vendor's FCF/share at the live
-    # quote — not the vendor's own KeyMetrics.pe); the margins ride the fundamentals.
+    # The trailing P/E and the FCF/OCF reads ride the valuation (P/E off the
+    # consensus-basis TTM, the cash reads off the anchor's per-share cash at the live
+    # quote — not the vendor's own KeyMetrics.pe); the margins ride the fundamentals,
+    # and the growth trio (incl. FCF/share growth) rides the anchor read.
     assert body["metrics"] == {
         "pe": 22.4,  # 975.56 / 43.55 — the valuation's trailing_pe
         "price_to_fcf": 20.03,  # 975.56 / 48.7
         "fcf_yield": 4.99,  # 48.7 / 975.56 * 100
+        "ocf_yield": 6.15,  # 60 / 975.56 * 100
         "gross_margin": 52.1,
         "operating_margin": 38.9,
         "net_margin": 33.5,
         "revenue_growth_yoy": 61.6,  # off the anchor
         "eps_growth_yoy": 587.4,
+        "fcf_growth_yoy": 42.0,  # off the anchor
     }
     # The options figures are rounded at the edge; the sampled expiries are dates.
     assert body["options_metrics"] == {
@@ -229,9 +234,10 @@ def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
         result=TickerCard(
             quote=card.quote,
             include=card.include,
-            # A Finnhub outage leaves the valuation with its consensus-basis TTM but
-            # no FCF/share (that leg is threaded off the same fundamentals call), so
-            # the P/E still serves while the FCF multiples null out.
+            # A Finnhub outage no longer touches the FCF leg (it rides the anchor now).
+            # This valuation carries the consensus-basis TTM but no per-share cash — an
+            # uncovered anchor — so the P/E serves while the FCF/OCF reads null out
+            # independently of the (failed) fundamentals call.
             valuation=TickerValuation(symbol="MU", price=975.56, ttm_eps=43.55),
             fundamentals=None,  # keyless or failed Finnhub
             performance=None,
@@ -250,19 +256,22 @@ def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
     assert body["exchange"] is None
     assert body["market_cap"] is None
     assert body["dividend"] is None  # requested, but nothing to serve
-    # The metrics block still appears (it was requested) with its
-    # fundamentals-backed margins null — and the FCF pair null too, since it rides
-    # the same fundamentals call; the valuation-backed trailing P/E (quarterly TTM)
-    # and the anchor-backed growth pair still serve, since neither rides Finnhub.
+    # The metrics block still appears (it was requested) with its fundamentals-backed
+    # margins null; the FCF/OCF reads are null here only because this hand-built valuation
+    # carries no per-share cash (an uncovered anchor), not because Finnhub failed. The
+    # valuation-backed trailing P/E (quarterly TTM) and the anchor-backed growth trio still
+    # serve, since none of them ride Finnhub.
     assert body["metrics"] == {
         "pe": 22.4,
         "price_to_fcf": None,
         "fcf_yield": None,
+        "ocf_yield": None,
         "gross_margin": None,
         "operating_margin": None,
         "net_margin": None,
         "revenue_growth_yoy": 61.6,
         "eps_growth_yoy": 587.4,
+        "fcf_growth_yoy": None,
     }
 
 
@@ -431,8 +440,10 @@ def _a_page() -> StockSearchPage:
                 industry="semiconductors",
                 market_cap=3e12,
                 pe_ratio=48.2,
+                fcf_yield=1.9,
                 revenue_growth_yoy=61.6,
                 eps_growth_yoy=587.4,
+                fcf_growth_yoy=60.8,
                 forward_revenue_growth_yoy=52.1,
                 forward_eps_growth_yoy=48.3,
                 in_sp500=True,
@@ -459,8 +470,10 @@ def test_search_returns_the_expected_json_shape():
         "industry": "semiconductors",
         "market_cap": 3e12,
         "pe_ratio": 48.2,
+        "fcf_yield": 1.9,
         "revenue_growth_yoy": 61.6,
         "eps_growth_yoy": 587.4,
+        "fcf_growth_yoy": 60.8,
         "forward_revenue_growth_yoy": 52.1,
         "forward_eps_growth_yoy": 48.3,
         "in_sp500": True,

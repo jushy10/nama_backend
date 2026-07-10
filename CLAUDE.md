@@ -397,22 +397,29 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > slice carries `eps_actual_consensus`); the TTM read reuses the quarterly slice's
 > read-through DB cache through its `QuarterlyEarningsProvider` port (lazy fill on a cold
 > miss) and is best-effort even when requested — a Yahoo-blocked fetch nulls the multiple,
-> never the card. Beside it: the **free-cash-flow valuation pair** `price_to_fcf` +
-> `fcf_yield` — live price ÷ the fundamentals vendor's trailing `fcf_per_share` (the same
-> `KeyMetrics.fcf_per_share` the snapshot carries), computed on the card's live quote the way
-> `trailing_pe` prices the consensus EPS (deliberately *not* the vendor's own P/FCF snapshot,
-> which rides its stale price). `price_to_fcf` is `null` for a non-positive FCF (an undefined
-> multiple, the same guard `trailing_pe` uses on a loss), while `fcf_yield` keeps its sign (a
-> negative yield is a real "burning cash" read), so the two diverge for a cash-burner. Both
-> ride the fundamentals call, so a keyless/blocked Finnhub nulls them (unlike the P/E, which
-> rides the quarterly TTM). And: `gross_margin`/`operating_margin`/`net_margin` (off the
-> fundamentals call). `trailing_pe`/`price_to_fcf`/`fcf_yield` are the computed fields on the
+> never the card. Beside it: the **cash-flow reads** `price_to_fcf` + `fcf_yield` +
+> `ocf_yield` — live price ÷ the annual-earnings slice's stored trailing `fcf_per_share` /
+> `ocf_per_share` (the newest reported year's free/operating cash flow per share, off the
+> **`stocks` anchor**, computed on the card's live quote the way `trailing_pe` prices the
+> consensus EPS — deliberately *not* Finnhub's `KeyMetrics.fcf_per_share`, which was dropped
+> as the FCF source; the per-share cash comes from Yahoo's cash-flow statement via the annual
+> slice's cron, so the card needs **no** live cash-flow fetch). `price_to_fcf` is `null` for a
+> non-positive FCF (an undefined multiple, the same guard `trailing_pe` uses on a loss), while
+> `fcf_yield` / `ocf_yield` keep their sign (a negative yield is a real "burning cash" read);
+> the gap between `ocf_yield` and `fcf_yield` is the capex drag (a heavy spender's OCF yield
+> runs well above its FCF yield). All three ride the **anchor read** (not the fundamentals
+> call), so a keyless/blocked Finnhub still serves them — `null` only until the annual slice has
+> reached the stock. And: `gross_margin`/`operating_margin`/`net_margin` (off the fundamentals
+> call). `trailing_pe`/`price_to_fcf`/`fcf_yield`/`ocf_yield` are the computed fields on the
 > slice-local `TickerValuation` entity; the entity's `symbol` is renamed `ticker` at the DTO.
 > The `metrics` block also carries the **latest trailing YoY growth** —
-> `revenue_growth_yoy` + `eps_growth_yoy` (percent, EPS on the consensus basis) — read
-> straight off the `stocks` anchor where the annual slice writes them (so they ride the
-> one anchor read, not Finnhub, and survive a keyless/blocked fundamentals call); `null`
-> until the annual slice has two reported years cached.
+> `revenue_growth_yoy` + `eps_growth_yoy` + `fcf_growth_yoy` (percent, EPS on the consensus
+> basis, FCF on a per-share basis) — read straight off the `stocks` anchor where the annual
+> slice writes them (so they ride the one anchor read, not Finnhub, and survive a
+> keyless/blocked fundamentals call); `null` until the annual slice has two reported years
+> cached. The **universe search** materializes `fcf_yield` onto the anchor too (its valuation
+> pass divides the stored `fcf_per_share` into the screen-time price, the same way it derives
+> `pe_ratio`), so the search list is sortable by cash cheapness (`sort=fcf_yield`).
 > `options_metrics` is what the options market *believes* about the stock, for a buyer
 > sizing an entry — four derived figures, deliberately not a chain browser: ATM implied
 > volatility (percent, ~1-month expiry), the priced-in `expected_move_percent` (the ATM
