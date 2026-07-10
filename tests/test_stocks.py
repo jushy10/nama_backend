@@ -57,7 +57,6 @@ from app.stocks.earnings.quarterly.entities import (
 )
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.indicators import RsiSignal
 from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
@@ -89,7 +88,6 @@ from app.stocks.router import (
     get_stock_candles,
     get_stock_ema,
     get_stock_logo,
-    get_stock_rsi,
     get_stock_support_levels,
 )
 from app.stocks.use_cases import (
@@ -102,7 +100,6 @@ from app.stocks.use_cases import (
     GetStockEma,
     GetStockInfo,
     GetStockLogo,
-    GetStockRsi,
     GetStockSupportLevels,
 )
 
@@ -529,7 +526,7 @@ def a_series(candles=None, timeframe: Timeframe = Timeframe.DAY_1) -> CandleSeri
 def a_rising_series(
     n: int = 4, start_close: float = 100.0, timeframe: Timeframe = Timeframe.DAY_1
 ) -> CandleSeries:
-    """A series of strictly rising closes — all gains, so RSI pins to 100."""
+    """A series of strictly rising closes (each bar one dollar above the last)."""
     base = datetime(2026, 6, 1, tzinfo=timezone.utc)
     candles = tuple(
         a_candle(close=start_close + i, timestamp=base + timedelta(days=i))
@@ -1092,50 +1089,6 @@ def test_candles_use_case_propagates_not_found():
         GetStockCandles(fake).execute("ZZZZ", Timeframe.DAY_1)
 
 
-# --------------------------- RSI use case ---------------------------
-
-def test_rsi_use_case_normalizes_symbol_and_forwards_window():
-    fake = FakeCandleProvider(series=a_rising_series())
-    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    end = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    GetStockRsi(fake).execute(
-        "  aapl ", Timeframe.HOUR_1, period=2, start=start, end=end
-    )
-    assert fake.received == [("AAPL", Timeframe.HOUR_1, start, end)]
-
-
-@pytest.mark.parametrize("bad", ["", "   ", "123", "AA1", "AA.B", "TOOLONG"])
-def test_rsi_use_case_rejects_invalid_symbols(bad):
-    fake = FakeCandleProvider(series=a_rising_series())
-    with pytest.raises(ValueError):
-        GetStockRsi(fake).execute(bad, Timeframe.DAY_1)
-    assert fake.received == []  # provider untouched on invalid input
-
-
-def test_rsi_use_case_rejects_inverted_window():
-    fake = FakeCandleProvider(series=a_rising_series())
-    start = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    end = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    with pytest.raises(ValueError):
-        GetStockRsi(fake).execute("AAPL", Timeframe.DAY_1, start=start, end=end)
-    assert fake.received == []
-
-
-def test_rsi_use_case_propagates_not_found():
-    fake = FakeCandleProvider(raises=StockNotFound("ZZZZ"))
-    with pytest.raises(StockNotFound):
-        GetStockRsi(fake).execute("ZZZZ", Timeframe.DAY_1)
-
-
-def test_rsi_use_case_computes_from_fetched_candles():
-    # Strictly rising closes -> all gains -> RSI pinned at 100 -> overbought.
-    result = GetStockRsi(FakeCandleProvider(series=a_rising_series())).execute(
-        "AAPL", Timeframe.DAY_1, period=2
-    )
-    assert result.latest.value == 100.0
-    assert result.signal is RsiSignal.OVERBOUGHT
-
-
 # --------------------------- EMA use case ---------------------------
 
 def test_ema_use_case_warms_up_before_the_window():
@@ -1298,7 +1251,6 @@ def make_client():
         profile_provider: CompanyProfileProvider | None = None,
         estimates_provider: AnalystEstimatesProvider | None = None,
         candle_provider: CandleProvider | None = None,
-        rsi_provider: CandleProvider | None = None,
         ema_provider: CandleProvider | None = None,
         support_levels_provider: CandleProvider | None = None,
         sector_provider: SectorPerformanceProvider | None = None,
@@ -1317,8 +1269,6 @@ def make_client():
             app.dependency_overrides[get_stock_candles] = (
                 lambda: GetStockCandles(candle_provider)
             )
-        if rsi_provider is not None:
-            app.dependency_overrides[get_stock_rsi] = lambda: GetStockRsi(rsi_provider)
         if ema_provider is not None:
             app.dependency_overrides[get_stock_ema] = lambda: GetStockEma(ema_provider)
         if support_levels_provider is not None:
@@ -2004,85 +1954,6 @@ def test_get_candles_upstream_failure_502(make_client):
     fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
     client = make_client(candle_provider=fake)
     assert client.get("/stocks/ticker/AAPL/candles").status_code == 502
-
-
-# --------------------------- RSI endpoint ---------------------------
-
-def test_get_rsi_returns_200_with_signal(make_client):
-    client = make_client(rsi_provider=FakeCandleProvider(a_rising_series()))
-    r = client.get("/stocks/AAPL/rsi", params={"period": 2})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["symbol"] == "AAPL"
-    assert body["timeframe"] == "1Day"
-    assert body["period"] == 2
-    assert body["count"] == 2                  # 4 candles - period 2
-    assert body["latest"] == 100.0             # all gains -> pinned high
-    assert body["signal"] == "overbought"      # the take-profit band
-    assert body["overbought"] == 70.0 and body["oversold"] == 30.0
-    assert set(body["points"][0]) == {"time", "timestamp", "value"}
-
-
-def test_get_rsi_defaults_to_6m_daily_period_14(make_client):
-    fake = FakeCandleProvider(a_series())       # a single candle
-    client = make_client(rsi_provider=fake)
-    r = client.get("/stocks/AAPL/rsi")
-    assert r.status_code == 200, r.text
-    symbol, timeframe, start, end = fake.received[0]
-    assert symbol == "AAPL"
-    assert timeframe is Timeframe.DAY_1                # default timeframe
-    assert (end - start).days == 183                   # default range = 6M
-    body = r.json()
-    assert body["period"] == 14                        # Wilder default
-    # One candle can't warm a 14-period RSI: graceful empty, not an error.
-    assert body["count"] == 0
-    assert body["latest"] is None and body["signal"] is None
-
-
-def test_get_rsi_honors_timeframe_range_and_period(make_client):
-    fake = FakeCandleProvider(a_rising_series(timeframe=Timeframe.HOUR_1))
-    client = make_client(rsi_provider=fake)
-    r = client.get(
-        "/stocks/AAPL/rsi",
-        params={"timeframe": "1Hour", "range": "7D", "period": 3},
-    )
-    assert r.status_code == 200, r.text
-    _, timeframe, start, end = fake.received[0]
-    assert timeframe is Timeframe.HOUR_1
-    assert (end - start).days == 7
-    assert r.json()["period"] == 3
-
-
-@pytest.mark.parametrize("bad_period", [1, 0, -5, 101])
-def test_get_rsi_invalid_period_422(make_client, bad_period):
-    client = make_client(rsi_provider=FakeCandleProvider(a_rising_series()))
-    r = client.get("/stocks/AAPL/rsi", params={"period": bad_period})
-    assert r.status_code == 422
-
-
-def test_get_rsi_invalid_symbol_400(make_client):
-    client = make_client(rsi_provider=FakeCandleProvider(a_rising_series()))
-    assert client.get("/stocks/123/rsi").status_code == 400
-
-
-def test_get_rsi_inverted_window_400(make_client):
-    client = make_client(rsi_provider=FakeCandleProvider(a_rising_series()))
-    r = client.get(
-        "/stocks/AAPL/rsi",
-        params={"start": "2026-02-01T00:00:00Z", "end": "2026-01-01T00:00:00Z"},
-    )
-    assert r.status_code == 400
-
-
-def test_get_rsi_unknown_symbol_404(make_client):
-    client = make_client(rsi_provider=FakeCandleProvider(raises=StockNotFound("ZZZZ")))
-    assert client.get("/stocks/ZZZZ/rsi").status_code == 404
-
-
-def test_get_rsi_upstream_failure_502(make_client):
-    fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
-    client = make_client(rsi_provider=fake)
-    assert client.get("/stocks/AAPL/rsi").status_code == 502
 
 
 # --------------------------- EMA endpoint ---------------------------

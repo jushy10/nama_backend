@@ -76,9 +76,9 @@ or `@classmethod` — computed on access, not stored:
 Entities are vendor-agnostic on purpose: e.g. `Timeframe` defines business-level
 granularities; the adapter maps them onto whatever the vendor calls them.
 
-Pure cross-entity calculations with no I/O (e.g. RSI math in `indicators.py`)
-are also domain code — they live next to the entities, import only entities, and
-never reach out for data.
+Pure cross-entity calculations with no I/O (e.g. the EMA / support-level math in
+`indicators.py`) are also domain code — they live next to the entities, import
+only entities, and never reach out for data.
 
 ### 2. Ports — `app/stocks/ports.py`
 The abstractions a use case depends on. Each is an `ABC` with `@abstractmethod`s
@@ -576,7 +576,7 @@ app/
 ├── db.py                   # engine/session/Base/get_db (DATABASE_URL-driven)
 └── stocks/                 # the stocks vertical slice
     ├── entities.py         # ── domain objects + intrinsic rules
-    ├── indicators.py       # ── pure domain calc (RSI)
+    ├── indicators.py       # ── pure domain calc (EMA, support levels)
     ├── ports.py            # ── abstract interfaces (ABCs)
     ├── use_cases.py        # ── orchestration (one class per action)
     ├── exceptions.py       # ── domain errors

@@ -36,10 +36,8 @@ from app.stocks.entities import (
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.indicators import (
     EmaSeries,
-    RsiSeries,
     SupportLevelSeries,
     ema_series,
-    rsi_series,
     support_levels,
 )
 from app.stocks.ports import (
@@ -224,36 +222,6 @@ class GetStockCandles:
         return self._provider.get_candles(
             _normalize_symbol(symbol), timeframe, start=start, end=end
         )
-
-
-class GetStockRsi:
-    """Use case: compute the RSI indicator for a symbol from its price history.
-
-    Reuses the CandleProvider port — RSI is derived from the same OHLC bars the
-    chart endpoint uses, so no extra data source is needed. The indicator math
-    is pure domain logic (``rsi_series``); this use case only fetches the window
-    and delegates. Too little history in the window yields an empty series
-    rather than an error: the symbol exists, the indicator just can't warm up.
-    """
-
-    def __init__(self, provider: CandleProvider) -> None:
-        self._provider = provider
-
-    def execute(
-        self,
-        symbol: str,
-        timeframe: Timeframe,
-        *,
-        period: int = 14,
-        start: datetime | None = None,
-        end: datetime | None = None,
-    ) -> RsiSeries:
-        if start is not None and end is not None and start >= end:
-            raise ValueError("'start' must be earlier than 'end'.")
-        series = self._provider.get_candles(
-            _normalize_symbol(symbol), timeframe, start=start, end=end
-        )
-        return rsi_series(series, period)
 
 
 # Approximate wall-clock span of one bar at each granularity. Used only to reach
