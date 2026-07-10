@@ -173,6 +173,10 @@ class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
     # cap is ample — and fewer generated tokens is the main lever on latency. Kept
     # above the worst case so a full read is never truncated.
     _MAX_TOKENS = 800
+    # Bedrock does not enforce the tool schema's minItems, and the fast Haiku tier
+    # occasionally returns empty leaders/laggards anyway. Re-issue the forced call
+    # up to this many *extra* times to recover them. Only fires on the miss.
+    _MAX_EMPTY_RETRIES = 2
 
     def __init__(
         self,
@@ -197,10 +201,12 @@ class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
         payload = self._invoke(prompt)
         # The forced tool asks for both a leaders and a laggards list, but Bedrock
         # does not enforce array length, and the fast Haiku tier sometimes fills
-        # only the summary and hands back empty lists. Retry once to recover them
-        # before the result-cache freezes it for the TTL (the same retry-once stance
-        # the shared yfinance session takes on a transient miss).
-        if _missing_highlights(payload):
+        # only the summary and hands back empty lists. Re-issue a bounded number of
+        # times to recover them (this read isn't result-cached, so a view that still
+        # came back empty would otherwise simply show none).
+        for _ in range(self._MAX_EMPTY_RETRIES):
+            if not _missing_highlights(payload):
+                break
             payload = self._invoke(prompt) or payload
         if payload is None:
             raise StockDataUnavailable(

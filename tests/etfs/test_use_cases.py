@@ -873,3 +873,17 @@ def test_analysis_cache_miss_generates_and_stores():
 
     assert result is generated
     assert cache.puts == [generated]
+
+
+def test_analysis_incomplete_read_is_not_cached():
+    # A read missing its bullet lists is returned but never frozen in the cache, so
+    # the next view regenerates instead of serving empty strengths/risks for the TTL.
+    detail_uc, *_ = _detail_use_case(quote=_quote(), profile=_a_profile())
+    incomplete = _an_analysis(strengths=(), risks=())
+    analyzer = _FakeEtfAnalysisProvider(incomplete)
+    cache = _FakeAnalysisCache()  # empty
+
+    result = GetEtfAnalysis(detail_uc, analyzer, cache=cache).execute("VOO")
+
+    assert result is incomplete  # still returned to the caller
+    assert cache.puts == []  # but not stored

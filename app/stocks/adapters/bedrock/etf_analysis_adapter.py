@@ -139,6 +139,11 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
     # The output is short and plain by design (a few sentences + two brief bullet lists), so a tight
     # cap is ample — and fewer generated tokens is the main lever on this endpoint's latency.
     _MAX_TOKENS = 800
+    # Bedrock does not enforce the tool schema's minItems, and the fast Haiku tier occasionally returns
+    # empty strengths/risks anyway. Re-issue the forced call up to this many *extra* times to recover
+    # the bullets; paired with the use case refusing to cache an incomplete read, an empty result is
+    # effectively never served (and never frozen for the TTL). Only fires on the miss.
+    _MAX_EMPTY_RETRIES = 2
 
     def __init__(
         self,
@@ -163,10 +168,13 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
         payload = self._invoke(prompt, detail.ticker)
         # The forced tool asks for both bullet lists, but Bedrock does not enforce
         # array length, and the fast Haiku tier sometimes packs everything into the
-        # thesis and hands back empty strengths/risks. Retry once to recover the
-        # balanced read before the result-cache freezes it for the TTL (the same
-        # retry-once stance the shared yfinance session takes on a transient miss).
-        if _missing_bullets(payload):
+        # thesis and hands back empty strengths/risks. Re-issue a bounded number of
+        # times to recover the balanced read; the use case won't cache an incomplete
+        # one, so an empty result is never frozen for the TTL — it regenerates next
+        # view. (Same retry-once-and-then-some stance the yfinance session takes.)
+        for _ in range(self._MAX_EMPTY_RETRIES):
+            if not _missing_bullets(payload):
+                break
             payload = self._invoke(prompt, detail.ticker) or payload
         if payload is None:
             raise StockDataUnavailable(
