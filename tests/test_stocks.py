@@ -1810,7 +1810,7 @@ def test_bedrock_adapter_accepts_empty_bullets_after_exhausting_retries():
 
     analysis = BedrockAnalysisProvider(client=client).analyze(a_stock())
 
-    assert len(client.calls) == 3  # initial call + 2 bounded retries, then accept
+    assert len(client.calls) == 5  # initial call + 4 bounded retries, then accept
     assert analysis.strengths == () and analysis.risks == ()
     assert analysis.thesis  # the rest of the read still comes through
 

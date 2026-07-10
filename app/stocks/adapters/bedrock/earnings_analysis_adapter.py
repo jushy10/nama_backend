@@ -142,7 +142,7 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
     # Bedrock does not enforce the tool schema's minItems, and the fast Haiku tier
     # occasionally returns an empty highlights list anyway. Re-issue the forced call
     # up to this many *extra* times to recover it. Only fires on the miss.
-    _MAX_EMPTY_RETRIES = 2
+    _MAX_EMPTY_RETRIES = 4
 
     def __init__(
         self,

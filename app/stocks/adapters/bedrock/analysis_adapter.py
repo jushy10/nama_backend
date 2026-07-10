@@ -166,7 +166,7 @@ class BedrockAnalysisProvider(InvestmentAnalysisProvider):
     # refusing to cache an incomplete read, an empty result is effectively never
     # served (and never frozen for the TTL). Only fires on the miss — zero cost when
     # the first call is already complete.
-    _MAX_EMPTY_RETRIES = 2
+    _MAX_EMPTY_RETRIES = 4
 
     def __init__(
         self,
