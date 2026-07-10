@@ -32,6 +32,7 @@ Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 
 from datetime import datetime, timezone
 
+from app.stocks.adapters.bedrock.cost import CostAccumulator
 from app.stocks.entities import Confidence, InvestmentAnalysis, Recommendation
 from app.stocks.etfs.entities import EtfDetail
 from app.stocks.etfs.ports import EtfAnalysisProvider
@@ -165,27 +166,38 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
 
     def analyze(self, detail: EtfDetail) -> InvestmentAnalysis:
         prompt = _render_prompt(detail)
-        payload = self._invoke(prompt, detail.ticker)
-        # The forced tool asks for both bullet lists, but Bedrock does not enforce
-        # array length, and the fast Haiku tier sometimes packs everything into the
-        # thesis and hands back empty strengths/risks. Re-issue a bounded number of
-        # times to recover the balanced read; the use case won't cache an incomplete
-        # one, so an empty result is never frozen for the TTL — it regenerates next
-        # view. (Same retry-once-and-then-some stance the yfinance session takes.)
-        for _ in range(self._MAX_EMPTY_RETRIES):
-            if not _missing_bullets(payload):
-                break
-            payload = self._invoke(prompt, detail.ticker) or payload
-        if payload is None:
-            raise StockDataUnavailable(
-                detail.ticker, "analysis model returned no structured result"
+        # One cost line per endpoint call: the retry loop below may make several model
+        # calls, so their token usage is summed and logged once (in a finally, so a
+        # mid-retry failure still records what was spent).
+        costs = CostAccumulator()
+        try:
+            payload = self._invoke(prompt, detail.ticker, costs)
+            # The forced tool asks for both bullet lists, but Bedrock does not enforce
+            # array length, and the fast Haiku tier sometimes packs everything into the
+            # thesis and hands back empty strengths/risks. Re-issue a bounded number of
+            # times to recover the balanced read; the use case won't cache an incomplete
+            # one, so an empty result is never frozen for the TTL — it regenerates next
+            # view. (Same retry-once-and-then-some stance the yfinance session takes.)
+            for _ in range(self._MAX_EMPTY_RETRIES):
+                if not _missing_bullets(payload):
+                    break
+                payload = self._invoke(prompt, detail.ticker, costs) or payload
+            if payload is None:
+                raise StockDataUnavailable(
+                    detail.ticker, "analysis model returned no structured result"
+                )
+            return _to_entity(detail.ticker, payload, self._model_id)
+        finally:
+            costs.log(
+                label="etf analysis", model_id=self._model_id, key=detail.ticker
             )
-        return _to_entity(detail.ticker, payload, self._model_id)
 
-    def _invoke(self, prompt: str, key: str) -> dict | None:
+    def _invoke(self, prompt: str, key: str, costs: CostAccumulator) -> dict | None:
         """One forced-tool call, returning the ``submit_analysis`` arguments (or
         ``None`` if the model somehow didn't call the tool). Any SDK/botocore
-        failure is mapped to this port's documented ``StockDataUnavailable``."""
+        failure is mapped to this port's documented ``StockDataUnavailable``. The
+        call's token usage is folded into ``costs`` for the caller's single
+        per-endpoint cost line."""
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -199,6 +211,7 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
             raise StockDataUnavailable(
                 key, f"analysis model call failed: {exc}"
             ) from exc
+        costs.add(message)
         return _tool_payload(message)
 
 

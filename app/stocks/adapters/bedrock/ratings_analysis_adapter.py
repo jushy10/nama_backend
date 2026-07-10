@@ -32,6 +32,7 @@ Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 
 from datetime import datetime, timezone
 
+from app.stocks.adapters.bedrock.cost import log_model_cost
 from app.stocks.entities import Confidence, RatingsAnalysis, RatingsVerdict
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.ports import RatingsAnalysisProvider
@@ -179,6 +180,12 @@ class BedrockRatingsAnalysisProvider(RatingsAnalysisProvider):
             raise StockDataUnavailable(
                 symbol, f"ratings analysis model call failed: {exc}"
             ) from exc
+        log_model_cost(
+            label="ratings analysis",
+            model_id=self._model_id,
+            message=message,
+            key=symbol,
+        )
         payload = _tool_payload(message)
         if payload is None:
             raise StockDataUnavailable(
