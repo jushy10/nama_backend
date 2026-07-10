@@ -402,10 +402,20 @@ def _render_industry_valuation(valuation: IndustryValuation | None) -> str:
     present block always carries a median."""
     if valuation is None or valuation.count == 0 or valuation.median_pe is None:
         return ""
+    # ``cohort`` names the size slice the peers were drawn from: "industry" for the whole
+    # (mid-cap-and-up) industry, or a tier label ("mega", "large/mega") when the benchmark was
+    # scoped to the stock's own cap class — so the model reads a mega-cap median as a like-for-
+    # like comparison, not an industry-wide one.
+    peer_group = (
+        "in the same industry"
+        if valuation.cohort == "industry"
+        else f"of the same size ({valuation.cohort}-cap) in the industry"
+    )
     lines = [
         "Industry valuation benchmark "
-        f"(trailing P/E across {valuation.count} peer(s) in the same industry):",
+        f"(trailing P/E across {valuation.count} peer(s) {peer_group}):",
         f"- Industry: {valuation.industry}",
+        f"- Peer group: {valuation.cohort}",
         f"- Median P/E: {_num(valuation.median_pe)}",
     ]
     if valuation.p25_pe is not None and valuation.p75_pe is not None:

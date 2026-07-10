@@ -480,23 +480,26 @@ class GetStockAnalysis:
     def _industry_valuation(self, symbol: str) -> IndustryValuation | None:
         # Best-effort context: the peer-valuation anchor that makes the stock's own
         # trailing P/E meaningful ("28 is high for an industry that trades near 21").
-        # Two DB reads on the shared anchor — resolve the ticker's industry, then
-        # summarize its screened peers' P/Es into the benchmark entity. An
+        # Reads on the shared anchor — resolve the ticker's industry and its own size
+        # tier, then summarize its peers' P/Es into a benchmark scoped to that tier
+        # (a mega-cap judged against mega-caps), widening to neighbouring tiers when
+        # the same-tier sample is thin (see IndustryValuation.for_stock_peers). An
         # unconfigured repository, an unscreened/unclassified symbol (no industry),
-        # or a benchmark too thin to stand for its industry (fewer than
-        # MIN_REPRESENTATIVE_PEERS valued peers — a "median" of one or two stocks
-        # is noise, not an anchor) all omit it rather than handing the model a
-        # figure it would over-trust.
+        # or a cohort still too thin to stand for its peers (fewer than
+        # MIN_REPRESENTATIVE_PEERS — a "median" of one or two stocks is noise, not an
+        # anchor) all omit it rather than handing the model a figure it would
+        # over-trust.
         if self._industry_repository is None:
             return None
         try:
             industry = self._industry_repository.industry_for_ticker(symbol)
             if not industry:
                 return None
-            pe_ratios = self._industry_repository.pe_ratios_for_industry(industry)
+            anchor_tier = self._industry_repository.tier_for_ticker(symbol)
+            peers = self._industry_repository.industry_peers(industry)
         except (StockNotFound, StockDataUnavailable):
             return None
-        valuation = IndustryValuation.from_pe_ratios(industry, pe_ratios)
+        valuation = IndustryValuation.for_stock_peers(industry, anchor_tier, peers)
         return valuation if valuation.is_representative else None
 
 

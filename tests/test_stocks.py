@@ -82,7 +82,7 @@ from app.stocks.recommendations.entities import (
     RecommendationTrend,
 )
 from app.stocks.recommendations.ports import RecommendationProvider
-from app.stocks.universe.entities import IndustryValuation
+from app.stocks.universe.entities import IndustryValuation, MarketCapTier
 from app.stocks.universe.repository import StockSearchRepository
 from app.stocks.router import (
     get_market_summary,
@@ -313,19 +313,32 @@ class FakeRecommendationProvider(RecommendationProvider):
 
 
 class FakeSearchRepo(StockSearchRepository):
-    """The two anchor reads the analysis path uses — the ticker's industry and its
-    peers' P/Es — configurable per test. ``search`` / ``classifications`` are the
-    search endpoint's job, not exercised here, so they raise if ever called."""
+    """The anchor reads the analysis path uses — the ticker's industry, its own cap
+    tier, and its industry's tier-tagged peers — configurable per test. ``search`` /
+    ``classifications`` are the search endpoint's job, not exercised here, so they
+    raise if ever called.
+
+    Two ways to set the peers: ``pe_ratios`` (a bare list; every peer and the anchor
+    default to ``MarketCapTier.MID``, so ``for_stock_peers`` yields one whole-industry
+    cohort — the pre-tier behaviour) or ``peers`` (explicit ``(pe, tier)`` pairs) plus
+    ``anchor_tier``, to exercise the tier scoping / widening."""
 
     def __init__(
         self,
         *,
         industry: str | None = None,
         pe_ratios: tuple[float, ...] = (),
+        peers: tuple[tuple[float, MarketCapTier], ...] | None = None,
+        anchor_tier: MarketCapTier | None = MarketCapTier.MID,
         raises: Exception | None = None,
     ):
         self._industry = industry
-        self._pe_ratios = pe_ratios
+        self._peers = (
+            peers
+            if peers is not None
+            else tuple((pe, MarketCapTier.MID) for pe in pe_ratios)
+        )
+        self._anchor_tier = anchor_tier
         self._raises = raises
 
     def industry_for_ticker(self, ticker: str) -> str | None:
@@ -333,10 +346,24 @@ class FakeSearchRepo(StockSearchRepository):
             raise self._raises
         return self._industry
 
-    def pe_ratios_for_industry(self, industry: str) -> tuple[float, ...]:
+    def tier_for_ticker(self, ticker: str) -> MarketCapTier | None:
         if self._raises is not None:
             raise self._raises
-        return self._pe_ratios
+        return self._anchor_tier
+
+    def industry_peers(
+        self, industry: str
+    ) -> tuple[tuple[float, MarketCapTier], ...]:
+        if self._raises is not None:
+            raise self._raises
+        return self._peers
+
+    def pe_ratios_for_industry(
+        self, industry: str
+    ) -> tuple[float, ...]:  # pragma: no cover - the endpoint path, not the analysis one
+        if self._raises is not None:
+            raise self._raises
+        return tuple(pe for pe, _ in self._peers)
 
     def search(self, criteria):  # pragma: no cover - not used by the analysis path
         raise NotImplementedError
@@ -1616,6 +1643,39 @@ def test_analysis_use_case_passes_industry_valuation():
     assert valuation.median_pe == 30.0  # median of the five peers
 
 
+def test_analysis_use_case_scopes_valuation_to_the_stocks_tier():
+    # The benchmark handed to the model is scoped to the stock's own cap tier: a mega-cap's
+    # three mega peers are thin, so the cohort widens to include the large-caps (a
+    # representative sample) but leaves the mid-caps out — a like-for-like comparison, and the
+    # cohort label says so.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    peers = (
+        (40.0, MarketCapTier.MEGA),
+        (42.0, MarketCapTier.MEGA),
+        (44.0, MarketCapTier.MEGA),
+        (20.0, MarketCapTier.LARGE),
+        (22.0, MarketCapTier.LARGE),
+        (24.0, MarketCapTier.LARGE),
+        (26.0, MarketCapTier.LARGE),
+        (28.0, MarketCapTier.LARGE),
+        (8.0, MarketCapTier.MID),
+        (9.0, MarketCapTier.MID),
+    )
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        industry_repository=FakeSearchRepo(
+            industry="semiconductors", peers=peers, anchor_tier=MarketCapTier.MEGA
+        ),
+    )
+    use_case.execute("nvda")
+    valuation = analyzer.last_industry_valuation
+    assert valuation is not None
+    assert valuation.cohort == "large/mega"
+    assert valuation.count == 8  # mega + large, the mid-caps excluded
+
+
 def test_analysis_use_case_omits_thin_industry_valuation():
     # A benchmark under MIN_REPRESENTATIVE_PEERS (here 4 valued peers) is omitted:
     # a "median" over so few names describes those companies, not the industry, so
@@ -1757,8 +1817,32 @@ def test_bedrock_adapter_renders_industry_valuation_into_prompt():
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Industry valuation benchmark" in prompt
     assert "Industry: semiconductors" in prompt
+    assert "Peer group: industry" in prompt  # whole-industry benchmark
+    assert "in the same industry" in prompt
     assert "Median P/E: 25.00" in prompt  # interpolated median of the four peers
     assert "25th-75th percentile): 17.50 to 32.50" in prompt
+
+
+def test_bedrock_adapter_renders_a_tier_scoped_cohort_as_same_size_peers():
+    # A benchmark scoped to the stock's own cap tier renders as a like-for-like block, so the
+    # model reads a mega-cap median as same-size, not industry-wide.
+    client = _StubClient(_tool_message())
+    # Five mega peers (a representative same-tier cohort) alongside some mid-caps that stay
+    # out — so the cohort is the mega slice, not the whole industry.
+    peers = tuple((pe, MarketCapTier.MEGA) for pe in (20.0, 30.0, 40.0, 50.0, 60.0)) + (
+        (8.0, MarketCapTier.MID),
+        (9.0, MarketCapTier.MID),
+    )
+    BedrockAnalysisProvider(client=client).analyze(
+        a_stock(metrics=a_key_metrics()),
+        a_quarterly_timeline(),
+        industry_valuation=IndustryValuation.for_stock_peers(
+            "semiconductors", MarketCapTier.MEGA, peers
+        ),
+    )
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "Peer group: mega" in prompt
+    assert "of the same size (mega-cap) in the industry" in prompt
 
 
 def test_bedrock_adapter_omits_industry_valuation_block_when_absent():

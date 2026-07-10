@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 
@@ -130,6 +130,17 @@ class MarketCapTier(str, Enum):
     SMALL = "small"
 
 
+# Ascending size order — the axis a tier-anchored peer cohort widens along (same tier first,
+# then its nearest neighbours). Naming/ordering only; the tier ⇄ dollar-bounds mapping stays
+# the adapter's job (see the ``MarketCapTier`` docstring).
+_TIER_ORDER_ASC: tuple[MarketCapTier, ...] = (
+    MarketCapTier.SMALL,
+    MarketCapTier.MID,
+    MarketCapTier.LARGE,
+    MarketCapTier.MEGA,
+)
+
+
 @dataclass(frozen=True)
 class StockSearchResult:
     """One row of a universe search — the anchor facts served straight from the ``stocks``
@@ -228,6 +239,12 @@ class IndustryValuation:
     industry reads as low-confidence. All three stats are ``None`` when ``count`` is 0 (an
     unknown industry, or none valued yet): no coverage, not an error. ``industry`` echoes the
     normalized slug.
+
+    ``cohort`` names the size slice the peers were drawn from — ``"industry"`` for the whole
+    (mid-cap-and-up) industry, or a size label like ``"mega"`` / ``"large/mega"`` when the
+    benchmark was scoped to the anchor stock's own cap tier (see :meth:`for_stock_peers`). It
+    keeps the summary honest: a median of the mega-caps only should not read as an
+    industry-wide figure.
     """
 
     # The smallest peer sample a benchmark can rest on and still say something about the
@@ -243,6 +260,7 @@ class IndustryValuation:
     median_pe: float | None
     p25_pe: float | None
     p75_pe: float | None
+    cohort: str = "industry"
 
     @property
     def is_representative(self) -> bool:
@@ -269,6 +287,64 @@ class IndustryValuation:
             p25_pe=_percentile(values, 25),
             p75_pe=_percentile(values, 75),
         )
+
+    @classmethod
+    def for_stock_peers(
+        cls,
+        industry: str,
+        anchor_tier: "MarketCapTier | None",
+        peers: Sequence[tuple[float, "MarketCapTier"]],
+    ) -> "IndustryValuation":
+        """Build a benchmark scoped to the anchor stock's *own* cap tier, widening as needed.
+
+        A mega-cap is best judged against other mega-caps, not the whole industry — but
+        size-tier buckets are thin, so a strict same-tier median would collapse below
+        :attr:`MIN_REPRESENTATIVE_PEERS` (worst for the largest tiers, where an industry may
+        hold only one or two names). So this starts with the anchor's own tier and **widens to
+        the nearest neighbouring tiers** until the cohort is representative, falling back to the
+        whole industry if even that isn't enough. ``peers`` are ``(positive_pe, tier)`` pairs
+        (the mid-cap-and-up sample the repository already filtered); ``anchor_tier`` is the
+        looked-up stock's tier, or ``None`` when its cap is unknown — in which case there is no
+        tier to anchor on and the result is the plain whole-industry benchmark.
+
+        The returned ``cohort`` records which slice was used, so a ``"mega"`` median never reads
+        as an industry-wide one.
+        """
+        all_pes = [pe for pe, _ in peers]
+        if anchor_tier is None or not peers:
+            return cls.from_pe_ratios(industry, all_pes)
+
+        order = _TIER_ORDER_ASC
+        anchor_rank = order.index(anchor_tier)
+        present = {tier for _, tier in peers}
+        # Widen the radius around the anchor tier until the cohort is representative; the last
+        # radius (covering every present tier) is the whole-industry fallback, taken even if it
+        # still falls short — the caller applies ``is_representative`` to decide whether to use it.
+        max_radius = max(abs(order.index(tier) - anchor_rank) for tier in present)
+        for radius in range(max_radius + 1):
+            allowed = {
+                tier
+                for i, tier in enumerate(order)
+                if abs(i - anchor_rank) <= radius
+            }
+            cohort_pes = [pe for pe, tier in peers if tier in allowed]
+            if len(cohort_pes) >= cls.MIN_REPRESENTATIVE_PEERS or radius == max_radius:
+                label = _cohort_label(allowed & present, present)
+                return replace(cls.from_pe_ratios(industry, cohort_pes), cohort=label)
+        # Unreachable: max_radius always terminates the loop above.
+        return cls.from_pe_ratios(industry, all_pes)
+
+
+def _cohort_label(chosen: set[MarketCapTier], present: set[MarketCapTier]) -> str:
+    """Name the size slice a peer cohort was drawn from, for :class:`IndustryValuation.cohort`.
+
+    ``"industry"`` when the cohort spans every tier the industry actually has (a same-tier
+    start that had to widen all the way, or an industry that's one tier deep — either way the
+    benchmark *is* the whole industry). Otherwise the chosen tiers joined smallest-first, e.g.
+    ``"mega"`` for a same-tier hit or ``"large/mega"`` for a one-step widen."""
+    if not chosen or chosen == present:
+        return "industry"
+    return "/".join(tier.value for tier in _TIER_ORDER_ASC if tier in chosen)
 
 
 def _percentile(sorted_values: Sequence[float], q: float) -> float | None:

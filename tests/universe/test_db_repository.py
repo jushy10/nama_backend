@@ -740,3 +740,37 @@ def test_industry_for_ticker_none_when_unknown_or_unclassified(session):
     r = SqlStockSearchRepository(session)
     assert r.industry_for_ticker("ZZZZ") is None  # no such anchor row
     assert r.industry_for_ticker("NEW") is None  # row exists, industry unclassified
+
+
+def test_tier_for_ticker_buckets_the_stored_cap(session):
+    _seed(session, "NVDA", market_cap=3e12)  # >= $200B -> mega
+    _seed(session, "AMD", market_cap=50e9)  # $10-200B -> large
+    _seed(session, "MU", market_cap=5e9)  # $2-10B -> mid
+    r = SqlStockSearchRepository(session)
+    assert r.tier_for_ticker("NVDA") is MarketCapTier.MEGA
+    assert r.tier_for_ticker("AMD") is MarketCapTier.LARGE
+    assert r.tier_for_ticker("MU") is MarketCapTier.MID
+
+
+def test_tier_for_ticker_none_when_unknown_or_below_the_smallest_tier(session):
+    _seed(session, "TINY", market_cap=100e6)  # below the SMALL floor ($250M)
+    r = SqlStockSearchRepository(session)
+    assert r.tier_for_ticker("ZZZZ") is None  # no anchor row
+    assert r.tier_for_ticker("TINY") is None  # too small to tier
+
+
+def test_industry_peers_tags_each_mid_cap_and_up_peer_with_its_tier(session):
+    _seed(session, "NVDA", industry="semiconductors", market_cap=3e12, pe_ratio=46.5)  # mega
+    _seed(session, "AMD", industry="semiconductors", market_cap=50e9, pe_ratio=30.0)  # large
+    _seed(session, "MU", industry="semiconductors", market_cap=5e9, pe_ratio=12.0)  # mid
+    _seed(session, "SMALL", industry="semiconductors", market_cap=1.5e9, pe_ratio=90.0)  # <$2B — dropped
+    _seed(session, "LOSS", industry="semiconductors", market_cap=5e9, pe_ratio=-5.0)  # loss — dropped
+    r = SqlStockSearchRepository(session)
+
+    peers = r.industry_peers("semiconductors")
+
+    assert sorted(peers) == [
+        (12.0, MarketCapTier.MID),
+        (30.0, MarketCapTier.LARGE),
+        (46.5, MarketCapTier.MEGA),
+    ]

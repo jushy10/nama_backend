@@ -380,6 +380,12 @@ class _FakeSearchRepo(StockSearchRepository):
         self.ticker_asked = ticker
         return self._industry
 
+    def tier_for_ticker(self, ticker):  # pragma: no cover - the endpoint path is industry-wide
+        raise NotImplementedError
+
+    def industry_peers(self, industry):  # pragma: no cover - the endpoint path is industry-wide
+        raise NotImplementedError
+
 
 def test_search_normalizes_inputs_and_passes_clean_criteria():
     repo = _FakeSearchRepo()
