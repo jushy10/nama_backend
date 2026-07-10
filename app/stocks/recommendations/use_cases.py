@@ -3,9 +3,11 @@
 Two actions, both pure orchestration over the ports so they run offline in tests against
 hand-written fakes and know nothing of yfinance, HTTP, or SQLAlchemy:
 
-- ``GetStockRecommendations`` — the read path. Normalizes the symbol and returns the
-  trends through the ``RecommendationProvider`` (wired in production as the DB cache over
-  yfinance, so the read hits Yahoo only on a miss).
+- ``GetStockAnalystInfo`` — the read path behind ``GET /stocks/ticker/{ticker}/analyst-info``.
+  Normalizes the symbol once and composes the slice's two ports into one ``AnalystInfo`` read:
+  the recommendation trends (+ price targets), primary, plus the rating-change events as
+  best-effort enrichment. Both are wired in production as the DB cache over yfinance, so each
+  hits Yahoo only on its own cold miss.
 - ``SyncRecommendations`` — the out-of-band refresh. Walks the already-stored rows
   least-recently-refreshed first and renews them from the live provider, so users see the
   current month's split without a request ever waiting on a vendor round-trip. Invoked by
@@ -48,34 +50,63 @@ def _normalize_symbol(symbol: str) -> str:
     return normalized
 
 
-class GetStockRecommendations:
-    """Use case: retrieve a stock's analyst recommendation trends by its symbol.
+@dataclass(frozen=True)
+class AnalystInfo:
+    """A stock's full analyst coverage, bundled for the analyst-info card.
 
-    Best-effort: a symbol no analyst covers yields an empty run rather than an error, so
-    the endpoint can present an empty result instead of a 404.
+    Groups the slice's two reads behind one result — the recommendation trends (+ the
+    consensus price target) and the discrete upgrade/downgrade events. Like the ticker card's
+    ``TickerCard``, it's a composite of the slice's shared entities, not a stored entity of its
+    own. ``recommendations`` is the primary content; ``rating_changes`` is best-effort, so it
+    may be an empty run even when the trends are present.
     """
 
-    def __init__(self, provider: RecommendationProvider) -> None:
-        self._provider = provider
-
-    def execute(self, symbol: str) -> AnalystRecommendations:
-        return self._provider.get_recommendations(_normalize_symbol(symbol))
+    symbol: str
+    recommendations: AnalystRecommendations
+    rating_changes: AnalystRatingChanges
 
 
-class GetStockRatingChanges:
-    """Use case: retrieve a stock's analyst rating actions (upgrades/downgrades) by symbol.
+class GetStockAnalystInfo:
+    """Use case: retrieve a stock's full analyst coverage — recommendation trends (+ price
+    targets) and rating-change events — in one read, for ``GET
+    /stocks/ticker/{ticker}/analyst-info``.
 
-    The read counterpart of the events the recommendations sweep stores. Best-effort like
-    the trends read: a symbol with no published actions yields an empty run rather than an
-    error, so the endpoint presents an empty result instead of a 404. In production the
-    provider is the DB cache over yfinance, so the read hits Yahoo only on a cold miss.
+    Composes the slice's two ports the way the ticker card composes several. The recommendation
+    trends are **primary** — their failure propagates (an unknown symbol → 404, an upstream
+    outage → 502), exactly as the old standalone read did. The rating-change events are
+    **best-effort enrichment**: a leg the source can't serve (``StockNotFound`` /
+    ``StockDataUnavailable``) degrades to an empty run rather than sinking the card, so the
+    events can never take down the trends the user came for. "No coverage" is not an error for
+    either — an uncovered symbol is an empty run, presented as a 200. In production both
+    providers are the read-through DB cache over yfinance, so each hits Yahoo only on its own
+    cold miss.
     """
 
-    def __init__(self, provider: RatingChangeProvider) -> None:
-        self._provider = provider
+    def __init__(
+        self,
+        recommendations: RecommendationProvider,
+        rating_changes: RatingChangeProvider,
+    ) -> None:
+        self._recommendations = recommendations
+        self._rating_changes = rating_changes
 
-    def execute(self, symbol: str) -> AnalystRatingChanges:
-        return self._provider.get_rating_changes(_normalize_symbol(symbol))
+    def execute(self, symbol: str) -> AnalystInfo:
+        symbol = _normalize_symbol(symbol)
+        # Trends are primary: their exceptions propagate to the endpoint's error mapping.
+        recommendations = self._recommendations.get_recommendations(symbol)
+        return AnalystInfo(
+            symbol=symbol,
+            recommendations=recommendations,
+            rating_changes=self._read_rating_changes(symbol),
+        )
+
+    def _read_rating_changes(self, symbol: str) -> AnalystRatingChanges:
+        """Best-effort: the rating-change events, or an empty run when the source can't serve
+        them — enrichment must never sink the primary trends."""
+        try:
+            return self._rating_changes.get_rating_changes(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return AnalystRatingChanges(symbol)
 
 
 @dataclass(frozen=True)

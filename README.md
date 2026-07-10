@@ -45,7 +45,7 @@ Tables are created by migrations, not on boot — run `alembic upgrade head` fir
 | GET    | `/stocks/ticker/{ticker}/candles` | OHLC candlestick chart data |
 | GET    | `/stocks/{symbol}/earnings/quarterly` | Per-quarter earnings timeline (reported + upcoming) |
 | GET    | `/stocks/{symbol}/earnings/annual` | Per-year earnings timeline (reported + upcoming) |
-| GET    | `/stocks/{symbol}/recommendations` | Analyst buy/hold/sell trends by month |
+| GET    | `/stocks/ticker/{ticker}/analyst-info` | Analyst coverage: buy/hold/sell trends, consensus price target, upgrade/downgrade events |
 | GET    | `/stocks/{symbol}/analysis` | AI-generated buy/hold/sell read (Bedrock) |
 
 ## Test
