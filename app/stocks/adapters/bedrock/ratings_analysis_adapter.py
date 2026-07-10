@@ -75,7 +75,7 @@ _ANALYSIS_TOOL = {
             "summary": {
                 "type": "string",
                 "description": (
-                    "2-4 short sentences in plain, everyday language: what analysts think "
+                    "2-3 short sentences in plain, everyday language: what analysts think "
                     "of this stock right now — how positive or cautious they are, how much "
                     "they agree, and roughly where they see the price going — as if to a "
                     "friend who doesn't follow markets. No jargon."
@@ -84,8 +84,10 @@ _ANALYSIS_TOOL = {
             "findings": {
                 "type": "array",
                 "items": {"type": "string"},
+                "minItems": 2,
+                "maxItems": 3,
                 "description": (
-                    "2-4 short, plain-language takeaways a reader should remember — one "
+                    "2 to 3 short, plain-language takeaways a reader should remember — one "
                     "clear point each (e.g. how lopsided the buy/hold/sell split is, how "
                     "wide the price-target range is, or whether the most respected firms "
                     "are more or less positive than the crowd). No jargon, no invented "

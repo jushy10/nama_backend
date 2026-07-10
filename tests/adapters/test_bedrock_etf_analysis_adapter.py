@@ -94,6 +94,16 @@ def _tool_message(**input_overrides) -> _StubMessage:
     return _StubMessage([_StubBlock("tool_use", name="submit_analysis", input=payload)])
 
 
+def _bullets_message(**input_overrides) -> _StubMessage:
+    # The lighter recovery tool the retry path forces — only the two bullet lists.
+    payload = dict(
+        strengths=["Very low yearly cost", ""],  # the blank entry should be dropped
+        risks=["Heavy in a handful of tech names"],
+    )
+    payload.update(input_overrides)
+    return _StubMessage([_StubBlock("tool_use", name="submit_bullets", input=payload)])
+
+
 # --- Fixtures for the detail snapshot ----------------------------------------------------------
 
 
@@ -242,14 +252,17 @@ def test_rejects_an_offschema_enum_value():
 
 def test_retries_once_when_bullets_come_back_empty():
     # The fast Haiku tier sometimes packs everything into the thesis and returns
-    # empty strengths/risks; the adapter retries the forced call once and takes the
-    # recovered, non-empty read (before the result-cache could freeze the empty one).
+    # empty strengths/risks; the adapter retries with the lighter bullets-only tool
+    # and merges the recovered lists in (before the result-cache could freeze the
+    # empty one) — a fraction of the tokens of re-running the whole analysis.
     empty = _tool_message(strengths=[], risks=[])
-    full = _tool_message()  # the default, non-empty bullets
-    client = _SeqStubClient([empty, full])
+    bullets = _bullets_message()  # the targeted recovery call
+    client = _SeqStubClient([empty, bullets])
 
     analysis = BedrockEtfAnalysisProvider(client=client).analyze(_detail())
 
     assert len(client.calls) == 2  # retried exactly once
+    # the recovery is the lighter, bullets-only forced tool, not the full analysis
+    assert client.calls[1]["tool_choice"] == {"type": "tool", "name": "submit_bullets"}
     assert analysis.strengths == ("Very low yearly cost",)
     assert analysis.risks == ("Heavy in a handful of tech names",)

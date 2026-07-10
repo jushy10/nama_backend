@@ -98,7 +98,7 @@ _SUMMARY_TOOL = {
             "summary": {
                 "type": "string",
                 "description": (
-                    "2-4 short sentences in plain, everyday language: the overall "
+                    "2-3 short sentences in plain, everyday language: the overall "
                     "picture of how the US market (the S&P 500 and the Nasdaq) has "
                     "done over the past year, month and week — as if to a friend "
                     "who doesn't follow the markets. No jargon."
