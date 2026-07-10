@@ -570,7 +570,7 @@ class GetRatingsFindings:
     """
 
     # How many credible covering firms to surface for the model — matches the card's top-firms.
-    _TOP_FIRMS = 5
+    _TOP_FIRMS = 10
 
     def __init__(
         self,

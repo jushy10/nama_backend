@@ -358,7 +358,7 @@ class AnalystRatingChanges:
         """The most recent action, or ``None`` when there are none."""
         return self.changes[0] if self.changes else None
 
-    def top_credible_firms(self, limit: int = 5) -> tuple[FirmRating, ...]:
+    def top_credible_firms(self, limit: int = 10) -> tuple[FirmRating, ...]:
         """The most credible firms covering the stock, each with its current stance.
 
         Walks the newest-first ``changes`` keeping the first (newest) action seen per firm,
