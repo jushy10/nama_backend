@@ -1363,6 +1363,25 @@ class _BoomClient:
     messages = _BoomMessages()
 
 
+class _SeqStubMessages:
+    """Returns a queued message per ``create`` call, repeating the last once the
+    queue is exhausted — lets a test drive the adapter's retry-on-empty path."""
+
+    def __init__(self, messages, recorder):
+        self._messages = list(messages)
+        self._recorder = recorder
+
+    def create(self, **kwargs):
+        self._recorder.append(kwargs)
+        return self._messages[min(len(self._recorder) - 1, len(self._messages) - 1)]
+
+
+class _SeqStubClient:
+    def __init__(self, messages):
+        self.calls: list[dict] = []
+        self.messages = _SeqStubMessages(messages, self.calls)
+
+
 def _tool_message(**input_overrides) -> _StubMessage:
     payload = dict(
         recommendation="hold",
@@ -1748,6 +1767,34 @@ def test_bedrock_adapter_rejects_offschema_value():
     client = _StubClient(_tool_message(recommendation="strong_buy"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
         BedrockAnalysisProvider(client=client).analyze(a_stock())
+
+
+def test_bedrock_adapter_retries_once_when_bullets_come_back_empty():
+    # The fast Haiku tier sometimes packs everything into the thesis and returns
+    # empty strengths/risks; the adapter retries the forced call once and takes the
+    # recovered, non-empty read (before the result-cache could freeze the empty one).
+    empty = _tool_message(strengths=[], risks=[])
+    full = _tool_message()  # the default, non-empty bullets
+    client = _SeqStubClient([empty, full])
+
+    analysis = BedrockAnalysisProvider(client=client).analyze(a_stock())
+
+    assert len(client.calls) == 2  # retried exactly once
+    assert analysis.strengths == ("High net margin",)
+    assert analysis.risks == ("Elevated P/E",)
+
+
+def test_bedrock_adapter_accepts_empty_bullets_after_a_failed_retry():
+    # If the one retry also comes back empty, keep the read (a thesis with no
+    # bullets beats failing the endpoint) rather than looping or raising.
+    empty = _tool_message(strengths=[], risks=[])
+    client = _SeqStubClient([empty, empty])
+
+    analysis = BedrockAnalysisProvider(client=client).analyze(a_stock())
+
+    assert len(client.calls) == 2  # exactly one retry, then accept
+    assert analysis.strengths == () and analysis.risks == ()
+    assert analysis.thesis  # the rest of the read still comes through
 
 
 def test_get_analysis_returns_200(make_client):
@@ -2290,6 +2337,19 @@ def test_sector_analysis_rejects_an_offschema_tone():
         BedrockSectorAnalysisProvider(client=client).analyze(_a_board())
 
 
+def test_sector_analysis_retries_once_when_lists_come_back_empty():
+    # An empty leaders/laggards result is retried once and the recovered read used.
+    empty = _sector_tool_message(leaders=[], laggards=[])
+    full = _sector_tool_message()
+    client = _SeqStubClient([empty, full])
+
+    analysis = BedrockSectorAnalysisProvider(client=client).analyze(_a_board())
+
+    assert len(client.calls) == 2  # retried exactly once
+    assert [h.sector for h in analysis.leaders] == ["Technology"]
+    assert [h.sector for h in analysis.laggards] == ["Energy"]
+
+
 def test_sector_analysis_use_case_hands_over_a_ranked_board():
     # The use case ranks the board best-first before handing it to the analyzer.
     analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
@@ -2477,6 +2537,18 @@ def test_market_summary_rejects_an_offschema_tone():
         BedrockMarketSummaryProvider(client=client).analyze(_a_market_board())
 
 
+def test_market_summary_retries_once_when_periods_come_back_empty():
+    # An empty periods list (no per-timeframe notes) is retried once and recovered.
+    empty = _market_tool_message(periods=[])
+    full = _market_tool_message()
+    client = _SeqStubClient([empty, full])
+
+    summary = BedrockMarketSummaryProvider(client=client).analyze(_a_market_board())
+
+    assert len(client.calls) == 2  # retried exactly once
+    assert summary.periods[0].note == "A strong year for both indexes."
+
+
 # ------------------------- earnings AI analysis -------------------------
 
 # Reuses the Bedrock stub client, forcing the earnings tool
@@ -2558,6 +2630,23 @@ def test_earnings_analysis_rejects_an_offschema_trend():
         BedrockEarningsAnalysisProvider(client=client).analyze(
             "AAPL", a_quarterly_timeline()
         )
+
+
+def test_earnings_analysis_retries_once_when_highlights_come_back_empty():
+    # An empty highlights list is retried once and the recovered read used.
+    empty = _earnings_tool_message(highlights=[])
+    full = _earnings_tool_message()
+    client = _SeqStubClient([empty, full])
+
+    analysis = BedrockEarningsAnalysisProvider(client=client).analyze(
+        "AAPL", a_quarterly_timeline()
+    )
+
+    assert len(client.calls) == 2  # retried exactly once
+    assert analysis.highlights == (
+        "Beat estimates every recent quarter",
+        "Profit and sales are both growing",
+    )
 
 
 def test_earnings_analysis_drops_string_highlights_instead_of_char_splitting():
