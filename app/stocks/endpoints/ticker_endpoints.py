@@ -82,13 +82,14 @@ from app.stocks.router import (
 )
 from app.stocks.schemas import StockPerformanceResponse
 from app.stocks.ticker.db_repository import SqlTickerRepository
-from app.stocks.ticker.entities import PeHistory, TickerOptionsMetrics
+from app.stocks.ticker.entities import PeHistory, PeHistoryStats, TickerOptionsMetrics
 from app.stocks.ticker.ports import OptionChainProvider
 from app.stocks.ticker.schemas import (
     DividendResponse,
     OptionsMetricsResponse,
     PeHistoryPointResponse,
     PeHistoryResponse,
+    PeHistoryStatsResponse,
     TickerCardResponse,
     TickerMetricsResponse,
     TickerTypeResponse,
@@ -300,9 +301,31 @@ def get_pe_history_use_case(
     return GetStockPeHistory(provider, _eps_history_provider())
 
 
+def _present_pe_stats(stats: PeHistoryStats | None) -> PeHistoryStatsResponse | None:
+    """Presenter: the P/E-history valuation summary -> DTO. The entity already rounds every
+    figure (the percentiles, median/quartiles, the discount), so this just maps fields and
+    renders the signal enum as its string value. ``None`` passes through — a series too short
+    for a stable percentile carries no stats block."""
+    if stats is None:
+        return None
+    return PeHistoryStatsResponse(
+        current_pe=stats.current_pe,
+        median_pe=stats.median_pe,
+        p25_pe=stats.p25_pe,
+        p75_pe=stats.p75_pe,
+        min_pe=stats.min_pe,
+        max_pe=stats.max_pe,
+        current_percentile=stats.current_percentile,
+        discount_to_median_percent=stats.discount_to_median_percent,
+        signal=stats.signal.value,
+        sample_size=stats.sample_size,
+    )
+
+
 def _present_pe_history(history: PeHistory) -> PeHistoryResponse:
     """Presenter: P/E-history entity -> HTTP response DTO. Rounds the display figures at
-    the edge (``pe`` is already 2-dp from the entity; price/EPS carry feed float noise)."""
+    the edge (``pe`` is already 2-dp from the entity; price/EPS carry feed float noise), and
+    attaches the valuation-vs-history ``stats`` (``None`` for a series too short to rank)."""
     return PeHistoryResponse(
         ticker=history.symbol,
         count=len(history.points),
@@ -315,6 +338,7 @@ def _present_pe_history(history: PeHistory) -> PeHistoryResponse:
             )
             for point in history.points
         ],
+        stats=_present_pe_stats(history.stats),
     )
 
 

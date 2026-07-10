@@ -72,7 +72,35 @@ def test_presents_the_history_with_counts_and_rounding():
         "ttm_eps": 6.43,
         "pe": 28.78,
     }
+    assert body["stats"] is None  # only 2 points -> too thin to rank
     assert fake.calls == ["aapl"]
+
+
+def _history_with_stats() -> PeHistory:
+    # Enough points (>= MIN_POINTS_FOR_STATS) for the entity to publish a stats block; the last
+    # point (the lowest multiple) reads as cheap vs the rest.
+    pes = [20, 22, 24, 26, 28, 30, 25, 15]
+    return PeHistory(
+        symbol="AAPL",
+        points=tuple(
+            PeHistoryPoint(report_date=date(2022, 1, 1), price=100.0, ttm_eps=5.0, pe=float(pe))
+            for pe in pes
+        ),
+    )
+
+
+def test_presents_the_valuation_stats_block():
+    resp = _client(_FakeUseCase(result=_history_with_stats())).get(
+        "/stocks/ticker/AAPL/pe-history"
+    )
+
+    assert resp.status_code == 200
+    stats = resp.json()["stats"]
+    assert stats["signal"] == "cheap"
+    assert stats["current_pe"] == 15.0
+    assert stats["median_pe"] == 24.5
+    assert stats["current_percentile"] < 25
+    assert stats["sample_size"] == 8
 
 
 def test_empty_history_is_a_200_not_a_404():
@@ -80,7 +108,7 @@ def test_empty_history_is_a_200_not_a_404():
         "/stocks/ticker/ZZZZ/pe-history"
     )
     assert resp.status_code == 200
-    assert resp.json() == {"ticker": "ZZZZ", "count": 0, "points": []}
+    assert resp.json() == {"ticker": "ZZZZ", "count": 0, "points": [], "stats": None}
 
 
 def test_bad_symbol_is_a_400():

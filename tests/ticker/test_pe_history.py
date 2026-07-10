@@ -15,7 +15,12 @@ import pytest
 from app.stocks.entities import Candle, CandleSeries, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import CandleProvider
-from app.stocks.ticker.entities import PeHistory, ReportedEps
+from app.stocks.ticker.entities import (
+    PeHistory,
+    PeHistoryPoint,
+    ReportedEps,
+    ValuationSignal,
+)
 from app.stocks.ticker.ports import EpsHistoryProvider
 from app.stocks.ticker.use_cases import GetStockPeHistory
 
@@ -116,6 +121,58 @@ def test_build_drops_a_trailing_loss():
 def test_build_needs_a_full_trailing_year():
     eps = _quarters([("2023-05-01", 1.0), ("2023-08-01", 1.0), ("2023-11-01", 1.0)])
     assert PeHistory.build("X", eps, {date(2023, 11, 1): 30.0}).points == ()
+
+
+# --- The entity: PeHistory.stats (valuation vs. its own history) -------------------------
+
+
+def _history_from_pes(pes: list[float]) -> PeHistory:
+    """A PeHistory carrying the given P/Es, oldest first (the last is 'current'). Only ``pe``
+    feeds the stats, so the other point fields are placeholders."""
+    points = tuple(
+        PeHistoryPoint(report_date=date(2022, 1, 1), price=100.0, ttm_eps=5.0, pe=float(pe))
+        for pe in pes
+    )
+    return PeHistory(symbol="X", points=points)
+
+
+def test_stats_is_none_for_a_thin_sample():
+    # One shy of the floor -> no verdict; exactly the floor -> a verdict.
+    assert _history_from_pes([15.0] * (PeHistory.MIN_POINTS_FOR_STATS - 1)).stats is None
+    assert _history_from_pes([15.0] * PeHistory.MIN_POINTS_FOR_STATS).stats is not None
+
+
+def test_stats_flags_a_cheap_current_reading():
+    # Current (last) is the lowest multiple the stock has traded at -> cheap vs history.
+    stats = _history_from_pes([20, 22, 24, 26, 28, 30, 25, 15]).stats
+    assert stats is not None
+    assert stats.current_pe == 15.0
+    assert stats.min_pe == 15.0
+    assert stats.max_pe == 30.0
+    assert stats.median_pe == 24.5
+    assert stats.signal is ValuationSignal.CHEAP
+    assert stats.current_percentile < 25
+    assert stats.discount_to_median_percent < 0  # below its typical multiple
+    assert stats.sample_size == 8
+
+
+def test_stats_flags_an_expensive_current_reading():
+    # Current (last) is the dearest multiple -> expensive vs history; quartiles interpolate.
+    stats = _history_from_pes([15, 16, 17, 18, 19, 20, 21, 30]).stats
+    assert stats is not None
+    assert stats.signal is ValuationSignal.EXPENSIVE
+    assert stats.current_percentile >= 75
+    assert stats.discount_to_median_percent > 0
+    assert stats.p25_pe == 16.75  # type-7 interpolation, same as the industry benchmark
+    assert stats.p75_pe == 20.25
+
+
+def test_stats_reads_a_mid_range_current_as_fair():
+    stats = _history_from_pes([10, 15, 20, 25, 30, 35, 40, 25]).stats
+    assert stats is not None
+    assert stats.signal is ValuationSignal.FAIR
+    assert 25 < stats.current_percentile < 75
+    assert stats.median_pe == 25.0
 
 
 # --- The use case: GetStockPeHistory ----------------------------------------------------

@@ -133,6 +133,34 @@ class PeHistoryPointResponse(BaseModel):
     pe: float  # price / ttm_eps
 
 
+class PeHistoryStatsResponse(BaseModel):
+    """Where the current trailing P/E sits within the stock's own history — the valuation
+    signal derived from the ``points`` series.
+
+    ``current_pe`` is the latest sampled multiple (the most recent earnings release, not a live
+    tick — the card's ``metrics.pe`` is that). ``median_pe`` with ``p25_pe``/``p75_pe`` is the
+    typical multiple and its interquartile band, and ``min_pe``/``max_pe`` the full envelope —
+    the reference line and shaded band a FE draws behind the P/E line. ``current_percentile``
+    (0–100) is where the current multiple falls in that distribution and ``signal`` buckets it:
+    ``"cheap"`` in the bottom quartile, ``"expensive"`` in the top, ``"fair"`` between.
+    ``discount_to_median_percent`` is the gap to the median (negative = below its usual
+    multiple). ``sample_size`` is how many releases back the read. A *relative* verdict —
+    "cheap for this stock", not "cheap" outright (a re-rated business can read cheap all the way
+    down). ``null`` on the parent when the series is too short (< ~2 years) for a percentile to
+    mean anything."""
+
+    current_pe: float
+    median_pe: float
+    p25_pe: float
+    p75_pe: float
+    min_pe: float
+    max_pe: float
+    current_percentile: float  # 0–100, share of history at or below the current multiple
+    discount_to_median_percent: float  # negative = cheaper than its own median
+    signal: str  # "cheap" | "fair" | "expensive"
+    sample_size: int
+
+
 class PeHistoryResponse(BaseModel):
     """A stock's trailing P/E over time — one point per reported quarter, oldest first.
 
@@ -140,11 +168,14 @@ class PeHistoryResponse(BaseModel):
     reported EPS (Yahoo) at that date. ``points`` is empty (a 200, not a 404) when the
     EPS history is uncovered or Yahoo blocked the read — the walk is a best-effort card
     extra. The *current* live P/E stays on the card's ``metrics.pe``; this is the
-    backward-looking series that pairs with it."""
+    backward-looking series that pairs with it. ``stats`` distils the series into a
+    valuation-vs-history read (percentile + cheap/fair/expensive signal); it's ``null`` for a
+    series too short to rank (and absent altogether when ``points`` is empty)."""
 
     ticker: str
     count: int  # number of points (may be fewer than the reported quarters)
     points: list[PeHistoryPointResponse]  # oldest first
+    stats: PeHistoryStatsResponse | None = None  # valuation-vs-history read; null for a thin series
 
 
 class TickerTypeResponse(BaseModel):
