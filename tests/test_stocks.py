@@ -1956,11 +1956,11 @@ def test_get_candles_defaults_to_6m_daily(make_client):
 def test_get_candles_honors_timeframe_and_range(make_client):
     fake = FakeCandleProvider(a_series(timeframe=Timeframe.HOUR_1))
     client = make_client(candle_provider=fake)
-    r = client.get("/stocks/ticker/AAPL/candles", params={"timeframe": "1Hour", "range": "5D"})
+    r = client.get("/stocks/ticker/AAPL/candles", params={"timeframe": "1Hour", "range": "7D"})
     assert r.status_code == 200
     _, timeframe, start, end = fake.received[0]
     assert timeframe is Timeframe.HOUR_1
-    assert (end - start).days == 5
+    assert (end - start).days == 7
 
 
 def test_get_candles_explicit_window_overrides_range(make_client):
@@ -2044,12 +2044,12 @@ def test_get_rsi_honors_timeframe_range_and_period(make_client):
     client = make_client(rsi_provider=fake)
     r = client.get(
         "/stocks/AAPL/rsi",
-        params={"timeframe": "1Hour", "range": "5D", "period": 3},
+        params={"timeframe": "1Hour", "range": "7D", "period": 3},
     )
     assert r.status_code == 200, r.text
     _, timeframe, start, end = fake.received[0]
     assert timeframe is Timeframe.HOUR_1
-    assert (end - start).days == 5
+    assert (end - start).days == 7
     assert r.json()["period"] == 3
 
 
@@ -2129,12 +2129,12 @@ def test_get_ema_honors_timeframe_and_range(make_client):
     client = make_client(ema_provider=fake)
     r = client.get(
         "/stocks/ticker/AAPL/ema",
-        params={"timeframe": "1Hour", "range": "5D", "period": 3},
+        params={"timeframe": "1Hour", "range": "7D", "period": 3},
     )
     assert r.status_code == 200, r.text
     _, timeframe, start, end = fake.received[0]
     assert timeframe is Timeframe.HOUR_1
-    assert (end - start).days == 5
+    assert (end - start).days == 7
 
 
 @pytest.mark.parametrize("bad_period", [1, 0, -5, 401])
@@ -2203,12 +2203,12 @@ def test_get_support_levels_honors_timeframe_range_and_window(make_client):
     client = make_client(support_levels_provider=fake)
     r = client.get(
         "/stocks/ticker/AAPL/support-levels",
-        params={"timeframe": "1Hour", "range": "5D", "window": 2},
+        params={"timeframe": "1Hour", "range": "7D", "window": 2},
     )
     assert r.status_code == 200, r.text
     _, timeframe, start, end = fake.received[0]
     assert timeframe is Timeframe.HOUR_1
-    assert (end - start).days == 5
+    assert (end - start).days == 7
 
 
 def test_get_support_levels_explicit_window_overrides_range(make_client):

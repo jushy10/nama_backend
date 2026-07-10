@@ -37,8 +37,8 @@ and for support-levels `window`, `tolerance`, `max_levels`) and the **response
 bodies are identical** — no field renames, so only the request URL needs updating.
 
 ```diff
-- GET /stocks/{symbol}/candles?timeframe=1Hour&range=5D
-+ GET /stocks/ticker/{ticker}/candles?timeframe=1Hour&range=5D
+- GET /stocks/{symbol}/candles?timeframe=1Hour&range=7D
++ GET /stocks/ticker/{ticker}/candles?timeframe=1Hour&range=7D
 
 - GET /stocks/{symbol}/support-levels?window=5
 + GET /stocks/ticker/{ticker}/support-levels?window=5

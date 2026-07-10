@@ -139,7 +139,7 @@ Query parameters:
 | Param       | Values | Default | Notes |
 | ----------- | ------ | ------- | ----- |
 | `timeframe` | `1Min` `5Min` `15Min` `30Min` `1Hour` `4Hour` `1Day` `1Week` `1Month` | `1Day` | Granularity of each candle. |
-| `range`     | `1D` `5D` `1M` `3M` `6M` `1Y` `2Y` `5Y` `YTD` `MAX` | `6M` | How far back to fetch. |
+| `range`     | `1D` `7D` `1M` `3M` `6M` `1Y` `2Y` `5Y` `YTD` `MAX` | `6M` | How far back to fetch. |
 | `start`     | ISO 8601 datetime | – | Explicit window start (UTC); overrides `range`. |
 | `end`       | ISO 8601 datetime | now | Explicit window end (UTC). |
 
@@ -151,8 +151,8 @@ adjusted, and capped at the 10,000 most recent bars in the window.
 # Last 6 months, daily candles (defaults)
 curl localhost:8080/stocks/ticker/AAPL/candles
 
-# Last 5 trading days, hourly candles
-curl "localhost:8080/stocks/ticker/AAPL/candles?timeframe=1Hour&range=5D"
+# Last 7 days, hourly candles
+curl "localhost:8080/stocks/ticker/AAPL/candles?timeframe=1Hour&range=7D"
 
 # An explicit window
 curl "localhost:8080/stocks/ticker/AAPL/candles?start=2026-01-01T00:00:00Z&end=2026-02-01T00:00:00Z"
