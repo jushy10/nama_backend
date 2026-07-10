@@ -254,7 +254,7 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > (consensus + targets + top firms) and returns a `verdict`/`confidence`/`summary`/`findings` read: it
 > mirrors the earnings-analysis pattern (structured forced-tool output, **no DB result cache**, DB-only
 > context via `DbOnlyRecommendationsProvider` + `DbOnlyRatingChangesProvider`), lives in `router.py`
-> with the other Bedrock analyses (`GetRatingsFindings` + `bedrock_ratings_analysis_provider.py`), and
+> with the other Bedrock analyses (`GetRatingsFindings` + `adapters/bedrock_ratings_analysis_adapter.py`), and
 > takes its own `BEDROCK_RATINGS_ANALYSIS_MODEL_ID` override. It replaced the two
 > separate reads (`GET /stocks/{symbol}/recommendations` + `GET /stocks/{symbol}/rating-changes`,
 > whose endpoint modules were removed); the path is grouped under the `/stocks/ticker/{ticker}`

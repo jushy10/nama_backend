@@ -23,9 +23,6 @@ from app.stocks.bedrock_earnings_analysis_provider import (
     BedrockEarningsAnalysisProvider,
 )
 from app.stocks.bedrock_market_summary_provider import BedrockMarketSummaryProvider
-from app.stocks.bedrock_ratings_analysis_provider import (
-    BedrockRatingsAnalysisProvider,
-)
 from app.stocks.bedrock_sector_analysis_provider import BedrockSectorAnalysisProvider
 from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
@@ -53,6 +50,9 @@ from app.stocks.indicators import (
 )
 from app.stocks.adapters.annual_earnings_estimates_adapter import (
     AnnualEarningsEstimatesProvider,
+)
+from app.stocks.adapters.bedrock_ratings_analysis_adapter import (
+    BedrockRatingsAnalysisProvider,
 )
 from app.stocks.adapters.db_only_context_providers import (
     DbOnlyAnnualEarningsProvider,

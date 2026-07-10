@@ -11,7 +11,9 @@ from datetime import date
 
 import pytest
 
-from app.stocks.bedrock_ratings_analysis_provider import BedrockRatingsAnalysisProvider
+from app.stocks.adapters.bedrock_ratings_analysis_adapter import (
+    BedrockRatingsAnalysisProvider,
+)
 from app.stocks.entities import Confidence, RatingsVerdict
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.recommendations.entities import (
