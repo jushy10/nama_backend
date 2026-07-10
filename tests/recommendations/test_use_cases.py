@@ -16,6 +16,7 @@ from app.stocks.recommendations.entities import (
     AnalystPriceTargets,
     AnalystRatingChanges,
     AnalystRecommendations,
+    FirmRating,
     RatingChange,
     RecommendationTrend,
 )
@@ -236,6 +237,92 @@ def test_analyst_info_rejects_invalid_symbols_before_touching_the_providers():
         with pytest.raises(ValueError):
             use_case.execute(bad)
     assert recs_provider.calls == [] and rc_provider.calls == []
+
+
+# ───────────────────────────── top credible firms ─────────────────────────────
+
+
+def _change(firm, published_at, *, to_grade="Buy", action="main", target=None):
+    return RatingChange(
+        firm, published_at, action=action, to_grade=to_grade, target_current=target
+    )
+
+
+def test_top_credible_firms_ranks_by_credibility_and_keeps_latest_per_firm():
+    changes = AnalystRatingChanges(
+        "NVDA",
+        (
+            # newest-first, the order the store serves them in
+            _change("Evercore ISI Group", date(2026, 5, 21), to_grade="Outperform", target=413),
+            _change("RBC Capital", date(2026, 5, 21), to_grade="Outperform", target=270),
+            _change("Morgan Stanley", date(2026, 5, 21), to_grade="Overweight", target=288),
+            _change("Rosenblatt", date(2026, 5, 21), to_grade="Buy", target=325),  # unranked
+            _change("RBC Capital", date(2026, 3, 17), to_grade="Outperform", target=250),  # older
+        ),
+    )
+    top = changes.top_credible_firms(5)
+    # RBC (rank 1) before Evercore (2) before Morgan Stanley (5); Rosenblatt excluded (unranked).
+    assert [f.firm for f in top] == ["RBC Capital", "Evercore ISI Group", "Morgan Stanley"]
+    assert isinstance(top[0], FirmRating)
+    assert top[0].rank == 1
+    assert top[0].target == 270  # the newer RBC row won the dedup, not the older $250 one
+    assert top[0].rating == "Outperform"
+
+
+def test_top_credible_firms_resolves_aliases_and_excludes_lookalikes():
+    changes = AnalystRatingChanges(
+        "X",
+        (
+            _change("B of A Securities", date(2026, 5, 21), target=350),  # alias -> Bank of America
+            _change("Keybanc", date(2026, 5, 21), target=310),  # NOT KBW — must be excluded
+            _change("Cowen", date(2026, 5, 20), target=300),  # alias -> TD Cowen
+        ),
+    )
+    firms = [f.firm for f in changes.top_credible_firms(5)]
+    assert "B of A Securities" in firms  # matched via alias
+    assert "Cowen" in firms  # matched via alias
+    assert "Keybanc" not in firms  # KeyBanc is not KBW
+
+
+def test_top_credible_firms_caps_and_may_return_fewer():
+    one = AnalystRatingChanges("X", (_change("UBS", date(2026, 5, 1)),))
+    assert len(one.top_credible_firms(5)) == 1  # only one credible firm covers it
+    assert one.top_credible_firms(0) == ()  # a non-positive cap yields none
+    assert AnalystRatingChanges("X", ()).top_credible_firms() == ()  # no events → none
+
+
+def test_top_credible_firms_carry_upside_percent():
+    top = AnalystRatingChanges(
+        "X", (_change("RBC Capital", date(2026, 5, 1), target=270.0),)
+    ).top_credible_firms(1)
+    assert top[0].upside_percent(200.0) == 35.0  # (270 - 200) / 200 * 100
+    assert top[0].upside_percent(None) is None
+
+
+def test_analyst_info_populates_top_firms_from_rating_changes():
+    changes = AnalystRatingChanges(
+        "NVDA",
+        (
+            _change("RBC Capital", date(2026, 5, 21), to_grade="Outperform", target=270.0),
+            _change("Rosenblatt", date(2026, 5, 21), to_grade="Buy", target=325.0),  # unranked
+        ),
+    )
+    info = GetStockAnalystInfo(
+        _FakeRecommendationReadProvider(_a_run("NVDA")),
+        _FakeRatingChangeReadProvider(changes),
+    ).execute("NVDA")
+    assert [f.firm for f in info.top_firms] == ["RBC Capital"]  # Rosenblatt excluded
+    assert info.top_firms[0].rating == "Outperform"
+
+
+def test_analyst_info_top_firms_empty_without_credible_coverage():
+    info = GetStockAnalystInfo(
+        _FakeRecommendationReadProvider(_a_run("X")),
+        _FakeRatingChangeReadProvider(
+            AnalystRatingChanges("X", (_change("Rosenblatt", date(2026, 5, 1)),))
+        ),
+    ).execute("X")
+    assert info.top_firms == ()
 
 
 # ───────────────────────────── SyncRecommendations ─────────────────────────────

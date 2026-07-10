@@ -67,6 +67,23 @@ class RatingChangeResponse(BaseModel):
     is_downgrade: bool
 
 
+class TopFirmRatingResponse(BaseModel):
+    """One credible firm's current stance — a row of the card's "top firms" read.
+
+    ``firm`` is the research house and ``rank`` its position in the curated credibility ranking
+    (0 = most credible, so ascending is best-first). ``rating`` is the grade it now holds (the
+    firm's latest ``to_grade``), ``action`` the move that set it, ``target`` its current price
+    target (``null`` when it published none), and ``published_at`` when it last acted. Derived
+    from the rating-change events, so it's empty when none of the covering firms is ranked."""
+
+    firm: str
+    rank: int
+    rating: str | None = None
+    action: str | None = None
+    target: float | None = None
+    published_at: date  # ISO date the firm last acted
+
+
 class AnalystRecommendationsBlock(BaseModel):
     """The recommendation-trend half of the analyst-info card.
 
@@ -88,10 +105,12 @@ class AnalystInfoResponse(BaseModel):
 
     ``recommendations`` is the buy/hold/sell trend block (+ consensus + price targets);
     ``rating_changes`` is the discrete upgrade/downgrade event feed, newest first — the
-    individual actions that, aggregated by month, become the trend. Both are best-effort: an
-    uncovered stock is a 200 with an empty ``trends`` and an empty ``rating_changes``, never a
-    404."""
+    individual actions that, aggregated by month, become the trend. ``top_firms`` is the card's
+    headline read of those events: the most credible covering firms and their current stance,
+    best-first. All best-effort: an uncovered stock is a 200 with an empty ``trends``, empty
+    ``rating_changes``, and empty ``top_firms``, never a 404."""
 
     ticker: str
     recommendations: AnalystRecommendationsBlock
     rating_changes: list[RatingChangeResponse]
+    top_firms: list[TopFirmRatingResponse]

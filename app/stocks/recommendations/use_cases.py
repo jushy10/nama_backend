@@ -24,6 +24,7 @@ from app.stocks.progress import iter_with_progress
 from app.stocks.recommendations.entities import (
     AnalystRatingChanges,
     AnalystRecommendations,
+    FirmRating,
 )
 from app.stocks.recommendations.ports import (
     RatingChangeProvider,
@@ -58,12 +59,15 @@ class AnalystInfo:
     consensus price target) and the discrete upgrade/downgrade events. Like the ticker card's
     ``TickerCard``, it's a composite of the slice's shared entities, not a stored entity of its
     own. ``recommendations`` is the primary content; ``rating_changes`` is best-effort, so it
-    may be an empty run even when the trends are present.
+    may be an empty run even when the trends are present. ``top_firms`` is the card's headline
+    read of the events — the most credible firms covering the stock and their current stance,
+    derived from ``rating_changes`` (empty when none of the covering firms are ranked).
     """
 
     symbol: str
     recommendations: AnalystRecommendations
     rating_changes: AnalystRatingChanges
+    top_firms: tuple[FirmRating, ...] = ()
 
 
 class GetStockAnalystInfo:
@@ -94,10 +98,14 @@ class GetStockAnalystInfo:
         symbol = _normalize_symbol(symbol)
         # Trends are primary: their exceptions propagate to the endpoint's error mapping.
         recommendations = self._recommendations.get_recommendations(symbol)
+        rating_changes = self._read_rating_changes(symbol)
         return AnalystInfo(
             symbol=symbol,
             recommendations=recommendations,
-            rating_changes=self._read_rating_changes(symbol),
+            rating_changes=rating_changes,
+            # The most credible covering firms, derived from the (best-effort) events — an
+            # empty tuple when none is ranked, so it never adds a failure mode of its own.
+            top_firms=rating_changes.top_credible_firms(),
         )
 
     def _read_rating_changes(self, symbol: str) -> AnalystRatingChanges:

@@ -245,7 +245,17 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > `cron_recommendations_endpoints.py`). The read serves **one consolidated payload** at
 > `GET /stocks/ticker/{ticker}/analyst-info` — the recommendation trends (newest snapshot first,
 > with a `price_targets` block) **and** the rating-change events together, composed by the
-> `GetStockAnalystInfo` use case (trends primary, events best-effort). It replaced the two
+> `GetStockAnalystInfo` use case (trends primary, events best-effort). The payload also carries a
+> `top_firms` block — the most credible covering firms (by a curated `FIRM_CREDIBILITY` ranking in
+> the slice's `entities.py`, matched through an alias map so `B of A Securities` folds onto `Bank of
+> America` and `KeyBanc` never onto `KBW`) with each one's current stance (rating + target), derived
+> from the rating-change events, most credible first. A sibling **AI review** at
+> `GET /stocks/ticker/{ticker}/analyst-info/analysis` runs Claude on Bedrock over that same coverage
+> (consensus + targets + top firms) and returns a `verdict`/`confidence`/`summary`/`findings` read: it
+> mirrors the earnings-analysis pattern (structured forced-tool output, **no DB result cache**, DB-only
+> context via `DbOnlyRecommendationsProvider` + `DbOnlyRatingChangesProvider`), lives in `router.py`
+> with the other Bedrock analyses (`GetRatingsFindings` + `bedrock_ratings_analysis_provider.py`), and
+> takes its own `BEDROCK_RATINGS_ANALYSIS_MODEL_ID` override. It replaced the two
 > separate reads (`GET /stocks/{symbol}/recommendations` + `GET /stocks/{symbol}/rating-changes`,
 > whose endpoint modules were removed); the path is grouped under the `/stocks/ticker/{ticker}`
 > resource because it's a per-ticker card the FE renders, though the data still comes from this
@@ -489,8 +499,9 @@ translates them.
 **Config & secrets** come from environment variables, read only in the router's
 wiring functions (`APCA_API_KEY_ID`, `FINNHUB_API_KEY`, `LOGODEV_TOKEN`,
 `DATABASE_URL`, `CRON_SYNC_TOKEN`; the Bedrock analysers add `BEDROCK_REGION` /
-`BEDROCK_ANALYSIS_MODEL_ID` and the analysis result cache adds the optional
-`ANALYSIS_CACHE_TTL_MINUTES`, default 30). The `/internal/*/sync` cron endpoints are guarded
+`BEDROCK_ANALYSIS_MODEL_ID` — plus per-analyser model overrides like
+`BEDROCK_EARNINGS_ANALYSIS_MODEL_ID` / `BEDROCK_RATINGS_ANALYSIS_MODEL_ID` — and the analysis
+result cache adds the optional `ANALYSIS_CACHE_TTL_MINUTES`, default 30). The `/internal/*/sync` cron endpoints are guarded
 by a shared bearer token: each `@router.post` depends on `require_cron_token`
 (`app/stocks/endpoints/cron_auth.py`), which requires `Authorization: Bearer
 $CRON_SYNC_TOKEN` (constant-time compared) and is **fail-closed** — a `503` when the token is
@@ -590,7 +601,7 @@ app/
     ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/Logo.dev)
     ├── adapters/           # ── vendor adapters as *_adapter.py (earnings: yfinance + caches; estimates projection;
     │                       #    universe screen + ETF screen/profile: yfinance; index membership: wikipedia;
-    │                       #    revenue segments: SEC EDGAR + cache; db_only_context_providers: DB-only earnings/recs views for the analysis path)
+    │                       #    revenue segments: SEC EDGAR + cache; db_only_context_providers: DB-only earnings/recs/rating-changes views for the analysis path)
     ├── analysis/           # ── AI-analysis result cache (read-through, shared by the stock + ETF analysis):
     │   ├── models.py            #    AnalysisCacheRecord (`investment_analysis_cache`, keyed (kind, symbol); standalone)
     │   └── db_repository.py     #    SqlInvestmentAnalysisCache (get latest / upsert; best-effort both ways)
@@ -677,7 +688,7 @@ app/
     │   ├── cron_annual_earnings_endpoints.py     #  POST /internal/earnings/annual/sync
     │   ├── annual_earnings_endpoints.py          #  GET /stocks/{symbol}/earnings/annual
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
-    │   ├── analyst_endpoints.py                  #  GET /stocks/ticker/{ticker}/analyst-info (trends + price targets + rating-change events, consolidated)
+    │   ├── analyst_endpoints.py                  #  GET /stocks/ticker/{ticker}/analyst-info (trends + price targets + rating-change events + top credible firms, consolidated); the AI review GET .../analyst-info/analysis is wired in router.py
     │   ├── cron_news_endpoints.py                #  POST /internal/news/sync
     │   ├── news_endpoints.py                     #  GET /stocks/{symbol}/news
     │   ├── cron_revenue_segments_endpoints.py    #  POST /internal/revenue-segments/sync

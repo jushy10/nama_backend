@@ -49,6 +49,7 @@ from app.stocks.recommendations.db_repository import (
 from app.stocks.recommendations.entities import (
     AnalystPriceTargets,
     AnalystRecommendations,
+    FirmRating,
     RatingChange,
     RecommendationTrend,
 )
@@ -62,6 +63,7 @@ from app.stocks.recommendations.schemas import (
     AnalystRecommendationsBlock,
     RatingChangeResponse,
     RecommendationTrendResponse,
+    TopFirmRatingResponse,
 )
 from app.stocks.recommendations.use_cases import AnalystInfo, GetStockAnalystInfo
 
@@ -146,6 +148,17 @@ def _present_change(change: RatingChange) -> RatingChangeResponse:
     )
 
 
+def _present_top_firm(firm: FirmRating) -> TopFirmRatingResponse:
+    return TopFirmRatingResponse(
+        firm=firm.firm,
+        rank=firm.rank,
+        rating=firm.rating,
+        action=firm.action,
+        target=firm.target,
+        published_at=firm.published_at,
+    )
+
+
 def _present_recommendations(
     recs: AnalystRecommendations,
 ) -> AnalystRecommendationsBlock:
@@ -167,6 +180,7 @@ def _present(info: AnalystInfo) -> AnalystInfoResponse:
         ticker=info.symbol,
         recommendations=_present_recommendations(info.recommendations),
         rating_changes=[_present_change(c) for c in info.rating_changes.changes],
+        top_firms=[_present_top_firm(f) for f in info.top_firms],
     )
 
 

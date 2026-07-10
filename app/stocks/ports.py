@@ -22,6 +22,7 @@ from app.stocks.entities import (
     MarketIndexPerformance,
     MarketSummary,
     Quote,
+    RatingsAnalysis,
     SectorAnalysis,
     SectorPerformance,
     Stock,
@@ -29,7 +30,7 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
-from app.stocks.recommendations.entities import AnalystRecommendations
+from app.stocks.recommendations.entities import AnalystRecommendations, FirmRating
 from app.stocks.universe.entities import IndustryValuation
 
 
@@ -433,6 +434,38 @@ class EarningsAnalysisProvider(ABC):
             quarterly: the recent quarterly earnings timeline, else ``None``.
             annual: the recent annual (fiscal-year) earnings timeline, else
                 ``None``.
+
+        Raises:
+            StockDataUnavailable: the model call failed or returned no usable
+                result.
+        """
+        raise NotImplementedError
+
+
+class RatingsAnalysisProvider(ABC):
+    """A gateway that turns a stock's analyst coverage into a short, AI-generated read.
+
+    The analyst-ratings sibling of ``EarningsAnalysisProvider``: the use case has already
+    gathered the recommendation consensus (trends + price targets) and the most credible covering
+    firms' stances, and the adapter reasons only over what it's handed — it fetches nothing
+    itself. This backs a dedicated endpoint (its own reason to exist, not best-effort
+    enrichment), so a failure surfaces as an error rather than being swallowed.
+    """
+
+    @abstractmethod
+    def analyze(
+        self,
+        symbol: str,
+        recommendations: AnalystRecommendations | None = None,
+        top_firms: tuple[FirmRating, ...] = (),
+    ) -> RatingsAnalysis:
+        """Return a ratings analysis built from the supplied coverage.
+
+        Args:
+            symbol: the ticker being analysed (for labelling and error context).
+            recommendations: the sell-side buy/hold/sell consensus + price targets, else
+                ``None``.
+            top_firms: the most credible covering firms' current stances (may be empty).
 
         Raises:
             StockDataUnavailable: the model call failed or returned no usable

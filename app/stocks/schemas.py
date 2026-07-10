@@ -254,3 +254,23 @@ class EarningsAnalysisResponse(BaseModel):
     disclaimer: str
     model: str  # the model that produced the analysis
     generated_at: datetime
+
+
+class RatingsAnalysisResponse(BaseModel):
+    """An AI-generated, plain-language read of a stock's analyst coverage.
+
+    ``verdict`` is the overall read ("bullish"/"mixed"/"cautious") and ``confidence`` how
+    firmly it's held ("low"/"medium"/"high"); ``summary`` is the plain-language headline and
+    ``findings`` a few short, concrete takeaways. ``disclaimer`` is a fixed reminder that this
+    is informational, not financial advice — authored by the service, not the model. ``model``
+    and ``generated_at`` record what produced the analysis and when. Reasoned only over the
+    analyst coverage the card exposes; descriptive, not advice."""
+
+    symbol: str
+    verdict: str  # "bullish" | "mixed" | "cautious"
+    confidence: str  # "low" | "medium" | "high"
+    summary: str
+    findings: list[str]
+    disclaimer: str
+    model: str  # the model that produced the analysis
+    generated_at: datetime
