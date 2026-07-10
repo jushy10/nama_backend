@@ -16,9 +16,9 @@ and knows nothing of Yahoo, HTTP, or SQLAlchemy:
   edge and hand the read repository a clean ``StockSearchCriteria``, returning the matched
   page. No live feed — the universe is already on the anchor.
 - ``AiScreenStocks`` — the AI-driven read side (``GET /stocks/ai-search``): a translator turns
-  a plain-English request into a ``ScreenIntent``, which is fed straight into ``SearchStocks``.
-  The AI only picks the filters; the ordinary search does the querying, so it can only ever
-  return real screened rows.
+  a plain-English request into a ``ScreenIntent`` and that's all it returns. The client applies
+  those filters to the ordinary ``GET /stocks/ticker`` search to fetch the rows, so the AI only
+  ever picks the filters — the querying stays the manual path's job.
 - ``ListClassifications`` — the filter-menu read (``GET /stocks/classifications``): the
   distinct sector/industry slugs the FE offers, straight from the repository.
 """
@@ -33,11 +33,11 @@ from app.stocks.earnings.quarterly.repository import QuarterlyEarningsRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.progress import iter_with_progress
 from app.stocks.universe.entities import (
-    AiScreenResult,
     Classifications,
     IndustryValuation,
     MarketCapTier,
     ScreenedStock,
+    ScreenIntent,
     SortDirection,
     StockSearchCriteria,
     StockSearchPage,
@@ -312,65 +312,44 @@ class SearchStocks:
 
 
 class AiScreenStocks:
-    """Screen the universe from a plain-English request (``GET /stocks/ai-search``).
+    """Translate a plain-English request into screen filters (``GET /stocks/ai-search``).
 
-    The AI-driven counterpart to ``SearchStocks``: instead of the client setting each filter,
-    a translator turns the request into a ``ScreenIntent`` and this hands that straight to the
-    ordinary search. Two ports, no new query path — the translator decides *which* filters,
-    ``SearchStocks`` does the querying, so an AI screen can only ever return real screened rows
-    (never a hallucinated ticker) and orders/paginates exactly like the manual list.
+    The AI-driven counterpart to ``SearchStocks`` — but it does **not** run the search. It
+    turns the request into a ``ScreenIntent`` (which filters to set) and returns just that; the
+    client applies those filters to the ordinary search (``GET /stocks/ticker``) to fetch the
+    rows. So the AI leg only ever *chooses filters* — it can't reach a stock outside the
+    screened universe or invent a ticker — and the querying/paging stays the manual path's job.
 
     The translator is fed the universe's current sector/industry slugs as its allowed
     vocabulary, so the model maps "semiconductor stocks" onto a slug the search can match
-    rather than an invented one. The intent is advisory: ``SearchStocks`` re-normalizes every
+    rather than an invented one. The intent is advisory anyway: the search re-normalizes every
     field (slug, clamp, dedupe), so an off-vocabulary value simply matches nothing.
     """
 
     def __init__(
         self,
         translator: ScreenerQueryTranslator,
-        search: SearchStocks,
         repository: StockSearchRepository,
     ) -> None:
         self._translator = translator
-        self._search = search
-        # Read only for the allowed-vocabulary the translator is constrained to; the actual
-        # querying goes through ``search`` (which fronts the same anchor).
+        # Read only for the allowed-vocabulary the translator is constrained to.
         self._repository = repository
 
-    def execute(
-        self, *, query: str, limit: int | None = None, offset: int = 0
-    ) -> AiScreenResult:
-        """Translate ``query`` into filters and run the search, returning both.
+    def execute(self, *, query: str) -> ScreenIntent:
+        """Translate ``query`` into a ``ScreenIntent`` of filters.
 
         ``query`` is required (a blank request is a ``ValueError`` → 400 at the edge — there is
-        nothing to translate). ``limit`` from the caller **overrides** the AI's chosen count
-        when given (an explicit page size wins); omit it to honour the model's own "top N".
-        ``offset`` is always the caller's (pagination is the client's, not the model's). A
-        translator failure (``StockDataUnavailable``) propagates — the request couldn't be
-        understood — distinct from an understood request that simply matched no stocks (an
-        empty page, not an error).
+        nothing to translate). A translator failure (``StockDataUnavailable``) propagates — the
+        request couldn't be understood — distinct from an understood request that simply maps to
+        filters matching no stocks (which the client discovers when it runs the search).
         """
         text = (query or "").strip()
         if not text:
             raise ValueError("A search request is required.")
         allowed = self._repository.classifications()
-        intent = self._translator.translate(
+        return self._translator.translate(
             text, sectors=allowed.sectors, industries=allowed.industries
         )
-        page = self._search.execute(
-            query=intent.query,
-            sectors=intent.sectors,
-            industries=intent.industries,
-            in_sp500=intent.in_sp500,
-            in_nasdaq100=intent.in_nasdaq100,
-            market_cap_tiers=intent.market_cap_tiers,
-            sort=intent.sort,
-            direction=intent.direction,
-            limit=limit if limit is not None else intent.limit,
-            offset=offset,
-        )
-        return AiScreenResult(intent=intent, page=page)
 
 
 class ListClassifications:

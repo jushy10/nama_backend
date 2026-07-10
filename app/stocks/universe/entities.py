@@ -246,21 +246,6 @@ class StockSearchPage:
 
 
 @dataclass(frozen=True)
-class AiScreenResult:
-    """The outcome of an AI-driven screen: the filters the model chose plus the page they
-    matched.
-
-    Carries the ``intent`` alongside the ``page`` on purpose — the FE renders the interpreted
-    filters back to the user (so an AI screen isn't a black box: they see it ran "mega-cap +
-    technology" and can tweak it in the manual controls), and the ``page`` is the same
-    ``StockSearchPage`` the manual search returns, so both paths present identically.
-    """
-
-    intent: ScreenIntent
-    page: StockSearchPage
-
-
-@dataclass(frozen=True)
 class Classifications:
     """The distinct sector and industry slugs present in the universe — the FE's filter menus.
 
