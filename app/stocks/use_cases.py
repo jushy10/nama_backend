@@ -570,23 +570,28 @@ class GetRatingsFindings:
     """
 
     # How many credible covering firms to surface for the model — matches the card's top-firms.
-    _TOP_FIRMS = 5
+    _TOP_FIRMS = 10
 
     def __init__(
         self,
         analyzer: RatingsAnalysisProvider,
         recommendations_provider: RecommendationProvider | None = None,
         rating_change_provider: RatingChangeProvider | None = None,
+        *,
+        now: datetime | None = None,
     ) -> None:
         self._analyzer = analyzer
         self._recommendations_provider = recommendations_provider
         self._rating_change_provider = rating_change_provider
+        self._now = now  # injectable clock for tests; None → real now per call
 
     def execute(self, symbol: str) -> RatingsAnalysis:
         normalized = _normalize_symbol(symbol)
         recommendations = self._recommendations(normalized)
         rating_changes = self._rating_changes(normalized)
-        top_firms = rating_changes.top_credible_firms(self._TOP_FIRMS)
+        # Only surface firms whose latest target is within the last year, matching the card.
+        today = (self._now or datetime.now(timezone.utc)).date()
+        top_firms = rating_changes.top_credible_firms(self._TOP_FIRMS, as_of=today)
         # Nothing the prompt can render — no consensus trends and no credible covering firm.
         # Fail rather than ask the model to analyse an empty slate. (Top firms derive from the
         # events, so this also covers a symbol with only uncredited firms' actions.)

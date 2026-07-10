@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.progress import iter_with_progress
@@ -90,22 +91,27 @@ class GetStockAnalystInfo:
         self,
         recommendations: RecommendationProvider,
         rating_changes: RatingChangeProvider,
+        *,
+        now: datetime | None = None,
     ) -> None:
         self._recommendations = recommendations
         self._rating_changes = rating_changes
+        self._now = now  # injectable clock for tests; None → real now per call
 
     def execute(self, symbol: str) -> AnalystInfo:
         symbol = _normalize_symbol(symbol)
         # Trends are primary: their exceptions propagate to the endpoint's error mapping.
         recommendations = self._recommendations.get_recommendations(symbol)
         rating_changes = self._read_rating_changes(symbol)
+        today = (self._now or datetime.now(timezone.utc)).date()
         return AnalystInfo(
             symbol=symbol,
             recommendations=recommendations,
             rating_changes=rating_changes,
             # The most credible covering firms, derived from the (best-effort) events — an
-            # empty tuple when none is ranked, so it never adds a failure mode of its own.
-            top_firms=rating_changes.top_credible_firms(),
+            # empty tuple when none is ranked. Only firms whose latest target is within the
+            # last year count, so stale coverage doesn't linger on the card.
+            top_firms=rating_changes.top_credible_firms(as_of=today),
         )
 
     def _read_rating_changes(self, symbol: str) -> AnalystRatingChanges:

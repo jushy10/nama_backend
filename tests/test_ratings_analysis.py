@@ -116,9 +116,12 @@ def _changes(symbol="NVDA") -> AnalystRatingChanges:
 
 def test_gathers_coverage_and_derives_top_firms():
     analyzer = _FakeAnalyzer()
-    result = GetRatingsFindings(analyzer, _FakeRecs(_recs()), _FakeChanges(_changes())).execute(
-        "  nvda "
-    )
+    result = GetRatingsFindings(
+        analyzer,
+        _FakeRecs(_recs()),
+        _FakeChanges(_changes()),
+        now=datetime(2026, 6, 1, tzinfo=timezone.utc),  # pin the recency window
+    ).execute("  nvda ")
     assert result.symbol == "NVDA"
     symbol, recs, top_firms = analyzer.received[0]
     assert symbol == "NVDA"  # normalized once, at the edge
@@ -182,6 +185,7 @@ def test_context_read_failure_degrades_to_empty():
         analyzer,
         _FakeRecs(None, error=StockDataUnavailable("NVDA", "db read failed")),
         _FakeChanges(_changes()),
+        now=datetime(2026, 6, 1, tzinfo=timezone.utc),  # pin the recency window
     ).execute("NVDA")
     _, recs, top_firms = analyzer.received[0]
     assert recs is None  # the failed read degraded to None
