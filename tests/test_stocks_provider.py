@@ -465,7 +465,7 @@ def test_get_candles_daily_reads_consolidated_feed_with_delayed_end():
 
 
 def test_get_candles_intraday_reads_realtime_feed_without_delay():
-    # Intraday charts (1D/5D/1M) need real-time IEX prints, and the window is
+    # Intraday charts (1D/7D/1M) need real-time IEX prints, and the window is
     # recent enough that IEX carries it — so the feed stays IEX and `end` passes
     # through untouched (no SIP-history hold-back).
     client = FakeBarsClient(

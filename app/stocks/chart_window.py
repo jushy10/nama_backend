@@ -15,7 +15,7 @@ class ChartRange(str, Enum):
     accepted ``range`` query values."""
 
     DAY_1 = "1D"
-    DAY_5 = "5D"
+    DAY_7 = "7D"
     MONTH_1 = "1M"
     MONTH_3 = "3M"
     MONTH_6 = "6M"
@@ -30,7 +30,7 @@ class ChartRange(str, Enum):
 # range never clips the far edge of the data it names.
 _LOOKBACKS: dict[ChartRange, timedelta] = {
     ChartRange.DAY_1: timedelta(days=1),
-    ChartRange.DAY_5: timedelta(days=5),
+    ChartRange.DAY_7: timedelta(days=7),
     ChartRange.MONTH_1: timedelta(days=31),
     ChartRange.MONTH_3: timedelta(days=92),
     ChartRange.MONTH_6: timedelta(days=183),
