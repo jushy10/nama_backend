@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.stocks.adapters.bedrock_etf_analysis_adapter import BedrockEtfAnalysisProvider
+from app.stocks.adapters.bedrock.etf_analysis_adapter import BedrockEtfAnalysisProvider
 from app.stocks.entities import Confidence, Quote, Recommendation, StockPerformance
 from app.stocks.etfs.entities import (
     EtfDetail,
@@ -61,6 +61,25 @@ class _BoomMessages:
 
 class _BoomClient:
     messages = _BoomMessages()
+
+
+class _SeqStubMessages:
+    """Returns a queued message per ``create`` call, repeating the last once the
+    queue is exhausted — lets a test drive the adapter's retry-on-empty path."""
+
+    def __init__(self, messages, recorder):
+        self._messages = list(messages)
+        self._recorder = recorder
+
+    def create(self, **kwargs):
+        self._recorder.append(kwargs)
+        return self._messages[min(len(self._recorder) - 1, len(self._messages) - 1)]
+
+
+class _SeqStubClient:
+    def __init__(self, messages):
+        self.calls: list[dict] = []
+        self.messages = _SeqStubMessages(messages, self.calls)
 
 
 def _tool_message(**input_overrides) -> _StubMessage:
@@ -219,3 +238,18 @@ def test_rejects_an_offschema_enum_value():
     client = _StubClient(_tool_message(recommendation="strong_buy"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
         BedrockEtfAnalysisProvider(client=client).analyze(_detail())
+
+
+def test_retries_once_when_bullets_come_back_empty():
+    # The fast Haiku tier sometimes packs everything into the thesis and returns
+    # empty strengths/risks; the adapter retries the forced call once and takes the
+    # recovered, non-empty read (before the result-cache could freeze the empty one).
+    empty = _tool_message(strengths=[], risks=[])
+    full = _tool_message()  # the default, non-empty bullets
+    client = _SeqStubClient([empty, full])
+
+    analysis = BedrockEtfAnalysisProvider(client=client).analyze(_detail())
+
+    assert len(client.calls) == 2  # retried exactly once
+    assert analysis.strengths == ("Very low yearly cost",)
+    assert analysis.risks == ("Heavy in a handful of tech names",)

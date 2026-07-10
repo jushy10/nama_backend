@@ -1,7 +1,7 @@
 """Interface Adapter: AI earnings summary via Claude on Amazon Bedrock.
 
-The earnings-focused sibling of ``bedrock_analysis_provider.py`` (the full
-buy/hold/sell read) and ``bedrock_market_summary_provider.py`` (the whole-market
+The earnings-focused sibling of ``analysis_adapter.py`` (the full
+buy/hold/sell read) and ``market_summary_adapter.py`` (the whole-market
 read). The only module — alongside its stock/ETF/sector/market cousins — that
 knows Bedrock (and the Anthropic SDK) exists. It takes the quarterly and annual
 earnings timelines the use case gathered, renders them into a compact prompt,
@@ -79,10 +79,13 @@ _ANALYSIS_TOOL = {
             "highlights": {
                 "type": "array",
                 "items": {"type": "string"},
+                "minItems": 2,
+                "maxItems": 4,
                 "description": (
-                    "2-4 short, plain-language takeaways a reader should remember "
-                    "— one clear point each (e.g. a beat streak, a growth rate, a "
-                    "forward expectation). No jargon, no invented numbers."
+                    "2 to 4 short, plain-language takeaways a reader should "
+                    "remember — one clear point each (e.g. a beat streak, a growth "
+                    "rate, a forward expectation). No jargon, no invented numbers. "
+                    "Always give at least two; never return an empty list."
                 ),
             },
         },
@@ -108,8 +111,9 @@ _SYSTEM_PROMPT = (
     "surprise' or 'guidance'). Ground every statement ONLY in the figures provided "
     "— do not use outside knowledge, recent news, or numbers you may recall, and "
     "never invent figures. Be honest that estimates can be wrong and past results "
-    "don't guarantee future ones. This is general information, not personal "
-    "financial advice. Respond by calling the submit_earnings_analysis tool."
+    "don't guarantee future ones. Always give at least two highlights — never "
+    "leave that list empty. This is general information, not personal financial "
+    "advice. Respond by calling the submit_earnings_analysis tool."
 )
 
 # The key the adapter reports failures under.
@@ -161,6 +165,24 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
         annual: AnnualEarningsTimeline | None = None,
     ) -> EarningsAnalysis:
         prompt = _render_prompt(symbol, quarterly, annual)
+        payload = self._invoke(prompt, symbol)
+        # The forced tool asks for a few highlights, but Bedrock does not enforce
+        # array length, and the fast Haiku tier sometimes packs everything into the
+        # summary and hands back an empty highlights list. Retry once to recover
+        # them before the result-cache freezes it for the TTL (the same retry-once
+        # stance the shared yfinance session takes on a transient miss).
+        if _missing_highlights(payload):
+            payload = self._invoke(prompt, symbol) or payload
+        if payload is None:
+            raise StockDataUnavailable(
+                symbol, "earnings analysis model returned no structured result"
+            )
+        return _to_entity(symbol, payload, self._model_id)
+
+    def _invoke(self, prompt: str, key: str) -> dict | None:
+        """One forced-tool call, returning the ``submit_earnings_analysis``
+        arguments (or ``None`` if the model somehow didn't call the tool). Any
+        SDK/botocore failure is mapped to this port's ``StockDataUnavailable``."""
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -172,14 +194,9 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
             )
         except Exception as exc:  # SDK/botocore raise a family of errors; map all
             raise StockDataUnavailable(
-                symbol, f"earnings analysis model call failed: {exc}"
+                key, f"earnings analysis model call failed: {exc}"
             ) from exc
-        payload = _tool_payload(message)
-        if payload is None:
-            raise StockDataUnavailable(
-                symbol, "earnings analysis model returned no structured result"
-            )
-        return _to_entity(symbol, payload, self._model_id)
+        return _tool_payload(message)
 
 
 def _tool_payload(message) -> dict | None:
@@ -228,11 +245,21 @@ def _string_tuple(value) -> tuple[str, ...]:
     a single string (e.g. a leaked ``<parameter name="highlights">[...]`` value).
     Iterating a ``str`` would split it into characters — a wall of one-character
     "notes" — so anything that isn't a list yields no highlights instead. Mirrors
-    ``bedrock_analysis_provider._string_tuple``.
+    ``analysis_adapter._string_tuple``.
     """
     if not isinstance(value, list):
         return ()
     return tuple(text for item in value if (text := str(item).strip()))
+
+
+def _missing_highlights(payload: dict | None) -> bool:
+    """True when a returned tool result is present but carries no usable highlights
+    — the signal to retry. A ``None`` payload (the model didn't call the tool at
+    all) is left for the caller to surface as ``StockDataUnavailable``, not
+    retried, so the existing no-structured-result path is unchanged."""
+    if payload is None:
+        return False
+    return not _string_tuple(payload.get("highlights"))
 
 
 def _fmt_eps(value: float | None) -> str:

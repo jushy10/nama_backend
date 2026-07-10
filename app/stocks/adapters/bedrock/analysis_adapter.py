@@ -82,17 +82,25 @@ _ANALYSIS_TOOL = {
             "strengths": {
                 "type": "array",
                 "items": {"type": "string"},
+                "minItems": 2,
+                "maxItems": 3,
                 "description": (
-                    "Up to 3 short, plain-language reasons the stock looks good — "
-                    "each clear on its own to someone with no finance background."
+                    "2 to 3 short, plain-language reasons the stock looks good — "
+                    "each clear on its own to someone with no finance background. "
+                    "Always give at least two; never return an empty list (put "
+                    "them here, not only in the thesis)."
                 ),
             },
             "risks": {
                 "type": "array",
                 "items": {"type": "string"},
+                "minItems": 2,
+                "maxItems": 3,
                 "description": (
-                    "Up to 3 short, plain-language reasons to be cautious — each "
-                    "clear on its own to someone with no finance background."
+                    "2 to 3 short, plain-language reasons to be cautious — each "
+                    "clear on its own to someone with no finance background. "
+                    "Always give at least two; never return an empty list (put "
+                    "them here, not only in the thesis)."
                 ),
             },
         },
@@ -118,9 +126,10 @@ _SYSTEM_PROMPT = (
     "the reader knows finance terms. Ground every statement ONLY in the figures "
     "provided — do not use outside knowledge, recent news, or prices you may "
     "recall, and never invent numbers. If the data is thin, say so plainly and "
-    "lower your confidence. Be honest about both the good and the bad. This is "
-    "general information, not personal financial advice. Respond by calling the "
-    "submit_analysis tool."
+    "lower your confidence. Be honest about both the good and the bad — always "
+    "name at least two strengths and at least two risks, and never leave either "
+    "list empty. This is general information, not personal financial advice. "
+    "Respond by calling the submit_analysis tool."
 )
 
 
@@ -182,6 +191,24 @@ class BedrockAnalysisProvider(InvestmentAnalysisProvider):
         prompt = _render_prompt(
             stock, quarterly, annual, recommendations, industry_valuation
         )
+        payload = self._invoke(prompt, stock.symbol)
+        # The forced tool asks for both bullet lists, but Bedrock does not enforce
+        # array length, and the fast Haiku tier sometimes packs everything into the
+        # thesis and hands back empty strengths/risks. Retry once to recover the
+        # balanced read before the result-cache freezes it for the TTL (the same
+        # retry-once stance the shared yfinance session takes on a transient miss).
+        if _missing_bullets(payload):
+            payload = self._invoke(prompt, stock.symbol) or payload
+        if payload is None:
+            raise StockDataUnavailable(
+                stock.symbol, "analysis model returned no structured result"
+            )
+        return _to_entity(stock.symbol, payload, self._model_id)
+
+    def _invoke(self, prompt: str, key: str) -> dict | None:
+        """One forced-tool call, returning the ``submit_analysis`` arguments (or
+        ``None`` if the model somehow didn't call the tool). Any SDK/botocore
+        failure is mapped to this port's documented ``StockDataUnavailable``."""
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -193,14 +220,9 @@ class BedrockAnalysisProvider(InvestmentAnalysisProvider):
             )
         except Exception as exc:  # SDK/botocore raise a family of errors; map them all
             raise StockDataUnavailable(
-                stock.symbol, f"analysis model call failed: {exc}"
+                key, f"analysis model call failed: {exc}"
             ) from exc
-        payload = _tool_payload(message)
-        if payload is None:
-            raise StockDataUnavailable(
-                stock.symbol, "analysis model returned no structured result"
-            )
-        return _to_entity(stock.symbol, payload, self._model_id)
+        return _tool_payload(message)
 
 
 def _tool_payload(message) -> dict | None:
@@ -248,6 +270,18 @@ def _string_tuple(value) -> tuple[str, ...]:
     if not isinstance(value, list):
         return ()
     return tuple(text for item in value if (text := str(item).strip()))
+
+
+def _missing_bullets(payload: dict | None) -> bool:
+    """True when a returned tool result is present but missing either bullet list —
+    the signal to retry. A ``None`` payload (the model didn't call the tool at all)
+    is left for the caller to surface as ``StockDataUnavailable``, not retried, so
+    the existing no-structured-result path is unchanged."""
+    if payload is None:
+        return False
+    return not _string_tuple(payload.get("strengths")) or not _string_tuple(
+        payload.get("risks")
+    )
 
 
 def _render_prompt(

@@ -1,6 +1,6 @@
 """Interface Adapter: AI market-sector analysis via Claude on Amazon Bedrock.
 
-The market-wide sibling of ``bedrock_analysis_provider.py`` (which reads one
+The market-wide sibling of ``analysis_adapter.py`` (which reads one
 stock). The only module — alongside its stock/ETF cousins — that knows Bedrock
 (and the Anthropic SDK) exists. It takes the day's ranked sector board the use
 case already gathered (each sector's move on the day + its trailing-window
@@ -105,15 +105,21 @@ _ANALYSIS_TOOL = {
             "leaders": {
                 "type": "array",
                 "items": _HIGHLIGHT_SCHEMA,
+                "minItems": 2,
+                "maxItems": 3,
                 "description": (
-                    "Up to 3 standout sectors doing well today, strongest first."
+                    "2 to 3 standout sectors doing well today, strongest first. "
+                    "Always name at least two; never return an empty list."
                 ),
             },
             "laggards": {
                 "type": "array",
                 "items": _HIGHLIGHT_SCHEMA,
+                "minItems": 2,
+                "maxItems": 3,
                 "description": (
-                    "Up to 3 standout sectors doing poorly today, weakest first."
+                    "2 to 3 standout sectors doing poorly today, weakest first. "
+                    "Always name at least two; never return an empty list."
                 ),
             },
         },
@@ -138,10 +144,11 @@ _SYSTEM_PROMPT = (
     "to sectors by name, never by their ETF ticker. When you name a leading or "
     "lagging sector, copy its name EXACTLY as written in the data. Ground every "
     "statement ONLY in the figures provided — do not use outside knowledge, recent "
-    "news, or prices you may recall, and never invent numbers. Be honest that a "
-    "single day's move is a snapshot, not a trend. This is general information, "
-    "not personal financial advice. Respond by calling the submit_sector_analysis "
-    "tool."
+    "news, or prices you may recall, and never invent numbers. Always name at "
+    "least two leading and two lagging sectors — never leave either list empty. "
+    "Be honest that a single day's move is a snapshot, not a trend. This is "
+    "general information, not personal financial advice. Respond by calling the "
+    "submit_sector_analysis tool."
 )
 
 
@@ -187,6 +194,24 @@ class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
 
     def analyze(self, sectors: list[SectorPerformance]) -> SectorAnalysis:
         prompt = _render_prompt(sectors)
+        payload = self._invoke(prompt)
+        # The forced tool asks for both a leaders and a laggards list, but Bedrock
+        # does not enforce array length, and the fast Haiku tier sometimes fills
+        # only the summary and hands back empty lists. Retry once to recover them
+        # before the result-cache freezes it for the TTL (the same retry-once stance
+        # the shared yfinance session takes on a transient miss).
+        if _missing_highlights(payload):
+            payload = self._invoke(prompt) or payload
+        if payload is None:
+            raise StockDataUnavailable(
+                _SECTORS_KEY, "analysis model returned no structured result"
+            )
+        return _to_entity(sectors, payload, self._model_id)
+
+    def _invoke(self, prompt: str) -> dict | None:
+        """One forced-tool call, returning the ``submit_sector_analysis`` arguments
+        (or ``None`` if the model somehow didn't call the tool). Any SDK/botocore
+        failure is mapped to this port's documented ``StockDataUnavailable``."""
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -200,12 +225,7 @@ class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
             raise StockDataUnavailable(
                 _SECTORS_KEY, f"analysis model call failed: {exc}"
             ) from exc
-        payload = _tool_payload(message)
-        if payload is None:
-            raise StockDataUnavailable(
-                _SECTORS_KEY, "analysis model returned no structured result"
-            )
-        return _to_entity(sectors, payload, self._model_id)
+        return _tool_payload(message)
 
 
 def _tool_payload(message) -> dict | None:
@@ -219,6 +239,16 @@ def _tool_payload(message) -> dict | None:
             if isinstance(inputs, dict):
                 return inputs
     return None
+
+
+def _missing_highlights(payload: dict | None) -> bool:
+    """True when a returned tool result is present but carries no leaders or no
+    laggards — the signal to retry. A ``None`` payload (the model didn't call the
+    tool at all) is left for the caller to surface as ``StockDataUnavailable``,
+    not retried, so the existing no-structured-result path is unchanged."""
+    if payload is None:
+        return False
+    return not payload.get("leaders") or not payload.get("laggards")
 
 
 def _to_entity(
