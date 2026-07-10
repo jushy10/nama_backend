@@ -270,6 +270,42 @@ def test_set_pe_ratios_writes_overwrites_and_returns_the_non_null_count(session)
     assert _row(session, "MSFT").pe_ratio is None  # cleared
 
 
+def test_fcf_per_share_by_ticker_returns_only_non_null_rows(session):
+    r = repo(session)
+    r.upsert_screen((_stock("AAPL", market_cap=3e12), _stock("MSFT", market_cap=2e12)))
+    # The annual slice writes fcf_per_share onto the anchor; here we set it directly.
+    _row(session, "AAPL").fcf_per_share = 4.0
+    session.commit()
+
+    by_ticker = r.fcf_per_share_by_ticker()
+
+    assert by_ticker == {"AAPL": 4.0}  # MSFT has none -> absent, not a null entry
+
+
+def test_set_fcf_yields_writes_overwrites_keeps_sign_and_counts(session):
+    r = repo(session)
+    r.upsert_screen(
+        (
+            _stock("AAPL", market_cap=3e12),
+            _stock("BURN", market_cap=1e10),
+            _stock("MSFT", market_cap=2e12),
+        )
+    )
+
+    written = r.set_fcf_yields({"AAPL": 4.0, "BURN": -20.0, "MSFT": None})
+
+    assert written == 2  # AAPL + BURN; the None isn't counted
+    assert _row(session, "AAPL").fcf_yield == 4.0
+    assert _row(session, "BURN").fcf_yield == -20.0  # sign kept (a cash-burner)
+    assert _row(session, "MSFT").fcf_yield is None
+
+    # Overwrite in place, and a None clears a prior figure.
+    written = r.set_fcf_yields({"AAPL": 3.5, "BURN": None})
+    assert written == 1
+    assert _row(session, "AAPL").fcf_yield == 3.5
+    assert _row(session, "BURN").fcf_yield is None  # cleared
+
+
 def test_set_pe_ratios_skips_an_unknown_ticker(session):
     r = repo(session)
     r.upsert_screen((_stock("AAPL", market_cap=3e12),))
@@ -299,8 +335,10 @@ def _seed(
     industry=None,
     market_cap=1e10,
     pe_ratio=None,
+    fcf_yield=None,
     revenue_growth_yoy=None,
     eps_growth_yoy=None,
+    fcf_growth_yoy=None,
     forward_revenue_growth_yoy=None,
     forward_eps_growth_yoy=None,
     in_sp500=False,
@@ -317,8 +355,10 @@ def _seed(
             industry=industry,
             market_cap=market_cap,
             pe_ratio=pe_ratio,
+            fcf_yield=fcf_yield,
             revenue_growth_yoy=revenue_growth_yoy,
             eps_growth_yoy=eps_growth_yoy,
+            fcf_growth_yoy=fcf_growth_yoy,
             forward_revenue_growth_yoy=forward_revenue_growth_yoy,
             forward_eps_growth_yoy=forward_eps_growth_yoy,
             in_sp500=in_sp500,
@@ -590,6 +630,26 @@ def test_search_sorts_by_pe_with_nulls_last_either_direction(session):
         "CHEAP",
         "NONE",
     ]
+
+
+def test_search_sorts_by_fcf_yield_with_nulls_last_either_direction(session):
+    _seed(session, "RICHCASH", fcf_yield=8.0)  # cheapest on cash (highest yield)
+    _seed(session, "MIDCASH", fcf_yield=3.0)
+    _seed(session, "BURN", fcf_yield=-5.0)  # negative yield kept — a cash-burner
+    _seed(session, "NONE", fcf_yield=None)  # unvalued sinks to the bottom
+    r = SqlStockSearchRepository(session)
+
+    # Descending surfaces the cheapest on cash (highest yield) first; the null is last.
+    assert _tickers(r.search(_criteria(sort=StockSort.FCF_YIELD))) == [
+        "RICHCASH",
+        "MIDCASH",
+        "BURN",
+        "NONE",
+    ]
+    # Ascending: the cash-burner (negative) first, and the null is STILL last (nulls_last).
+    assert _tickers(
+        r.search(_criteria(sort=StockSort.FCF_YIELD, direction=SortDirection.ASC))
+    ) == ["BURN", "MIDCASH", "RICHCASH", "NONE"]
 
 
 def test_search_with_no_sort_orders_by_ticker_ignoring_direction(session):

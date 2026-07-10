@@ -135,14 +135,20 @@ class _FakeClassifier(CompanyClassificationProvider):
 class _FakeRepo(UniverseRepository):
     """Records the upsert input and the classifications written; serves a canned work-list."""
 
-    def __init__(self, *, counts=UniverseSyncCounts(0, 0), missing=()) -> None:
+    def __init__(
+        self, *, counts=UniverseSyncCounts(0, 0), missing=(), fcf_per_share=None
+    ) -> None:
         self._counts = counts
         self._missing = tuple(missing)
+        # The stored {ticker: fcf_per_share} the valuation pass reads (annual slice's write).
+        self._fcf_per_share = dict(fcf_per_share or {})
         self.upserted: tuple[ScreenedStock, ...] | None = None
         self.classified: list[tuple[str, CompanyClassification]] = []
         self.missing_limit: int | None = None
-        # The {ticker: pe} map handed to set_pe_ratios — None until the valuation pass runs.
+        # The {ticker: pe} / {ticker: fcf_yield} maps handed to the setters — None until the
+        # valuation pass runs.
         self.pe_written: dict[str, float | None] | None = None
+        self.fcf_yield_written: dict[str, float | None] | None = None
 
     def upsert_screen(self, stocks):
         self.upserted = tuple(stocks)
@@ -158,6 +164,13 @@ class _FakeRepo(UniverseRepository):
     def set_pe_ratios(self, pe_by_ticker):
         self.pe_written = dict(pe_by_ticker)
         return sum(1 for pe in self.pe_written.values() if pe is not None)
+
+    def fcf_per_share_by_ticker(self):
+        return dict(self._fcf_per_share)
+
+    def set_fcf_yields(self, fcf_yield_by_ticker):
+        self.fcf_yield_written = dict(fcf_yield_by_ticker)
+        return sum(1 for y in self.fcf_yield_written.values() if y is not None)
 
 
 def test_sync_upserts_a_healthy_screen_and_reports_counts():
@@ -330,6 +343,52 @@ def test_sync_writes_no_pe_when_no_quarterly_cache_is_wired():
     assert report.skipped is False  # the screen itself still succeeded
 
 
+def test_sync_materializes_the_fcf_yield_from_stored_fcf_per_share():
+    # Two priced names on a plausible screen; the anchor already carries an fcf_per_share for
+    # AAPL (the annual slice's write) but not MSFT. fcf_yield = fcf/share / price * 100.
+    priced = (
+        _stock("AAPL", market_cap=3e12, price=100.0),
+        _stock("MSFT", market_cap=2e12, price=50.0),
+    )
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN) + priced
+    repo = _FakeRepo(fcf_per_share={"AAPL": 4.0})  # MSFT has no stored fcf/share
+    quarterly = _FakeQuarterlyRepo()
+
+    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), quarterly).execute()
+
+    # Only the priced names are valued; the price-less baseline is skipped.
+    assert set(repo.fcf_yield_written) == {"AAPL", "MSFT"}
+    assert repo.fcf_yield_written["AAPL"] == 4.0  # 4 / 100 * 100 — the card's fcf_yield rule
+    assert repo.fcf_yield_written["MSFT"] is None  # no stored fcf/share -> null yield
+
+
+def test_sync_materializes_a_negative_fcf_yield_for_a_cash_burner():
+    # Unlike the P/E, the materialized FCF yield keeps its sign: a negative FCF/share is a
+    # real "burning cash" reading, so the stock ranks below zero rather than dropping out.
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN) + (
+        _stock("BURN", market_cap=1e10, price=25.0),
+    )
+    repo = _FakeRepo(fcf_per_share={"BURN": -5.0})
+
+    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier()).execute()
+
+    assert repo.fcf_yield_written["BURN"] == -20.0  # -5 / 25 * 100, sign kept
+
+
+def test_sync_materializes_fcf_yield_even_without_a_quarterly_cache():
+    # The FCF yield needs only the anchor read (fcf_per_share), not the quarterly TTM, so it
+    # materializes even when no quarterly cache is wired (which zeroes the P/E pass).
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN) + (
+        _stock("AAPL", market_cap=3e12, price=100.0),
+    )
+    repo = _FakeRepo(fcf_per_share={"AAPL": 4.0})
+
+    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier()).execute()  # no quarterly
+
+    assert repo.pe_written is None  # P/E pass is a no-op without the quarterly cache
+    assert repo.fcf_yield_written["AAPL"] == 4.0  # but the FCF yield still materialized
+
+
 # --- SearchStocks / ListClassifications (the read side) ------------------------------------
 
 _RESULT = StockSearchResult(
@@ -339,8 +398,10 @@ _RESULT = StockSearchResult(
     industry="semiconductors",
     market_cap=3e12,
     pe_ratio=48.2,
+    fcf_yield=1.9,
     revenue_growth_yoy=61.6,
     eps_growth_yoy=587.4,
+    fcf_growth_yoy=60.8,
     forward_revenue_growth_yoy=52.1,
     forward_eps_growth_yoy=48.3,
     in_sp500=True,

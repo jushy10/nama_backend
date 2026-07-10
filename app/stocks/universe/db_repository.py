@@ -141,6 +141,34 @@ class SqlUniverseRepository(UniverseRepository):
         self._session.commit()
         return written
 
+    def fcf_per_share_by_ticker(self) -> Mapping[str, float]:
+        # Every anchor row the annual slice has given an fcf_per_share (its newest reported
+        # year's figure). `is_not(None)` keeps the divisor clean; the valuation pass looks up
+        # by ticker and ignores any extra rows, so no screened gate is needed here.
+        rows = self._session.execute(
+            select(StockRecord.ticker, StockRecord.fcf_per_share).where(
+                StockRecord.fcf_per_share.is_not(None)
+            )
+        ).all()
+        return {ticker: fcf_ps for ticker, fcf_ps in rows}
+
+    def set_fcf_yields(self, fcf_yield_by_ticker: Mapping[str, float | None]) -> int:
+        # Overwrite, mirroring set_pe_ratios: the yield is recomputed from a fresh price each
+        # sweep, so a None legitimately clears a stale figure (no fcf_per_share, or no price
+        # this run). One commit for the whole batch.
+        written = 0
+        for ticker, fcf_yield in fcf_yield_by_ticker.items():
+            stock = self._session.execute(
+                select(StockRecord).where(StockRecord.ticker == ticker)
+            ).scalar_one_or_none()
+            if stock is None:
+                continue
+            stock.fcf_yield = fcf_yield
+            if fcf_yield is not None:
+                written += 1
+        self._session.commit()
+        return written
+
 
 # Each domain sort field → the anchor column (or expression) it orders by. The growth figures
 # are nullable (the annual slice may not have filled them yet), so whichever is chosen gets
@@ -164,6 +192,8 @@ _SORT_EXPRESSIONS = {
     )
     / 2.0,
     StockSort.PE: StockRecord.pe_ratio,
+    StockSort.FCF_GROWTH: StockRecord.fcf_growth_yoy,
+    StockSort.FCF_YIELD: StockRecord.fcf_yield,
 }
 
 # Each market-cap tier → its (min_inclusive, max_exclusive) dollar bounds; ``None`` = unbounded
@@ -218,8 +248,10 @@ def _to_result(row: StockRecord) -> StockSearchResult:
         industry=row.industry,
         market_cap=row.market_cap,
         pe_ratio=row.pe_ratio,
+        fcf_yield=row.fcf_yield,
         revenue_growth_yoy=row.revenue_growth_yoy,
         eps_growth_yoy=row.eps_growth_yoy,
+        fcf_growth_yoy=row.fcf_growth_yoy,
         forward_revenue_growth_yoy=row.forward_revenue_growth_yoy,
         forward_eps_growth_yoy=row.forward_eps_growth_yoy,
         in_sp500=row.in_sp500,

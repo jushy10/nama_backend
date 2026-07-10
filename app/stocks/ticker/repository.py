@@ -29,8 +29,11 @@ class StoredTickerFacts(NamedTuple):
     ``name`` / ``exchange`` are the fill-once identity facts the card lazily learns;
     the rest are read-only reflections of other slices' writes onto the anchor —
     ``market_cap`` / ``sector`` / ``industry`` from the universe screen, and
-    ``revenue_growth_yoy`` / ``eps_growth_yoy`` (percent, consensus-basis EPS) the
-    annual slice's latest trailing year-over-year snapshot."""
+    ``revenue_growth_yoy`` / ``eps_growth_yoy`` (percent, consensus-basis EPS) plus
+    ``fcf_per_share`` / ``ocf_per_share`` (newest reported year, trading currency) and
+    ``fcf_growth_yoy`` (percent) the annual slice's latest snapshots. The card prices
+    the two per-share cash figures against its live quote (into P/FCF, FCF yield, OCF
+    yield); ``fcf_growth_yoy`` it serves directly."""
 
     name: str | None = None
     exchange: str | None = None
@@ -39,6 +42,9 @@ class StoredTickerFacts(NamedTuple):
     industry: str | None = None
     revenue_growth_yoy: float | None = None
     eps_growth_yoy: float | None = None
+    fcf_per_share: float | None = None
+    ocf_per_share: float | None = None
+    fcf_growth_yoy: float | None = None
 
 
 class TickerRepository(ABC):

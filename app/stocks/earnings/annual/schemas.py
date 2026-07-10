@@ -26,6 +26,11 @@ class AnnualEarningsYearResponse(BaseModel):
     # The reported year's actual EPS on the analyst-consensus (adjusted) basis — comparable
     # with eps_estimate, unlike the GAAP-diluted eps_actual. Best-effort; reported years only.
     eps_actual_consensus: float | None
+    # The reported year's free- and operating-cash-flow per share (trading currency), from the
+    # cash-flow statement over the year's diluted average shares. Best-effort; reported years
+    # only (an upcoming year carries neither) — so a client can chart an FCF/share trend.
+    fcf_per_share: float | None
+    ocf_per_share: float | None
     is_reported: bool
 
 
@@ -33,10 +38,11 @@ class AnnualEarningsResponse(BaseModel):
     """A stock's per-year earnings timeline: recent reported years then upcoming ones, in
     chronological order, with counts so a client can split the two without re-deriving them.
 
-    ``revenue_growth_yoy`` / ``eps_growth_yoy`` are the latest *trailing* year-over-year
-    growth (percent) — the newest reported year over the one before it. Trailing (reported
-    actuals, not estimates); the EPS figure is on the analyst-consensus (adjusted) basis.
-    ``None`` until two reported years are present (and EPS is best-effort beyond that)."""
+    ``revenue_growth_yoy`` / ``eps_growth_yoy`` / ``fcf_growth_yoy`` are the latest *trailing*
+    year-over-year growth (percent) — the newest reported year over the one before it. Trailing
+    (reported actuals, not estimates); the EPS figure is on the analyst-consensus (adjusted)
+    basis, and FCF is on a per-share basis. ``None`` until two reported years are present (and
+    each is best-effort beyond that — FCF growth needs the cash-flow figures on both years)."""
 
     symbol: str
     count: int
@@ -44,4 +50,5 @@ class AnnualEarningsResponse(BaseModel):
     upcoming_count: int
     revenue_growth_yoy: float | None
     eps_growth_yoy: float | None
+    fcf_growth_yoy: float | None
     years: list[AnnualEarningsYearResponse]

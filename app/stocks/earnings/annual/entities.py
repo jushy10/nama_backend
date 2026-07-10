@@ -54,6 +54,14 @@ class AnnualEarnings:
     # year's four quarterly "Reported EPS" figures, comparable with eps_estimate (which is
     # quoted on that basis, unlike the GAAP-diluted eps_actual). Reported years only.
     eps_actual_consensus: float | None = None
+    # The reported year's free-cash-flow and operating-cash-flow *per share* (the year's
+    # total from the cash-flow statement over that year's diluted average shares, on the
+    # trading currency). Reported years only — cash flow is a reported fact, so an upcoming
+    # year carries neither. Best-effort enrichment (like net_income): a blocked cash-flow
+    # fetch leaves them None without sinking the year. They power the ticker card's live
+    # price/FCF, FCF-yield and OCF-yield reads, priced on the card's live quote.
+    fcf_per_share: float | None = None  # reported free cash flow per share (trading currency)
+    ocf_per_share: float | None = None  # reported operating cash flow per share (trading currency)
 
     @property
     def is_reported(self) -> bool:
@@ -124,6 +132,38 @@ class AnnualEarningsTimeline:
         return _growth_percent(
             reported[-1].eps_actual_consensus, reported[-2].eps_actual_consensus
         )
+
+    @property
+    def latest_fcf_per_share(self) -> float | None:
+        """The newest reported year's free-cash-flow per share (trading currency), or
+        ``None`` when no reported year carries it. A quasi-static per-share figure (it
+        moves once a year on a filing), stored on the anchor so the ticker card can price
+        it against the *live* quote — the FCF analogue of how the card prices ``ttm_eps``."""
+        reported = self.past
+        return reported[-1].fcf_per_share if reported else None
+
+    @property
+    def latest_ocf_per_share(self) -> float | None:
+        """The newest reported year's operating-cash-flow per share (trading currency), or
+        ``None``. The pre-capex companion to ``latest_fcf_per_share`` — the card prices it
+        into an OCF yield whose gap to the FCF yield is the capex drag."""
+        reported = self.past
+        return reported[-1].ocf_per_share if reported else None
+
+    @property
+    def latest_fcf_growth_yoy(self) -> float | None:
+        """Trailing YoY free-cash-flow growth (percent): the newest reported year's
+        ``fcf_per_share`` over the prior reported year's.
+
+        A *trailing* indicator on the per-share basis (so it nets out dilution, the same
+        basis the card's FCF multiples sit on) — the cash-flow sibling of
+        ``latest_revenue_growth_yoy``. ``None`` with fewer than two reported years, a
+        missing figure, or a non-positive prior (growth off a non-positive base — a prior
+        cash-burn year — is meaningless, the same guard the revenue/EPS growth use)."""
+        reported = self.past
+        if len(reported) < 2:
+            return None
+        return _growth_percent(reported[-1].fcf_per_share, reported[-2].fcf_per_share)
 
     @property
     def forward_revenue_growth_yoy(self) -> float | None:
@@ -231,6 +271,18 @@ def _merged_year(fresh: AnnualEarnings, stored: AnnualEarnings | None) -> Annual
                 fresh.eps_actual_consensus
                 if fresh.eps_actual_consensus is not None
                 else stored.eps_actual_consensus
+            ),
+            # Cash-flow per share rides Yahoo's hardest-gated endpoint (like net income),
+            # so a degraded refresh keeps the stored reported figure — it never changes.
+            fcf_per_share=(
+                fresh.fcf_per_share
+                if fresh.fcf_per_share is not None
+                else stored.fcf_per_share
+            ),
+            ocf_per_share=(
+                fresh.ocf_per_share
+                if fresh.ocf_per_share is not None
+                else stored.ocf_per_share
             ),
         )
     # Both upcoming: fill the consensus holes.

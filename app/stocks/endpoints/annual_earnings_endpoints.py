@@ -76,6 +76,8 @@ def _present_year(year: AnnualEarnings) -> AnnualEarningsYearResponse:
         revenue_estimate=year.revenue_estimate,
         net_income=year.net_income,
         eps_actual_consensus=year.eps_actual_consensus,
+        fcf_per_share=year.fcf_per_share,
+        ocf_per_share=year.ocf_per_share,
         is_reported=year.is_reported,
     )
 
@@ -89,6 +91,7 @@ def _present(timeline: AnnualEarningsTimeline) -> AnnualEarningsResponse:
         upcoming_count=len(timeline.future),
         revenue_growth_yoy=timeline.latest_revenue_growth_yoy,
         eps_growth_yoy=timeline.latest_eps_growth_yoy,
+        fcf_growth_yoy=timeline.latest_fcf_growth_yoy,
         years=[_present_year(y) for y in timeline.years],
     )
 

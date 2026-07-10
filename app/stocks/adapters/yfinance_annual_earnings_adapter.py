@@ -33,6 +33,16 @@ one scale up:
   ``None`` rather than a wrong sum. Best-effort enrichment: a failure fetching the history
   drops the consensus actuals but never sinks the timeline.
 
+- ``Ticker.cashflow`` — the annual cash-flow statement, one column per fiscal-year-end (the
+  same columns as ``income_stmt``). Its ``Free Cash Flow`` and ``Operating Cash Flow`` rows,
+  divided by the year's diluted average shares (from ``income_stmt``'s ``Diluted Average
+  Shares``, falling back to ``Basic Average Shares``), give a reported year's ``fcf_per_share``
+  / ``ocf_per_share``. Same reporting-currency normalization as ``income_stmt`` (a no-op for a
+  domestic issuer). This is the same hard-IP-gated fundamentals class as ``income_stmt``, so
+  it's best-effort enrichment on the reported years: a blocked fetch drops the per-share cash
+  figures (the merge-preserving sync then carries the stored ones forward) but never sinks the
+  timeline.
+
 There is deliberately **no annual surprise/beat**: Yahoo's estimate-vs-actual history is
 per-quarter (``earnings_history``), so there is no historical annual estimate to compare a
 reported year against. A reported year carries an actual with no estimate. A reported column
@@ -143,6 +153,22 @@ class YfinanceAnnualEarningsProvider(AnnualEarningsProvider):
         # figures onto the trading currency (USD) — a no-op for a domestic issuer.
         reported = _reported_years(income_stmt, normalizer)  # newest first, uncapped
 
+        # Cash-flow per share (free + operating) is best-effort enrichment on the reported
+        # years, from the annual cash-flow statement — the same hard-gated fundamentals class
+        # as income_stmt. A blocked fetch just drops the per-share cash figures (the sync
+        # carries the stored ones forward). Only worth fetching when there are reported years
+        # to attach it to (and it needs income_stmt's share counts, so income_stmt must have
+        # come through anyway).
+        cash_per_share: dict[date, tuple[float | None, float | None]] = {}
+        if reported:
+            try:
+                cashflow = yfinance_session.call(
+                    lambda: ticker.cashflow, is_empty=yfinance_session.frame_is_empty
+                )
+            except Exception:  # noqa: BLE001 — enrichment: degrade to no cash-flow figures
+                cashflow = None
+            cash_per_share = _cash_flow_per_share(cashflow, income_stmt, normalizer)
+
         # The consensus-basis annual actuals (the sum of each fiscal year's four quarterly
         # "Reported EPS" values) need the announcement history. Best-effort enrichment on the
         # reported years: a failure fetching it drops the consensus figures, nothing else.
@@ -169,13 +195,17 @@ class YfinanceAnnualEarningsProvider(AnnualEarningsProvider):
             seen.add(year.fiscal_year)
             # The consensus actual is a market-EPS figure (summed from earnings_dates), so it
             # rides the detected market-EPS currency — converted for a reporting-currency
-            # issuer (BABA), left alone for a trading-currency one (TSM).
+            # issuer (BABA), left alone for a trading-currency one (TSM). The per-share cash
+            # figures are already trading-currency (normalized in _cash_flow_per_share).
+            cash = cash_per_share.get(year.period_end)
             years.append(
                 replace(
                     year,
                     eps_actual_consensus=normalizer.market_to_trading(
                         consensus.get(year.period_end)
                     ),
+                    fcf_per_share=cash[0] if cash else None,
+                    ocf_per_share=cash[1] if cash else None,
                 )
             )
 
@@ -243,6 +273,78 @@ def _reported_years(
             )
         )
     out.sort(key=lambda y: y.period_end or date.min, reverse=True)  # newest first
+    return out
+
+
+def _cash_flow_per_share(
+    cashflow_frame, income_frame, normalizer: CurrencyNormalizer
+) -> dict[date, tuple[float | None, float | None]]:
+    """fiscal-year-end → ``(fcf_per_share, ocf_per_share)`` on the trading currency.
+
+    Divides the annual cash-flow statement's ``Free Cash Flow`` / ``Operating Cash Flow``
+    rows by the year's diluted average shares (from the income statement — the cash-flow
+    frame carries no share count), then normalizes onto the trading currency exactly as the
+    income statement's figures are (the per-share division is by a unitless count, so the FX
+    convert commutes with it). Keyed by the true fiscal-year-end so the caller can attach each
+    to its reported year. Best-effort throughout: a missing frame, a missing share count for a
+    year, or a non-positive share count yields no entry for that year (a partial map is fine —
+    a year with neither figure is simply absent)."""
+    if cashflow_frame is None or getattr(cashflow_frame, "empty", True):
+        return {}
+    shares_by_end = _shares_by_period_end(income_frame)
+    if not shares_by_end:
+        return {}  # no share count anywhere ⇒ nothing to divide by
+    fcf_row = _row(cashflow_frame, "Free Cash Flow")
+    ocf_row = _row(cashflow_frame, "Operating Cash Flow")
+    try:
+        periods = list(cashflow_frame.columns)
+    except Exception:  # noqa: BLE001 — never let a frame quirk escape the adapter
+        return {}
+    out: dict[date, tuple[float | None, float | None]] = {}
+    for period in periods:
+        period_end = _to_date(period)
+        if period_end is None:
+            continue
+        shares = shares_by_end.get(period_end)
+        if shares is None or shares <= 0:
+            continue
+        fcf_total = _cell_at(fcf_row, period)
+        ocf_total = _cell_at(ocf_row, period)
+        fcf_ps = (
+            normalizer.to_trading(fcf_total / shares) if fcf_total is not None else None
+        )
+        ocf_ps = (
+            normalizer.to_trading(ocf_total / shares) if ocf_total is not None else None
+        )
+        if fcf_ps is None and ocf_ps is None:
+            continue  # nothing to attach for this year
+        out[period_end] = (fcf_ps, ocf_ps)
+    return out
+
+
+def _shares_by_period_end(frame) -> dict[date, float]:
+    """fiscal-year-end → the year's diluted average shares (``Basic Average Shares`` as a
+    fallback), read off the annual income statement — the per-share divisor for the cash-flow
+    figures. Positive counts only; ``{}`` when the frame or the share rows are absent."""
+    if frame is None or getattr(frame, "empty", True):
+        return {}
+    shares_row = _row(frame, "Diluted Average Shares")
+    if shares_row is None:
+        shares_row = _row(frame, "Basic Average Shares")
+    if shares_row is None:
+        return {}
+    try:
+        periods = list(frame.columns)
+    except Exception:  # noqa: BLE001 — never let a frame quirk escape the adapter
+        return {}
+    out: dict[date, float] = {}
+    for period in periods:
+        period_end = _to_date(period)
+        if period_end is None:
+            continue
+        shares = _cell_at(shares_row, period)
+        if shares is not None and shares > 0:
+            out[period_end] = shares
     return out
 
 

@@ -74,6 +74,12 @@ class StockAnnualEarningsRecord(Base):
     # quarterly "Reported EPS" values) — comparable with eps_estimate, unlike the
     # GAAP-diluted eps_actual. Best-effort, reported years only.
     eps_actual_consensus: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The reported year's free-cash-flow / operating-cash-flow per share (trading
+    # currency), from the cash-flow statement over the year's diluted average shares.
+    # Persisted per-year so the merge-preserving sync can carry them forward when Yahoo
+    # blocks the (hard-gated) cash-flow fetch. Best-effort, reported years only (0027).
+    fcf_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ocf_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
