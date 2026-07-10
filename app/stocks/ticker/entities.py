@@ -4,17 +4,10 @@ Slice-local domain objects (this sub-slice keeps its own ``entities`` rather tha
 reaching into the shared ``app/stocks/entities.py``, the same convention as the
 earnings and recommendations sub-slices). Pure and vendor-agnostic — stdlib only.
 
-``TickerValuation`` models the card's valuation multiples on one EPS basis — the
-analyst-consensus (adjusted) one. The trailing P/E is today's price over the sum
-of the 4 newest reported quarters' consensus-basis EPS (not a vendor's GAAP TTM
-read, so it's directly comparable with the forward legs). The forward PEG is the
-forward analogue of the trailing PEG: the forward P/E (today's price against next
-fiscal year's consensus EPS) divided by the EPS growth analysts expect the year
-after that (FY1 → FY2). Where the trailing PEG divides by growth *already
-reported* — which a cyclical rebound can inflate into the hundreds of percent,
-pinning the ratio near zero — this one divides by growth analysts still
-*expect*, so it answers "is today's price justified by what's supposed to come"
-rather than "by what already happened".
+``TickerValuation`` models the card's trailing P/E on the analyst-consensus
+(adjusted) EPS basis — today's price over the sum of the 4 newest reported
+quarters' consensus-basis EPS (not a vendor's GAAP TTM read, so it lines up with
+the forward consensus figures the AI analysis context is built on).
 
 ``OptionContract`` + ``TickerOptionsMetrics`` model what the options market says
 about the stock: how nervous it is (at-the-money implied volatility), how big a
@@ -32,16 +25,6 @@ from dataclasses import dataclass
 from datetime import date
 from enum import Enum
 from typing import Mapping, Sequence
-
-# Below this forward EPS-growth rate (percent) the forward PEG stops being a stable
-# read and is suppressed. PEG = P/E ÷ growth, so as growth approaches zero the ratio
-# explodes and swings wildly on tiny estimate revisions (d(PEG)/dg = −P/E ÷ g²). The
-# trap is a boom *current* year: Yahoo anchors the forward P/E on ``0y`` (the year in
-# progress), so when this year's consensus has already surged, the next single-year
-# leg (``0y``→``+1y``) can sit near zero even for a healthy grower — GOOGL mid-2026 is
-# a 25.8 forward P/E over 2.1% expected growth, an arithmetically-correct-but-useless
-# PEG of 12.2 that reads as "wildly overvalued". Better to serve nothing than that.
-_MIN_FORWARD_EPS_GROWTH = 5.0  # percent
 
 # A trailing-twelve-month EPS is the sum of this many reported quarters — the window the
 # P/E-history walk rolls over the reported-EPS run (and the warm-up before its first point).
@@ -61,63 +44,34 @@ _EXPENSIVE_PERCENTILE = 75.0
 
 @dataclass(frozen=True)
 class TickerValuation:
-    """One symbol's valuation legs at today's price.
+    """One symbol's trailing P/E at today's price.
 
-    The legs arrive precomputed (the use case derives them from the live quote,
-    the stored consensus estimates, and the quarterly-earnings timeline); the
-    entity owns the rules that combine them. The legs are optional: estimates
-    are consensus coverage and the TTM sum needs four cached quarters, so a
-    symbol missing either simply carries ``None``s around a live price.
+    The leg arrives precomputed (the use case derives ``ttm_eps`` from the
+    quarterly-earnings timeline); the entity owns the rule that turns it into the
+    multiple. ``ttm_eps`` is optional — the TTM sum needs four cached quarters —
+    so a symbol missing it simply carries ``None`` around a live price.
 
     ``ttm_eps`` is deliberately on the *consensus (adjusted)* basis — the sum of
-    the 4 newest reported quarters' "Reported EPS" — not GAAP diluted: the
-    forward legs are quoted on the consensus basis, so anchoring the trailing
-    multiple on the same basis is what makes ``trailing_pe`` and ``forward_pe``
-    a comparable pair (a GAAP trailing leg would make the walk between them a
-    basis artifact, not a story about growth).
+    the 4 newest reported quarters' "Reported EPS" — not GAAP diluted, so the
+    trailing multiple sits on the same basis as the forward consensus figures the
+    AI analysis context is built on (a GAAP trailing leg would make any walk
+    between them a basis artifact rather than a story about growth).
     """
 
     symbol: str
     price: float  # the live price the multiple was taken at
-    forward_pe: float | None  # price / FY1 consensus EPS
-    forward_eps_growth: float | None  # FY1 -> FY2 consensus EPS growth (percent)
     ttm_eps: float | None = None  # trailing 12m EPS, consensus basis (4 reported quarters)
 
     @property
     def trailing_pe(self) -> float | None:
         """Trailing P/E on the consensus basis: price over ``ttm_eps``.
 
-        The trailing counterpart of ``forward_pe``, on the same (adjusted) EPS
-        basis so the two multiples read as one walk. Same guard as the other
-        ratios here: ``None`` unless both legs are positive — a loss-making
-        trailing year (or a broken quote) makes the multiple meaningless.
+        ``None`` unless both legs are positive — a loss-making trailing year (or
+        a broken quote) makes the multiple meaningless.
         """
         if self.ttm_eps is None or self.ttm_eps <= 0 or self.price <= 0:
             return None
         return round(self.price / self.ttm_eps, 2)
-
-    @property
-    def forward_peg(self) -> float | None:
-        """Forward PEG: forward P/E divided by expected EPS growth (percent).
-
-        The forward cousin of ``KeyMetrics.peg`` with the same reading (near 1.0
-        means the price roughly matches growth) and the same positive-legs guard:
-        ``None`` unless both legs are present and the multiple is positive — a
-        non-positive multiple or expected shrinkage makes the ratio meaningless.
-
-        Plus one guard the trailing PEG doesn't need: the growth leg must clear
-        ``_MIN_FORWARD_EPS_GROWTH``. The denominator is a single FY1→FY2 leg
-        (Yahoo's forward ceiling), not the classic five-year rate, so a boom
-        *current* year (the ``0y`` the forward P/E is anchored on) can leave the
-        next leg near zero and blow the ratio up — a division so unstable near
-        zero growth that the number misleads more than it informs. Below the
-        floor we serve ``None`` rather than that.
-        """
-        if self.forward_pe is None or self.forward_eps_growth is None:
-            return None
-        if self.forward_pe <= 0 or self.forward_eps_growth < _MIN_FORWARD_EPS_GROWTH:
-            return None
-        return round(self.forward_pe / self.forward_eps_growth, 2)
 
 
 @dataclass(frozen=True)

@@ -132,8 +132,7 @@ class AnnualEarningsTimeline:
 
         The *forward* mirror of ``latest_revenue_growth_yoy`` — where that reads
         already-reported actuals, this reads the two forward consensus estimates, so it
-        says what growth analysts *expect* next year (the same figure the card's forward
-        PEG is built on, one estimate basis). Both legs are ``revenue_estimate``, so no
+        says what growth analysts *expect* next year. Both legs are ``revenue_estimate``, so no
         basis caveat applies. ``None`` with fewer than two upcoming years (Yahoo often
         publishes only FY1 — then this is unset), a missing estimate, or a non-positive
         first year (growth off a non-positive base is meaningless)."""
@@ -147,10 +146,9 @@ class AnnualEarningsTimeline:
         """Forward YoY EPS growth (percent): the second upcoming year's consensus EPS
         over the first upcoming year's (FY1 → FY2).
 
-        The *forward* mirror of ``latest_eps_growth_yoy`` and the earnings-growth leg of
-        the card's forward PEG. Both legs are ``eps_estimate``, quoted on the
-        analyst-consensus (adjusted) basis — so no basis caveat, unlike the trailing
-        counterpart which has to reach for ``eps_actual_consensus``. ``None`` with fewer
+        The *forward* mirror of ``latest_eps_growth_yoy``. Both legs are ``eps_estimate``,
+        quoted on the analyst-consensus (adjusted) basis — so no basis caveat, unlike the
+        trailing counterpart which has to reach for ``eps_actual_consensus``. ``None`` with fewer
         than two upcoming years, a missing estimate, or a non-positive first year."""
         upcoming = self.future
         if len(upcoming) < 2:

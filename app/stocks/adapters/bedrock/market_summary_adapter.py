@@ -1,6 +1,6 @@
 """Interface Adapter: AI market-overview summary via Claude on Amazon Bedrock.
 
-The whole-market sibling of ``bedrock_sector_analysis_provider.py`` (which reads
+The whole-market sibling of ``sector_analysis_adapter.py`` (which reads
 the day's sector rotation). The only module — alongside its stock/ETF/sector
 cousins — that knows Bedrock (and the Anthropic SDK) exists. It takes the day's
 index board the use case gathered (the S&P 500 and the Nasdaq, each with its
@@ -117,9 +117,12 @@ _SUMMARY_TOOL = {
             "periods": {
                 "type": "array",
                 "items": _PERIOD_SCHEMA,
+                "minItems": 3,
+                "maxItems": 3,
                 "description": (
                     "One note for EACH timeframe — the past year, the past month, "
-                    "and the past week (three notes in total)."
+                    "and the past week (exactly three notes, one per timeframe; "
+                    "never return an empty list)."
                 ),
             },
         },
@@ -145,6 +148,7 @@ _SYSTEM_PROMPT = (
     "to the indices by name (the S&P 500, the Nasdaq), never by their ETF ticker. "
     "Ground every statement ONLY in the figures provided — do not use outside "
     "knowledge, recent news, or prices you may recall, and never invent numbers. "
+    "Always include a note for all three timeframes — never leave that list empty. "
     "Be honest that markets carry risk and past moves don't predict future ones. "
     "This is general information, not personal financial advice. Respond by "
     "calling the submit_market_summary tool."
@@ -192,6 +196,24 @@ class BedrockMarketSummaryProvider(MarketSummaryProvider):
 
     def analyze(self, indexes: list[MarketIndexPerformance]) -> MarketSummary:
         prompt = _render_prompt(indexes)
+        payload = self._invoke(prompt)
+        # The forced tool asks for a note per timeframe, but Bedrock does not
+        # enforce array length, and the fast Haiku tier sometimes fills only the
+        # summary and hands back an empty periods list. Retry once to recover the
+        # notes before the result-cache freezes it for the TTL (the same retry-once
+        # stance the shared yfinance session takes on a transient miss).
+        if _missing_notes(payload):
+            payload = self._invoke(prompt) or payload
+        if payload is None:
+            raise StockDataUnavailable(
+                _MARKET_KEY, "summary model returned no structured result"
+            )
+        return _to_entity(indexes, payload, self._model_id)
+
+    def _invoke(self, prompt: str) -> dict | None:
+        """One forced-tool call, returning the ``submit_market_summary`` arguments
+        (or ``None`` if the model somehow didn't call the tool). Any SDK/botocore
+        failure is mapped to this port's documented ``StockDataUnavailable``."""
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -205,12 +227,7 @@ class BedrockMarketSummaryProvider(MarketSummaryProvider):
             raise StockDataUnavailable(
                 _MARKET_KEY, f"summary model call failed: {exc}"
             ) from exc
-        payload = _tool_payload(message)
-        if payload is None:
-            raise StockDataUnavailable(
-                _MARKET_KEY, "summary model returned no structured result"
-            )
-        return _to_entity(indexes, payload, self._model_id)
+        return _tool_payload(message)
 
 
 def _tool_payload(message) -> dict | None:
@@ -271,6 +288,16 @@ def _notes_by_period(value) -> dict[str, str]:
         if period and note:
             out[period] = note
     return out
+
+
+def _missing_notes(payload: dict | None) -> bool:
+    """True when a returned tool result is present but carries no usable per-period
+    notes — the signal to retry. A ``None`` payload (the model didn't call the tool
+    at all) is left for the caller to surface as ``StockDataUnavailable``, not
+    retried, so the existing no-structured-result path is unchanged."""
+    if payload is None:
+        return False
+    return not _notes_by_period(payload.get("periods"))
 
 
 def _period_highlight(
