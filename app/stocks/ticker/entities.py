@@ -41,6 +41,23 @@ _MAX_PRICE_LAG_DAYS = 7
 _CHEAP_PERCENTILE = 25.0
 _EXPENSIVE_PERCENTILE = 75.0
 
+# A cyclical stock's earnings can collapse to a near-zero (but still positive) trailing sum at a
+# trough — Seagate/STX is the type case — and a tiny denominator balloons the trailing P/E into a
+# spike that says nothing about how the market values the business. Two self-scaling screens keep
+# those spikes from cluttering the chart or distorting the signal; both are *relative to the
+# stock's own history*, deliberately not an absolute P/E cutoff (which would punish a genuine
+# high-growth multiple):
+#   * trough-earnings — a release whose trailing-twelve-month EPS is below this fraction of the
+#     series' median TTM EPS is a trough. Its point is dropped from the chart, and when the
+#     *latest* release is a trough the valuation signal is suppressed (the multiple is not
+#     meaningful, not "expensive").
+_TROUGH_EPS_FRACTION = 0.3
+#   * far-outlier — a P/E past the Tukey far-outlier fence (Q3 + this × IQR) is dropped from the
+#     chart too, catching a spike from any cause (a near-trough the fraction screen just misses,
+#     or a price bubble). Chart-only: a high *current* multiple on healthy earnings still reads
+#     "expensive", so this fence never drives the signal.
+_OUTLIER_IQR_MULT = 3.0
+
 
 @dataclass(frozen=True)
 class TickerValuation:
@@ -284,11 +301,18 @@ class ValuationSignal(str, Enum):
     business (slowing growth, a faded moat) can read CHEAP the whole way down, so the signal
     anchors a judgement rather than making it. A ``str`` enum so the presenter serializes the
     value directly.
+
+    ``NOT_MEANINGFUL`` is the escape hatch for a cyclical trough: when the *latest* release sits
+    on a near-zero trailing EPS (see ``_TROUGH_EPS_FRACTION``), the P/E balloons on a collapsing
+    denominator, so a percentile read would call a mid-cycle-cheap stock "expensive". Rather than
+    emit that false verdict, the signal reports no read — the FE shows "trailing P/E not
+    meaningful (trough earnings)" and the historical band is still there to eyeball.
     """
 
     CHEAP = "cheap"
     FAIR = "fair"
     EXPENSIVE = "expensive"
+    NOT_MEANINGFUL = "not_meaningful"
 
 
 @dataclass(frozen=True)
@@ -308,6 +332,12 @@ class PeHistoryStats:
     fundamentals-sampled, so "current" moves only when a new quarter reports). Same "relative to
     itself" caveat as ``ValuationSignal``: this says where the multiple is versus its own past,
     which anchors "is it a good buy" without settling it alone.
+
+    When the latest release sits on a cyclical earnings trough, ``signal`` is
+    ``NOT_MEANINGFUL`` and the distribution fields (``median_pe`` … ``max_pe``) are drawn from
+    the rest of the history — the trough spike would otherwise blow out the envelope. ``current_pe``
+    still carries the real (distorted) multiple, so the FE can show it beside the "not meaningful"
+    note rather than hiding it.
     """
 
     current_pe: float
@@ -359,7 +389,11 @@ class PeHistory:
     ) -> "PeHistory":
         """Roll the reported-EPS run into a trailing-twelve-month series and divide each
         release's close by it. ``eps`` in any order (sorted here); ``closes`` maps a
-        trading day to that day's close."""
+        trading day to that day's close.
+
+        The raw series is then passed through ``_without_cyclical_spikes`` — a cyclical
+        trough (a near-zero trailing EPS ballooning the multiple) is dropped so it doesn't
+        clutter the chart, the same reason ``stats`` suppresses the trough signal."""
         ordered = sorted(eps, key=lambda e: e.report_date)
         trading_days = sorted(closes)
         points: list[PeHistoryPoint] = []
@@ -380,7 +414,7 @@ class PeHistory:
                     pe=round(price / ttm, 2),
                 )
             )
-        return cls(symbol=symbol, points=tuple(points))
+        return cls(symbol=symbol, points=_without_cyclical_spikes(tuple(points)))
 
     @property
     def stats(self) -> PeHistoryStats | None:
@@ -390,25 +424,39 @@ class PeHistory:
 
         Pure over ``points`` — every P/E in them is already positive (``build`` drops trailing
         losses), so the distribution is well-formed and the median is a safe divisor. "Current"
-        is the newest point (``points`` is oldest-first), ranked against the whole series."""
+        is the newest point (``points`` is oldest-first), ranked against the whole series.
+
+        One special case: when the latest release sits on a cyclical earnings trough (its TTM
+        EPS below ``_TROUGH_EPS_FRACTION`` of the history's median), the multiple is distorted
+        by a collapsing denominator, so the signal is ``NOT_MEANINGFUL`` and the distribution is
+        measured from the rest of the history rather than let the spike blow out the envelope."""
         if len(self.points) < self.MIN_POINTS_FOR_STATS:
             return None
-        pes = sorted(point.pe for point in self.points)
+        current = self.points[-1]
+        trough_eps, _fence = _cyclical_thresholds(self.points[:-1])
+        current_is_trough = current.ttm_eps < trough_eps
+        # A trough denominator makes the current multiple meaningless: rank it and shape the band
+        # from history alone (the spike would distort both), and hand back no cheap/fair/expensive.
+        reference = self.points[:-1] if current_is_trough else self.points
+        pes = sorted(point.pe for point in reference)
         median = _percentile(pes, 50)
         if median is None or median <= 0:
             return None  # defensive: real P/Es are positive, so a non-positive median never occurs
-        current = self.points[-1].pe
-        percentile = _percentile_rank(pes, current)
+        percentile = _percentile_rank(pes, current.pe)
         return PeHistoryStats(
-            current_pe=current,
+            current_pe=current.pe,
             median_pe=median,
             p25_pe=_percentile(pes, 25),
             p75_pe=_percentile(pes, 75),
             min_pe=pes[0],
             max_pe=pes[-1],
             current_percentile=percentile,
-            discount_to_median_percent=round((current - median) / median * 100, 1),
-            signal=_signal_for(percentile),
+            discount_to_median_percent=round((current.pe - median) / median * 100, 1),
+            signal=(
+                ValuationSignal.NOT_MEANINGFUL
+                if current_is_trough
+                else _signal_for(percentile)
+            ),
             sample_size=len(pes),
         )
 
@@ -475,3 +523,39 @@ def _signal_for(percentile: float) -> ValuationSignal:
     if percentile >= _EXPENSIVE_PERCENTILE:
         return ValuationSignal.EXPENSIVE
     return ValuationSignal.FAIR
+
+
+def _cyclical_thresholds(points: Sequence[PeHistoryPoint]) -> tuple[float, float]:
+    """The two bounds that mark a trailing-P/E point as a cyclical distortion, derived from the
+    given reference points (the caller passes the history *excluding* the current point, and
+    guarantees it is non-empty): the *trough-earnings* EPS floor (``_TROUGH_EPS_FRACTION`` × the
+    median TTM EPS) and the *far-outlier* P/E fence (``Q3 + _OUTLIER_IQR_MULT`` × IQR). Both rest
+    on the median / quartiles, so a handful of spike points in the reference don't move them."""
+    median_ttm = _percentile(sorted(p.ttm_eps for p in points), 50) or 0.0
+    pes = sorted(p.pe for p in points)
+    q1 = _percentile(pes, 25) or 0.0
+    q3 = _percentile(pes, 75) or 0.0
+    return _TROUGH_EPS_FRACTION * median_ttm, q3 + _OUTLIER_IQR_MULT * (q3 - q1)
+
+
+def _without_cyclical_spikes(
+    points: tuple[PeHistoryPoint, ...]
+) -> tuple[PeHistoryPoint, ...]:
+    """Drop the history's cyclical-trough / far-outlier P/E spikes (see ``_cyclical_thresholds``)
+    so they don't clutter the chart or distort the valuation band. The most recent point is kept
+    regardless — it's the current reading, distorted or not, and ``PeHistory.stats`` flags it
+    (``NOT_MEANINGFUL``) rather than hiding it. A no-op below ``MIN_POINTS_FOR_STATS`` points,
+    where the distribution is too thin to judge an outlier from — a fresh listing keeps its raw
+    series, and ``stats`` returns ``None`` there anyway.
+
+    Thresholds come from the history alone (the latest point excluded), so a current spike can't
+    define the fence that would then wave it through."""
+    if len(points) < PeHistory.MIN_POINTS_FOR_STATS:
+        return points
+    trough_eps, pe_fence = _cyclical_thresholds(points[:-1])
+    last = len(points) - 1
+    return tuple(
+        point
+        for i, point in enumerate(points)
+        if i == last or (point.ttm_eps >= trough_eps and point.pe <= pe_fence)
+    )

@@ -140,7 +140,14 @@ class PeHistoryStatsResponse(BaseModel):
     multiple). ``sample_size`` is how many releases back the read. A *relative* verdict —
     "cheap for this stock", not "cheap" outright (a re-rated business can read cheap all the way
     down). ``null`` on the parent when the series is too short (< ~2 years) for a percentile to
-    mean anything."""
+    mean anything.
+
+    ``signal`` is ``"not_meaningful"`` when the latest release sits on a cyclical earnings trough
+    (a near-zero trailing EPS blows the multiple up on a collapsing denominator — Seagate at the
+    bottom of a cycle): a percentile read would call it "expensive" when it's mid-cycle cheap, so
+    no cheap/fair/expensive verdict is given. ``current_pe`` still carries the real (distorted)
+    figure and the band fields describe the rest of the history, so the FE can show the number
+    beside a "trailing P/E not meaningful" note."""
 
     current_pe: float
     median_pe: float
@@ -150,7 +157,7 @@ class PeHistoryStatsResponse(BaseModel):
     max_pe: float
     current_percentile: float  # 0–100, share of history at or below the current multiple
     discount_to_median_percent: float  # negative = cheaper than its own median
-    signal: str  # "cheap" | "fair" | "expensive"
+    signal: str  # "cheap" | "fair" | "expensive" | "not_meaningful" (trough earnings)
     sample_size: int
 
 
