@@ -20,6 +20,7 @@ from app.stocks.ticker.entities import (
     PeHistoryPoint,
     ReportedEps,
     ValuationSignal,
+    _without_cyclical_spikes,
 )
 from app.stocks.ticker.ports import EpsHistoryProvider
 from app.stocks.ticker.use_cases import GetStockPeHistory
@@ -235,3 +236,84 @@ def test_bad_symbol_is_a_value_error():
     use_case = GetStockPeHistory(_FakeCandles(), _FakeEpsHistory())
     with pytest.raises(ValueError):
         use_case.execute("!!")
+
+
+# --- Cyclical-trough filtering (STX-style pump/dump) -------------------------------------
+
+
+def _points_with(pairs: list[tuple[float, float]]) -> tuple[PeHistoryPoint, ...]:
+    """Points carrying explicit (ttm_eps, pe) — the two fields the spike filter and the trough
+    signal read; the rest are placeholders."""
+    return tuple(
+        PeHistoryPoint(report_date=date(2022, 1, 1), price=100.0, ttm_eps=t, pe=pe)
+        for t, pe in pairs
+    )
+
+
+def test_spike_filter_drops_a_historical_trough_but_keeps_latest():
+    # A near-zero TTM balloons one historical multiple to 400x; it's dropped, latest kept.
+    points = _points_with([(4.0, 10.0)] * 3 + [(0.1, 400.0)] + [(4.0, 10.0)] * 6)
+    kept = _without_cyclical_spikes(points)
+    assert len(kept) == 9
+    assert 400.0 not in [p.pe for p in kept]
+
+
+def test_spike_filter_drops_a_far_outlier_on_normal_earnings():
+    # A P/E spike from a price bubble (healthy TTM, 300x multiple) is fenced out of the chart.
+    points = _points_with([(4.0, 10.0)] * 3 + [(4.0, 300.0)] + [(4.0, 10.0)] * 6)
+    kept = _without_cyclical_spikes(points)
+    assert len(kept) == 9
+    assert 300.0 not in [p.pe for p in kept]
+
+
+def test_spike_filter_is_a_noop_for_a_thin_sample():
+    # Below MIN_POINTS_FOR_STATS the distribution can't judge an outlier — keep the raw series.
+    points = _points_with([(4.0, 10.0)] * 6 + [(0.1, 400.0)])
+    assert _without_cyclical_spikes(points) == points
+
+
+def test_stats_suppresses_the_signal_for_a_current_trough():
+    # Latest release sits on a collapsed TTM (0.1 vs a ~4.0 history) -> the multiple is
+    # not meaningful, not "expensive"; the band is measured from history alone.
+    points = _points_with([(4.0, 10.0)] * 8 + [(0.1, 400.0)])
+    stats = PeHistory(symbol="STX", points=points).stats
+    assert stats is not None
+    assert stats.signal is ValuationSignal.NOT_MEANINGFUL
+    assert stats.current_pe == 400.0  # the real distorted figure is still surfaced
+    assert stats.max_pe == 10.0  # envelope from history, not the trough spike
+    assert stats.median_pe == 10.0
+    assert stats.sample_size == 8  # history only (current excluded)
+
+
+def test_stats_keeps_expensive_for_a_high_multiple_on_healthy_earnings():
+    # A genuine re-rating (dearest multiple, but a normal TTM) reads expensive — the far-outlier
+    # fence only declutters the chart; it must not suppress a real "expensive" signal.
+    points = _points_with(
+        [(4.0, 12.0), (4.0, 13.0), (4.0, 14.0), (4.0, 15.0),
+         (4.0, 16.0), (4.0, 17.0), (4.0, 18.0), (4.0, 40.0)]
+    )
+    stats = PeHistory(symbol="X", points=points).stats
+    assert stats is not None
+    assert stats.signal is ValuationSignal.EXPENSIVE
+    assert stats.current_pe == 40.0
+
+
+def test_build_filters_a_cyclical_trough_from_the_series():
+    # Eight healthy quarters (EPS 1.0) then a four-quarter earnings collapse (EPS 0.01): the
+    # rolling TTM craters into a trough, spiking the trailing P/E — the STX shape end to end.
+    quarters = [
+        ("2021-02-01", 1.0), ("2021-05-01", 1.0), ("2021-08-01", 1.0), ("2021-11-01", 1.0),
+        ("2022-02-01", 1.0), ("2022-05-01", 1.0), ("2022-08-01", 1.0), ("2022-11-01", 1.0),
+        ("2023-02-01", 0.01), ("2023-05-01", 0.01), ("2023-08-01", 0.01), ("2023-11-01", 0.01),
+    ]
+    closes = {date.fromisoformat(d): 50.0 for d, _ in quarters}
+    history = PeHistory.build("STX", _quarters(quarters), closes)
+
+    report_dates = [p.report_date for p in history.points]
+    # The deepest historical trough point (2023-08, TTM ~1.03 -> P/E ~48) is filtered out...
+    assert date(2023, 8, 1) not in report_dates
+    # ...while the latest release is kept (flagged by stats, not hidden) and normal history stays.
+    assert history.points[-1].report_date == date(2023, 11, 1)
+    assert date(2021, 11, 1) in report_dates
+    assert history.stats is not None
+    assert history.stats.signal is ValuationSignal.NOT_MEANINGFUL
