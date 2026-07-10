@@ -64,7 +64,7 @@ _ANALYSIS_TOOL = {
             "thesis": {
                 "type": "string",
                 "description": (
-                    "2-3 short sentences in plain, everyday language explaining the overall take "
+                    "1-2 short sentences in plain, everyday language explaining the overall take "
                     "and the main reason for it — as if to a friend who doesn't follow the markets. "
                     "No jargon."
                 ),
@@ -73,22 +73,22 @@ _ANALYSIS_TOOL = {
                 "type": "array",
                 "items": {"type": "string"},
                 "minItems": 2,
-                "maxItems": 3,
+                "maxItems": 2,
                 "description": (
-                    "2 to 3 short, plain-language reasons the fund looks good — each clear on its "
-                    "own to someone with no finance background. Always give at least two; never "
-                    "return an empty list (put them here, not only in the thesis)."
+                    "Exactly 2 short, plain-language reasons the fund looks good — each clear on "
+                    "its own to someone with no finance background. Never return an empty list "
+                    "(put them here, not only in the thesis)."
                 ),
             },
             "risks": {
                 "type": "array",
                 "items": {"type": "string"},
                 "minItems": 2,
-                "maxItems": 3,
+                "maxItems": 2,
                 "description": (
-                    "2 to 3 short, plain-language reasons to be cautious — each clear on its own "
-                    "to someone with no finance background. Always give at least two; never "
-                    "return an empty list (put them here, not only in the thesis)."
+                    "Exactly 2 short, plain-language reasons to be cautious — each clear on its "
+                    "own to someone with no finance background. Never return an empty list "
+                    "(put them here, not only in the thesis)."
                 ),
             },
         },
@@ -118,6 +118,56 @@ _SYSTEM_PROMPT = (
     "and lower your confidence. Be honest about both the good and the bad — always name at least "
     "two strengths and at least two risks, and never leave either list empty. This is general "
     "information, not personal financial advice. Respond by calling the submit_analysis tool."
+)
+
+# The recovery tool for the retry path: when the first pass packs everything into the thesis and
+# hands back empty strengths/risks, the retry asks for *only* the two bullet lists — a far shorter
+# generation than re-running the whole analysis. Output tokens dominate this endpoint's cost, so a
+# bullets-only retry is the cheap way to recover, and the narrower ask lands more reliably.
+_BULLETS_TOOL = {
+    "name": "submit_bullets",
+    "description": (
+        "Record only the plain-language strengths and risks for the fund, grounded only in the "
+        "figures provided. Exactly two of each; never leave either empty."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "strengths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 2,
+                "maxItems": 2,
+                "description": (
+                    "Exactly 2 short, plain-language reasons the fund looks good — each clear on "
+                    "its own to someone with no finance background. Never empty."
+                ),
+            },
+            "risks": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 2,
+                "maxItems": 2,
+                "description": (
+                    "Exactly 2 short, plain-language reasons to be cautious — each clear on its "
+                    "own to someone with no finance background. Never empty."
+                ),
+            },
+        },
+        "required": ["strengths", "risks"],
+    },
+}
+
+_BULLETS_SYSTEM = (
+    "You already gave the overall read on this fund. Now give ONLY the plain-language strengths "
+    "and risks — exactly two of each, grounded only in the figures below, each clear to someone "
+    "with no finance background. Never leave either list empty. Respond by calling the "
+    "submit_bullets tool."
+)
+
+# Prepended to the same figures the first pass saw, so the recovered bullets stay grounded.
+_BULLETS_INSTRUCTION = (
+    "List the two strengths and two risks for this fund, grounded only in these figures:\n\n"
 )
 
 
@@ -175,13 +225,18 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
             # The forced tool asks for both bullet lists, but Bedrock does not enforce
             # array length, and the fast Haiku tier sometimes packs everything into the
             # thesis and hands back empty strengths/risks. Re-issue a bounded number of
-            # times to recover the balanced read; the use case won't cache an incomplete
-            # one, so an empty result is never frozen for the TTL — it regenerates next
-            # view. (Same retry-once-and-then-some stance the yfinance session takes.)
+            # times to recover them; the use case won't cache an incomplete one, so an
+            # empty result is never frozen for the TTL — it regenerates next view. Each
+            # retry asks for *only* the missing bullets (not the whole analysis again),
+            # so it regenerates a fraction of the tokens — output is this endpoint's
+            # dominant cost. A recovery that doesn't land leaves the payload unchanged
+            # and simply consumes a bounded retry, so a truly stuck read still exits.
             for _ in range(self._MAX_EMPTY_RETRIES):
                 if not _missing_bullets(payload):
                     break
-                payload = self._invoke(prompt, detail.ticker, costs) or payload
+                recovered = self._recover_bullets(prompt, detail.ticker, costs)
+                if recovered is not None:
+                    payload = _merge_bullets(payload, recovered)
             if payload is None:
                 raise StockDataUnavailable(
                     detail.ticker, "analysis model returned no structured result"
@@ -192,19 +247,29 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
                 label="etf analysis", model_id=self._model_id, key=detail.ticker
             )
 
-    def _invoke(self, prompt: str, key: str, costs: CostAccumulator) -> dict | None:
-        """One forced-tool call, returning the ``submit_analysis`` arguments (or
-        ``None`` if the model somehow didn't call the tool). Any SDK/botocore
-        failure is mapped to this port's documented ``StockDataUnavailable``. The
-        call's token usage is folded into ``costs`` for the caller's single
-        per-endpoint cost line."""
+    def _invoke(
+        self,
+        prompt: str,
+        key: str,
+        costs: CostAccumulator,
+        *,
+        tool: dict = _ANALYSIS_TOOL,
+        tool_name: str = "submit_analysis",
+        system: str = _SYSTEM_PROMPT,
+    ) -> dict | None:
+        """One forced-tool call, returning the tool's arguments (or ``None`` if the
+        model somehow didn't call the forced tool). Defaults to the full analysis
+        tool; the retry path passes the lighter ``submit_bullets`` tool. Any
+        SDK/botocore failure is mapped to this port's documented
+        ``StockDataUnavailable``. The call's token usage is folded into ``costs`` for
+        the caller's single per-endpoint cost line."""
         try:
             message = self._client.messages.create(
                 model=self._model_id,
                 max_tokens=self._MAX_TOKENS,
-                system=_SYSTEM_PROMPT,
-                tools=[_ANALYSIS_TOOL],
-                tool_choice={"type": "tool", "name": "submit_analysis"},
+                system=system,
+                tools=[tool],
+                tool_choice={"type": "tool", "name": tool_name},
                 messages=[{"role": "user", "content": prompt}],
             )
         except Exception as exc:  # SDK/botocore raise a family of errors; map them all
@@ -212,20 +277,48 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
                 key, f"analysis model call failed: {exc}"
             ) from exc
         costs.add(message)
-        return _tool_payload(message)
+        return _tool_payload(message, tool_name)
+
+    def _recover_bullets(
+        self, prompt: str, key: str, costs: CostAccumulator
+    ) -> dict | None:
+        """One targeted retry that regenerates *only* the strengths/risks bullets,
+        grounded in the same figures the first pass saw — far fewer output tokens than
+        re-running the whole analysis. Returns the ``submit_bullets`` arguments, or
+        ``None`` when the model didn't call the tool (the caller then leaves the payload
+        unchanged and consumes a bounded retry)."""
+        return self._invoke(
+            _BULLETS_INSTRUCTION + prompt,
+            key,
+            costs,
+            tool=_BULLETS_TOOL,
+            tool_name="submit_bullets",
+            system=_BULLETS_SYSTEM,
+        )
 
 
-def _tool_payload(message) -> dict | None:
-    """Pull the submit_analysis arguments out of the model's tool call, if any."""
+def _tool_payload(message, name: str) -> dict | None:
+    """Pull the named forced tool's arguments out of the model's tool call, if any."""
     for block in getattr(message, "content", None) or []:
         if (
             getattr(block, "type", None) == "tool_use"
-            and getattr(block, "name", None) == "submit_analysis"
+            and getattr(block, "name", None) == name
         ):
             inputs = getattr(block, "input", None)
             if isinstance(inputs, dict):
                 return inputs
     return None
+
+
+def _merge_bullets(payload: dict, recovered: dict) -> dict:
+    """Fill only the *empty* bullet lists from a targeted recovery call, leaving any
+    list the first pass already produced untouched — so a retry that recovers one side
+    (say, risks) never overwrites the good other side."""
+    merged = dict(payload)
+    for field in ("strengths", "risks"):
+        if not _string_tuple(merged.get(field)) and _string_tuple(recovered.get(field)):
+            merged[field] = recovered[field]
+    return merged
 
 
 def _to_entity(symbol: str, payload: dict, model_id: str) -> InvestmentAnalysis:

@@ -38,8 +38,10 @@ from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.ports import EarningsAnalysisProvider
 
 # How many recent reported periods to feed the model — enough to show a trend
-# without a wall of history the plain-language read would only skim.
-_MAX_REPORTED = 6
+# without a wall of history the plain-language read would only skim. Four quarters
+# is a full year of beats, which is all the plain read needs; fewer input lines is
+# a small but free token saving on every call.
+_MAX_REPORTED = 4
 
 # A single forced tool pins the model to structured output: Claude must call
 # submit_earnings_analysis, so the response comes back as validated JSON
@@ -59,7 +61,7 @@ _ANALYSIS_TOOL = {
             "summary": {
                 "type": "string",
                 "description": (
-                    "2-4 short sentences in plain, everyday language: how this "
+                    "2-3 short sentences in plain, everyday language: how this "
                     "company's earnings have been going — whether it tends to beat "
                     "or miss, how its profit and sales are trending, and what's "
                     "expected next — as if to a friend who doesn't follow markets. "
@@ -81,9 +83,9 @@ _ANALYSIS_TOOL = {
                 "type": "array",
                 "items": {"type": "string"},
                 "minItems": 2,
-                "maxItems": 4,
+                "maxItems": 3,
                 "description": (
-                    "2 to 4 short, plain-language takeaways a reader should "
+                    "2 to 3 short, plain-language takeaways a reader should "
                     "remember — one clear point each (e.g. a beat streak, a growth "
                     "rate, a forward expectation). No jargon, no invented numbers. "
                     "Always give at least two; never return an empty list."
@@ -115,6 +117,49 @@ _SYSTEM_PROMPT = (
     "don't guarantee future ones. Always give at least two highlights — never "
     "leave that list empty. This is general information, not personal financial "
     "advice. Respond by calling the submit_earnings_analysis tool."
+)
+
+# The recovery tool for the retry path: when the first pass packs everything into the
+# summary and hands back an empty highlights list, the retry asks for *only* the
+# highlights — a far shorter generation than re-running the whole analysis (summary +
+# trend + highlights). Output tokens dominate this endpoint's cost, so a highlights-only
+# retry is the cheap way to recover, and the narrower ask lands more reliably.
+_HIGHLIGHTS_TOOL = {
+    "name": "submit_highlights",
+    "description": (
+        "Record only the plain-language earnings highlights, grounded only in the "
+        "figures provided. Two or three takeaways; never leave the list empty."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "highlights": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 2,
+                "maxItems": 3,
+                "description": (
+                    "2 to 3 short, plain-language takeaways a reader should remember — one "
+                    "clear point each (a beat streak, a growth rate, a forward "
+                    "expectation). No jargon, no invented numbers. Never empty."
+                ),
+            },
+        },
+        "required": ["highlights"],
+    },
+}
+
+_HIGHLIGHTS_SYSTEM = (
+    "You already summarized this company's earnings. Now give ONLY the plain-language "
+    "highlights — two or three short takeaways, grounded only in the figures below, each "
+    "clear to someone with no finance background. Never leave the list empty. Respond by "
+    "calling the submit_highlights tool."
+)
+
+# Prepended to the same figures the first pass saw, so the recovered highlights stay grounded.
+_HIGHLIGHTS_INSTRUCTION = (
+    "List the two or three earnings highlights for this company, grounded only in these "
+    "figures:\n\n"
 )
 
 # The key the adapter reports failures under.
@@ -180,11 +225,17 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
             # array length, and the fast Haiku tier sometimes packs everything into the
             # summary and hands back an empty highlights list. Re-issue a bounded number
             # of times to recover them (this read isn't result-cached, so a view that
-            # still came back empty would otherwise simply show none).
+            # still came back empty would otherwise simply show none). Each retry asks
+            # for *only* the highlights (not the whole analysis again), so it regenerates
+            # a fraction of the tokens — output is this endpoint's dominant cost. A
+            # recovery that doesn't land leaves the payload unchanged and consumes a
+            # bounded retry, so a truly stuck read still exits.
             for _ in range(self._MAX_EMPTY_RETRIES):
                 if not _missing_highlights(payload):
                     break
-                payload = self._invoke(prompt, symbol, costs) or payload
+                recovered = self._recover_highlights(prompt, symbol, costs)
+                if recovered is not None:
+                    payload = _merge_highlights(payload, recovered)
             if payload is None:
                 raise StockDataUnavailable(
                     symbol, "earnings analysis model returned no structured result"
@@ -193,9 +244,19 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
         finally:
             costs.log(label="earnings analysis", model_id=self._model_id, key=symbol)
 
-    def _invoke(self, prompt: str, key: str, costs: CostAccumulator) -> dict | None:
-        """One forced-tool call, returning the ``submit_earnings_analysis``
-        arguments (or ``None`` if the model somehow didn't call the tool). Any
+    def _invoke(
+        self,
+        prompt: str,
+        key: str,
+        costs: CostAccumulator,
+        *,
+        tool: dict = _ANALYSIS_TOOL,
+        tool_name: str = "submit_earnings_analysis",
+        system: str = _SYSTEM_PROMPT,
+    ) -> dict | None:
+        """One forced-tool call, returning the tool's arguments (or ``None`` if the
+        model somehow didn't call the forced tool). Defaults to the full earnings
+        tool; the retry path passes the lighter ``submit_highlights`` tool. Any
         SDK/botocore failure is mapped to this port's ``StockDataUnavailable``. The
         call's token usage is folded into ``costs`` for the caller's single
         per-endpoint cost line."""
@@ -203,9 +264,9 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
             message = self._client.messages.create(
                 model=self._model_id,
                 max_tokens=self._MAX_TOKENS,
-                system=_SYSTEM_PROMPT,
-                tools=[_ANALYSIS_TOOL],
-                tool_choice={"type": "tool", "name": "submit_earnings_analysis"},
+                system=system,
+                tools=[tool],
+                tool_choice={"type": "tool", "name": tool_name},
                 messages=[{"role": "user", "content": prompt}],
             )
         except Exception as exc:  # SDK/botocore raise a family of errors; map all
@@ -213,20 +274,49 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
                 key, f"earnings analysis model call failed: {exc}"
             ) from exc
         costs.add(message)
-        return _tool_payload(message)
+        return _tool_payload(message, tool_name)
+
+    def _recover_highlights(
+        self, prompt: str, key: str, costs: CostAccumulator
+    ) -> dict | None:
+        """One targeted retry that regenerates *only* the highlights, grounded in the
+        same figures the first pass saw — far fewer output tokens than re-running the
+        whole analysis. Returns the ``submit_highlights`` arguments, or ``None`` when
+        the model didn't call the tool (the caller then leaves the payload unchanged
+        and consumes a bounded retry)."""
+        return self._invoke(
+            _HIGHLIGHTS_INSTRUCTION + prompt,
+            key,
+            costs,
+            tool=_HIGHLIGHTS_TOOL,
+            tool_name="submit_highlights",
+            system=_HIGHLIGHTS_SYSTEM,
+        )
 
 
-def _tool_payload(message) -> dict | None:
-    """Pull the submit_earnings_analysis arguments out of the tool call, if any."""
+def _tool_payload(message, name: str) -> dict | None:
+    """Pull the named forced tool's arguments out of the tool call, if any."""
     for block in getattr(message, "content", None) or []:
         if (
             getattr(block, "type", None) == "tool_use"
-            and getattr(block, "name", None) == "submit_earnings_analysis"
+            and getattr(block, "name", None) == name
         ):
             inputs = getattr(block, "input", None)
             if isinstance(inputs, dict):
                 return inputs
     return None
+
+
+def _merge_highlights(payload: dict, recovered: dict) -> dict:
+    """Fill the highlights list from a targeted recovery call only when the first pass
+    left it empty — a recovery that itself came back empty leaves the payload as-is."""
+    if _string_tuple(payload.get("highlights")):
+        return payload
+    if not _string_tuple(recovered.get("highlights")):
+        return payload
+    merged = dict(payload)
+    merged["highlights"] = recovered["highlights"]
+    return merged
 
 
 def _to_entity(symbol: str, payload: dict, model_id: str) -> EarningsAnalysis:

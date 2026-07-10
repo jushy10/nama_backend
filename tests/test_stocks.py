@@ -1425,6 +1425,16 @@ def _tool_message(**input_overrides) -> _StubMessage:
     return _StubMessage([_StubBlock("tool_use", name="submit_analysis", input=payload)])
 
 
+def _bullets_message(**input_overrides) -> _StubMessage:
+    # The lighter recovery tool the retry path forces — only the two bullet lists.
+    payload = dict(
+        strengths=["High net margin", ""],  # the blank entry should be dropped
+        risks=["Elevated P/E"],
+    )
+    payload.update(input_overrides)
+    return _StubMessage([_StubBlock("tool_use", name="submit_bullets", input=payload)])
+
+
 def test_analysis_use_case_passes_stock_and_earnings():
     analyzer = FakeAnalysisProvider(an_analysis())
     info = GetStockInfo(FakeProvider(stock=a_stock()))
@@ -1872,15 +1882,18 @@ def test_bedrock_adapter_rejects_offschema_value():
 
 def test_bedrock_adapter_retries_once_when_bullets_come_back_empty():
     # The fast Haiku tier sometimes packs everything into the thesis and returns
-    # empty strengths/risks; the adapter retries the forced call once and takes the
-    # recovered, non-empty read (before the result-cache could freeze the empty one).
+    # empty strengths/risks; the adapter retries with the lighter bullets-only tool
+    # and merges the recovered lists in (before the result-cache could freeze the
+    # empty one) — a fraction of the tokens of re-running the whole analysis.
     empty = _tool_message(strengths=[], risks=[])
-    full = _tool_message()  # the default, non-empty bullets
-    client = _SeqStubClient([empty, full])
+    bullets = _bullets_message()  # the targeted recovery call
+    client = _SeqStubClient([empty, bullets])
 
     analysis = BedrockAnalysisProvider(client=client).analyze(a_stock())
 
     assert len(client.calls) == 2  # retried exactly once
+    # the recovery is the lighter, bullets-only forced tool, not the full analysis
+    assert client.calls[1]["tool_choice"] == {"type": "tool", "name": "submit_bullets"}
     assert analysis.strengths == ("High net margin",)
     assert analysis.risks == ("Elevated P/E",)
 
@@ -2670,6 +2683,20 @@ def _earnings_tool_message(**input_overrides) -> _StubMessage:
     )
 
 
+def _earnings_highlights_message(**input_overrides) -> _StubMessage:
+    # The lighter recovery tool the retry path forces — only the highlights list.
+    payload = dict(
+        highlights=[
+            "Beat estimates every recent quarter",
+            "Profit and sales are both growing",
+        ],
+    )
+    payload.update(input_overrides)
+    return _StubMessage(
+        [_StubBlock("tool_use", name="submit_highlights", input=payload)]
+    )
+
+
 def test_earnings_analysis_parses_tool_call_into_entity():
     client = _StubClient(_earnings_tool_message())
     provider = BedrockEarningsAnalysisProvider(client=client, model_id="test-model")
@@ -2735,16 +2762,19 @@ def test_earnings_analysis_rejects_an_offschema_trend():
 
 
 def test_earnings_analysis_retries_once_when_highlights_come_back_empty():
-    # An empty highlights list is retried once and the recovered read used.
+    # An empty highlights list is retried with the lighter highlights-only tool and
+    # the recovered list merged in — a fraction of the tokens of a full re-run.
     empty = _earnings_tool_message(highlights=[])
-    full = _earnings_tool_message()
-    client = _SeqStubClient([empty, full])
+    highlights = _earnings_highlights_message()  # the targeted recovery call
+    client = _SeqStubClient([empty, highlights])
 
     analysis = BedrockEarningsAnalysisProvider(client=client).analyze(
         "AAPL", a_quarterly_timeline()
     )
 
     assert len(client.calls) == 2  # retried exactly once
+    # the recovery is the lighter, highlights-only forced tool, not the full analysis
+    assert client.calls[1]["tool_choice"] == {"type": "tool", "name": "submit_highlights"}
     assert analysis.highlights == (
         "Beat estimates every recent quarter",
         "Profit and sales are both growing",

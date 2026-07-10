@@ -87,7 +87,7 @@ _ANALYSIS_TOOL = {
             "summary": {
                 "type": "string",
                 "description": (
-                    "2-4 short sentences in plain, everyday language: which parts "
+                    "2-3 short sentences in plain, everyday language: which parts "
                     "of the market are up today and which are down, and the overall "
                     "picture — as if to a friend who doesn't follow the markets. "
                     "No jargon."
