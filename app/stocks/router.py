@@ -44,10 +44,7 @@ from app.stocks.finnhub_company_profile_provider import FinnhubCompanyProfilePro
 from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
 from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import (
-    RSI_OVERBOUGHT,
-    RSI_OVERSOLD,
     EmaSeries,
-    RsiSeries,
     SupportLevelSeries,
 )
 from app.stocks.adapters.annual_earnings_estimates_adapter import (
@@ -91,8 +88,6 @@ from app.stocks.schemas import (
     MarketIndexReturnResponse,
     MarketPeriodResponse,
     MarketSummaryResponse,
-    RsiPointResponse,
-    RsiResponse,
     SectorAnalysisResponse,
     SectorBoardResponse,
     SectorHighlightResponse,
@@ -112,7 +107,6 @@ from app.stocks.use_cases import (
     GetStockEma,
     GetStockInfo,
     GetStockLogo,
-    GetStockRsi,
     GetStockSupportLevels,
 )
 
@@ -198,24 +192,16 @@ def get_stock_candles(
     return GetStockCandles(provider)
 
 
-def get_stock_rsi(
-    # RSI rides on the same CandleProvider: it's derived from the OHLC bars,
-    # so the Alpaca instance backs this endpoint too.
-    provider: AlpacaStockDataProvider = Depends(get_provider),
-) -> GetStockRsi:
-    return GetStockRsi(provider)
-
-
 def get_stock_ema(
-    # EMA rides on the same CandleProvider as candles and RSI — it's derived from
-    # the OHLC bars, so the Alpaca instance backs this endpoint too.
+    # EMA rides on the same CandleProvider as candles — it's derived from the
+    # OHLC bars, so the Alpaca instance backs this endpoint too.
     provider: AlpacaStockDataProvider = Depends(get_provider),
 ) -> GetStockEma:
     return GetStockEma(provider)
 
 
 def get_stock_support_levels(
-    # Support levels ride on the same CandleProvider as candles and RSI — they're
+    # Support levels ride on the same CandleProvider as candles — they're
     # detected from the OHLC bars, so the Alpaca instance backs this endpoint too.
     provider: AlpacaStockDataProvider = Depends(get_provider),
 ) -> GetStockSupportLevels:
@@ -501,30 +487,6 @@ def _present_candles(series: CandleSeries) -> CandleSeriesResponse:
     )
 
 
-def _present_rsi(series: RsiSeries) -> RsiResponse:
-    """Presenter: RSI series entity -> HTTP response DTO."""
-    latest = series.latest
-    signal = series.signal
-    return RsiResponse(
-        symbol=series.symbol,
-        timeframe=series.timeframe.value,
-        period=series.period,
-        count=len(series.points),
-        latest=latest.value if latest else None,
-        signal=signal.value if signal else None,
-        overbought=RSI_OVERBOUGHT,
-        oversold=RSI_OVERSOLD,
-        points=[
-            RsiPointResponse(
-                time=int(point.timestamp.timestamp()),
-                timestamp=point.timestamp,
-                value=point.value,
-            )
-            for point in series.points
-        ],
-    )
-
-
 def _present_ema(series: EmaSeries) -> EmaResponse:
     """Presenter: EMA series entity -> HTTP response DTO (one line per period)."""
     return EmaResponse(
@@ -713,46 +675,6 @@ def get_stock_candles_endpoint(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present_candles(series)
-
-
-@router.get("/stocks/{symbol}/rsi", response_model=RsiResponse)
-def get_stock_rsi_endpoint(
-    symbol: str,
-    timeframe: Timeframe = Query(
-        Timeframe.DAY_1, description="Granularity each RSI value is computed over."
-    ),
-    range_: ChartRange = Query(
-        ChartRange.MONTH_6,
-        alias="range",
-        description="How far back to fetch closes. Ignored when `start`/`end` is given.",
-    ),
-    period: int = Query(
-        14, ge=2, le=100, description="RSI lookback in candles (Wilder default 14)."
-    ),
-    start: datetime | None = Query(
-        None, description="Explicit window start (ISO 8601, UTC). Overrides `range`."
-    ),
-    end: datetime | None = Query(
-        None, description="Explicit window end (ISO 8601, UTC). Defaults to now."
-    ),
-    use_case: GetStockRsi = Depends(get_stock_rsi),
-) -> RsiResponse:
-    start, end = _as_utc(start), _as_utc(end)
-    # Explicit start/end win; otherwise derive the window from the range preset.
-    if start is None and end is None:
-        start, end = resolve_window(range_, now=datetime.now(timezone.utc))
-    elif end is None:
-        end = datetime.now(timezone.utc)
-
-    try:
-        series = use_case.execute(symbol, timeframe, period=period, start=start, end=end)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except StockNotFound as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except StockDataUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
-    return _present_rsi(series)
 
 
 # EMA overlay bounds: a chart draws a handful of moving-average lines, each a

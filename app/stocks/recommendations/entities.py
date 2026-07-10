@@ -28,8 +28,7 @@ class RecommendationTrend:
     period (``strong_buy`` … ``strong_sell``). The derived ``score`` collapses
     them to a single consensus mean on the classic 1 (Strong Buy) … 5 (Strong
     Sell) scale — lower is more bullish — and ``consensus`` maps that mean to a
-    five-step label, the same vocabulary the RSI verdict uses so the two reads
-    line up.
+    five-step label.
     """
 
     period: date  # first day of the month this snapshot covers
