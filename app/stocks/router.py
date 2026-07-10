@@ -303,8 +303,8 @@ def get_stock_analysis(
 def get_sector_analysis_provider() -> SectorAnalysisProvider:
     # The sector read is short, plain output (a few sentences + two brief highlight
     # lists), so it runs on the fast Haiku tier — the provider's own default —
-    # rather than inheriting BEDROCK_ANALYSIS_MODEL_ID, which the deploy points at a
-    # larger, slower model for the per-stock analysis. It gets its own override,
+    # rather than inheriting BEDROCK_ANALYSIS_MODEL_ID (the per-stock and ETF
+    # analysis's shared var). It gets its own override,
     # BEDROCK_SECTOR_ANALYSIS_MODEL_ID, so the model can still be swapped without a
     # code change. Bedrock authenticates through the process's AWS credentials, so
     # there's no secret to gate on; a missing 'bedrock' extra surfaces as a 503.
@@ -341,8 +341,8 @@ def get_market_overview(
 def get_market_summary_provider() -> MarketSummaryProvider:
     # The market read is short, plain output (a few sentences + three brief period
     # notes), so it runs on the fast Haiku tier — the provider's own default —
-    # rather than inheriting BEDROCK_ANALYSIS_MODEL_ID (the per-stock analysis's
-    # larger model). It gets its own override, BEDROCK_MARKET_SUMMARY_MODEL_ID, so
+    # rather than inheriting BEDROCK_ANALYSIS_MODEL_ID (the per-stock and ETF
+    # analysis's shared var). It gets its own override, BEDROCK_MARKET_SUMMARY_MODEL_ID, so
     # the model can still be swapped without a code change, exactly like the sector
     # read. Bedrock authenticates through the process's AWS credentials, so there's
     # no secret to gate on; a missing 'bedrock' extra surfaces as a 503.
@@ -371,8 +371,8 @@ def get_market_summary(
 def get_earnings_analysis_provider() -> EarningsAnalysisProvider:
     # The earnings read is short, plain output (a few sentences + a few
     # highlights), so it runs on the fast Haiku tier — the provider's own default
-    # — rather than inheriting BEDROCK_ANALYSIS_MODEL_ID (the per-stock analysis's
-    # larger model). It gets its own override, BEDROCK_EARNINGS_ANALYSIS_MODEL_ID,
+    # — rather than inheriting BEDROCK_ANALYSIS_MODEL_ID (the per-stock and ETF
+    # analysis's shared var). It gets its own override, BEDROCK_EARNINGS_ANALYSIS_MODEL_ID,
     # so the model can still be swapped without a code change, exactly like the
     # sector and market reads. Bedrock authenticates through the process's AWS
     # credentials, so there's no secret to gate on; a missing 'bedrock' extra

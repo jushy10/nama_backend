@@ -187,20 +187,26 @@ module "app" {
     CRON_SYNC_TOKEN     = module.cron_sync_token.arn
   }
 
-  # Plain (non-secret) config for the AI analysis endpoint, so the Bedrock model
-  # and region are swappable without a code change. Using Claude Sonnet 4.6 —
-  # Opus 4.8 isn't entitled to this account on Bedrock. The model id is a
-  # cross-region inference profile and must be access-enabled in this account.
+  # Plain (non-secret) config for the AI analysis endpoints, so the Bedrock model
+  # and region are swappable without a code change. Using Claude Haiku 4.5: the
+  # analysis output is short, plain-language summarization of already-computed
+  # figures, so the fast/cheap tier is the right fit (and Opus 4.8 isn't entitled
+  # to this account on Bedrock anyway). Drives BOTH the per-stock and ETF analysis
+  # — they share this var; the sector, market, and earnings reads have their own
+  # *_MODEL_ID overrides, each already defaulting to Haiku in code. The id is a
+  # cross-region inference profile and must be access-enabled in this account;
+  # Haiku 4.5 has no short alias on Bedrock, so it's the full versioned id (the
+  # short us.anthropic.claude-haiku-4-5 400s with "invalid model identifier").
   extra_environment = {
     BEDROCK_REGION            = "us-east-1"
-    BEDROCK_ANALYSIS_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+    BEDROCK_ANALYSIS_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
   }
 
-  # Grant the task role bedrock:InvokeModel for the AI analysis endpoint
-  # (GET /stocks/{symbol}/analysis). Bedrock authenticates as the task role, so
-  # there's no API key — but the model must be access-enabled in this account /
-  # region, and BEDROCK_ANALYSIS_MODEL_ID may need to name a cross-region
-  # inference profile (defaults to us.anthropic.claude-opus-4-8 in code).
+  # Grant the task role bedrock:InvokeModel for the AI analysis endpoints
+  # (per-stock /stocks/{symbol}/analysis, ETF, sector, market, earnings). Bedrock
+  # authenticates as the task role, so there's no API key — but the model must be
+  # access-enabled in this account / region, and BEDROCK_ANALYSIS_MODEL_ID names a
+  # cross-region inference profile (defaults to us.anthropic.claude-haiku-4-5 in code).
   enable_bedrock_invoke = true
 
   domain_name     = var.domain_name
