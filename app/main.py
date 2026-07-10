@@ -27,12 +27,7 @@ from app.stocks.endpoints.cron_news_endpoints import router as news_cron_router
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     router as quarterly_earnings_router,
 )
-from app.stocks.endpoints.recommendations_endpoints import (
-    router as recommendations_router,
-)
-from app.stocks.endpoints.rating_changes_endpoints import (
-    router as rating_changes_router,
-)
+from app.stocks.endpoints.analyst_endpoints import router as analyst_router
 from app.stocks.endpoints.news_endpoints import router as news_router
 from app.stocks.endpoints.cron_universe_endpoints import (
     router as universe_cron_router,
@@ -143,14 +138,12 @@ app.include_router(quarterly_earnings_router)
 # recent reported fiscal years + upcoming estimated ones, served from the DB cache over
 # yfinance. See app/stocks/endpoints/annual_earnings_endpoints.py.
 app.include_router(annual_earnings_router)
-# The analyst-recommendations read endpoint (GET /stocks/{symbol}/recommendations): the
-# sell-side buy/hold/sell split by month, served from the DB cache over yfinance. See
-# app/stocks/endpoints/recommendations_endpoints.py.
-app.include_router(recommendations_router)
-# The analyst rating-changes read endpoint (GET /stocks/{symbol}/rating-changes): the
-# sell-side's individual upgrade/downgrade actions, newest first, served from the DB cache
-# over yfinance. See app/stocks/endpoints/rating_changes_endpoints.py.
-app.include_router(rating_changes_router)
+# The analyst-info read endpoint (GET /stocks/ticker/{ticker}/analyst-info): a stock's full
+# analyst coverage in one payload — the sell-side buy/hold/sell trends by month, the consensus
+# price target, and the discrete upgrade/downgrade events — served from the DB cache over
+# yfinance. Consolidates the former /recommendations + /rating-changes reads. See
+# app/stocks/endpoints/analyst_endpoints.py.
+app.include_router(analyst_router)
 # The news read endpoint (GET /stocks/{symbol}/news): the stock's recent headlines
 # (title/publisher/link/published time), served from the DB cache over yfinance. See
 # app/stocks/endpoints/news_endpoints.py.

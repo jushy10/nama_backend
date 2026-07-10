@@ -1,10 +1,10 @@
-"""Tests for the recommendations use cases: GetStockRecommendations + SyncRecommendations.
+"""Tests for the recommendations use cases: GetStockAnalystInfo + SyncRecommendations.
 
 Offline: hand-written fakes for the provider and repository ports, so this exercises only
-the orchestration — symbol normalization and pass-through on the read side; which targets
-are refreshed, failure/empty handling, and the per-run limit on the sync side — plus the
-entity rules the slice's responses lean on (score, consensus bands, direction), independent
-of yfinance or the DB.
+the orchestration — symbol normalization, the two-leg compose, and primary-vs-best-effort
+failure handling on the read side; which targets are refreshed, failure/empty handling, and
+the per-run limit on the sync side — plus the entity rules the slice's responses lean on
+(score, consensus bands, direction), independent of yfinance or the DB.
 """
 
 from datetime import date
@@ -29,8 +29,7 @@ from app.stocks.recommendations.repository import (
     RefreshTarget,
 )
 from app.stocks.recommendations.use_cases import (
-    GetStockRatingChanges,
-    GetStockRecommendations,
+    GetStockAnalystInfo,
     RecommendationsSyncReport,
     SyncRecommendations,
 )
@@ -146,79 +145,97 @@ def test_rating_changes_latest_and_empty():
     assert empty.is_empty and empty.latest is None
 
 
-# ───────────────────────────── GetStockRecommendations ─────────────────────────────
+# ───────────────────────────── GetStockAnalystInfo ─────────────────────────────
 
 
-class _FakeReadProvider(RecommendationProvider):
-    def __init__(self, recommendations: AnalystRecommendations) -> None:
+class _FakeRecommendationReadProvider(RecommendationProvider):
+    """Returns a canned run, or raises the given error when one is set."""
+
+    def __init__(self, recommendations=None, *, error=None) -> None:
         self._recommendations = recommendations
+        self._error = error
         self.calls: list[str] = []
 
     def get_recommendations(self, symbol: str) -> AnalystRecommendations:
         self.calls.append(symbol)
+        if self._error is not None:
+            raise self._error
         return self._recommendations
 
 
-def test_get_normalizes_the_symbol_before_calling_the_provider():
-    recs = AnalystRecommendations("AAPL", ())
-    provider = _FakeReadProvider(recs)
-
-    out = GetStockRecommendations(provider).execute("  aapl ")
-
-    assert out is recs
-    assert provider.calls == ["AAPL"]  # trimmed + upper-cased once, at the edge
-
-
-def test_get_rejects_a_blank_symbol():
-    provider = _FakeReadProvider(AnalystRecommendations("", ()))
-    with pytest.raises(ValueError):
-        GetStockRecommendations(provider).execute("   ")
-    assert provider.calls == []  # rejected before the provider is touched
-
-
-def test_get_rejects_obviously_invalid_symbols():
-    provider = _FakeReadProvider(AnalystRecommendations("", ()))
-    for bad in ("123", "TOOLONG", "BR.K"):
-        with pytest.raises(ValueError):
-            GetStockRecommendations(provider).execute(bad)
-    assert provider.calls == []
-
-
-# ───────────────────────────── GetStockRatingChanges ─────────────────────────────
-
-
 class _FakeRatingChangeReadProvider(RatingChangeProvider):
-    def __init__(self, rating_changes: AnalystRatingChanges) -> None:
+    """Returns a canned run, or raises the given error when one is set."""
+
+    def __init__(self, rating_changes=None, *, error=None) -> None:
         self._rating_changes = rating_changes
+        self._error = error
         self.calls: list[str] = []
 
     def get_rating_changes(self, symbol: str) -> AnalystRatingChanges:
         self.calls.append(symbol)
+        if self._error is not None:
+            raise self._error
         return self._rating_changes
 
 
-def test_get_rating_changes_normalizes_the_symbol_before_calling_the_provider():
+def test_analyst_info_normalizes_the_symbol_and_composes_both_legs():
+    recs = _a_run("AAPL")
     changes = AnalystRatingChanges("AAPL", (RatingChange("A Firm", date(2026, 6, 1)),))
-    provider = _FakeRatingChangeReadProvider(changes)
+    recs_provider = _FakeRecommendationReadProvider(recs)
+    rc_provider = _FakeRatingChangeReadProvider(changes)
 
-    out = GetStockRatingChanges(provider).execute("  aapl ")
+    info = GetStockAnalystInfo(recs_provider, rc_provider).execute("  aapl ")
 
-    assert out is changes
-    assert provider.calls == ["AAPL"]  # trimmed + upper-cased once, at the edge
-
-
-def test_get_rating_changes_returns_empty_coverage_as_is():
-    empty = AnalystRatingChanges("ZZZZ", ())
-    provider = _FakeRatingChangeReadProvider(empty)
-    out = GetStockRatingChanges(provider).execute("ZZZZ")
-    assert out.is_empty  # no coverage is not an error
+    assert info.symbol == "AAPL"
+    assert info.recommendations is recs
+    assert info.rating_changes is changes
+    # both ports saw the trimmed + upper-cased symbol, once, at the edge
+    assert recs_provider.calls == ["AAPL"]
+    assert rc_provider.calls == ["AAPL"]
 
 
-def test_get_rating_changes_rejects_a_blank_symbol():
-    provider = _FakeRatingChangeReadProvider(AnalystRatingChanges("", ()))
-    with pytest.raises(ValueError):
-        GetStockRatingChanges(provider).execute("   ")
-    assert provider.calls == []  # rejected before the provider is touched
+def test_analyst_info_returns_empty_coverage_as_is():
+    # No coverage on either leg is a 200-shaped empty result, not an error.
+    info = GetStockAnalystInfo(
+        _FakeRecommendationReadProvider(AnalystRecommendations("ZZZZ", ())),
+        _FakeRatingChangeReadProvider(AnalystRatingChanges("ZZZZ", ())),
+    ).execute("ZZZZ")
+    assert info.recommendations.is_empty
+    assert info.rating_changes.is_empty
+
+
+def test_analyst_info_rating_changes_failure_is_swallowed():
+    # The rating-change leg is best-effort enrichment: a provider failure degrades it to an
+    # empty run while the primary trends are still returned.
+    recs = _a_run("AAPL")
+    for error in (StockNotFound("AAPL"), StockDataUnavailable("AAPL", "yahoo down")):
+        info = GetStockAnalystInfo(
+            _FakeRecommendationReadProvider(recs),
+            _FakeRatingChangeReadProvider(error=error),
+        ).execute("AAPL")
+        assert info.recommendations is recs  # primary trends survive
+        assert info.rating_changes == AnalystRatingChanges("AAPL")  # empty, not an error
+
+
+def test_analyst_info_recommendations_failure_propagates():
+    # The trends are primary — their failure is not swallowed (the endpoint maps it to 404/502).
+    for error in (StockNotFound("AAPL"), StockDataUnavailable("AAPL", "yahoo down")):
+        use_case = GetStockAnalystInfo(
+            _FakeRecommendationReadProvider(error=error),
+            _FakeRatingChangeReadProvider(AnalystRatingChanges("AAPL", ())),
+        )
+        with pytest.raises(type(error)):
+            use_case.execute("AAPL")
+
+
+def test_analyst_info_rejects_invalid_symbols_before_touching_the_providers():
+    recs_provider = _FakeRecommendationReadProvider(AnalystRecommendations("", ()))
+    rc_provider = _FakeRatingChangeReadProvider(AnalystRatingChanges("", ()))
+    use_case = GetStockAnalystInfo(recs_provider, rc_provider)
+    for bad in ("   ", "123", "TOOLONG", "BR.K"):
+        with pytest.raises(ValueError):
+            use_case.execute(bad)
+    assert recs_provider.calls == [] and rc_provider.calls == []
 
 
 # ───────────────────────────── SyncRecommendations ─────────────────────────────

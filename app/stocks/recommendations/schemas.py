@@ -1,9 +1,15 @@
-"""HTTP response DTOs for the recommendations endpoint.
+"""HTTP response DTOs for the analyst-info endpoint.
 
 Pydantic models kept at the edge, deliberately separate from the ``entities`` — the
 serialization shape lives here so the domain stays framework-agnostic. ``total``,
 ``score``, ``consensus``, and ``direction`` are surfaced as plain fields (they're
 computed on the entity) so a client doesn't have to re-derive them.
+
+``AnalystInfoResponse`` is the one response the ``GET /stocks/ticker/{ticker}/analyst-info``
+endpoint serves: the recommendation trends (+ price targets) in a nested block beside the
+discrete rating-change events. The inner ``RecommendationTrendResponse`` /
+``AnalystPriceTargetsResponse`` / ``RatingChangeResponse`` shapes are the reusable pieces it's
+built from.
 """
 
 from datetime import date
@@ -41,25 +47,6 @@ class RecommendationTrendResponse(BaseModel):
     consensus: str | None = None
 
 
-class RecommendationsResponse(BaseModel):
-    """Analyst recommendation trends for a symbol, newest snapshot first.
-
-    The forward "what does the street think?" read for the stock page.
-    ``latest`` is the current month's split and ``direction`` how the consensus
-    shifted from the prior month ("upgraded" / "downgraded" / "unchanged" /
-    ``null``) — the predictive part. ``price_targets`` is the current consensus
-    12-month target block (``null`` when the source serves none). ``count`` is how
-    many monthly snapshots are returned; an empty ``trends`` means no analyst covers
-    the symbol."""
-
-    symbol: str
-    count: int
-    direction: str | None = None
-    latest: RecommendationTrendResponse | None = None
-    price_targets: AnalystPriceTargetsResponse | None = None
-    trends: list[RecommendationTrendResponse]
-
-
 class RatingChangeResponse(BaseModel):
     """One published sell-side rating action — the discrete event behind the trend.
 
@@ -80,13 +67,31 @@ class RatingChangeResponse(BaseModel):
     is_downgrade: bool
 
 
-class RatingChangesResponse(BaseModel):
-    """A stock's individual analyst rating actions, newest first.
+class AnalystRecommendationsBlock(BaseModel):
+    """The recommendation-trend half of the analyst-info card.
 
-    The upgrade/downgrade feed — the events that, aggregated by month, become the
-    recommendation trend. ``count`` is how many actions are returned; an empty
-    ``changes`` means the source publishes none for the symbol."""
+    The monthly buy/hold/sell series (``trends``, newest snapshot first), the current
+    consensus (``latest``) and how it shifted from the prior month (``direction`` —
+    "upgraded" / "downgraded" / "unchanged" / ``null``), plus the current consensus 12-month
+    ``price_targets`` (``null`` when the source serves none). An empty ``trends`` means no
+    analyst covers the symbol."""
 
-    symbol: str
-    count: int
-    changes: list[RatingChangeResponse]
+    direction: str | None = None
+    latest: RecommendationTrendResponse | None = None
+    price_targets: AnalystPriceTargetsResponse | None = None
+    trends: list[RecommendationTrendResponse]
+
+
+class AnalystInfoResponse(BaseModel):
+    """A stock's full analyst coverage in one payload — the response of
+    ``GET /stocks/ticker/{ticker}/analyst-info``.
+
+    ``recommendations`` is the buy/hold/sell trend block (+ consensus + price targets);
+    ``rating_changes`` is the discrete upgrade/downgrade event feed, newest first — the
+    individual actions that, aggregated by month, become the trend. Both are best-effort: an
+    uncovered stock is a 200 with an empty ``trends`` and an empty ``rating_changes``, never a
+    404."""
+
+    ticker: str
+    recommendations: AnalystRecommendationsBlock
+    rating_changes: list[RatingChangeResponse]

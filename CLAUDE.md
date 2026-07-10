@@ -241,9 +241,15 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > month-over-month `direction` as entity properties; plus `AnalystPriceTargets` and
 > `RatingChange`/`AnalystRatingChanges`), plus
 > `ports` / `repository` / `db_repository` / `models` / `use_cases` / `schemas` (both HTTP
-> endpoints live in `app/stocks/endpoints/`: the read `recommendations_endpoints.py` and the
-> `cron_recommendations_endpoints.py`). Serves `GET /stocks/{symbol}/recommendations`,
-> newest snapshot first, now with a `price_targets` block. Live source is **yfinance (Yahoo)**
+> endpoints live in `app/stocks/endpoints/`: the read `analyst_endpoints.py` and the
+> `cron_recommendations_endpoints.py`). The read serves **one consolidated payload** at
+> `GET /stocks/ticker/{ticker}/analyst-info` — the recommendation trends (newest snapshot first,
+> with a `price_targets` block) **and** the rating-change events together, composed by the
+> `GetStockAnalystInfo` use case (trends primary, events best-effort). It replaced the two
+> separate reads (`GET /stocks/{symbol}/recommendations` + `GET /stocks/{symbol}/rating-changes`,
+> whose endpoint modules were removed); the path is grouped under the `/stocks/ticker/{ticker}`
+> resource because it's a per-ticker card the FE renders, though the data still comes from this
+> slice. Live source is **yfinance (Yahoo)**
 > via `Ticker.recommendations` + `Ticker.analyst_price_targets`
 > (`adapters/yfinance_recommendations_adapter.py`) — this replaced Finnhub's
 > `/stock/recommendation`, dropping the endpoint's `FINNHUB_API_KEY` 503 gate — behind the
@@ -279,13 +285,14 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > history). Folded into the **same** recommendations sweep — `SyncRecommendations` takes an
 > optional rating-change provider + repository and, after a stock's trends refresh succeeds,
 > stores its events too (best-effort: its own failure is swallowed) — rather than a second pass
-> over the anchor, which would double the rate-limited Yahoo round-trips. The read endpoint
-> `GET /stocks/{symbol}/rating-changes` (`endpoints/rating_changes_endpoints.py`,
-> `GetStockRatingChanges` use case) serves the events newest-first with derived
-> `is_upgrade`/`is_downgrade` flags, behind the same **read-through** DB cache as the trends read
-> (`adapters/db_cached_rating_changes_adapter.py` — DB-first, lazy-fill on a cold miss); the
-> DTO carries no consensus, just the per-firm actions. Best-effort like the trends read: a
-> symbol with no published actions is a 200 with an empty `changes` list, not a 404.
+> over the anchor, which would double the rate-limited Yahoo round-trips. The events are served
+> as the `rating_changes` block of the consolidated `GET /stocks/ticker/{ticker}/analyst-info`
+> payload (above) — newest-first, with derived `is_upgrade`/`is_downgrade` flags, behind the same
+> **read-through** DB cache as the trends read (`adapters/db_cached_rating_changes_adapter.py` —
+> DB-first, lazy-fill on a cold miss). The `GetStockAnalystInfo` use case reads this leg through
+> the `RatingChangeProvider` port and **swallows its failures** (an empty run, never propagated)
+> so the best-effort events can't sink the primary trends. Best-effort throughout: a symbol with
+> no published actions is a 200 with an empty `rating_changes` list, not a 404.
 
 > **The news sub-slice — `app/stocks/news/`.** A stock's recent news headlines, built on the
 > same skeleton as the recommendations sub-slice: its **own `entities.py`** (`NewsArticle` +
@@ -612,8 +619,8 @@ app/
     │   ├── repository.py        #    abstract persistence ports (RecommendationsRepository + RatingChangesRepository)
     │   ├── db_repository.py     #    concrete repos: map rows⇄entities, call models (targets on latest trend row; rating changes insert-only)
     │   ├── models.py            #    stock_analyst_trends (+ target_* cols) & stock_analyst_rating_changes ORM + query fns (anchor from stocks/)
-    │   ├── use_cases.py         #    GetStockRecommendations + SyncRecommendations (one sweep stores trends+targets AND rating changes)
-    │   └── schemas.py           #    HTTP response DTOs incl. price_targets (the HTTP endpoints live in endpoints/)
+    │   ├── use_cases.py         #    GetStockAnalystInfo (AnalystInfo composite: trends primary + rating-change events best-effort) + SyncRecommendations (one sweep stores trends+targets AND rating changes)
+    │   └── schemas.py           #    HTTP response DTOs: AnalystInfoResponse (recommendations block incl. price_targets + rating_changes) (the HTTP endpoint lives in endpoints/)
     ├── news/               # ── news sub-slice (its OWN entities.py; merge-upsert cache, pruned to newest 50/stock):
     │   ├── entities.py          #    NewsArticle (is_video) + StockNews (slice-local)
     │   ├── ports.py             #    live-source port (NewsProvider)
@@ -670,8 +677,7 @@ app/
     │   ├── cron_annual_earnings_endpoints.py     #  POST /internal/earnings/annual/sync
     │   ├── annual_earnings_endpoints.py          #  GET /stocks/{symbol}/earnings/annual
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
-    │   ├── recommendations_endpoints.py          #  GET /stocks/{symbol}/recommendations
-    │   ├── rating_changes_endpoints.py           #  GET /stocks/{symbol}/rating-changes (upgrade/downgrade feed)
+    │   ├── analyst_endpoints.py                  #  GET /stocks/ticker/{ticker}/analyst-info (trends + price targets + rating-change events, consolidated)
     │   ├── cron_news_endpoints.py                #  POST /internal/news/sync
     │   ├── news_endpoints.py                     #  GET /stocks/{symbol}/news
     │   ├── cron_revenue_segments_endpoints.py    #  POST /internal/revenue-segments/sync
