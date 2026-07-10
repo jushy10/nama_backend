@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 
 @dataclass(frozen=True)
@@ -358,7 +358,13 @@ class AnalystRatingChanges:
         """The most recent action, or ``None`` when there are none."""
         return self.changes[0] if self.changes else None
 
-    def top_credible_firms(self, limit: int = 10) -> tuple[FirmRating, ...]:
+    def top_credible_firms(
+        self,
+        limit: int = 10,
+        *,
+        as_of: date | None = None,
+        max_age_days: int = 365,
+    ) -> tuple[FirmRating, ...]:
         """The most credible firms covering the stock, each with its current stance.
 
         Walks the newest-first ``changes`` keeping the first (newest) action seen per firm,
@@ -367,14 +373,24 @@ class AnalystRatingChanges:
         few credible firms with a stored action. Pure: the ranking is curated reference data
         (``FIRM_CREDIBILITY``), no I/O. Dedup is by credibility identity (rank), so the same
         firm published under two labels (``Cowen`` / ``TD Cowen``) collapses to one row.
+
+        When ``as_of`` is given, a firm whose most recent action predates it by more than
+        ``max_age_days`` (one year by default) is dropped — a firm that stopped covering the
+        stock over a year ago is stale, not a current read. ``as_of=None`` applies no recency
+        filter; the caller supplies the reference date (this entity holds no clock).
         """
+        cutoff = as_of - timedelta(days=max_age_days) if as_of is not None else None
         seen: set[int] = set()
         ranked: list[FirmRating] = []
         for change in self.changes:  # newest first
             rank = _credibility_rank(change.firm)
             if rank is None or rank in seen:
                 continue
+            # First (newest) action for this firm: mark it seen so its older rows are skipped,
+            # then drop the firm entirely when even that newest action is stale.
             seen.add(rank)
+            if cutoff is not None and change.published_at < cutoff:
+                continue
             ranked.append(
                 FirmRating(
                     firm=change.firm,

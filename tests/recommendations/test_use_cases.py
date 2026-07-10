@@ -7,7 +7,7 @@ the per-run limit on the sync side — plus the entity rules the slice's respons
 (score, consensus bands, direction), independent of yfinance or the DB.
 """
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -308,6 +308,25 @@ def test_top_credible_firms_caps_at_ten_by_default():
     assert [f.rank for f in top] == list(range(10))
 
 
+def test_top_credible_firms_drops_targets_older_than_a_year():
+    as_of = date(2026, 7, 10)
+    changes = AnalystRatingChanges(
+        "X",
+        (
+            _change("RBC Capital", date(2026, 3, 1), target=270),  # recent → kept (RBC's newest)
+            _change("RBC Capital", date(2024, 1, 1), target=100),  # RBC's stale older row, ignored
+            _change("UBS", date(2025, 7, 10), target=280),  # exactly one year old → kept (inclusive)
+            _change("Evercore ISI Group", date(2025, 7, 9), target=400),  # a day past a year → dropped
+            _change("Truist Securities", date(2024, 6, 1), target=307),  # well over a year → dropped
+        ),
+    )
+    top = changes.top_credible_firms(as_of=as_of)
+    assert [f.firm for f in top] == ["RBC Capital", "UBS"]  # Evercore + Truist drop off as stale
+    assert top[0].target == 270  # RBC's newest in-window action, not its 2024 one
+    # No as_of → no recency filter: all four distinct credible firms return.
+    assert len(changes.top_credible_firms()) == 4
+
+
 def test_top_credible_firms_carry_upside_percent():
     top = AnalystRatingChanges(
         "X", (_change("RBC Capital", date(2026, 5, 1), target=270.0),)
@@ -327,6 +346,7 @@ def test_analyst_info_populates_top_firms_from_rating_changes():
     info = GetStockAnalystInfo(
         _FakeRecommendationReadProvider(_a_run("NVDA")),
         _FakeRatingChangeReadProvider(changes),
+        now=datetime(2026, 6, 1, tzinfo=timezone.utc),  # pin the recency window
     ).execute("NVDA")
     assert [f.firm for f in info.top_firms] == ["RBC Capital"]  # Rosenblatt excluded
     assert info.top_firms[0].rating == "Outperform"
