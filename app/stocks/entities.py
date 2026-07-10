@@ -523,6 +523,14 @@ class InvestmentAnalysis:
     model: str
     generated_at: datetime
 
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its full substance — both the bull case
+        (``strengths``) and the bear case (``risks``). The AI-analysis use cases
+        refuse to cache an analysis that isn't complete, so a rare empty-list model
+        result is never frozen for the cache TTL; the next view regenerates."""
+        return bool(self.strengths and self.risks)
+
 
 class MarketTone(str, Enum):
     """The risk posture the day's sector rotation implies.

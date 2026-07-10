@@ -446,7 +446,9 @@ class GetEtfAnalysis:
             return cached
         detail = self._detail.execute(normalized, include=self._SNAPSHOT_INCLUDES)
         analysis = self._analyzer.analyze(detail)
-        if self._cache is not None:
+        # Cache only a *complete* read (both strengths and risks present), so a rare
+        # empty-list model result never freezes for the TTL — the next view regenerates.
+        if self._cache is not None and analysis.is_complete:
             self._cache.put(analysis)
         return analysis
 

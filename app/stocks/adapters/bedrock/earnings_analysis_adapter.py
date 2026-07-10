@@ -139,6 +139,10 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
     # Short, plain output (a few sentences + a few highlights), so a tight cap is
     # ample — and fewer generated tokens is the main lever on latency.
     _MAX_TOKENS = 900
+    # Bedrock does not enforce the tool schema's minItems, and the fast Haiku tier
+    # occasionally returns an empty highlights list anyway. Re-issue the forced call
+    # up to this many *extra* times to recover it. Only fires on the miss.
+    _MAX_EMPTY_RETRIES = 2
 
     def __init__(
         self,
@@ -168,10 +172,12 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
         payload = self._invoke(prompt, symbol)
         # The forced tool asks for a few highlights, but Bedrock does not enforce
         # array length, and the fast Haiku tier sometimes packs everything into the
-        # summary and hands back an empty highlights list. Retry once to recover
-        # them before the result-cache freezes it for the TTL (the same retry-once
-        # stance the shared yfinance session takes on a transient miss).
-        if _missing_highlights(payload):
+        # summary and hands back an empty highlights list. Re-issue a bounded number
+        # of times to recover them (this read isn't result-cached, so a view that
+        # still came back empty would otherwise simply show none).
+        for _ in range(self._MAX_EMPTY_RETRIES):
+            if not _missing_highlights(payload):
+                break
             payload = self._invoke(prompt, symbol) or payload
         if payload is None:
             raise StockDataUnavailable(

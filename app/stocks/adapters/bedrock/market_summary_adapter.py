@@ -175,6 +175,10 @@ class BedrockMarketSummaryProvider(MarketSummaryProvider):
     # Short, plain output (a few sentences + three brief period notes), so a tight
     # cap is ample — and fewer generated tokens is the main lever on latency.
     _MAX_TOKENS = 800
+    # Bedrock does not enforce the tool schema's minItems, and the fast Haiku tier
+    # occasionally returns an empty periods list anyway. Re-issue the forced call
+    # up to this many *extra* times to recover the notes. Only fires on the miss.
+    _MAX_EMPTY_RETRIES = 2
 
     def __init__(
         self,
@@ -199,10 +203,12 @@ class BedrockMarketSummaryProvider(MarketSummaryProvider):
         payload = self._invoke(prompt)
         # The forced tool asks for a note per timeframe, but Bedrock does not
         # enforce array length, and the fast Haiku tier sometimes fills only the
-        # summary and hands back an empty periods list. Retry once to recover the
-        # notes before the result-cache freezes it for the TTL (the same retry-once
-        # stance the shared yfinance session takes on a transient miss).
-        if _missing_notes(payload):
+        # summary and hands back an empty periods list. Re-issue a bounded number of
+        # times to recover the notes (this read isn't result-cached, so a view that
+        # still came back empty would otherwise show the periods without notes).
+        for _ in range(self._MAX_EMPTY_RETRIES):
+            if not _missing_notes(payload):
+                break
             payload = self._invoke(prompt) or payload
         if payload is None:
             raise StockDataUnavailable(

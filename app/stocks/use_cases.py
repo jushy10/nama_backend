@@ -405,9 +405,12 @@ class GetStockAnalysis:
             self._recommendations(normalized),
             self._industry_valuation(normalized),
         )
-        # Store for the next viewer. Best-effort by contract (a write failure is
-        # swallowed in the adapter), so it never sinks the freshly-made analysis.
-        if self._cache is not None:
+        # Store for the next viewer — but only a *complete* read (both strengths
+        # and risks present). Refusing to cache an incomplete analysis means a rare
+        # empty-list model result is never frozen for the TTL: the next view
+        # regenerates instead of serving empty bullets. Best-effort by contract (a
+        # write failure is swallowed in the adapter), so it never sinks the analysis.
+        if self._cache is not None and analysis.is_complete:
             self._cache.put(analysis)
         return analysis
 

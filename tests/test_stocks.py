@@ -1449,6 +1449,19 @@ def test_analysis_cache_miss_generates_and_stores():
     assert cache.puts == [generated]
 
 
+def test_analysis_incomplete_read_is_not_cached():
+    # A model read missing its bullet lists is returned to the caller but never
+    # frozen in the cache, so the next view regenerates instead of serving empty
+    # strengths/risks for the whole TTL.
+    incomplete = an_analysis(strengths=(), risks=())
+    analyzer = FakeAnalysisProvider(incomplete)
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    cache = FakeAnalysisCache()  # empty
+    result = GetStockAnalysis(info, analyzer, cache=cache).execute("AAPL")
+    assert result is incomplete  # still returned to the caller
+    assert cache.puts == []  # but not stored
+
+
 def test_stock_info_gathers_the_enrichment_calls_concurrently():
     # Deterministic proof the four independent enrichment reads run in parallel, not
     # in series: each waits on a 4-party barrier. If they truly overlap, all four
@@ -1788,15 +1801,16 @@ def test_bedrock_adapter_retries_once_when_bullets_come_back_empty():
     assert analysis.risks == ("Elevated P/E",)
 
 
-def test_bedrock_adapter_accepts_empty_bullets_after_a_failed_retry():
-    # If the one retry also comes back empty, keep the read (a thesis with no
-    # bullets beats failing the endpoint) rather than looping or raising.
+def test_bedrock_adapter_accepts_empty_bullets_after_exhausting_retries():
+    # If every attempt comes back empty, keep the read (a thesis with no bullets
+    # beats failing the endpoint) rather than looping forever or raising — and the
+    # use case refuses to cache it, so the next view regenerates.
     empty = _tool_message(strengths=[], risks=[])
-    client = _SeqStubClient([empty, empty])
+    client = _SeqStubClient([empty])  # the stub repeats the empty message every call
 
     analysis = BedrockAnalysisProvider(client=client).analyze(a_stock())
 
-    assert len(client.calls) == 2  # exactly one retry, then accept
+    assert len(client.calls) == 3  # initial call + 2 bounded retries, then accept
     assert analysis.strengths == () and analysis.risks == ()
     assert analysis.thesis  # the rest of the read still comes through
 
