@@ -238,21 +238,25 @@ class GetTickerCard:
             if self._repository is not None
             else StoredTickerFacts()
         )
+        # Fundamentals is opt-in now that market cap comes off the anchor: it's fetched
+        # only for the blocks that still need it (dividend, and the metrics' margins +
+        # FCF multiples) — a bare card costs no fundamentals call. Fetched once here so
+        # the valuation can price its FCF leg off the same call the margins ride.
+        fundamentals = (
+            self._get_fundamentals(normalized)
+            if wanted & {"dividend", "metrics"}
+            else None
+        )
         return TickerCard(
             quote=quote,
             include=wanted,
             asset_type=self._get_asset_type(normalized),
             valuation=(
-                self._get_valuation(normalized, quote) if "metrics" in wanted else None
-            ),
-            # Fundamentals is opt-in now that market cap comes off the anchor: it's
-            # fetched only for the blocks that still need it (dividend, and the metrics'
-            # margins) — a bare card costs no fundamentals call.
-            fundamentals=(
-                self._get_fundamentals(normalized)
-                if wanted & {"dividend", "metrics"}
+                self._get_valuation(normalized, quote, fundamentals)
+                if "metrics" in wanted
                 else None
             ),
+            fundamentals=fundamentals,
             performance=(
                 self._get_performance(normalized) if "performance" in wanted else None
             ),
@@ -279,15 +283,20 @@ class GetTickerCard:
             return ASSET_TYPE_ETF
         return ASSET_TYPE_EQUITY
 
-    def _get_valuation(self, symbol: str, quote: Quote) -> TickerValuation:
-        # The trailing P/E, on the consensus basis: the quarterly slice's timeline
-        # owns the TTM rule and this just prices it at today's quote. Best-effort
-        # (see _get_ttm_eps) — an uncovered/blocked symbol yields a null multiple,
-        # never a failed card.
+    def _get_valuation(
+        self, symbol: str, quote: Quote, fundamentals: StockFundamentals | None
+    ) -> TickerValuation:
+        # The trailing multiples at today's quote: the P/E off the quarterly slice's
+        # consensus TTM (the timeline owns the TTM rule), and the FCF multiples off the
+        # fundamentals vendor's trailing FCF/share (already fetched for the margins).
+        # Both legs best-effort — an uncovered/blocked symbol yields null multiples,
+        # never a failed card (see _get_ttm_eps; fundamentals degrades to None upstream).
+        metrics = fundamentals.metrics if fundamentals else None
         return TickerValuation(
             symbol=symbol,
             price=quote.price,
             ttm_eps=self._get_ttm_eps(symbol),
+            fcf_per_share=metrics.fcf_per_share if metrics else None,
         )
 
     def _get_ttm_eps(self, symbol: str) -> float | None:

@@ -214,6 +214,10 @@ def _present(card: TickerCard) -> TickerCardResponse:
         trailing = fundamentals.metrics if fundamentals else None
         metrics = TickerMetricsResponse(
             pe=card.valuation.trailing_pe if card.valuation else None,
+            # The FCF pair rides the valuation too (price / the vendor's trailing
+            # FCF/share), so it's on the same live quote as the P/E.
+            price_to_fcf=card.valuation.price_to_fcf if card.valuation else None,
+            fcf_yield=card.valuation.fcf_yield if card.valuation else None,
             gross_margin=trailing.gross_margin if trailing else None,
             operating_margin=trailing.operating_margin if trailing else None,
             net_margin=trailing.net_margin if trailing else None,

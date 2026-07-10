@@ -86,6 +86,9 @@ def _a_card(
                 price=975.56,
                 # Consensus-basis TTM: trailing_pe = 975.56 / 43.55 -> 22.4.
                 ttm_eps=43.55,
+                # FCF/share -> price_to_fcf = 975.56 / 48.7 -> 20.03,
+                # fcf_yield = 48.7 / 975.56 * 100 -> 4.99.
+                fcf_per_share=48.7,
             )
             if "metrics" in include
             else None
@@ -188,10 +191,13 @@ def test_presents_the_optin_blocks_when_included():
     assert body["performance"] == {
         "1w": 1.5, "1m": 8.0, "3m": 40.0, "6m": 90.0, "ytd": 120.0, "1y": 150.0,
     }
-    # The trailing P/E rides the valuation's consensus-basis TTM (not the
-    # vendor's KeyMetrics.pe); the margins ride the fundamentals.
+    # The trailing P/E and the FCF pair ride the valuation (P/E off the
+    # consensus-basis TTM, the FCF multiples off the vendor's FCF/share at the live
+    # quote — not the vendor's own KeyMetrics.pe); the margins ride the fundamentals.
     assert body["metrics"] == {
         "pe": 22.4,  # 975.56 / 43.55 — the valuation's trailing_pe
+        "price_to_fcf": 20.03,  # 975.56 / 48.7
+        "fcf_yield": 4.99,  # 48.7 / 975.56 * 100
         "gross_margin": 52.1,
         "operating_margin": 38.9,
         "net_margin": 33.5,
@@ -223,7 +229,10 @@ def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
         result=TickerCard(
             quote=card.quote,
             include=card.include,
-            valuation=card.valuation,  # the consensus half still serves
+            # A Finnhub outage leaves the valuation with its consensus-basis TTM but
+            # no FCF/share (that leg is threaded off the same fundamentals call), so
+            # the P/E still serves while the FCF multiples null out.
+            valuation=TickerValuation(symbol="MU", price=975.56, ttm_eps=43.55),
             fundamentals=None,  # keyless or failed Finnhub
             performance=None,
             name=None,
@@ -242,11 +251,13 @@ def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
     assert body["market_cap"] is None
     assert body["dividend"] is None  # requested, but nothing to serve
     # The metrics block still appears (it was requested) with its
-    # fundamentals-backed margins null; the valuation-backed trailing P/E
-    # (quarterly TTM) and the anchor-backed growth pair still serve, since
-    # neither rides Finnhub.
+    # fundamentals-backed margins null — and the FCF pair null too, since it rides
+    # the same fundamentals call; the valuation-backed trailing P/E (quarterly TTM)
+    # and the anchor-backed growth pair still serve, since neither rides Finnhub.
     assert body["metrics"] == {
         "pe": 22.4,
+        "price_to_fcf": None,
+        "fcf_yield": None,
         "gross_margin": None,
         "operating_margin": None,
         "net_margin": None,

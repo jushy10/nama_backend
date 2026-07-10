@@ -397,9 +397,17 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > slice carries `eps_actual_consensus`); the TTM read reuses the quarterly slice's
 > read-through DB cache through its `QuarterlyEarningsProvider` port (lazy fill on a cold
 > miss) and is best-effort even when requested — a Yahoo-blocked fetch nulls the multiple,
-> never the card. Beside it: `gross_margin`/`operating_margin`/`net_margin` (off the
-> fundamentals call). `trailing_pe` is the only computed field on the slice-local
-> `TickerValuation` entity; the entity's `symbol` is renamed `ticker` at the DTO.
+> never the card. Beside it: the **free-cash-flow valuation pair** `price_to_fcf` +
+> `fcf_yield` — live price ÷ the fundamentals vendor's trailing `fcf_per_share` (the same
+> `KeyMetrics.fcf_per_share` the snapshot carries), computed on the card's live quote the way
+> `trailing_pe` prices the consensus EPS (deliberately *not* the vendor's own P/FCF snapshot,
+> which rides its stale price). `price_to_fcf` is `null` for a non-positive FCF (an undefined
+> multiple, the same guard `trailing_pe` uses on a loss), while `fcf_yield` keeps its sign (a
+> negative yield is a real "burning cash" read), so the two diverge for a cash-burner. Both
+> ride the fundamentals call, so a keyless/blocked Finnhub nulls them (unlike the P/E, which
+> rides the quarterly TTM). And: `gross_margin`/`operating_margin`/`net_margin` (off the
+> fundamentals call). `trailing_pe`/`price_to_fcf`/`fcf_yield` are the computed fields on the
+> slice-local `TickerValuation` entity; the entity's `symbol` is renamed `ticker` at the DTO.
 > The `metrics` block also carries the **latest trailing YoY growth** —
 > `revenue_growth_yoy` + `eps_growth_yoy` (percent, EPS on the consensus basis) — read
 > straight off the `stocks` anchor where the annual slice writes them (so they ride the
