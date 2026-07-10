@@ -30,6 +30,7 @@ Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 
 from datetime import datetime, timezone
 
+from app.stocks.adapters.bedrock.cost import CostAccumulator
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.entities import EarningsAnalysis, EarningsTrend
@@ -169,26 +170,35 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
         annual: AnnualEarningsTimeline | None = None,
     ) -> EarningsAnalysis:
         prompt = _render_prompt(symbol, quarterly, annual)
-        payload = self._invoke(prompt, symbol)
-        # The forced tool asks for a few highlights, but Bedrock does not enforce
-        # array length, and the fast Haiku tier sometimes packs everything into the
-        # summary and hands back an empty highlights list. Re-issue a bounded number
-        # of times to recover them (this read isn't result-cached, so a view that
-        # still came back empty would otherwise simply show none).
-        for _ in range(self._MAX_EMPTY_RETRIES):
-            if not _missing_highlights(payload):
-                break
-            payload = self._invoke(prompt, symbol) or payload
-        if payload is None:
-            raise StockDataUnavailable(
-                symbol, "earnings analysis model returned no structured result"
-            )
-        return _to_entity(symbol, payload, self._model_id)
+        # One cost line per endpoint call: the retry loop below may make several model
+        # calls, so their token usage is summed and logged once (in a finally, so a
+        # mid-retry failure still records what was spent).
+        costs = CostAccumulator()
+        try:
+            payload = self._invoke(prompt, symbol, costs)
+            # The forced tool asks for a few highlights, but Bedrock does not enforce
+            # array length, and the fast Haiku tier sometimes packs everything into the
+            # summary and hands back an empty highlights list. Re-issue a bounded number
+            # of times to recover them (this read isn't result-cached, so a view that
+            # still came back empty would otherwise simply show none).
+            for _ in range(self._MAX_EMPTY_RETRIES):
+                if not _missing_highlights(payload):
+                    break
+                payload = self._invoke(prompt, symbol, costs) or payload
+            if payload is None:
+                raise StockDataUnavailable(
+                    symbol, "earnings analysis model returned no structured result"
+                )
+            return _to_entity(symbol, payload, self._model_id)
+        finally:
+            costs.log(label="earnings analysis", model_id=self._model_id, key=symbol)
 
-    def _invoke(self, prompt: str, key: str) -> dict | None:
+    def _invoke(self, prompt: str, key: str, costs: CostAccumulator) -> dict | None:
         """One forced-tool call, returning the ``submit_earnings_analysis``
         arguments (or ``None`` if the model somehow didn't call the tool). Any
-        SDK/botocore failure is mapped to this port's ``StockDataUnavailable``."""
+        SDK/botocore failure is mapped to this port's ``StockDataUnavailable``. The
+        call's token usage is folded into ``costs`` for the caller's single
+        per-endpoint cost line."""
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -202,6 +212,7 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
             raise StockDataUnavailable(
                 key, f"earnings analysis model call failed: {exc}"
             ) from exc
+        costs.add(message)
         return _tool_payload(message)
 
 
