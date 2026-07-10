@@ -6,7 +6,7 @@ other slices keep). These back ``GET /stocks/ticker`` (the search list) and
 ``GET /stocks/classifications`` (the filter menus).
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class StockSearchItemResponse(BaseModel):
@@ -53,6 +53,38 @@ class StockSearchResponse(BaseModel):
     offset: int
     count: int
     results: list[StockSearchItemResponse]
+
+
+class AiScreenInterpretationResponse(BaseModel):
+    """The filters an AI screen resolved a plain-English request into — echoed back so the FE
+    can show the user *what was applied* and let them tweak it in the manual controls (an AI
+    screen isn't a black box). Every field is a plain, serializable value that maps one-to-one
+    onto the manual search's query params: ``sort`` / ``direction`` and the ``market_cap_tiers``
+    are the same slug strings ``GET /stocks/ticker`` accepts, ``sectors`` / ``industries`` the
+    stored slugs. All optional/empty when the request didn't call for them (an all-unset
+    interpretation is a neutral browse)."""
+
+    query: str | None = None
+    sectors: list[str] = Field(default_factory=list)
+    industries: list[str] = Field(default_factory=list)
+    in_sp500: bool | None = None
+    in_nasdaq100: bool | None = None
+    market_cap_tiers: list[str] = Field(default_factory=list)
+    sort: str | None = None
+    direction: str
+    limit: int | None = None
+
+
+class AiScreenResponse(BaseModel):
+    """The response to ``GET /stocks/ai-search``: the interpreted filters plus the matched page.
+
+    ``results`` is the exact ``StockSearchResponse`` the manual ``GET /stocks/ticker`` returns
+    (same rows, same pagination envelope), so both search paths present identically; ``interpreted``
+    is the AI's reading of the request, for the FE to surface and make editable.
+    """
+
+    interpreted: AiScreenInterpretationResponse
+    results: StockSearchResponse
 
 
 class ClassificationsResponse(BaseModel):

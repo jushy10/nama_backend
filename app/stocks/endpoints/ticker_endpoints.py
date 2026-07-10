@@ -72,6 +72,7 @@ from app.stocks.router import (
     get_options_provider,
     get_profile_provider,
     get_provider,
+    get_screener_translator,
 )
 from app.stocks.schemas import StockPerformanceResponse
 from app.stocks.ticker.db_repository import SqlTickerRepository
@@ -95,6 +96,7 @@ from app.stocks.ticker.use_cases import (
 )
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.universe.entities import (
+    AiScreenResult,
     Classifications,
     IndustryValuation,
     MarketCapTier,
@@ -102,13 +104,17 @@ from app.stocks.universe.entities import (
     StockSearchPage,
     StockSort,
 )
+from app.stocks.universe.ports import ScreenerQueryTranslator
 from app.stocks.universe.schemas import (
+    AiScreenInterpretationResponse,
+    AiScreenResponse,
     ClassificationsResponse,
     IndustryValuationResponse,
     StockSearchItemResponse,
     StockSearchResponse,
 )
 from app.stocks.universe.use_cases import (
+    AiScreenStocks,
     GetIndustryValuation,
     ListClassifications,
     SearchStocks,
@@ -545,6 +551,79 @@ def search_stocks_endpoint(
     # query without going stale.
     response.headers["Cache-Control"] = "public, max-age=60"
     return _present_search(page)
+
+
+def get_ai_search_use_case(
+    db: Session = Depends(get_db),
+    translator: ScreenerQueryTranslator = Depends(get_screener_translator),
+) -> AiScreenStocks:
+    # The AI screen composes the ordinary search: one request-scoped read repository backs
+    # both the translator's allowed-vocabulary read and the search itself. The translator
+    # (Bedrock) is the only non-DB dependency — it carries its own 503 gate in the wiring.
+    repository = SqlStockSearchRepository(db)
+    return AiScreenStocks(translator, SearchStocks(repository), repository)
+
+
+def _present_ai_screen(result: AiScreenResult) -> AiScreenResponse:
+    """Presenter: AI-screen result entity -> HTTP response DTO (interpreted filters + page)."""
+    intent = result.intent
+    return AiScreenResponse(
+        interpreted=AiScreenInterpretationResponse(
+            query=intent.query,
+            sectors=list(intent.sectors),
+            industries=list(intent.industries),
+            in_sp500=intent.in_sp500,
+            in_nasdaq100=intent.in_nasdaq100,
+            market_cap_tiers=[t.value for t in intent.market_cap_tiers],
+            sort=intent.sort.value if intent.sort is not None else None,
+            direction=intent.direction.value,
+            limit=intent.limit,
+        ),
+        results=_present_search(result.page),
+    )
+
+
+@router.get("/stocks/ai-search", response_model=AiScreenResponse)
+def ai_search_stocks_endpoint(
+    response: Response,
+    q: str = Query(
+        ...,
+        min_length=1,
+        description=(
+            "A plain-English screen request — e.g. 'mega-cap technology stocks', "
+            "'semiconductor companies', or 'top S&P 500 names by revenue growth'. An AI "
+            "translates it into the same filters the manual /stocks/ticker search accepts and "
+            "runs it, so results are always real screened stocks (never invented tickers). The "
+            "response echoes the interpreted filters so the FE can show and edit them."
+        ),
+    ),
+    limit: int | None = Query(
+        None,
+        ge=1,
+        le=SearchStocks.MAX_LIMIT,
+        description=(
+            "Override the result count. Omit to let the AI decide (it honours 'top N'); "
+            "otherwise this wins over the AI's choice. Max 100."
+        ),
+    ),
+    offset: int = Query(0, ge=0, description="Rows to skip, for pagination."),
+    use_case: AiScreenStocks = Depends(get_ai_search_use_case),
+) -> AiScreenResponse:
+    """Screen the universe from a natural-language request. A blank request is a 400; a
+    translation failure (the model/vendor couldn't parse it) is a 502 — distinct from a
+    well-understood request that simply matched no stocks (a 200 with an empty page)."""
+    try:
+        result = use_case.execute(query=q, limit=limit, offset=offset)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(
+            502, "AI stock screening is temporarily unavailable."
+        ) from exc
+    # Deterministic for a given request against the slow-moving universe — cache briefly like
+    # the manual search so a burst of identical queries collapses onto one screen.
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return _present_ai_screen(result)
 
 
 @router.get("/stocks/classifications", response_model=ClassificationsResponse)
