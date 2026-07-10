@@ -44,23 +44,31 @@ _EXPENSIVE_PERCENTILE = 75.0
 
 @dataclass(frozen=True)
 class TickerValuation:
-    """One symbol's trailing P/E at today's price.
+    """One symbol's trailing valuation multiples at today's price.
 
-    The leg arrives precomputed (the use case derives ``ttm_eps`` from the
-    quarterly-earnings timeline); the entity owns the rule that turns it into the
-    multiple. ``ttm_eps`` is optional — the TTM sum needs four cached quarters —
-    so a symbol missing it simply carries ``None`` around a live price.
+    The per-share legs arrive precomputed (the use case derives ``ttm_eps`` from
+    the quarterly-earnings timeline and takes ``fcf_per_share`` off the
+    fundamentals call); the entity owns the rules that turn them into multiples.
+    Each leg is optional — the TTM sum needs four cached quarters, and the FCF
+    figure needs a covering fundamentals vendor — so a symbol missing one simply
+    carries ``None`` around a live price.
 
     ``ttm_eps`` is deliberately on the *consensus (adjusted)* basis — the sum of
     the 4 newest reported quarters' "Reported EPS" — not GAAP diluted, so the
     trailing multiple sits on the same basis as the forward consensus figures the
     AI analysis context is built on (a GAAP trailing leg would make any walk
     between them a basis artifact rather than a story about growth).
+
+    ``fcf_per_share`` is the vendor's trailing free-cash-flow per share (the same
+    ``KeyMetrics.fcf_per_share`` the snapshot carries). Pricing it here — rather
+    than trusting the vendor's own P/FCF snapshot — keeps the FCF multiples on the
+    card's *live* quote, exactly as ``trailing_pe`` prices the consensus EPS.
     """
 
     symbol: str
-    price: float  # the live price the multiple was taken at
+    price: float  # the live price the multiples were taken at
     ttm_eps: float | None = None  # trailing 12m EPS, consensus basis (4 reported quarters)
+    fcf_per_share: float | None = None  # trailing free cash flow per share (fundamentals vendor)
 
     @property
     def trailing_pe(self) -> float | None:
@@ -72,6 +80,38 @@ class TickerValuation:
         if self.ttm_eps is None or self.ttm_eps <= 0 or self.price <= 0:
             return None
         return round(self.price / self.ttm_eps, 2)
+
+    @property
+    def price_to_fcf(self) -> float | None:
+        """Price-to-free-cash-flow: price over ``fcf_per_share`` — the cash-flow
+        analogue of ``trailing_pe``.
+
+        ``None`` unless both legs are *positive*. A non-positive FCF (a company
+        burning cash) makes the multiple meaningless in exactly the way a
+        loss-making year does for P/E — "24× cash flow" has no reading when the
+        cash flow is negative — so the same positivity guard applies. The signed
+        version of that same read is ``fcf_yield``, which stays informative for a
+        cash-burner.
+        """
+        if self.fcf_per_share is None or self.fcf_per_share <= 0 or self.price <= 0:
+            return None
+        return round(self.price / self.fcf_per_share, 2)
+
+    @property
+    def fcf_yield(self) -> float | None:
+        """Free-cash-flow yield (percent): ``fcf_per_share`` over price — the
+        reciprocal of ``price_to_fcf``, and the "how much cash am I buying per
+        dollar of price" read that sits beside the dividend yield.
+
+        Unlike ``price_to_fcf`` this keeps its *sign*: a negative yield (a company
+        with negative free cash flow) is a real, informative reading, not a
+        meaningless one — so the only guard is a live price. When FCF is negative
+        the two figures deliberately diverge (a null P/FCF beside a negative
+        yield), which is the standard treatment.
+        """
+        if self.fcf_per_share is None or self.price <= 0:
+            return None
+        return round(self.fcf_per_share / self.price * 100, 2)
 
 
 @dataclass(frozen=True)

@@ -20,6 +20,7 @@ from app.stocks.earnings.quarterly.entities import (
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.entities import (
     CompanyProfile,
+    KeyMetrics,
     Quote,
     Stock,
     StockFundamentals,
@@ -87,15 +88,20 @@ class _FakeQuotes(StockQuoteProvider):
 
 
 class _FakeFundamentals(StockFundamentalsProvider):
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        error: Exception | None = None,
+        fundamentals: StockFundamentals | None = None,
+    ) -> None:
         self._error = error
+        self._fundamentals = fundamentals
         self.calls: list[str] = []
 
     def get_fundamentals(self, symbol: str) -> StockFundamentals:
         self.calls.append(symbol)
         if self._error is not None:
             raise self._error
-        return _fundamentals()
+        return self._fundamentals if self._fundamentals is not None else _fundamentals()
 
 
 class _FakePerformance(StockPerformanceProvider):
@@ -321,6 +327,37 @@ def test_trailing_pe_is_none_without_a_positive_ttm(ttm):
     # no meaningful P/E.
     v = TickerValuation(symbol="MU", price=100.0, ttm_eps=ttm)
     assert v.trailing_pe is None
+
+
+def test_fcf_multiples_price_the_trailing_fcf_per_share():
+    # $5 FCF/share against a $100 quote: a 20x P/FCF and a 5% FCF yield (its
+    # reciprocal). Both taken at the card's live price, like the P/E.
+    v = TickerValuation(symbol="MU", price=100.0, fcf_per_share=5.0)
+    assert v.price_to_fcf == 20.0
+    assert v.fcf_yield == 5.0
+
+
+@pytest.mark.parametrize("fcf", [None, 0.0, -2.0])
+def test_price_to_fcf_is_none_without_a_positive_fcf(fcf):
+    # A non-positive FCF (a cash-burner) has no meaningful multiple — the same
+    # guard trailing_pe applies to a loss-making year.
+    v = TickerValuation(symbol="MU", price=100.0, fcf_per_share=fcf)
+    assert v.price_to_fcf is None
+
+
+def test_fcf_yield_keeps_its_sign_for_a_cash_burner():
+    # Unlike the multiple, a negative yield is informative — it says the company
+    # has negative free cash flow, so it's served (and P/FCF stays null).
+    v = TickerValuation(symbol="MU", price=100.0, fcf_per_share=-2.0)
+    assert v.fcf_yield == -2.0
+    assert v.price_to_fcf is None
+
+
+def test_fcf_multiples_are_none_without_the_fcf_leg():
+    # No fundamentals coverage: both figures are simply absent around a live price.
+    v = TickerValuation(symbol="MU", price=100.0)
+    assert v.price_to_fcf is None
+    assert v.fcf_yield is None
 
 
 def test_options_metrics_derives_all_four_reads_from_the_two_chains():
@@ -741,6 +778,46 @@ def test_unwired_earnings_provider_leaves_the_trailing_pe_none():
     )
     assert card.valuation.ttm_eps is None
     assert card.valuation.trailing_pe is None
+
+
+def test_metrics_carries_the_fcf_multiples_off_the_fundamentals():
+    # The FCF/share on the fundamentals metrics block flows into the valuation and
+    # is priced at the live quote: $4 FCF/share against $100 is a 25x P/FCF, 4% yield.
+    fundamentals = _FakeFundamentals(
+        fundamentals=StockFundamentals(
+            market_cap=1_000_000_000.0,
+            dividend_per_share=None,
+            dividend_yield=None,
+            metrics=KeyMetrics(fcf_per_share=4.0),
+        )
+    )
+
+    card = GetTickerCard(
+        _FakeQuotes(price=100.0), fundamentals=fundamentals
+    ).execute("MU", include=["metrics"])
+
+    assert fundamentals.calls == ["MU"]
+    assert card.valuation.fcf_per_share == pytest.approx(4.0)
+    assert card.valuation.price_to_fcf == pytest.approx(25.0)
+    assert card.valuation.fcf_yield == pytest.approx(4.0)
+
+
+def test_fcf_multiples_are_none_when_fundamentals_is_unavailable():
+    # Best-effort: a blocked fundamentals call leaves the FCF leg null without
+    # sinking the card or the trailing P/E (which rides the separate earnings read).
+    fundamentals = _FakeFundamentals(
+        error=StockDataUnavailable("MU", "finnhub down")
+    )
+    earnings = _FakeEarnings(_four_quarters(1.5, 2.0, 2.5, 3.0))
+
+    card = GetTickerCard(
+        _FakeQuotes(price=100.0), fundamentals=fundamentals, earnings=earnings
+    ).execute("MU", include=["metrics"])
+
+    assert card.valuation.fcf_per_share is None
+    assert card.valuation.price_to_fcf is None
+    assert card.valuation.fcf_yield is None
+    assert card.valuation.trailing_pe == pytest.approx(11.11)  # the card still serves
 
 
 # ──────────────────────── the options_metrics block ────────────────────────

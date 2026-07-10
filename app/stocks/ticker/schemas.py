@@ -39,15 +39,21 @@ class TickerMetricsResponse(BaseModel):
     basis**: live price over the sum of the 4 newest reported quarters'
     consensus-basis EPS from the quarterly-earnings slice — deliberately not the
     fundamentals vendor's GAAP-ish TTM read (``null`` until 4 quarters are cached,
-    or when the trailing year is a loss). The margins are the trailing
-    profitability ladder (percent), off the fundamentals call.
-    ``revenue_growth_yoy`` / ``eps_growth_yoy`` are the
-    stock's *latest trailing* year-over-year growth (percent) — the newest reported
-    fiscal year over the prior one, served straight off the ``stocks`` anchor where
-    the annual-earnings slice writes them (EPS on the analyst-consensus basis);
-    ``null`` until that slice has two reported years cached."""
+    or when the trailing year is a loss). ``price_to_fcf`` and ``fcf_yield`` are the
+    cash-flow valuation pair — live price over the vendor's trailing free-cash-flow
+    per share, and its reciprocal as a percent. ``price_to_fcf`` is ``null`` for a
+    non-positive FCF (an undefined multiple, like ``pe`` on a loss), while
+    ``fcf_yield`` keeps its sign (a negative yield is a real "burning cash" reading),
+    so the two diverge for a cash-burner. The margins are the trailing profitability
+    ladder (percent), off the fundamentals call. ``revenue_growth_yoy`` /
+    ``eps_growth_yoy`` are the stock's *latest trailing* year-over-year growth
+    (percent) — the newest reported fiscal year over the prior one, served straight
+    off the ``stocks`` anchor where the annual-earnings slice writes them (EPS on the
+    analyst-consensus basis); ``null`` until that slice has two reported years cached."""
 
     pe: float | None = None  # trailing: price / TTM EPS (consensus basis, 4 quarters)
+    price_to_fcf: float | None = None  # trailing: price / FCF per share (null if FCF <= 0)
+    fcf_yield: float | None = None  # percent: FCF per share / price (signed)
     gross_margin: float | None = None  # percent
     operating_margin: float | None = None  # percent
     net_margin: float | None = None  # percent
