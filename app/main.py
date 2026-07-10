@@ -163,8 +163,8 @@ app.include_router(quarterly_earnings_cron_router)
 app.include_router(annual_earnings_cron_router)
 # The ticker endpoints (app/stocks/endpoints/ticker_endpoints.py): the card
 # GET /stocks/ticker/{ticker} — live quote + day move, name, exchange (DB-backed) and
-# market cap always; dividend/performance/metrics (trailing PEG + margins + forward PEG)
-# as ?include= opt-ins, computed per request from the live quote + stored annual consensus —
+# market cap always; dividend/performance/metrics (trailing P/E + margins + trailing YoY
+# growth) as ?include= opt-ins, computed per request from the live quote + stored facts —
 # plus the universe read side that shares the resource: GET /stocks/ticker (paginated
 # search/filter/sort over the screened `stocks` anchor — name/ticker substring,
 # sector/industry, index membership; sort by market cap or trailing growth) and

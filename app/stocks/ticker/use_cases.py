@@ -12,10 +12,9 @@ HTTP:
   screen facts (market cap, sector, industry) the universe sync writes there —
   and fetches the *opt-in* blocks only when asked: ``dividend`` and
   ``performance`` (the trailing windows), ``metrics`` (the trailing P/E off the
-  quarterly-earnings slice's stored TTM — consensus basis, so it pairs with the
-  forward legs — the margins/PEG off the fundamentals call, the stored forward
-  consensus for the forward PEG, and the annual slice's stored trailing YoY
-  growth off the same anchor read), and ``options_metrics`` (the options-market
+  quarterly-earnings slice's stored TTM — consensus basis — the margins off the
+  fundamentals call, and the annual slice's stored trailing YoY growth off the
+  same anchor read), and ``options_metrics`` (the options-market
   read: ATM implied volatility, the priced-in expected move, the cost of a
   protective put, and the day's put/call lean). Pay-per-use: a block that isn't
   requested costs no provider call — and market cap now riding the anchor, the
@@ -48,7 +47,6 @@ from app.stocks.entities import (
 from app.stocks.etfs.repository import EtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
-    AnalystEstimatesProvider,
     CandleProvider,
     CompanyProfileProvider,
     StockDataProvider,
@@ -156,7 +154,7 @@ class TickerCard:
     A composition of shared entities rather than a new domain concept — which is
     why it lives here with the orchestration (like the sync slices' report
     dataclasses) instead of in the slice's ``entities.py``: the slice-local entity
-    (``TickerValuation``) owns the forward-PEG rule, and this just bundles it with
+    (``TickerValuation``) owns the trailing-P/E rule, and this just bundles it with
     the quote and the enrichment blocks. ``include`` records which opt-in blocks
     the caller asked for, so the presenter can tell "not requested" apart from
     "requested but unavailable" (best-effort blocks are ``None`` either way).
@@ -164,7 +162,7 @@ class TickerCard:
 
     quote: Quote  # live price + the day's move
     include: frozenset[str]  # the opt-in blocks this card was asked to carry
-    valuation: TickerValuation | None  # the forward-PEG read; only with 'metrics'
+    valuation: TickerValuation | None  # the trailing-P/E read; only with 'metrics'
     fundamentals: StockFundamentals | None  # dividend + trailing metrics (best-effort; only with 'dividend'/'metrics')
     performance: StockPerformance | None  # trailing windows; only with 'performance'
     # Always served (never null): "etf" when the symbol is in the stored ETF universe, else
@@ -184,18 +182,14 @@ class TickerCard:
 
 class GetTickerCard:
     """Use case: a stock's ticker card — live quote, name, market cap, and the
-    opt-in blocks (dividend, performance, forward-PEG metrics).
+    opt-in blocks (dividend, performance, metrics).
 
-    The quote is primary, and so is the consensus read *when 'metrics' is
-    requested* — so those failing propagates (the endpoint maps it to HTTP). But
-    *absent* forward coverage is not a failure: an ``is_empty`` estimates block
-    (symbol not cached by the annual slice yet, or no analyst coverage) yields a
-    null PEG, the same "no data ≠ error" stance the other slices take. The name,
-    exchange, fundamentals, performance, options metrics and the trailing TTM
-    read are best-effort enrichment, mirroring the stock snapshot: unconfigured
-    or failing providers just leave their blocks ``None``. The options and TTM
-    reads stay best-effort *even when requested* — unlike the DB-backed
-    consensus, both can go live to Yahoo (the TTM on a cold cache miss), and
+    The quote is the only primary read — it failing propagates (the endpoint maps
+    it to HTTP). Everything else — the name, exchange, fundamentals, performance,
+    options metrics and the trailing TTM read — is best-effort enrichment,
+    mirroring the stock snapshot: unconfigured or failing providers just leave
+    their blocks ``None``. The options and TTM reads stay best-effort *even when
+    requested* — both can go live to Yahoo (the TTM on a cold cache miss), and
     Yahoo intermittently blocks data-centre IPs; a colored insight going missing
     must not take the quote down with it. Opt-in blocks that aren't requested
     cost no provider call at all — and market cap now served off the anchor row
@@ -206,7 +200,6 @@ class GetTickerCard:
     def __init__(
         self,
         quotes: StockQuoteProvider,
-        estimates: AnalystEstimatesProvider,
         fundamentals: StockFundamentalsProvider | None = None,
         performance: StockPerformanceProvider | None = None,
         profile: CompanyProfileProvider | None = None,
@@ -218,7 +211,6 @@ class GetTickerCard:
         today: Callable[[], date] | None = None,
     ) -> None:
         self._quotes = quotes
-        self._estimates = estimates
         self._fundamentals = fundamentals
         self._performance = performance
         self._profile = profile
@@ -255,7 +247,7 @@ class GetTickerCard:
             ),
             # Fundamentals is opt-in now that market cap comes off the anchor: it's
             # fetched only for the blocks that still need it (dividend, and the metrics'
-            # PEG + margins) — a bare card costs no fundamentals call.
+            # margins) — a bare card costs no fundamentals call.
             fundamentals=(
                 self._get_fundamentals(normalized)
                 if wanted & {"dividend", "metrics"}
@@ -288,17 +280,13 @@ class GetTickerCard:
         return ASSET_TYPE_EQUITY
 
     def _get_valuation(self, symbol: str, quote: Quote) -> TickerValuation:
-        # Primary when requested: the metrics block exists to price the forward
-        # PEG, so a failing consensus read propagates rather than degrading.
-        estimates = self._estimates.get_estimates(symbol)
-        # The estimate entity owns the per-leg rules (positive-EPS guards,
-        # FY1→FY2 growth); this just evaluates them at today's price. An empty
-        # block naturally yields all-None legs — no special-casing needed.
+        # The trailing P/E, on the consensus basis: the quarterly slice's timeline
+        # owns the TTM rule and this just prices it at today's quote. Best-effort
+        # (see _get_ttm_eps) — an uncovered/blocked symbol yields a null multiple,
+        # never a failed card.
         return TickerValuation(
             symbol=symbol,
             price=quote.price,
-            forward_pe=estimates.forward_pe(quote.price),
-            forward_eps_growth=estimates.forward_eps_growth(),
             ttm_eps=self._get_ttm_eps(symbol),
         )
 

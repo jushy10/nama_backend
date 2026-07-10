@@ -157,8 +157,8 @@ def get_options_provider() -> YfinanceOptionChainProvider:
 def get_estimates_provider(
     db: Session = Depends(get_db),
 ) -> AnalystEstimatesProvider:
-    # Forward analyst estimates back the ticker card's forward PEG and the AI
-    # analysis context — best-effort enrichment. They're projected from the
+    # Forward analyst estimates back the AI analysis context — best-effort
+    # enrichment. They're projected from the
     # annual-earnings slice's stored forward years (the same Yahoo consensus that
     # timeline serves), DB-only: a symbol whose timeline isn't cached yet just
     # omits the forward metrics until the annual read path or its cron fills the

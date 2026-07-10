@@ -9,11 +9,8 @@ is this endpoint's JSON vocabulary.
 one vocabulary across endpoints. ``dividend``, ``performance``, ``metrics`` and
 ``options_metrics`` are opt-in blocks (the ``include`` query param): ``null`` unless
 requested — and for the best-effort ones, ``null`` also when requested but unavailable.
-``metrics`` carries ``forward_peg`` — the one figure no other endpoint serves — and is
-where future card-only metrics belong; the PEG's legs (``forward_pe``, the forward EPS
-growth) stay unserialized, living only on the shared entities that feed the Bedrock
-analysis context. ``options_metrics`` is likewise card-only: no other endpoint reads
-the options market.
+``metrics`` is where card-only valuation/profitability figures belong, and
+``options_metrics`` is likewise card-only: no other endpoint reads the options market.
 """
 
 from datetime import date
@@ -41,26 +38,16 @@ class TickerMetricsResponse(BaseModel):
     ``pe`` is the trailing multiple on the **analyst-consensus (adjusted) EPS
     basis**: live price over the sum of the 4 newest reported quarters'
     consensus-basis EPS from the quarterly-earnings slice — deliberately not the
-    fundamentals vendor's GAAP-ish TTM read, so it sits on the same basis as the
-    forward consensus legs (``null`` until 4 quarters are cached, or when the
-    trailing year is a loss). Then two PEGs, side by side:
-    ``peg`` is the trailing read (the vendor's trailing P/E over
-    *already-reported* EPS growth — which a cyclical rebound can inflate and pin
-    the ratio near zero), ``forward_peg`` the honest forward cousin (forward P/E
-    over the FY1→FY2 growth analysts *expect*); ``forward_peg`` is ``null`` when
-    no forward consensus is stored for the symbol yet, a leg is
-    non-positive, or expected growth is so near zero that the ratio would explode
-    (a boom current year can leave the next single-year leg ~flat). The margins
-    are the trailing profitability ladder (percent),
-    off the fundamentals call. ``revenue_growth_yoy`` / ``eps_growth_yoy`` are the
+    fundamentals vendor's GAAP-ish TTM read (``null`` until 4 quarters are cached,
+    or when the trailing year is a loss). The margins are the trailing
+    profitability ladder (percent), off the fundamentals call.
+    ``revenue_growth_yoy`` / ``eps_growth_yoy`` are the
     stock's *latest trailing* year-over-year growth (percent) — the newest reported
     fiscal year over the prior one, served straight off the ``stocks`` anchor where
-    the annual-earnings slice writes them (EPS on the analyst-consensus basis, to
-    match the forward legs); ``null`` until that slice has two reported years cached."""
+    the annual-earnings slice writes them (EPS on the analyst-consensus basis);
+    ``null`` until that slice has two reported years cached."""
 
     pe: float | None = None  # trailing: price / TTM EPS (consensus basis, 4 quarters)
-    peg: float | None = None  # trailing P/E / trailing EPS growth
-    forward_peg: float | None = None  # forward P/E / expected FY1->FY2 EPS growth
     gross_margin: float | None = None  # percent
     operating_margin: float | None = None  # percent
     net_margin: float | None = None  # percent
