@@ -676,7 +676,7 @@ app/
     │   ├── news_endpoints.py                     #  GET /stocks/{symbol}/news
     │   ├── cron_revenue_segments_endpoints.py    #  POST /internal/revenue-segments/sync
     │   ├── revenue_segments_endpoints.py         #  GET /stocks/{symbol}/revenue-segments (revenue by segment/product/geography, from SEC 10-K)
-    │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol} (card) + GET /stocks/ticker (search) + GET /stocks/classifications
+    │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol} (card) + GET /stocks/ticker/{symbol}/pe-history (trailing-P/E series + valuation-vs-history stats: percentile, median/IQR band, cheap/fair/expensive signal) + GET /stocks/ticker (search) + GET /stocks/classifications
     │   ├── heatmap_endpoints.py                  #  GET /market/heatmap?index=sp500|nasdaq100 (the sector→industry→stock treemap)
     │   ├── etf_endpoints.py                      #  GET /stocks/etfs (top-ETF search/filter/sort) + GET /stocks/etfs/categories (filter menu) + GET /stocks/etf/{ticker} (one fund's card: quote + facts + DB-read profile, 3y/5y returns fetched live for the performance block + opt-in ?include=metrics/dividends/performance)
     │   ├── cron_etf_endpoints.py                 #  POST /internal/etfs/sync (fire-and-forget: screen + profile enrichment)

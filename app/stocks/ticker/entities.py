@@ -30,6 +30,7 @@ from __future__ import annotations
 import bisect
 from dataclasses import dataclass
 from datetime import date
+from enum import Enum
 from typing import Mapping, Sequence
 
 # Below this forward EPS-growth rate (percent) the forward PEG stops being a stable
@@ -49,6 +50,13 @@ TTM_QUARTERS = 4
 # How stale a close may be to price an earnings release: a release can land on a weekend or
 # holiday, so the P/E point takes the most recent session's close within this many days.
 _MAX_PRICE_LAG_DAYS = 7
+
+# Percentile thresholds that bucket the current multiple against its own history. At or below
+# the 25th percentile the stock has rarely been cheaper (a "cheap vs history" read); at or above
+# the 75th it has rarely been dearer. The middle half is "fair" — no signal. They bound the
+# interquartile band the FE shades, so the buckets line up with ``p25_pe`` / ``p75_pe``.
+_CHEAP_PERCENTILE = 25.0
+_EXPENSIVE_PERCENTILE = 75.0
 
 
 @dataclass(frozen=True)
@@ -273,6 +281,53 @@ class PeHistoryPoint:
     pe: float  # price / ttm_eps, rounded to 2
 
 
+class ValuationSignal(str, Enum):
+    """Where the current trailing P/E sits within the stock's own history — the one-word read.
+
+    ``CHEAP`` / ``EXPENSIVE`` when the current multiple is in the bottom / top quartile of its
+    own history (it has rarely been cheaper / dearer), ``FAIR`` in the middle half. Deliberately
+    a *relative* verdict — "cheap for this stock", not "cheap" outright: a structurally re-rated
+    business (slowing growth, a faded moat) can read CHEAP the whole way down, so the signal
+    anchors a judgement rather than making it. A ``str`` enum so the presenter serializes the
+    value directly.
+    """
+
+    CHEAP = "cheap"
+    FAIR = "fair"
+    EXPENSIVE = "expensive"
+
+
+@dataclass(frozen=True)
+class PeHistoryStats:
+    """Where the *current* trailing P/E sits within the stock's own history.
+
+    The read that turns the raw P/E line into a valuation signal. The distribution of the
+    historical multiples — ``median_pe`` with the ``p25_pe``/``p75_pe`` interquartile band and
+    the ``min_pe``/``max_pe`` envelope — and where the latest reading falls in it:
+    ``current_percentile`` (0–100, the share of history at or below it) bucketed into ``signal``.
+    ``discount_to_median_percent`` is the current multiple's gap to its median (negative = below
+    its typical multiple, i.e. cheaper than usual). ``sample_size`` is how many releases the
+    distribution rests on — the confidence behind the verdict.
+
+    ``current_pe`` is the *latest sampled point* — the P/E at the most recent earnings release,
+    not a live tick (the card's ``metrics.pe`` is the to-the-second figure; this series is
+    fundamentals-sampled, so "current" moves only when a new quarter reports). Same "relative to
+    itself" caveat as ``ValuationSignal``: this says where the multiple is versus its own past,
+    which anchors "is it a good buy" without settling it alone.
+    """
+
+    current_pe: float
+    median_pe: float
+    p25_pe: float
+    p75_pe: float
+    min_pe: float
+    max_pe: float
+    current_percentile: float  # 0–100: share of history at or below the current multiple
+    discount_to_median_percent: float  # (current - median) / median * 100; negative = cheaper
+    signal: ValuationSignal
+    sample_size: int  # number of historical points the distribution rests on
+
+
 @dataclass(frozen=True)
 class PeHistory:
     """A symbol's trailing P/E sampled at each earnings release — one point per reported
@@ -287,6 +342,14 @@ class PeHistory:
     (early quarters outside the price feed's range are dropped). So the series can be
     shorter than the EPS run — a 200 with an empty ``points`` is a valid "no coverage".
     """
+
+    # The fewest historical points a valuation signal may rest on. The series samples one
+    # multiple per earnings release (~4 a year), so this is ~2 years — enough for a percentile
+    # to mean "versus how it has traded" rather than versus two or three readings. Below it
+    # ``stats`` is None (no verdict), the same "thin sample → no benchmark" stance the universe
+    # slice's ``IndustryValuation`` takes with ``MIN_REPRESENTATIVE_PEERS``. The EPS adapter
+    # fetches ~7 years, so a mature stock clears this comfortably; only fresh listings fall short.
+    MIN_POINTS_FOR_STATS = 8
 
     symbol: str
     points: tuple[PeHistoryPoint, ...]
@@ -325,6 +388,36 @@ class PeHistory:
             )
         return cls(symbol=symbol, points=tuple(points))
 
+    @property
+    def stats(self) -> PeHistoryStats | None:
+        """Summarize where the latest multiple sits in the series, or ``None`` for a thin
+        sample (fewer than ``MIN_POINTS_FOR_STATS`` points) where a percentile would be noise
+        rather than a signal.
+
+        Pure over ``points`` — every P/E in them is already positive (``build`` drops trailing
+        losses), so the distribution is well-formed and the median is a safe divisor. "Current"
+        is the newest point (``points`` is oldest-first), ranked against the whole series."""
+        if len(self.points) < self.MIN_POINTS_FOR_STATS:
+            return None
+        pes = sorted(point.pe for point in self.points)
+        median = _percentile(pes, 50)
+        if median is None or median <= 0:
+            return None  # defensive: real P/Es are positive, so a non-positive median never occurs
+        current = self.points[-1].pe
+        percentile = _percentile_rank(pes, current)
+        return PeHistoryStats(
+            current_pe=current,
+            median_pe=median,
+            p25_pe=_percentile(pes, 25),
+            p75_pe=_percentile(pes, 75),
+            min_pe=pes[0],
+            max_pe=pes[-1],
+            current_percentile=percentile,
+            discount_to_median_percent=round((current - median) / median * 100, 1),
+            signal=_signal_for(percentile),
+            sample_size=len(pes),
+        )
+
 
 def _close_asof(
     trading_days: Sequence[date],
@@ -343,3 +436,48 @@ def _close_asof(
     if (target - day).days > max_lag_days:
         return None
     return closes[day]
+
+
+def _percentile(sorted_values: Sequence[float], q: float) -> float | None:
+    """The ``q``-th percentile (0–100) of an already-sorted sequence, by linear interpolation
+    between the two nearest ranks (the "type 7" definition numpy defaults to). ``None`` for an
+    empty sample; rounded to 2 dp, the precision the P/E points carry.
+
+    Deliberately the same definition as the universe slice's industry benchmark
+    (``IndustryValuation._percentile``), so "P/E percentile" means one thing across the app —
+    reimplemented here rather than imported to keep the entity layer stdlib-only (an entity
+    never reaches into another slice)."""
+    n = len(sorted_values)
+    if n == 0:
+        return None
+    if n == 1:
+        return round(sorted_values[0], 2)
+    rank = (q / 100) * (n - 1)
+    lo = int(rank)
+    hi = min(lo + 1, n - 1)
+    frac = rank - lo
+    return round(sorted_values[lo] + frac * (sorted_values[hi] - sorted_values[lo]), 2)
+
+
+def _percentile_rank(sorted_values: Sequence[float], value: float) -> float:
+    """The rank of ``value`` within ``sorted_values`` as a 0–100 percentile — the inverse of
+    ``_percentile`` (value → rank, not rank → value).
+
+    The mid-rank ("mean") convention: ties split half-below, half-above, so a value equal to
+    the whole sample lands at 50 and the measure is symmetric between the minimum and the
+    maximum. ``sorted_values`` must be non-empty; the P/Es are 2-dp rounded, so equality is
+    exact. Rounded to 1 dp."""
+    n = len(sorted_values)
+    below = sum(1 for v in sorted_values if v < value)
+    equal = sum(1 for v in sorted_values if v == value)
+    return round(100 * (below + 0.5 * equal) / n, 1)
+
+
+def _signal_for(percentile: float) -> ValuationSignal:
+    """Bucket a 0–100 percentile into the valuation signal: bottom quartile → cheap, top
+    quartile → expensive, the middle half → fair."""
+    if percentile <= _CHEAP_PERCENTILE:
+        return ValuationSignal.CHEAP
+    if percentile >= _EXPENSIVE_PERCENTILE:
+        return ValuationSignal.EXPENSIVE
+    return ValuationSignal.FAIR
