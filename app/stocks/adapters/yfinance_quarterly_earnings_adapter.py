@@ -32,6 +32,16 @@ ends in December) — a documented limitation of a source that doesn't report fi
 The offset is cosmetic only: within a row, the EPS and the revenue always belong to the same
 fiscal quarter, because revenue is matched by real period proximity, not by that label.
 
+Currency: a foreign ADR reports in one currency but trades in another, and Yahoo mixes them
+across these surfaces — ``quarterly_income_stmt`` revenue reliably in the *reporting* currency,
+but the *market* EPS surfaces (``earnings_dates`` — the reported actual and its preceding
+estimate — and the forward ``earnings_estimate``) in either currency depending on the issuer
+(USD for TSM, CNY for BABA). A shared ``yfinance_currency`` normalizer (built from ``info``'s
+``financialCurrency`` vs ``currency``, with the market-EPS currency detected once from the
+``0y`` estimate against ``info['forwardEps']``) converts everything onto the trading currency.
+Both EPS legs of a reported quarter ride the same market rate, so the surprise stays coherent.
+The identity for a domestic issuer, so US names are untouched.
+
 This is the only module that knows ``yfinance``/Yahoo exists; swap it and nothing else
 changes. It is deliberately defensive — Yahoo is an unofficial, best-effort feed that
 reshapes payloads without notice and rate-limits data-centre IPs — so any vendor failure
@@ -51,7 +61,8 @@ from datetime import date, datetime
 import pandas as pd
 import yfinance as yf
 
-from app.stocks.adapters import yfinance_session
+from app.stocks.adapters import yfinance_currency, yfinance_session
+from app.stocks.adapters.yfinance_currency import CurrencyNormalizer
 from app.stocks.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
@@ -98,6 +109,19 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
                 symbol, f"yfinance quarterly earnings failed ({exc})"
             ) from exc
 
+        # info tells us the issuer's reporting vs trading currency, so a foreign ADR's
+        # figures can be normalized onto one currency. Best-effort — a blocked info degrades
+        # to an identity normalizer, never sinking the timeline. The market-EPS currency
+        # (earnings_dates + earnings_estimate) is detected from the forward annual estimate
+        # (0y — present on the same estimate frame) against info's trading-currency forwardEps.
+        info = yfinance_currency.read_info(ticker)
+        normalizer = yfinance_currency.build(
+            self._ticker_factory,
+            info,
+            market_eps_sample=_cell(eps_estimate, "0y", "avg"),
+            market_eps_reference=_num(info.get("forwardEps")),
+        )
+
         # Reported revenue is best-effort enrichment on the past quarters — a failure
         # fetching the income statement must not sink the (primary) earnings timeline. Like
         # the annual fundamentals endpoint, an empty result is a swallowed crumb 401, so
@@ -109,7 +133,9 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
             )
         except Exception:  # noqa: BLE001 — enrichment: degrade to no revenue_actual
             income_stmt = None
-        revenue_actuals = _revenue_actuals(income_stmt)
+        # The income statement is in the reporting currency; normalize revenue onto the
+        # trading currency (a no-op for a domestic issuer).
+        revenue_actuals = _revenue_actuals(income_stmt, normalizer)
 
         rows = _parse_rows(dates)
         reported = sorted(
@@ -127,7 +153,7 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
         for row in reported:
             if len(quarters) >= self._PAST:
                 break
-            quarter = _build_reported(row, revenue_actuals)
+            quarter = _build_reported(row, revenue_actuals, normalizer)
             key = (quarter.fiscal_year, quarter.fiscal_quarter)
             if key in seen:  # a restated/duplicate announcement in the same quarter
                 continue
@@ -137,7 +163,7 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
         # Upcoming: the 0q/+1q forward estimates (at most two), so a stock with a single
         # scheduled future date still surfaces both quarters Yahoo estimates.
         for quarter in _upcoming_quarters(
-            reported, future_dates, eps_estimate, revenue_estimate
+            reported, future_dates, eps_estimate, revenue_estimate, normalizer
         ):
             key = (quarter.fiscal_year, quarter.fiscal_quarter)
             if key in seen:
@@ -152,7 +178,11 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
 
 
 def _upcoming_quarters(
-    reported: list[dict], future_dates: list[date], eps_estimate, revenue_estimate
+    reported: list[dict],
+    future_dates: list[date],
+    eps_estimate,
+    revenue_estimate,
+    normalizer: CurrencyNormalizer,
 ) -> list[QuarterlyEarnings]:
     """The next one or two upcoming quarters, from Yahoo's ``0q`` / ``+1q`` forward estimate
     rows (EPS + revenue) — the reliable source of *two* forward quarters, unlike
@@ -164,7 +194,9 @@ def _upcoming_quarters(
     as the report date when one lines up with the quarter's period. A quarter is emitted only
     when Yahoo actually has an estimate (or a date) for it, so the result is at most two and
     may be one or none.
-    """
+
+    Currency: ``revenue_estimate`` is reliably reporting-currency (converted outright); the
+    EPS estimate is a market-EPS figure on the detected market-EPS currency."""
     if reported:
         q0_end = _next_quarter_end(_period_end_before(reported[0]["report_date"]))
     elif future_dates:
@@ -185,22 +217,30 @@ def _upcoming_quarters(
         report_date = date_by_period.get(period_end)
         if eps is None and revenue is None and report_date is None:
             continue  # Yahoo has nothing for this quarter — don't invent it
+        eps = normalizer.market_to_trading(eps)
+        revenue = normalizer.to_trading(revenue)
         out.append(_build_upcoming(period_end, report_date, eps, revenue))
     return out
 
 
 def _build_reported(
-    row: dict, revenue_by_period_end: dict[date, float]
+    row: dict,
+    revenue_by_period_end: dict[date, float],
+    normalizer: CurrencyNormalizer,
 ) -> QuarterlyEarnings:
     """One reported quarter from an ``earnings_dates`` row: the reported EPS against the
     estimate that preceded it (surprise computed here, not read from Yahoo's own
-    ``Surprise(%)`` column), plus the reported revenue matched from the income statement."""
+    ``Surprise(%)`` column), plus the reported revenue matched from the income statement.
+
+    Both EPS figures are market EPS (from ``earnings_dates``), so they ride the detected
+    market-EPS currency; converting both by the same rate leaves ``eps_surprise_percent``
+    unchanged and the absolute surprise on the trading-currency basis."""
     report_date: date = row["report_date"]
     period_end = _period_end_before(report_date)
     fiscal_year = period_end.year
     fiscal_quarter = _quarter_of(period_end)
-    eps_actual = row["eps_actual"]
-    eps_estimate = row["eps_estimate"]
+    eps_actual = normalizer.market_to_trading(row["eps_actual"])
+    eps_estimate = normalizer.market_to_trading(row["eps_estimate"])
 
     surprise: float | None = None
     surprise_percent: float | None = None
@@ -274,12 +314,15 @@ def _next_quarter_end(period_end: date) -> date:
     return date(period_end.year, month, day)
 
 
-def _revenue_actuals(frame) -> dict[date, float]:
+def _revenue_actuals(frame, normalizer: CurrencyNormalizer) -> dict[date, float]:
     """``quarterly_income_stmt`` → reported ``Total Revenue`` keyed by the column's *true*
     fiscal period-end date, matched to the reported quarters by announcement-date proximity
     (``_revenue_for``). Never keyed by the calendar fiscal label: for an off-calendar filer
     the label names a different fiscal quarter than the one the EPS was reported for, so a
-    label match would pair one quarter's EPS with another quarter's revenue."""
+    label match would pair one quarter's EPS with another quarter's revenue.
+
+    The income statement is in the reporting currency, so each revenue is put through
+    ``normalizer.to_trading`` (a no-op for a domestic issuer)."""
     out: dict[date, float] = {}
     if frame is None or getattr(frame, "empty", True):
         return out
@@ -294,7 +337,7 @@ def _revenue_actuals(frame) -> dict[date, float]:
         revenue = _num(value)
         if day is None or revenue is None:
             continue
-        out[day] = revenue
+        out[day] = normalizer.to_trading(revenue)
     return out
 
 
