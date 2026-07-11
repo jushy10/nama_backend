@@ -156,7 +156,7 @@ app.include_router(news_router)
 # its latest 10-K on SEC EDGAR and served from the DB cache. See
 # app/stocks/endpoints/revenue_segments_endpoints.py.
 app.include_router(revenue_segments_router)
-# The insider-transactions read endpoint (GET /stocks/{symbol}/insider-transactions): a stock's
+# The insider-transactions read endpoint (GET /stocks/ticker/{ticker}/insider-transactions): a stock's
 # recent SEC Form 4 buys and sells — open-market purchases/sales flagged apart from the
 # grant/exercise/tax noise, with a net buy-vs-sell summary. Served from a TTL read-through DB
 # cache over SEC EDGAR (no cron — the TTL keeps it fresh on read). See

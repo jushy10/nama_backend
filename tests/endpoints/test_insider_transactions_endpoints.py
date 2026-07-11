@@ -1,4 +1,4 @@
-"""Tests for the insider-transactions read endpoint (GET /stocks/{symbol}/insider-transactions).
+"""Tests for the insider-transactions read endpoint (GET /stocks/ticker/{ticker}/insider-transactions).
 
 Offline: a fake GetInsiderTransactions is injected through dependency_overrides + FastAPI's
 TestClient, so this checks only the controller + presenter — the JSON shape (open-market flags,
@@ -71,7 +71,7 @@ def _client(fake: _FakeUseCase) -> TestClient:
 
 
 def test_presents_the_activity_with_summary():
-    resp = _client(_FakeUseCase(result=_ACTIVITY)).get("/stocks/AAPL/insider-transactions")
+    resp = _client(_FakeUseCase(result=_ACTIVITY)).get("/stocks/ticker/AAPL/insider-transactions")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["symbol"] == "AAPL"
@@ -95,7 +95,7 @@ def test_presents_the_activity_with_summary():
 
 def test_open_market_only_filters_transactions_but_not_the_summary():
     resp = _client(_FakeUseCase(result=_ACTIVITY)).get(
-        "/stocks/AAPL/insider-transactions?open_market_only=true"
+        "/stocks/ticker/AAPL/insider-transactions?open_market_only=true"
     )
     body = resp.json()
     codes = [t["transaction_code"] for t in body["transactions"]]
@@ -106,13 +106,13 @@ def test_open_market_only_filters_transactions_but_not_the_summary():
 
 
 def test_sets_the_cache_header():
-    resp = _client(_FakeUseCase(result=_ACTIVITY)).get("/stocks/AAPL/insider-transactions")
+    resp = _client(_FakeUseCase(result=_ACTIVITY)).get("/stocks/ticker/AAPL/insider-transactions")
     assert resp.headers["cache-control"] == "public, max-age=300"
 
 
 def test_empty_activity_is_a_200_with_no_transactions():
     resp = _client(_FakeUseCase(result=InsiderActivity("ZZZZ"))).get(
-        "/stocks/ZZZZ/insider-transactions"
+        "/stocks/ticker/ZZZZ/insider-transactions"
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -123,14 +123,14 @@ def test_empty_activity_is_a_200_with_no_transactions():
 
 def test_bad_symbol_is_a_400():
     fake = _FakeUseCase(error=ValueError("'123' is not a valid stock symbol."))
-    assert _client(fake).get("/stocks/123/insider-transactions").status_code == 400
+    assert _client(fake).get("/stocks/ticker/123/insider-transactions").status_code == 400
 
 
 def test_unknown_symbol_is_a_404():
     fake = _FakeUseCase(error=StockNotFound("ZZZZ"))
-    assert _client(fake).get("/stocks/ZZZZ/insider-transactions").status_code == 404
+    assert _client(fake).get("/stocks/ticker/ZZZZ/insider-transactions").status_code == 404
 
 
 def test_upstream_failure_is_a_502():
     fake = _FakeUseCase(error=StockDataUnavailable("AAPL", "boom"))
-    assert _client(fake).get("/stocks/AAPL/insider-transactions").status_code == 502
+    assert _client(fake).get("/stocks/ticker/AAPL/insider-transactions").status_code == 502

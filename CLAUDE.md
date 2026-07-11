@@ -370,7 +370,7 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > foreign (20-F) filer with no disaggregation is a 200 with an empty list, not a 404.
 
 > **The insider-transactions sub-slice — `app/stocks/insider_transactions/`.** A stock's **big
-> insider buys and sells** at `GET /stocks/{symbol}/insider-transactions` — the open-market
+> insider buys and sells** at `GET /stocks/ticker/{ticker}/insider-transactions` — the open-market
 > purchases and sales its own officers, directors, and 10%+ owners report to the SEC on **Form 4**,
 > the strongest "conviction" signal the data offers ("the CEO bought $4M"). Built on the same
 > skeleton as the news/revenue-segments slices: its **own `entities.py`** (`InsiderTransaction` +
@@ -734,7 +734,7 @@ app/
     │   ├── news_endpoints.py                     #  GET /stocks/{symbol}/news
     │   ├── cron_revenue_segments_endpoints.py    #  POST /internal/revenue-segments/sync
     │   ├── revenue_segments_endpoints.py         #  GET /stocks/{symbol}/revenue-segments (revenue by segment/product/geography, from SEC 10-K)
-    │   ├── insider_transactions_endpoints.py     #  GET /stocks/{symbol}/insider-transactions (Form 4 buys/sells + net summary, ?open_market_only; TTL cache over SEC, no cron)
+    │   ├── insider_transactions_endpoints.py     #  GET /stocks/ticker/{ticker}/insider-transactions (Form 4 buys/sells + net summary, ?open_market_only; TTL cache over SEC, no cron)
     │   ├── ticker_endpoints.py                   #  GET /stocks/ticker/{symbol} (card) + GET /stocks/ticker/{symbol}/pe-history (trailing-P/E series + valuation-vs-history stats: percentile, median/IQR band, cheap/fair/expensive signal) + GET /stocks/ticker (search) + GET /stocks/ai-search (plain-English AI screen → interpreted filters; the client runs the search) + GET /stocks/classifications
     │   ├── heatmap_endpoints.py                  #  GET /market/heatmap?index=sp500|nasdaq100 (the sector→industry→stock treemap)
     │   ├── etf_endpoints.py                      #  GET /stocks/etfs (top-ETF search/filter/sort) + GET /stocks/etfs/categories (filter menu) + GET /stocks/etf/{ticker} (one fund's card: quote + facts + DB-read profile, 3y/5y returns fetched live for the performance block + opt-in ?include=metrics/dividends/performance)

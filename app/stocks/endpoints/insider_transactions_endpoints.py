@@ -1,11 +1,13 @@
 """HTTP API for reading a stock's insider (Form 4) transactions.
 
-``GET /stocks/{symbol}/insider-transactions`` — the read endpoint for the insider-transactions
-slice: a stock's recent SEC Form 4 buys and sells, newest first, each flagged as an open-market
-purchase (``P``) / sale (``S``) vs. the compensation/mechanics noise a Form 4 also reports, with
-a net buy-vs-sell ``summary``. ``?open_market_only=true`` narrows the feed to just the P/S
-conviction trades (the summary always reflects the full open-market rollup). Controller +
-presenter + wiring, the composition-root way, sitting in ``app/stocks/endpoints/``.
+``GET /stocks/ticker/{ticker}/insider-transactions`` — the read endpoint for the
+insider-transactions slice: a stock's recent SEC Form 4 buys and sells, newest first, each
+flagged as an open-market purchase (``P``) / sale (``S``) vs. the compensation/mechanics noise a
+Form 4 also reports, with a net buy-vs-sell ``summary``. ``?open_market_only=true`` narrows the
+feed to just the P/S conviction trades (the summary always reflects the full open-market rollup).
+Grouped under the ``/stocks/ticker/{ticker}`` resource (like the ticker card and analyst-info),
+since it's a per-ticker card the FE renders. Controller + presenter + wiring, the
+composition-root way, sitting in ``app/stocks/endpoints/``.
 
 Wiring mirrors the revenue-segments read path, with one divergence: the DB cache is **TTL-based**
 (``INSIDER_CACHE_TTL_HOURS``, default 24). This slice has no out-of-band cron, so the TTL is what
@@ -139,11 +141,11 @@ def _present(
 
 
 @router.get(
-    "/stocks/{symbol}/insider-transactions",
+    "/stocks/ticker/{ticker}/insider-transactions",
     response_model=InsiderActivityResponse,
 )
 def get_insider_transactions_endpoint(
-    symbol: str,
+    ticker: str,
     response: Response,
     open_market_only: bool = Query(
         False,
@@ -153,7 +155,7 @@ def get_insider_transactions_endpoint(
     use_case: GetInsiderTransactions = Depends(get_insider_transactions_use_case),
 ) -> InsiderActivityResponse:
     try:
-        activity = use_case.execute(symbol)
+        activity = use_case.execute(ticker)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except StockNotFound as exc:
