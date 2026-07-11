@@ -58,12 +58,15 @@ from app.stocks.etfs.db_repository import (
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfDetail,
+    EtfScreenIntent,
     EtfSearchPage,
     EtfSort,
     SortDirection,
 )
-from app.stocks.etfs.ports import EtfAnalysisProvider
+from app.stocks.etfs.ports import EtfAnalysisProvider, EtfScreenerQueryTranslator
 from app.stocks.etfs.schemas import (
+    AiEtfScreenInterpretationResponse,
+    AiEtfScreenResponse,
     EtfAnalysisResponse,
     EtfCategoriesResponse,
     EtfDetailResponse,
@@ -76,6 +79,7 @@ from app.stocks.etfs.schemas import (
     EtfSectorWeightResponse,
 )
 from app.stocks.etfs.use_cases import (
+    AiScreenEtfs,
     GetEtfAnalysis,
     GetEtfDetail,
     ListEtfCategories,
@@ -87,7 +91,30 @@ from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,
 )
+from app.stocks.adapters.bedrock.etf_screener_query_adapter import (
+    BedrockEtfScreenerQueryTranslator,
+)
 from app.stocks.wiring import analysis_cache_ttl, get_provider
+
+@lru_cache(maxsize=1)
+def get_etf_screener_translator() -> EtfScreenerQueryTranslator:
+    # The ETF sibling of the stock screener's translator: the AI ETF screener's translation is its
+    # primary data, so it's required, but there's no secret to gate on (Bedrock authenticates
+    # through the process's AWS credentials — the ECS task role in prod). It shares the stock
+    # screener's env so one config drives both: BEDROCK_REGION (default us-east-1) and the optional
+    # BEDROCK_SCREENER_MODEL_ID (a cross-region inference profile). A missing 'bedrock' extra
+    # surfaces as a clean 503 here rather than a 500.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_SCREENER_MODEL_ID")
+    try:
+        if model_id:
+            return BedrockEtfScreenerQueryTranslator(model_id=model_id, region=region)
+        return BedrockEtfScreenerQueryTranslator(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI ETF screening is not configured (install the 'bedrock' extra)."
+        ) from exc
+
 
 router = APIRouter(tags=["etfs"])
 
@@ -100,6 +127,16 @@ def get_search_use_case(db: Session = Depends(get_db)) -> SearchEtfs:
 
 def get_categories_use_case(db: Session = Depends(get_db)) -> ListEtfCategories:
     return ListEtfCategories(SqlEtfSearchRepository(db))
+
+
+def get_ai_etf_search_use_case(
+    db: Session = Depends(get_db),
+    translator: EtfScreenerQueryTranslator = Depends(get_etf_screener_translator),
+) -> AiScreenEtfs:
+    # The AI screen only translates — it reads the stored set's categories (the translator's
+    # allowed vocabulary) but does not run the search itself. The translator (Bedrock) is the only
+    # non-DB dependency — it carries its own 503 gate in the wiring.
+    return AiScreenEtfs(translator, SqlEtfSearchRepository(db))
 
 
 def get_etf_detail_use_case(
@@ -186,6 +223,19 @@ def _present_search(page: EtfSearchPage) -> EtfSearchResponse:
 def _present_categories(categories: EtfCategories) -> EtfCategoriesResponse:
     """Presenter: categories entity -> HTTP response DTO."""
     return EtfCategoriesResponse(categories=list(categories.categories))
+
+
+def _present_ai_etf_screen(intent: EtfScreenIntent) -> AiEtfScreenResponse:
+    """Presenter: the AI's EtfScreenIntent -> HTTP response DTO (the interpreted filters)."""
+    return AiEtfScreenResponse(
+        interpreted=AiEtfScreenInterpretationResponse(
+            query=intent.query,
+            categories=list(intent.categories),
+            sort=intent.sort.value if intent.sort is not None else None,
+            direction=intent.direction.value,
+            limit=intent.limit,
+        ),
+    )
 
 
 def _present_metrics(detail: EtfDetail) -> EtfMetricsResponse:
@@ -356,6 +406,38 @@ def list_etf_categories_endpoint(
     # the search list.
     response.headers["Cache-Control"] = "public, max-age=300"
     return _present_categories(categories)
+
+
+@router.get("/stocks/etfs/ai-search", response_model=AiEtfScreenResponse)
+def ai_search_etfs_endpoint(
+    response: Response,
+    q: str = Query(
+        ...,
+        min_length=1,
+        description=(
+            "A plain-English ETF-screen request — e.g. 'cheap S&P 500 index funds', 'high-yield "
+            "dividend ETFs', or 'gold funds by size'. An AI translates it into the same filters "
+            "the manual /stocks/etfs search accepts and returns just those interpreted filters (it "
+            "does not run the search) — the client applies them to /stocks/etfs to fetch the rows, "
+            "so it can show and edit them."
+        ),
+    ),
+    use_case: AiScreenEtfs = Depends(get_ai_etf_search_use_case),
+) -> AiEtfScreenResponse:
+    """Translate a natural-language request into ETF-screen filters. A blank request is a 400; a
+    translation failure (the model/vendor couldn't parse it) is a 502."""
+    try:
+        intent = use_case.execute(query=q)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(
+            502, "AI ETF screening is temporarily unavailable."
+        ) from exc
+    # Deterministic for a given request against the slow-moving set — cache briefly like the manual
+    # search so a burst of identical queries collapses onto one translation.
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return _present_ai_etf_screen(intent)
 
 
 @router.get("/stocks/etf/{ticker}", response_model=EtfDetailResponse)

@@ -34,13 +34,19 @@ from app.stocks.etfs.entities import (
     EtfCategories,
     EtfDetail,
     EtfProfile,
+    EtfScreenIntent,
     EtfSearchCriteria,
     EtfSearchPage,
     EtfSort,
     SortDirection,
     slugify,
 )
-from app.stocks.etfs.ports import EtfAnalysisProvider, EtfProfileProvider, EtfScreener
+from app.stocks.etfs.ports import (
+    EtfAnalysisProvider,
+    EtfProfileProvider,
+    EtfScreener,
+    EtfScreenerQueryTranslator,
+)
 from app.stocks.etfs.repository import (
     EtfLookupRepository,
     EtfRepository,
@@ -263,6 +269,45 @@ class ListEtfCategories:
 
     def execute(self) -> EtfCategories:
         return self._repository.categories()
+
+
+class AiScreenEtfs:
+    """Translate a plain-English request into ETF-screen filters (``GET /stocks/etfs/ai-search``).
+
+    The AI-driven counterpart to ``SearchEtfs`` — but it does **not** run the search. It turns the
+    request into an ``EtfScreenIntent`` (which filters to set) and returns just that; the client
+    applies those filters to the ordinary search (``GET /stocks/etfs``) to fetch the rows. So the
+    AI leg only ever *chooses filters* — it can't reach a fund outside the screened set or invent a
+    ticker — and the querying/paging stays the manual path's job.
+
+    The translator is fed the stored set's current category slugs as its allowed vocabulary, so the
+    model maps "gold funds" onto a slug the search can match rather than an invented one. The intent
+    is advisory anyway: the search re-normalizes every field (slug, clamp, dedupe), so an
+    off-vocabulary value simply matches nothing.
+    """
+
+    def __init__(
+        self,
+        translator: EtfScreenerQueryTranslator,
+        repository: EtfSearchRepository,
+    ) -> None:
+        self._translator = translator
+        # Read only for the allowed vocabulary the translator is constrained to.
+        self._repository = repository
+
+    def execute(self, *, query: str) -> EtfScreenIntent:
+        """Translate ``query`` into an ``EtfScreenIntent`` of filters.
+
+        ``query`` is required (a blank request is a ``ValueError`` → 400 at the edge — there is
+        nothing to translate). A translator failure (``StockDataUnavailable``) propagates — the
+        request couldn't be understood — distinct from an understood request that simply maps to
+        filters matching no funds (which the client discovers when it runs the search).
+        """
+        text = (query or "").strip()
+        if not text:
+            raise ValueError("A search request is required.")
+        allowed = self._repository.categories()
+        return self._translator.translate(text, categories=allowed.categories)
 
 
 def _normalize_symbol(symbol: str) -> str:

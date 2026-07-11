@@ -59,6 +59,34 @@ class EtfCategoriesResponse(BaseModel):
     categories: list[str]
 
 
+class AiEtfScreenInterpretationResponse(BaseModel):
+    """The filters an AI translated a plain-English ETF-screen request into — the same axes the
+    manual ``GET /stocks/etfs`` search accepts.
+
+    Every field mirrors a search parameter, so the client applies them straight to the search:
+    ``query`` is the free-text name/ticker term (``null`` when the request was expressed by the
+    filters), ``categories`` an OR set of fund-category slugs, ``sort`` the ranking field (``null``
+    to leave the search's own ``net_assets`` default) with ``direction`` (``asc`` / ``desc``), and
+    ``limit`` a requested count (``null`` for the search default). An all-unset interpretation is a
+    neutral browse."""
+
+    query: str | None = None
+    categories: list[str] = []
+    sort: str | None = None
+    direction: str = "desc"
+    limit: int | None = None
+
+
+class AiEtfScreenResponse(BaseModel):
+    """The response of ``GET /stocks/etfs/ai-search`` — only the interpreted filters.
+
+    The endpoint translates the request and returns just this (it does **not** run the search), so
+    the client can show the filters, let the user edit them, and apply them to ``GET /stocks/etfs``
+    to fetch the rows — the ETF sibling of the stock ``AiScreenResponse``."""
+
+    interpreted: AiEtfScreenInterpretationResponse
+
+
 class EtfHoldingResponse(BaseModel):
     """One of a fund's top holdings — the underlying position and its weight.
 

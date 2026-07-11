@@ -76,15 +76,15 @@ class AiScreenInterpretationResponse(BaseModel):
 
 
 class AiScreenResponse(BaseModel):
-    """The response to ``GET /stocks/ai-search``: the interpreted filters plus the matched page.
+    """The response to ``GET /stocks/ai-search``: the AI's reading of the request as filters.
 
-    ``results`` is the exact ``StockSearchResponse`` the manual ``GET /stocks/ticker`` returns
-    (same rows, same pagination envelope), so both search paths present identically; ``interpreted``
-    is the AI's reading of the request, for the FE to surface and make editable.
+    Just the ``interpreted`` filters — the endpoint does not run the search itself. The client
+    applies these to the manual ``GET /stocks/ticker`` search (the same query params) to fetch
+    the rows, so the AI leg only ever decides *which filters to set* and the FE can surface and
+    edit them.
     """
 
     interpreted: AiScreenInterpretationResponse
-    results: StockSearchResponse
 
 
 class ClassificationsResponse(BaseModel):

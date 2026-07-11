@@ -624,26 +624,24 @@ class _FakeTranslator(ScreenerQueryTranslator):
 
 
 def _ai_use_case(translator, repo):
-    """Wire an AiScreenStocks over the shared fake read repo (search + vocabulary)."""
-    return AiScreenStocks(translator, SearchStocks(repo), repo)
+    """Wire an AiScreenStocks over the fake read repo (used only for the translator's
+    allowed vocabulary — the use case does not run the search)."""
+    return AiScreenStocks(translator, repo)
 
 
-def test_ai_screen_feeds_the_intent_into_the_search():
-    # "mega-cap technology stocks" -> sector + tier filters, biggest first.
+def test_ai_screen_returns_the_translated_intent():
+    # "mega-cap technology stocks" -> sector + tier filters, biggest first. The use case
+    # returns the intent as-is; running the search is the client's job.
     intent = ScreenIntent(
         sectors=("technology",),
         market_cap_tiers=(MarketCapTier.MEGA,),
         sort=StockSort.MARKET_CAP,
         direction=SortDirection.DESC,
     )
-    repo = _FakeSearchRepo()
-    _ai_use_case(_FakeTranslator(intent=intent), repo).execute(query="mega cap tech stocks")
-    c = repo.criteria
-    assert c.sectors == ("technology",)
-    assert c.market_cap_tiers == (MarketCapTier.MEGA,)
-    assert (c.sort, c.direction) == (StockSort.MARKET_CAP, SortDirection.DESC)
-    # No explicit endpoint limit and no AI limit -> the search's own default page.
-    assert c.limit == SearchStocks.DEFAULT_LIMIT
+    result = _ai_use_case(_FakeTranslator(intent=intent), _FakeSearchRepo()).execute(
+        query="mega cap tech stocks"
+    )
+    assert result is intent
 
 
 def test_ai_screen_maps_a_growth_request():
@@ -653,13 +651,14 @@ def test_ai_screen_maps_a_growth_request():
         sort=StockSort.REVENUE_GROWTH,
         direction=SortDirection.DESC,
     )
-    repo = _FakeSearchRepo()
-    _ai_use_case(_FakeTranslator(intent=intent), repo).execute(
+    result = _ai_use_case(_FakeTranslator(intent=intent), _FakeSearchRepo()).execute(
         query="top sp500 stocks with good revenue growth"
     )
-    c = repo.criteria
-    assert c.in_sp500 is True
-    assert (c.sort, c.direction) == (StockSort.REVENUE_GROWTH, SortDirection.DESC)
+    assert result.in_sp500 is True
+    assert (result.sort, result.direction) == (
+        StockSort.REVENUE_GROWTH,
+        SortDirection.DESC,
+    )
 
 
 def test_ai_screen_passes_the_universe_vocabulary_to_the_translator():
@@ -682,27 +681,6 @@ def test_ai_screen_trims_the_request_and_rejects_a_blank_one():
     assert translator.query == "find me tech"  # trimmed before translation
     with pytest.raises(ValueError):
         _ai_use_case(_FakeTranslator(), _FakeSearchRepo()).execute(query="   ")
-
-
-def test_ai_screen_endpoint_limit_overrides_the_ai_choice():
-    # An explicit caller limit wins over the AI's; omitting it honours the AI's "top N".
-    intent = ScreenIntent(limit=5)
-    repo = _FakeSearchRepo()
-    _ai_use_case(_FakeTranslator(intent=intent), repo).execute(query="top 5", limit=None)
-    assert repo.criteria.limit == 5  # AI's count honoured
-    repo2 = _FakeSearchRepo()
-    _ai_use_case(_FakeTranslator(intent=intent), repo2).execute(query="top 5", limit=20)
-    assert repo2.criteria.limit == 20  # caller override wins
-
-
-def test_ai_screen_returns_the_intent_and_the_page():
-    page = StockSearchPage(results=(_RESULT,), total=1, limit=25, offset=0)
-    intent = ScreenIntent(sectors=("technology",))
-    result = _ai_use_case(
-        _FakeTranslator(intent=intent), _FakeSearchRepo(page=page)
-    ).execute(query="tech")
-    assert result.intent is intent
-    assert result.page is page
 
 
 def test_ai_screen_propagates_a_translation_failure():

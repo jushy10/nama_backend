@@ -16,9 +16,15 @@ terms, only the adapter knows a language model backs it.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 from app.stocks.analysis.entities import InvestmentAnalysis
-from app.stocks.etfs.entities import EtfDetail, EtfProfile, ScreenedEtf
+from app.stocks.etfs.entities import (
+    EtfDetail,
+    EtfProfile,
+    EtfScreenIntent,
+    ScreenedEtf,
+)
 
 
 class EtfScreener(ABC):
@@ -100,5 +106,44 @@ class EtfAnalysisProvider(ABC):
             StockDataUnavailable: the analysis could not be produced — the model call failed or
                 returned no usable structured result. The one error this port documents; the
                 endpoint maps it to a 502.
+        """
+        raise NotImplementedError
+
+
+class EtfScreenerQueryTranslator(ABC):
+    """A gateway that turns a plain-English ETF-screen request into structured search filters.
+
+    The ETF analogue of the stock universe's ``ScreenerQueryTranslator``: the abstraction the
+    ``AiScreenEtfs`` use case depends on so a user can screen the fund set by asking ("cheap S&P
+    500 index funds", "high-yield dividend ETFs", "gold funds by size") instead of setting each
+    control by hand. Dependency Inversion as ever — the core hands the request (and the vocabulary
+    of valid category slugs) to this interface and gets back an ``EtfScreenIntent`` in domain
+    terms, never touching an LLM/vendor directly, so the source is swappable (Claude on Bedrock
+    today) and the tests run offline against a hand-written fake.
+
+    The translation is *primary* data for the AI-screen endpoint (its reason to exist), so unlike
+    the enrichment ports a failure here **propagates** rather than degrading to a neutral result.
+    """
+
+    @abstractmethod
+    def translate(
+        self,
+        query: str,
+        *,
+        categories: Sequence[str],
+    ) -> EtfScreenIntent:
+        """Translate ``query`` into an ``EtfScreenIntent`` of search filters.
+
+        ``categories`` are the category slugs currently present in the stored set — the allowed
+        vocabulary the translator constrains its category choices to, so the result maps onto
+        values the search can actually match (an implementation may also leave the filter unset
+        when the request names no category). The intent is *advisory*: the use case still
+        normalizes every field through the ordinary search, so an off-vocabulary or nonsensical
+        value degrades to "matches nothing", never an error.
+
+        Raises:
+            StockDataUnavailable: the upstream translation failed (a model/vendor error). The
+                endpoint surfaces it as a 502 — the request couldn't be understood this time,
+                distinct from a well-understood request that simply matched no funds.
         """
         raise NotImplementedError

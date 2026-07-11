@@ -99,10 +99,10 @@ from app.stocks.ticker.use_cases import (
 )
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.universe.entities import (
-    AiScreenResult,
     Classifications,
     IndustryValuation,
     MarketCapTier,
+    ScreenIntent,
     SortDirection,
     StockSearchPage,
     StockSort,
@@ -581,16 +581,14 @@ def get_ai_search_use_case(
     db: Session = Depends(get_db),
     translator: ScreenerQueryTranslator = Depends(get_screener_translator),
 ) -> AiScreenStocks:
-    # The AI screen composes the ordinary search: one request-scoped read repository backs
-    # both the translator's allowed-vocabulary read and the search itself. The translator
+    # The AI screen only translates — it reads the universe's classifications (the
+    # translator's allowed vocabulary) but does not run the search itself. The translator
     # (Bedrock) is the only non-DB dependency — it carries its own 503 gate in the wiring.
-    repository = SqlStockSearchRepository(db)
-    return AiScreenStocks(translator, SearchStocks(repository), repository)
+    return AiScreenStocks(translator, SqlStockSearchRepository(db))
 
 
-def _present_ai_screen(result: AiScreenResult) -> AiScreenResponse:
-    """Presenter: AI-screen result entity -> HTTP response DTO (interpreted filters + page)."""
-    intent = result.intent
+def _present_ai_screen(intent: ScreenIntent) -> AiScreenResponse:
+    """Presenter: the AI's ScreenIntent -> HTTP response DTO (the interpreted filters)."""
     return AiScreenResponse(
         interpreted=AiScreenInterpretationResponse(
             query=intent.query,
@@ -603,7 +601,6 @@ def _present_ai_screen(result: AiScreenResult) -> AiScreenResponse:
             direction=intent.direction.value,
             limit=intent.limit,
         ),
-        results=_present_search(result.page),
     )
 
 
@@ -617,27 +614,16 @@ def ai_search_stocks_endpoint(
             "A plain-English screen request — e.g. 'mega-cap technology stocks', "
             "'semiconductor companies', or 'top S&P 500 names by revenue growth'. An AI "
             "translates it into the same filters the manual /stocks/ticker search accepts and "
-            "runs it, so results are always real screened stocks (never invented tickers). The "
-            "response echoes the interpreted filters so the FE can show and edit them."
+            "returns just those interpreted filters (it does not run the search) — the client "
+            "applies them to /stocks/ticker to fetch the rows, so it can show and edit them."
         ),
     ),
-    limit: int | None = Query(
-        None,
-        ge=1,
-        le=SearchStocks.MAX_LIMIT,
-        description=(
-            "Override the result count. Omit to let the AI decide (it honours 'top N'); "
-            "otherwise this wins over the AI's choice. Max 100."
-        ),
-    ),
-    offset: int = Query(0, ge=0, description="Rows to skip, for pagination."),
     use_case: AiScreenStocks = Depends(get_ai_search_use_case),
 ) -> AiScreenResponse:
-    """Screen the universe from a natural-language request. A blank request is a 400; a
-    translation failure (the model/vendor couldn't parse it) is a 502 — distinct from a
-    well-understood request that simply matched no stocks (a 200 with an empty page)."""
+    """Translate a natural-language request into screen filters. A blank request is a 400; a
+    translation failure (the model/vendor couldn't parse it) is a 502."""
     try:
-        result = use_case.execute(query=q, limit=limit, offset=offset)
+        intent = use_case.execute(query=q)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except StockDataUnavailable as exc:
@@ -645,9 +631,9 @@ def ai_search_stocks_endpoint(
             502, "AI stock screening is temporarily unavailable."
         ) from exc
     # Deterministic for a given request against the slow-moving universe — cache briefly like
-    # the manual search so a burst of identical queries collapses onto one screen.
+    # the manual search so a burst of identical queries collapses onto one translation.
     response.headers["Cache-Control"] = "public, max-age=60"
-    return _present_ai_screen(result)
+    return _present_ai_screen(intent)
 
 
 @router.get("/stocks/classifications", response_model=ClassificationsResponse)
