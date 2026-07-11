@@ -17,6 +17,7 @@ from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     EarningsAnalysis,
+    FundamentalsAnalysis,
     InvestmentAnalysis,
     Logo,
     MarketIndexPerformance,
@@ -466,6 +467,39 @@ class RatingsAnalysisProvider(ABC):
             recommendations: the sell-side buy/hold/sell consensus + price targets, else
                 ``None``.
             top_firms: the most credible covering firms' current stances (may be empty).
+
+        Raises:
+            StockDataUnavailable: the model call failed or returned no usable
+                result.
+        """
+        raise NotImplementedError
+
+
+class FundamentalsAnalysisProvider(ABC):
+    """A gateway that turns a stock's fundamentals into a short, AI-generated read.
+
+    The fundamentals-focused sibling of ``EarningsAnalysisProvider`` and
+    ``RatingsAnalysisProvider``: the use case has already assembled the enriched stock snapshot
+    (the trailing/forward valuation multiples, the profitability and balance-sheet metrics, the
+    growth figures, the dividend and market cap) and, best-effort, the stock's industry-P/E
+    benchmark, and the adapter reasons only over what it's handed — it fetches nothing itself.
+    This backs a dedicated endpoint (its own reason to exist, not best-effort enrichment), so a
+    failure surfaces as an error rather than being swallowed.
+    """
+
+    @abstractmethod
+    def analyze(
+        self,
+        stock: Stock,
+        industry_valuation: IndustryValuation | None = None,
+    ) -> FundamentalsAnalysis:
+        """Return a fundamentals analysis built from the supplied snapshot.
+
+        Args:
+            stock: the enriched stock snapshot — its ``metrics`` (trailing valuation /
+                profitability / health / growth), ``analyst_estimates`` (forward consensus),
+                dividend and market cap. The symbol is read off it.
+            industry_valuation: the stock's industry-P/E peer benchmark, else ``None``.
 
         Raises:
             StockDataUnavailable: the model call failed or returned no usable
