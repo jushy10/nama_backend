@@ -168,6 +168,22 @@ module "dns" {
   create_zone   = var.create_hosted_zone
 }
 
+# Google Search Console domain-property verification. A TXT record at the apex
+# (namainsights.com) proves ownership of the domain and every subdomain, so the SEO
+# sitemap can be submitted in Search Console. module.dns.zone_id is the namainsights.com
+# hosted zone. If a later verification (Bing) or SPF needs the apex TXT too, add its value
+# to this same `records` list — Route 53 keeps all apex TXT values in one record set, so a
+# second record resource for the same name/type would collide.
+resource "aws_route53_record" "google_site_verification" {
+  zone_id = module.dns.zone_id
+  name    = var.parent_domain
+  type    = "TXT"
+  ttl     = 300
+  records = [
+    "google-site-verification=hOAOsyYqg8DUzoo-mO_gTLL9DUmsoi9YOK82ouctwLI",
+  ]
+}
+
 # The app on ECS Fargate, fronted by an API Gateway HTTP API (per-request
 # billing — no always-on load balancer). It carries the database's app
 # security group, reads DATABASE_URL from the SSM SecureString, and is served
