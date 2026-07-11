@@ -22,6 +22,7 @@ from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     EarningsAnalysis,
+    FundamentalsAnalysis,
     InvestmentAnalysis,
     Logo,
     MarketIndexPerformance,
@@ -47,6 +48,7 @@ from app.stocks.ports import (
     CandleProvider,
     CompanyProfileProvider,
     EarningsAnalysisProvider,
+    FundamentalsAnalysisProvider,
     InvestmentAnalysisCache,
     InvestmentAnalysisProvider,
     LogoProvider,
@@ -621,6 +623,85 @@ class GetRatingsFindings:
             return self._rating_change_provider.get_rating_changes(symbol)
         except (StockNotFound, StockDataUnavailable):
             return AnalystRatingChanges(symbol)
+
+
+class GetFundamentalsAnalysis:
+    """Use case: an AI-generated, plain-language read of a stock's fundamentals.
+
+    The fundamentals-focused sibling of ``GetEarningsAnalysis`` and ``GetRatingsFindings``.
+    Reuses ``GetStockInfo`` to assemble the enriched snapshot — the trailing valuation/health
+    metrics, the forward analyst estimates, the dividend and market cap — then best-effort layers
+    on the stock's industry-P/E benchmark (the same peer anchor ``GetStockAnalysis`` uses, so a
+    valuation multiple reads against its peers rather than in a vacuum) before handing the lot to
+    the injected analyzer.
+
+    The snapshot is primary — a bad/unknown symbol or an upstream price failure propagates — but a
+    snapshot carrying *no* fundamentals at all (no metrics, no estimates, no dividend, no market
+    cap: an uncovered symbol or an unconfigured fundamentals vendor) surfaces as
+    ``StockDataUnavailable`` rather than asking the model to reason over a bare price. The industry
+    benchmark is best-effort, so a miss just omits it. Unlike the per-stock buy/hold/sell analysis
+    this has no DB result cache — the endpoint leans on a short HTTP ``Cache-Control`` instead,
+    matching the earnings and ratings reads. The analyzer reasons only over what it's handed; it
+    fetches nothing itself.
+    """
+
+    def __init__(
+        self,
+        stock_info: GetStockInfo,
+        analyzer: FundamentalsAnalysisProvider,
+        industry_repository: StockSearchRepository | None = None,
+    ) -> None:
+        self._stock_info = stock_info
+        self._analyzer = analyzer
+        self._industry_repository = industry_repository
+
+    def execute(self, symbol: str) -> FundamentalsAnalysis:
+        normalized = _normalize_symbol(symbol)
+        # The enriched snapshot is primary: a bad symbol (ValueError), an unknown one
+        # (StockNotFound), or an upstream price failure (StockDataUnavailable) all propagate
+        # rather than yielding an analysis of nothing.
+        stock = self._stock_info.execute(normalized)
+        if not _has_fundamentals(stock):
+            # Only a price came back — no valuation/health metrics, no forward estimates, no
+            # dividend or market cap. Nothing fundamental to read, so fail rather than ask the
+            # model to reason over a bare quote (mirrors the earnings/ratings no-data guards).
+            raise StockDataUnavailable(normalized, "no fundamentals data to analyse")
+        return self._analyzer.analyze(stock, self._industry_valuation(normalized))
+
+    def _industry_valuation(self, symbol: str) -> IndustryValuation | None:
+        # Best-effort context: the peer-valuation anchor that makes the stock's own P/E
+        # meaningful ("28 is high for an industry that trades near 21"). Identical to
+        # ``GetStockAnalysis._industry_valuation`` — resolve the ticker's industry and size
+        # tier, summarize its peers' P/Es into a tier-scoped benchmark, and only surface it when
+        # the cohort is representative (a "median" of one or two stocks is noise, not an anchor).
+        if self._industry_repository is None:
+            return None
+        try:
+            industry = self._industry_repository.industry_for_ticker(symbol)
+            if not industry:
+                return None
+            anchor_tier = self._industry_repository.tier_for_ticker(symbol)
+            peers = self._industry_repository.industry_peers(industry)
+        except (StockNotFound, StockDataUnavailable):
+            return None
+        valuation = IndustryValuation.for_stock_peers(industry, anchor_tier, peers)
+        return valuation if valuation.is_representative else None
+
+
+def _has_fundamentals(stock: Stock) -> bool:
+    """Whether an enriched snapshot carries anything fundamental to analyse.
+
+    True when at least one fundamentals source contributed — the trailing metrics block, the
+    forward estimates, a dividend, or a market cap. A snapshot with none of these is a bare
+    price (an uncovered symbol or an unconfigured fundamentals vendor), which the use case
+    refuses to hand the model."""
+    return (
+        stock.metrics is not None
+        or stock.analyst_estimates is not None
+        or stock.dividend_yield is not None
+        or stock.dividend_per_share is not None
+        or stock.market_cap is not None
+    )
 
 
 class GetSectorPerformance:

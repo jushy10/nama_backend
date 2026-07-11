@@ -760,3 +760,47 @@ class RatingsAnalysis:
     findings: tuple[str, ...]
     model: str
     generated_at: datetime
+
+
+class FundamentalsVerdict(str, Enum):
+    """The overall read of a company's *fundamentals*.
+
+    A holistic quality read of the business behind the price — how profitable it is, whether
+    revenue and earnings are growing, how sound the balance sheet looks, and whether the shares
+    are reasonably priced against all that. ``strong`` when the fundamentals clearly hold up
+    (healthy margins and growth, a solid balance sheet, a valuation the numbers support),
+    ``weak`` when they clearly don't (thin or falling margins, shrinking growth, heavy debt, or
+    a valuation the business can't justify), ``mixed`` when the picture is uneven or the signals
+    conflict. The string values double as the JSON the model returns and the API serves, the
+    same convention as ``RatingsVerdict`` and ``EarningsTrend``.
+    """
+
+    STRONG = "strong"
+    MIXED = "mixed"
+    WEAK = "weak"
+
+
+@dataclass(frozen=True)
+class FundamentalsAnalysis:
+    """An AI-generated, plain-language read of a company's *fundamentals*.
+
+    The fundamentals-focused sibling of ``EarningsAnalysis`` and ``RatingsAnalysis``: produced by
+    a language model from the fundamentals the slice already gathers — the trailing and forward
+    valuation multiples (P/E, P/B, P/S, PEG, forward P/E), the profitability ladder (gross /
+    operating / net margins, ROE), balance-sheet health (current ratio, debt-to-equity), the
+    trailing and forward growth in revenue and earnings, the dividend, the market cap, and how the
+    stock's P/E sits against its industry peers — never from outside data the model happens to
+    recall. ``verdict`` is the overall read and ``confidence`` how firmly it's held; ``summary`` is
+    the plain-language headline and ``findings`` a few short, concrete takeaways (e.g. a fat net
+    margin, a stretched forward multiple versus peers, growth that is fading). Informational, not
+    advice — the model fills in the substance and the presenter attaches the disclaimer.
+    ``model``/``generated_at`` keep a read traceable, as with ``RatingsAnalysis``.
+    """
+
+    symbol: str
+    verdict: FundamentalsVerdict
+    confidence: Confidence
+    summary: str
+    findings: tuple[str, ...]
+    model: str
+    generated_at: datetime
