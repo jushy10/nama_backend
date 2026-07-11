@@ -10,8 +10,8 @@ miss and refreshes it on a TTL (there is no cron); a refresh is insert-only (a f
 is a frozen fact) and the feed is pruned to the newest N transactions per stock. Hangs off the
 ``stocks`` anchor (from 0002) with an ``ON DELETE CASCADE`` foreign key.
 
-Revision ID: 0028_insider_txns
-Revises: 0027_fcf
+Revision ID: 0029_insider_txns
+Revises: 0028_scorecard_sections
 Create Date: 2026-07-11
 
 """
@@ -22,8 +22,8 @@ import sqlalchemy as sa
 
 # Keep the revision id <= 32 chars: alembic_version.version_num is VARCHAR(32). Postgres
 # enforces it (SQLite doesn't), so a longer id passes local tests but fails the RDS migration.
-revision: str = "0028_insider_txns"
-down_revision: Union[str, None] = "0027_fcf"
+revision: str = "0029_insider_txns"
+down_revision: Union[str, None] = "0028_scorecard_sections"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
