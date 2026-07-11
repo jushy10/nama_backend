@@ -190,8 +190,9 @@ def test_sitemap_lists_stock_and_sector_pages() -> None:
     assert "<lastmod>2026-07-03</lastmod>" in body
     # The stampless page still appears, just without a lastmod element.
     assert "<loc>https://www.namainsights.com/stock/AAPL</loc>" in body
-    # Homepage is included.
+    # Homepage + the static AI-screener landing page are included.
     assert "<loc>https://www.namainsights.com/</loc>" in body
+    assert "<loc>https://www.namainsights.com/ai-stock-screener</loc>" in body
     # ETF, sector and screen pages are all listed.
     assert "<loc>https://www.namainsights.com/etf/VOO</loc>" in body
     assert "<loc>https://www.namainsights.com/sector/technology</loc>" in body
@@ -378,3 +379,28 @@ def test_malformed_etf_ticker_is_400() -> None:
     fake = _FakeEtfUseCase(error=ValueError("'1' is not a valid ticker."))
     resp = _etf_client(fake).get("/etf/1")
     assert resp.status_code == 400
+
+
+# --- AI stock screener landing page ------------------------------------------------------
+
+
+def test_ai_stock_screener_landing_page() -> None:
+    app = FastAPI()
+    app.include_router(endpoints.router)  # static page, no dependency to override
+    resp = TestClient(app).get("/ai-stock-screener")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert resp.headers["cache-control"] == "public, max-age=3600"
+
+    body = resp.text
+    assert "<h1>Free AI Stock Screener</h1>" in body
+    assert '<link rel="canonical" href="https://www.namainsights.com/ai-stock-screener"' in body
+    assert '<meta name="robots" content="index,follow"' in body
+    # Structured data that AI engines / rich results lift: the tool + the FAQ.
+    assert '"@type": "WebApplication"' in body
+    assert '"@type": "FAQPage"' in body
+    # Example queries, a CTA into the app screener, and cross-links to the /screen pages.
+    assert "Mega-cap technology stocks" in body
+    assert 'href="https://www.namainsights.com/screener"' in body
+    assert 'href="https://www.namainsights.com/screen/high-fcf-yield"' in body

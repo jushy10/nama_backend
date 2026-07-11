@@ -588,6 +588,136 @@ def etf_page_endpoint(
     return _render_etf(request, page)
 
 
+# --- AI stock screener landing page: /ai-stock-screener ----------------------------------
+#
+# A marketing/SEO landing page targeting the "AI stock screener" keyword and funnelling into
+# the app's plain-English screener. Static content (no DB), so it renders straight here. The
+# example queries deliberately reflect what the AI screener actually supports — sector/industry,
+# company size, index membership, and how to rank — so the copy never promises a filter it can't do.
+
+_AI_SCREENER_EXAMPLES = [
+    "Mega-cap technology stocks",
+    "Semiconductor companies in the S&P 500",
+    "Large-cap stocks sorted by revenue growth",
+    "The cheapest S&P 500 stocks by P/E",
+    "Consumer stocks with the highest free cash flow yield",
+    "Nasdaq-100 companies ranked by forward growth",
+]
+
+_AI_SCREENER_STEPS = [
+    ("Describe what you want", "Type a plain-English request — the kind of companies you're looking for."),
+    ("AI builds the screen", "It turns your words into filters — sector, size, index and how to rank."),
+    ("Explore the results", "See matching US stocks with valuation, growth and cash-flow metrics — and refine the filters anytime."),
+]
+
+# (question, answer) pairs — rendered on the page AND emitted as FAQPage JSON-LD.
+_AI_SCREENER_FAQS = [
+    (
+        "What is an AI stock screener?",
+        "An AI stock screener lets you find stocks by describing what you want in plain "
+        "English instead of setting filters by hand. You type a request like “mega-cap "
+        "technology stocks” and the AI turns it into a live screen of US stocks.",
+    ),
+    (
+        "Is Nama's AI stock screener free?",
+        "Yes. Nama Insights is free to use — no login and no paywall.",
+    ),
+    (
+        "How is it different from a screener like Finviz?",
+        "Traditional screeners make you set each filter yourself — sector, market cap, "
+        "ratios. Nama's AI screener lets you describe what you want in a sentence and builds "
+        "the screen for you, and you can still refine the filters by hand afterwards.",
+    ),
+    (
+        "What can I ask it?",
+        "Requests like “semiconductor companies in the S&P 500”, “large caps sorted by "
+        "revenue growth”, or “the cheapest stocks by P/E”. It understands sectors and "
+        "industries, company size (market cap), index membership, and how to rank the results.",
+    ),
+    (
+        "What stocks does it cover?",
+        "US-listed stocks with a market capitalization of $1 billion or more — around 2,700 "
+        "companies — with the data refreshed daily.",
+    ),
+]
+
+
+def _ai_screener_jsonld(canonical: str, site: str) -> str:
+    """schema.org JSON-LD for the landing page: the tool (WebApplication), the FAQ (FAQPage —
+    strong for both rich results and AI citation), and a breadcrumb. ``<`` escaped so nothing
+    can break out of the <script> block."""
+    web_app = {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Nama Insights AI Stock Screener",
+        "url": canonical,
+        "applicationCategory": "FinanceApplication",
+        "operatingSystem": "Web",
+        "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+        "description": (
+            "A free AI stock screener: describe the US stocks you want in plain English "
+            "and get a live, filtered screen."
+        ),
+    }
+    faq = {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+            {
+                "@type": "Question",
+                "name": question,
+                "acceptedAnswer": {"@type": "Answer", "text": answer},
+            }
+            for question, answer in _AI_SCREENER_FAQS
+        ],
+    }
+    breadcrumbs = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "Nama Insights", "item": site},
+            {"@type": "ListItem", "position": 2, "name": "AI Stock Screener", "item": canonical},
+        ],
+    }
+    return json.dumps([web_app, faq, breadcrumbs]).replace("<", "\\u003c")
+
+
+@router.get("/ai-stock-screener")
+def ai_stock_screener_page(request: Request) -> Response:
+    """The AI-stock-screener landing page — a static, server-rendered marketing page that
+    targets the keyword and funnels into the app's plain-English screener."""
+    site = _site_origin()
+    canonical = f"{site}/ai-stock-screener"
+    popular = [
+        ("Highest free cash flow yield", f"{site}/screen/high-fcf-yield"),
+        ("Cheapest by P/E", f"{site}/screen/cheapest-pe"),
+        ("Highest revenue growth", f"{site}/screen/highest-revenue-growth"),
+        ("Largest by market cap", f"{site}/screen/largest-companies"),
+    ]
+    context = {
+        "title": "Free AI Stock Screener — Screen Stocks in Plain English | Nama Insights",
+        "description": (
+            "A free AI stock screener: describe the US stocks you want in plain English and "
+            "get a live, filtered screen — no filters to learn, no signup."
+        ),
+        "canonical": canonical,
+        "robots": "index,follow",
+        "site": site,
+        "app_url": f"{site}/screener",
+        "examples": _AI_SCREENER_EXAMPLES,
+        "steps": [{"title": title, "body": body} for title, body in _AI_SCREENER_STEPS],
+        "faqs": [{"q": question, "a": answer} for question, answer in _AI_SCREENER_FAQS],
+        "popular": [{"label": label, "url": url} for label, url in popular],
+        "jsonld": _ai_screener_jsonld(canonical, site),
+        "year": datetime.now(timezone.utc).year,
+    }
+    response = _TEMPLATES.TemplateResponse(
+        request=request, name="ai_screener.html", context=context
+    )
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
 # --- Crawler files: robots.txt, llms.txt, sitemap.xml ------------------------------------
 #
 # These belong at the site root, so at the edge (CloudFront) they route to this origin
@@ -641,7 +771,12 @@ _LLMS_TXT = """\
 
 > Free stock and ETF research for US-listed companies: live quotes, fundamentals,
 > free-cash-flow metrics (FCF yield, P/FCF), earnings history, analyst coverage, and
-> AI-generated analysis. Market data is refreshed daily.
+> AI-generated analysis. Includes a free AI stock screener that turns a plain-English
+> request into a live screen. Market data is refreshed daily.
+
+## AI stock screener
+Describe the stocks you want in plain English and the AI builds the screen —
+/ai-stock-screener (the tool runs at /screener).
 
 ## Stock pages
 Per-ticker pages with market cap, trailing P/E, free-cash-flow yield, year-over-year
@@ -686,6 +821,8 @@ def _sitemap_xml(data: SitemapData, site: str) -> str:
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
         f"  <url><loc>{escape(site + '/')}</loc></url>",
+        # Static landing pages (marketing/keyword pages, not data-driven).
+        f"  <url><loc>{escape(site + '/ai-stock-screener')}</loc></url>",
     ]
     def _entity_url(prefix: str, ref) -> str:
         loc = escape(f"{site}/{prefix}/{ref.ticker}")

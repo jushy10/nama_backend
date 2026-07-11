@@ -291,6 +291,7 @@ module "frontend" {
     "/etf/*",
     "/sector/*",
     "/screen/*",
+    "/ai-stock-screener",
     "/sitemap.xml",
     "/robots.txt",
     "/llms.txt",
