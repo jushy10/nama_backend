@@ -28,6 +28,9 @@ from app.stocks.adapters.bedrock.etf_screener_query_adapter import (
 from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
     BedrockEarningsAnalysisProvider,
 )
+from app.stocks.adapters.bedrock.fundamentals_analysis_adapter import (
+    BedrockFundamentalsAnalysisProvider,
+)
 from app.stocks.adapters.bedrock.market_summary_adapter import (
     BedrockMarketSummaryProvider,
 )
@@ -41,6 +44,7 @@ from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     CandleSeries,
     EarningsAnalysis,
+    FundamentalsAnalysis,
     MarketIndexReturn,
     MarketPeriodHighlight,
     MarketSummary,
@@ -81,6 +85,7 @@ from app.stocks.ports import (
     AnalystEstimatesProvider,
     CompanyProfileProvider,
     EarningsAnalysisProvider,
+    FundamentalsAnalysisProvider,
     LogoProvider,
     MarketSummaryProvider,
     RatingsAnalysisProvider,
@@ -105,6 +110,7 @@ from app.stocks.schemas import (
     EmaLineResponse,
     EmaPointResponse,
     EmaResponse,
+    FundamentalsAnalysisResponse,
     InvestmentAnalysisResponse,
     ScorecardSectionResponse,
     SectionMetricResponse,
@@ -122,6 +128,7 @@ from app.stocks.schemas import (
 )
 from app.stocks.use_cases import (
     GetEarningsAnalysis,
+    GetFundamentalsAnalysis,
     GetMarketOverview,
     GetMarketSummary,
     GetRatingsFindings,
@@ -491,6 +498,44 @@ def get_ratings_findings(
 
 
 @lru_cache(maxsize=1)
+def get_fundamentals_analysis_provider() -> FundamentalsAnalysisProvider:
+    # The fundamentals read is short, plain output (a few sentences + a few findings), so it
+    # runs on the fast Haiku tier — the provider's own default — with its own override,
+    # BEDROCK_FUNDAMENTALS_ANALYSIS_MODEL_ID, so the model can be swapped without a code change,
+    # exactly like the earnings and ratings reads. Bedrock authenticates through the process's
+    # AWS credentials, so there's no secret to gate on; a missing 'bedrock' extra is a 503.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_FUNDAMENTALS_ANALYSIS_MODEL_ID")
+    try:
+        if model_id:
+            return BedrockFundamentalsAnalysisProvider(model_id=model_id, region=region)
+        return BedrockFundamentalsAnalysisProvider(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI analysis is not configured (install the 'bedrock' extra)."
+        ) from exc
+
+
+def get_fundamentals_analysis(
+    stock_info: GetStockInfo = Depends(get_stock_info),
+    analyzer: FundamentalsAnalysisProvider = Depends(get_fundamentals_analysis_provider),
+    # The industry-P/E benchmark is a pure DB read off the shared anchor (the same screened
+    # universe the /stocks/industries/{industry}/pe endpoint groups on) — best-effort context
+    # for the fundamentals read, so a miss just omits it.
+    db: Session = Depends(get_db),
+) -> GetFundamentalsAnalysis:
+    # Reuses the stock snapshot wiring wholesale (price + the trailing/forward valuation,
+    # profitability, health, growth and dividend enrichment), then layers the analyzer and the
+    # industry benchmark. No result cache — the endpoint leans on a short HTTP Cache-Control,
+    # matching the earnings and ratings reads.
+    return GetFundamentalsAnalysis(
+        stock_info,
+        analyzer,
+        SqlStockSearchRepository(db),
+    )
+
+
+@lru_cache(maxsize=1)
 def get_logo_provider() -> LogoProvider:
     # Logo.dev keeps logos current through rebrands/symbol changes. It needs a
     # free *publishable* token (logo.dev, 500k/mo); without it the logo endpoint
@@ -585,6 +630,25 @@ def _present_ratings_analysis(
     The disclaimer is attached here, at the edge — it's a property of the service,
     not something the model is trusted to author."""
     return RatingsAnalysisResponse(
+        symbol=analysis.symbol,
+        verdict=analysis.verdict.value,
+        confidence=analysis.confidence.value,
+        summary=analysis.summary,
+        findings=list(analysis.findings),
+        disclaimer=_ANALYSIS_DISCLAIMER,
+        model=analysis.model,
+        generated_at=analysis.generated_at,
+    )
+
+
+def _present_fundamentals_analysis(
+    analysis: FundamentalsAnalysis,
+) -> FundamentalsAnalysisResponse:
+    """Presenter: fundamentals-analysis entity -> HTTP response DTO.
+
+    The disclaimer is attached here, at the edge — it's a property of the service,
+    not something the model is trusted to author."""
+    return FundamentalsAnalysisResponse(
         symbol=analysis.symbol,
         verdict=analysis.verdict.value,
         confidence=analysis.confidence.value,
@@ -1019,6 +1083,30 @@ def get_ratings_analysis_endpoint(
     # cache briefly so a burst of viewers collapses onto one generation rather than re-billing.
     response.headers["Cache-Control"] = "public, max-age=300"
     return _present_ratings_analysis(analysis)
+
+
+@router.get(
+    "/stocks/{symbol}/fundamentals/analysis",
+    response_model=FundamentalsAnalysisResponse,
+)
+def get_fundamentals_analysis_endpoint(
+    symbol: str,
+    response: Response,
+    use_case: GetFundamentalsAnalysis = Depends(get_fundamentals_analysis),
+) -> FundamentalsAnalysisResponse:
+    try:
+        analysis = use_case.execute(symbol)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    # The model call is slow and metered, and a fundamentals read only drifts as the reported
+    # figures do — cache briefly so a burst of viewers collapses onto one generation rather
+    # than re-billing per request.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return _present_fundamentals_analysis(analysis)
 
 
 @router.get("/sectors", response_model=SectorBoardResponse)

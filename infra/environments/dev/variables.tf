@@ -29,9 +29,20 @@ variable "create_hosted_zone" {
 }
 
 variable "bastion_enabled" {
-  description = "Keep the SSM bastion (the laptop->database tunnel host) provisioned and running continuously (~$7/mo) so the database tunnel is always available. Set false to remove it entirely. Not in the app's serving path — never affects the API."
+  description = "Keep the SSM bastion (the laptop->database tunnel host) provisioned. Parked (stopped) by default — see bastion_desired_state — so it costs only ~$0.64/mo (disk) until you start it on demand. Set false to remove it entirely. Not in the app's serving path — never affects the API."
   type        = bool
   default     = true
+}
+
+variable "bastion_desired_state" {
+  description = "Power state Terraform holds the bastion in. Defaults to \"stopped\" so the box is parked (~$0.64/mo, disk only) unless you need it — start it on demand with infra/bastion.ps1 (a manual start persists until the next terraform apply reconciles it back). Set \"running\" to keep it up continuously across applies (~$7/mo). Only takes effect while bastion_enabled = true."
+  type        = string
+  default     = "stopped"
+
+  validation {
+    condition     = contains(["running", "stopped"], var.bastion_desired_state)
+    error_message = "bastion_desired_state must be \"running\" or \"stopped\"."
+  }
 }
 
 variable "frontend_domain_name" {

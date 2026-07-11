@@ -299,3 +299,25 @@ class RatingsAnalysisResponse(BaseModel):
     disclaimer: str
     model: str  # the model that produced the analysis
     generated_at: datetime
+
+
+class FundamentalsAnalysisResponse(BaseModel):
+    """An AI-generated, plain-language read of a stock's fundamentals.
+
+    ``verdict`` is the overall read ("strong"/"mixed"/"weak") of the company's fundamentals —
+    profitability, growth, balance-sheet health, and whether the shares look reasonably priced
+    against all that — and ``confidence`` how firmly it's held ("low"/"medium"/"high");
+    ``summary`` is the plain-language headline and ``findings`` a few short, concrete takeaways.
+    ``disclaimer`` is a fixed reminder that this is informational, not financial advice — authored
+    by the service, not the model. ``model`` and ``generated_at`` record what produced the
+    analysis and when. Reasoned only over the fundamentals the ticker card exposes plus the
+    industry-P/E peer benchmark; descriptive, not advice."""
+
+    symbol: str
+    verdict: str  # "strong" | "mixed" | "weak"
+    confidence: str  # "low" | "medium" | "high"
+    summary: str
+    findings: list[str]
+    disclaimer: str
+    model: str  # the model that produced the analysis
+    generated_at: datetime
