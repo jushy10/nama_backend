@@ -54,6 +54,18 @@ class StockPageRef:
     last_modified: date | None
 
 
+@dataclass(frozen=True)
+class SectorStock:
+    """One row on a sector page: enough to render a linked, sortable listing without a
+    second read per stock. All the figures come off the anchor (screened rows only)."""
+
+    ticker: str
+    name: str | None
+    market_cap: float | None
+    pe_ratio: float | None
+    fcf_yield: float | None
+
+
 class SeoReadRepository(ABC):
     """A read-only view of the ``stocks`` anchor for the content pages."""
 
@@ -71,4 +83,17 @@ class SeoReadRepository(ABC):
         (``market_cap`` filled, the same gate a single page uses to decide it's
         indexable), most valuable first, capped at ``limit``. Ordering by market cap
         means a truncated sitemap still lists the biggest, most-searched names."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_sector_stocks(self, sector: str, limit: int) -> tuple[SectorStock, ...]:
+        """The screened stocks in one sector (by stored snake_case slug), most valuable
+        first, capped at ``limit``. Empty when the sector is unknown — the "not a real
+        sector" signal the endpoint maps to a 404."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_sectors(self) -> tuple[str, ...]:
+        """The distinct sector slugs across the screened universe, sorted — the set of
+        ``/sector/{slug}`` pages that exist, for the sitemap."""
         raise NotImplementedError

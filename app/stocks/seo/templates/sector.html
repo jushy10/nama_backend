@@ -8,7 +8,6 @@
     <link rel="canonical" href="{{ canonical }}" />
     <meta name="robots" content="{{ robots }}" />
 
-    <!-- Open Graph / Twitter: how the page previews when shared or surfaced. -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Nama Insights" />
     <meta property="og:title" content="{{ title }}" />
@@ -18,7 +17,6 @@
     <meta name="twitter:title" content="{{ title }}" />
     <meta name="twitter:description" content="{{ description }}" />
 
-    <!-- Structured data: the clean facts search + AI engines lift for rich results and citation. -->
     <script type="application/ld+json">{{ jsonld | safe }}</script>
 
     <style>
@@ -39,38 +37,30 @@
         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       }
       a { color: var(--accent); }
-      .wrap { max-width: 780px; margin: 0 auto; padding: 24px 20px 56px; }
+      .wrap { max-width: 900px; margin: 0 auto; padding: 24px 20px 56px; }
       header.site { display: flex; align-items: center; gap: 10px; padding: 8px 0 24px; }
       header.site .brand { font-weight: 700; font-size: 1.1rem; color: var(--fg); text-decoration: none; }
       nav.crumbs { font-size: 0.85rem; color: var(--muted); margin-bottom: 14px; }
       nav.crumbs a { color: var(--muted); text-decoration: none; }
       nav.crumbs a:hover { color: var(--accent); }
-      h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 4px; letter-spacing: -0.01em; }
-      h1 .ticker { color: var(--muted); font-weight: 600; }
-      .sub { color: var(--muted); margin: 0 0 18px; }
-      .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 22px; }
-      .chip {
-        background: var(--chip); border: 1px solid var(--line); border-radius: 999px;
-        padding: 3px 11px; font-size: 0.8rem; color: var(--muted);
-      }
-      .summary {
-        background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-        padding: 18px 20px; margin: 0 0 22px;
-      }
-      table.metrics {
-        width: 100%; border-collapse: collapse; background: var(--card);
-        border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
-      }
-      table.metrics th, table.metrics td { text-align: left; padding: 12px 16px; font-size: 0.95rem; }
-      table.metrics th { color: var(--muted); font-weight: 500; width: 55%; }
-      table.metrics td { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
-      table.metrics tr + tr { border-top: 1px solid var(--line); }
+      h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 6px; letter-spacing: -0.01em; }
+      .sub { color: var(--muted); margin: 0 0 22px; }
+      .tablewrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+      table.rows { width: 100%; border-collapse: collapse; }
+      table.rows th, table.rows td { padding: 11px 14px; font-size: 0.92rem; white-space: nowrap; }
+      table.rows thead th { text-align: right; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); }
+      table.rows thead th:first-child, table.rows thead th:nth-child(2) { text-align: left; }
+      table.rows td { text-align: right; font-variant-numeric: tabular-nums; }
+      table.rows td:first-child { text-align: left; font-weight: 700; }
+      table.rows td:nth-child(2) { text-align: left; color: var(--muted); }
+      table.rows tbody tr + tr td { border-top: 1px solid var(--line); }
+      table.rows a { text-decoration: none; }
+      table.rows a:hover { text-decoration: underline; }
       .cta { margin: 26px 0 0; }
       .cta a {
         display: inline-block; background: var(--accent); color: var(--accent-fg);
         text-decoration: none; font-weight: 600; padding: 12px 20px; border-radius: 10px;
       }
-      .related { margin: 16px 0 0; font-size: 0.95rem; }
       footer.site { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.8rem; }
       .disclaimer { margin-top: 8px; }
     </style>
@@ -84,37 +74,40 @@
       <nav class="crumbs" aria-label="Breadcrumb">
         <a href="{{ site }}">Home</a> ›
         <a href="{{ site }}/search">Stocks</a> ›
-        <span>{{ name }} ({{ ticker }})</span>
+        <span>{{ label }}</span>
       </nav>
 
-      <h1>{{ name }} <span class="ticker">({{ ticker }})</span></h1>
-      {% if subtitle %}<p class="sub">{{ subtitle }}</p>{% endif %}
+      <h1>{{ label }} Stocks</h1>
+      <p class="sub">{{ subtitle }}</p>
 
-      {% if chips %}
-      <div class="chips">
-        {% for chip in chips %}<span class="chip">{{ chip }}</span>{% endfor %}
+      <div class="tablewrap">
+        <table class="rows">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th>Company</th>
+              <th>Market cap</th>
+              <th>P/E</th>
+              <th>FCF yield</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in stocks %}
+            <tr>
+              <td><a href="{{ row.url }}">{{ row.ticker }}</a></td>
+              <td>{{ row.name }}</td>
+              <td>{{ row.market_cap }}</td>
+              <td>{{ row.pe }}</td>
+              <td>{{ row.fcf_yield }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </div>
-      {% endif %}
-
-      <div class="summary">{{ summary }}</div>
-
-      <table class="metrics">
-        <tbody>
-          {% for row in metrics %}
-          <tr><th>{{ row.label }}</th><td>{{ row.value }}</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
 
       <div class="cta">
-        <a href="{{ app_url }}">Explore live {{ ticker }} data on Nama Insights →</a>
+        <a href="{{ app_url }}">Screen {{ label }} stocks on Nama Insights →</a>
       </div>
-
-      {% if sector_url %}
-      <p class="related">
-        See more: <a href="{{ sector_url }}">{{ sector_label }} stocks →</a>
-      </p>
-      {% endif %}
 
       <footer class="site">
         <div>© {{ year }} Nama Insights.</div>

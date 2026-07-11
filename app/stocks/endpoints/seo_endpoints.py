@@ -31,8 +31,15 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.stocks.seo.db_repository import SqlSeoReadRepository
-from app.stocks.seo.repository import StockPageRef, TickerPageFacts
-from app.stocks.seo.use_cases import GetSitemap, GetTickerStockPage, TickerStockPage
+from app.stocks.seo.repository import TickerPageFacts
+from app.stocks.seo.use_cases import (
+    GetSectorPage,
+    GetSitemap,
+    GetTickerStockPage,
+    SectorPage,
+    SitemapData,
+    TickerStockPage,
+)
 
 router = APIRouter(tags=["seo"])
 
@@ -232,6 +239,12 @@ def _render(request: Request, page: TickerStockPage) -> Response:
         "summary": _summary(name, ticker, facts),
         "metrics": _metrics(facts),
         "jsonld": _jsonld(name, ticker, facts, canonical, site),
+        # Internal link to the stock's sector page — the hub/spoke structure that helps
+        # crawlers reach every page and spreads authority. Null when unclassified.
+        "sector_url": (
+            f"{site}/sector/{facts.sector.replace('_', '-')}" if facts.sector else None
+        ),
+        "sector_label": _humanize(facts.sector),
         "year": datetime.now(timezone.utc).year,
     }
     response = _TEMPLATES.TemplateResponse(
@@ -258,6 +271,113 @@ def stock_page_endpoint(
     if not page.has_data:
         raise HTTPException(404, f"No data available for {page.ticker}.")
     return _render(request, page)
+
+
+# --- Sector pages: /sector/{slug} --------------------------------------------------------
+#
+# The internal-linking hub: each sector page lists its top stocks (linked to their /stock/
+# pages), and each stock page links back to its sector. This sector->stock structure is
+# what lets a crawler reach every leaf page and spreads authority across the site.
+
+
+def get_sector_page_use_case(db: Session = Depends(get_db)) -> GetSectorPage:
+    return GetSectorPage(SqlSeoReadRepository(db))
+
+
+def _sector_description(page: SectorPage) -> str:
+    label = page.label
+    examples = ", ".join(s.ticker for s in page.stocks[:5])
+    desc = (
+        f"The largest {label} stocks by market cap — {len(page.stocks)} companies with "
+        "P/E, FCF yield and key metrics on Nama Insights."
+    )
+    if examples:
+        desc += f" Incl. {examples}."
+    return desc if len(desc) <= 160 else desc[:159].rstrip(" ,.") + "…"
+
+
+def _sector_jsonld(page: SectorPage, canonical: str, site: str) -> str:
+    """schema.org JSON-LD: an ItemList of the sector's stocks (each linking to its page) and
+    a breadcrumb trail. ``<`` escaped so data can't break out of the <script> block."""
+    item_list = {
+        "@context": "https://schema.org",
+        "@type": "ItemList",
+        "name": f"{page.label} Stocks",
+        "itemListElement": [
+            {
+                "@type": "ListItem",
+                "position": i + 1,
+                "url": f"{site}/stock/{stock.ticker}",
+                "name": stock.name or stock.ticker,
+            }
+            for i, stock in enumerate(page.stocks)
+        ],
+    }
+    breadcrumbs = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "Nama Insights", "item": site},
+            {"@type": "ListItem", "position": 2, "name": "Stocks", "item": f"{site}/search"},
+            {"@type": "ListItem", "position": 3, "name": f"{page.label} Stocks", "item": canonical},
+        ],
+    }
+    return json.dumps([item_list, breadcrumbs]).replace("<", "\\u003c")
+
+
+def _render_sector(request: Request, page: SectorPage) -> Response:
+    site = _site_origin()
+    label = page.label
+    canonical = f"{site}/sector/{page.url_slug}"
+    rows = [
+        {
+            "ticker": stock.ticker,
+            "url": f"{site}/stock/{stock.ticker}",
+            "name": stock.name or "—",
+            "market_cap": _fmt_cap(stock.market_cap) or "—",
+            "pe": _fmt_ratio(stock.pe_ratio) or "—",
+            "fcf_yield": _fmt_pct(stock.fcf_yield) or "—",
+        }
+        for stock in page.stocks
+    ]
+    context = {
+        "title": f"{label} Stocks — Top Companies by Market Cap | Nama Insights",
+        "description": _sector_description(page),
+        "canonical": canonical,
+        "robots": "index,follow",  # a sector page only renders when it has stocks
+        "site": site,
+        "app_url": f"{site}/search",
+        "label": label,
+        "subtitle": (
+            f"The {len(page.stocks)} largest {label} companies by market cap, with "
+            "valuation and cash-flow metrics."
+        ),
+        "stocks": rows,
+        "jsonld": _sector_jsonld(page, canonical, site),
+        "year": datetime.now(timezone.utc).year,
+    }
+    response = _TEMPLATES.TemplateResponse(
+        request=request, name="sector.html", context=context
+    )
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
+@router.get("/sector/{sector}")
+def sector_page_endpoint(
+    sector: str,
+    request: Request,
+    use_case: GetSectorPage = Depends(get_sector_page_use_case),
+):
+    """A sector's server-rendered listing page. A malformed slug is a 400; a sector we hold
+    no screened stocks for is a 404."""
+    try:
+        page = use_case.execute(sector)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not page.has_data:
+        raise HTTPException(404, f"No stocks found for sector '{sector}'.")
+    return _render_sector(request, page)
 
 
 # --- Crawler files: robots.txt, llms.txt, sitemap.xml ------------------------------------
@@ -320,6 +440,10 @@ Per-ticker pages with market cap, trailing P/E, free-cash-flow yield, year-over-
 growth, and sector/industry classification — e.g. /stock/AAPL, /stock/NVDA, /stock/MSFT.
 The full list is in /sitemap.xml.
 
+## Sector pages
+The largest stocks in each sector by market cap — e.g. /sector/technology,
+/sector/financial-services, /sector/healthcare.
+
 ## Tools
 - /search — search and filter the >=$1B US stock universe
 - /screener — stock screener
@@ -338,16 +462,16 @@ def get_sitemap_use_case(db: Session = Depends(get_db)) -> GetSitemap:
     return GetSitemap(SqlSeoReadRepository(db))
 
 
-def _sitemap_xml(refs: tuple[StockPageRef, ...], site: str) -> str:
-    """Build the urlset XML: the homepage plus one <url> per index-worthy stock page,
-    each carrying its ``lastmod`` when known. ``loc`` values are XML-escaped (tickers are
-    constrained, but escaping the origin-joined URL is correct and cheap)."""
+def _sitemap_xml(data: SitemapData, site: str) -> str:
+    """Build the urlset XML: the homepage, one <url> per index-worthy stock page (with its
+    ``lastmod`` when known), and one per sector page. ``loc`` values are XML-escaped
+    (tickers/slugs are constrained, but escaping the origin-joined URL is correct/cheap)."""
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
         f"  <url><loc>{escape(site + '/')}</loc></url>",
     ]
-    for ref in refs:
+    for ref in data.stock_pages:
         loc = escape(f"{site}/stock/{ref.ticker}")
         if ref.last_modified is not None:
             parts.append(
@@ -356,6 +480,10 @@ def _sitemap_xml(refs: tuple[StockPageRef, ...], site: str) -> str:
             )
         else:
             parts.append(f"  <url><loc>{loc}</loc></url>")
+    for slug in data.sector_slugs:
+        # Hyphenated URL form of the stored snake_case slug.
+        loc = escape(f"{site}/sector/{slug.replace('_', '-')}")
+        parts.append(f"  <url><loc>{loc}</loc></url>")
     parts.append("</urlset>")
     return "\n".join(parts)
 

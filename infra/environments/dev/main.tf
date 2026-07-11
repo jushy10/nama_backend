@@ -262,5 +262,11 @@ module "frontend" {
   # Route the SEO surface to the app. var.domain_name is the API's custom domain
   # (api.namainsights.com); its cert covers that host, which the https-only origin needs.
   backend_origin_domain_name = var.domain_name
-  backend_path_patterns      = ["/stock/*", "/sitemap.xml", "/robots.txt", "/llms.txt"]
+  backend_path_patterns = [
+    "/stock/*",
+    "/sector/*",
+    "/sitemap.xml",
+    "/robots.txt",
+    "/llms.txt",
+  ]
 }

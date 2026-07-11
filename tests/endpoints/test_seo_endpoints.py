@@ -12,8 +12,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import seo_endpoints as endpoints
-from app.stocks.seo.repository import StockPageRef, TickerPageFacts
-from app.stocks.seo.use_cases import TickerStockPage
+from app.stocks.seo.repository import SectorStock, StockPageRef, TickerPageFacts
+from app.stocks.seo.use_cases import (
+    SectorPage,
+    SitemapData,
+    TickerStockPage,
+)
 
 
 class _FakeUseCase:
@@ -128,13 +132,13 @@ def test_malformed_ticker_is_400() -> None:
 
 
 class _FakeSitemap:
-    """Stands in for GetSitemap; returns canned page refs."""
+    """Stands in for GetSitemap; returns canned SitemapData."""
 
-    def __init__(self, refs) -> None:
-        self._refs = refs
+    def __init__(self, data) -> None:
+        self._data = data
 
     def execute(self):
-        return self._refs
+        return self._data
 
 
 def test_robots_txt_welcomes_ai_crawlers_and_points_at_sitemap() -> None:
@@ -155,14 +159,17 @@ def test_llms_txt_served() -> None:
     assert "# Nama Insights" in resp.text
 
 
-def test_sitemap_lists_stock_pages_with_lastmod() -> None:
+def test_sitemap_lists_stock_and_sector_pages() -> None:
     app = FastAPI()
     app.include_router(endpoints.router)
-    refs = (
-        StockPageRef(ticker="MU", last_modified=date(2026, 7, 3)),
-        StockPageRef(ticker="AAPL", last_modified=None),  # no stamp -> no <lastmod>
+    data = SitemapData(
+        stock_pages=(
+            StockPageRef(ticker="MU", last_modified=date(2026, 7, 3)),
+            StockPageRef(ticker="AAPL", last_modified=None),  # no stamp -> no <lastmod>
+        ),
+        sector_slugs=("technology", "consumer_electronics"),
     )
-    app.dependency_overrides[endpoints.get_sitemap_use_case] = lambda: _FakeSitemap(refs)
+    app.dependency_overrides[endpoints.get_sitemap_use_case] = lambda: _FakeSitemap(data)
     resp = TestClient(app).get("/sitemap.xml")
 
     assert resp.status_code == 200
@@ -175,3 +182,73 @@ def test_sitemap_lists_stock_pages_with_lastmod() -> None:
     assert "<loc>https://www.namainsights.com/stock/AAPL</loc>" in body
     # Homepage is included.
     assert "<loc>https://www.namainsights.com/</loc>" in body
+    # Sector pages are listed, with the stored underscore slug hyphenated for the URL.
+    assert "<loc>https://www.namainsights.com/sector/technology</loc>" in body
+    assert "<loc>https://www.namainsights.com/sector/consumer-electronics</loc>" in body
+
+
+# --- Sector pages ------------------------------------------------------------------------
+
+
+class _FakeSectorUseCase:
+    """Stands in for GetSectorPage; returns a canned page or raises."""
+
+    def __init__(self, *, result=None, error=None) -> None:
+        self._result = result
+        self._error = error
+        self.calls: list[str] = []
+
+    def execute(self, sector: str) -> SectorPage:
+        self.calls.append(sector)
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def _sector_client(fake: _FakeSectorUseCase) -> TestClient:
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    app.dependency_overrides[endpoints.get_sector_page_use_case] = lambda: fake
+    return TestClient(app)
+
+
+def test_sector_page_renders_linked_stock_listing() -> None:
+    page = SectorPage(
+        slug="consumer_electronics",
+        stocks=(
+            SectorStock(ticker="AAPL", name="Apple Inc.", market_cap=3.5e12, pe_ratio=31.2, fcf_yield=3.1),
+            SectorStock(ticker="SONY", name="Sony Group", market_cap=1.2e11, pe_ratio=17.8, fcf_yield=4.6),
+        ),
+    )
+    fake = _FakeSectorUseCase(result=page)
+    resp = _sector_client(fake).get("/sector/consumer-electronics")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    # The raw hyphenated slug reaches the use case (normalization is inside it).
+    assert fake.calls == ["consumer-electronics"]
+
+    body = resp.text
+    assert "Consumer Electronics Stocks" in body
+    # Canonical uses the hyphenated slug.
+    assert '<link rel="canonical" href="https://www.namainsights.com/sector/consumer-electronics"' in body
+    assert '<meta name="robots" content="index,follow"' in body
+    # Each stock links to its /stock/ page — the internal-linking hub.
+    assert 'href="https://www.namainsights.com/stock/AAPL"' in body
+    assert "Apple Inc." in body
+    assert "$3.50T" in body
+    # JSON-LD ItemList of the constituents.
+    assert '"@type": "ItemList"' in body
+
+
+def test_unknown_sector_is_404() -> None:
+    # No stocks in the sector -> not a real sector -> 404.
+    page = SectorPage(slug="nonsense", stocks=())
+    resp = _sector_client(_FakeSectorUseCase(result=page)).get("/sector/nonsense")
+    assert resp.status_code == 404
+
+
+def test_malformed_sector_is_400() -> None:
+    fake = _FakeSectorUseCase(error=ValueError("'a/b' is not a valid sector."))
+    resp = _sector_client(fake).get("/sector/a b")
+    assert resp.status_code == 400

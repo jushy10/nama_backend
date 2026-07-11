@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass
 
 from app.stocks.seo.repository import (
+    SectorStock,
     SeoReadRepository,
     StockPageRef,
     TickerPageFacts,
@@ -86,14 +87,76 @@ class GetTickerStockPage:
         )
 
 
-class GetSitemap:
-    """Use case: the list of index-worthy stock pages for ``sitemap.xml``.
+def normalize_sector_slug(raw: str) -> str:
+    """Fold a URL sector slug onto the stored snake_case form: lower-case, and map the
+    URL-friendly hyphen back to the stored underscore (``consumer-electronics`` ->
+    ``consumer_electronics``). Rejects anything that isn't a plain slug."""
+    slug = (raw or "").strip().lower().replace("-", "_")
+    if not slug:
+        raise ValueError("A sector is required.")
+    if not re.match(r"^[a-z0-9_]+$", slug):
+        raise ValueError(f"'{raw}' is not a valid sector.")
+    return slug
 
-    Thin over the repository — the sitemap is just the screened universe's pages — but it
-    owns the URL ceiling: a single sitemap file tops out at 50,000 URLs, so the cap keeps
-    us under it (the universe is a few thousand today; when it approaches the limit this
-    becomes a sitemap *index* of paginated children). Most-valuable-first ordering means a
-    future truncation drops only the smallest names.
+
+@dataclass(frozen=True)
+class SectorPage:
+    """What a sector content page renders: the sector (stored slug) and its top stocks."""
+
+    slug: str  # stored snake_case form
+    stocks: tuple[SectorStock, ...]
+
+    @property
+    def has_data(self) -> bool:
+        """A real sector has at least one screened stock; an unknown slug yields none and
+        is a 404 rather than an empty page."""
+        return len(self.stocks) > 0
+
+    @property
+    def url_slug(self) -> str:
+        """The hyphenated form used in URLs (better for search than underscores)."""
+        return self.slug.replace("_", "-")
+
+    @property
+    def label(self) -> str:
+        """A human sector label — ``consumer_electronics`` -> ``Consumer Electronics``."""
+        return self.slug.replace("_", " ").title()
+
+
+class GetSectorPage:
+    """Use case: a sector's content-page view — its top stocks by market cap, from DB-only
+    facts. The listing is the internal-linking hub (sector -> each /stock/ page)."""
+
+    # Enough to be a rich, link-dense page without an unbounded listing.
+    LIMIT = 100
+
+    def __init__(self, repository: SeoReadRepository) -> None:
+        self._repository = repository
+
+    def execute(self, sector: str) -> SectorPage:
+        slug = normalize_sector_slug(sector)
+        return SectorPage(
+            slug=slug,
+            stocks=self._repository.list_sector_stocks(slug, self.LIMIT),
+        )
+
+
+@dataclass(frozen=True)
+class SitemapData:
+    """Everything the sitemap lists: the stock pages and the sector pages."""
+
+    stock_pages: tuple[StockPageRef, ...]
+    sector_slugs: tuple[str, ...]
+
+
+class GetSitemap:
+    """Use case: the URLs for ``sitemap.xml`` — the index-worthy stock pages plus the
+    sector pages.
+
+    Owns the per-file URL ceiling: a single sitemap file tops out at 50,000 URLs, so the
+    stock cap keeps us under it (the universe is a few thousand today; when it approaches
+    the limit this becomes a sitemap *index* of paginated children). Most-valuable-first
+    ordering means a future truncation drops only the smallest names.
     """
 
     # The sitemaps.org per-file ceiling. Kept comfortably below in practice.
@@ -102,5 +165,8 @@ class GetSitemap:
     def __init__(self, repository: SeoReadRepository) -> None:
         self._repository = repository
 
-    def execute(self) -> tuple[StockPageRef, ...]:
-        return self._repository.list_stock_pages(self.MAX_URLS)
+    def execute(self) -> SitemapData:
+        return SitemapData(
+            stock_pages=self._repository.list_stock_pages(self.MAX_URLS),
+            sector_slugs=self._repository.list_sectors(),
+        )

@@ -28,12 +28,16 @@ literals like `/stocks/etfs` and `/stocks/classifications`.
 | Page | URL | Status |
 |------|-----|--------|
 | Stock | `/stock/{TICKER}` | **live** |
+| Sector | `/sector/{slug}` (hyphenated, e.g. `/sector/consumer-electronics`) | **live** |
+| Crawler files | `/robots.txt`, `/sitemap.xml`, `/llms.txt` | **live** |
 | ETF | `/etf/{TICKER}` | planned |
-| Sector | `/sector/{slug}` | planned |
 | Screen landing | `/screen/{slug}` (e.g. `/screen/high-fcf-yield`) | planned |
 | Comparison | `/compare/{a}-vs-{b}` | planned |
 | Glossary | `/learn/{term}` | planned |
-| Crawler files | `/robots.txt`, `/sitemap.xml`, `/llms.txt` | planned |
+
+Sector pages list the top stocks in a sector (linked to their stock pages) and each stock
+page links back to its sector — the hub/spoke internal-linking structure that helps crawlers
+reach every leaf page. Sector URLs are hyphenated; the stored slug is snake_case.
 
 Canonical/OG URLs point at the **public canonical** origin (`PUBLIC_SITE_ORIGIN`, default
 `https://www.namainsights.com` — www, because the CloudFront edge 301-redirects the apex to

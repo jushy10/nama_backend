@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.stocks.seo.repository import (
+    SectorStock,
     SeoReadRepository,
     StockPageRef,
     TickerPageFacts,
@@ -64,3 +65,38 @@ class SqlSeoReadRepository(SeoReadRepository):
             )
             for ticker, screened_at in rows
         )
+
+    def list_sector_stocks(self, sector: str, limit: int) -> tuple[SectorStock, ...]:
+        rows = self._session.execute(
+            select(
+                StockRecord.ticker,
+                StockRecord.name,
+                StockRecord.market_cap,
+                StockRecord.pe_ratio,
+                StockRecord.fcf_yield,
+            )
+            .where(
+                StockRecord.market_cap.is_not(None),  # screened only
+                StockRecord.sector == sector,
+            )
+            .order_by(StockRecord.market_cap.desc(), StockRecord.ticker)
+            .limit(limit)
+        ).all()
+        # SELECT order matches SectorStock's fields, so each row unpacks straight onto it.
+        return tuple(SectorStock(*row) for row in rows)
+
+    def list_sectors(self) -> tuple[str, ...]:
+        rows = (
+            self._session.execute(
+                select(StockRecord.sector)
+                .where(
+                    StockRecord.market_cap.is_not(None),
+                    StockRecord.sector.is_not(None),
+                )
+                .distinct()
+                .order_by(StockRecord.sector)
+            )
+            .scalars()
+            .all()
+        )
+        return tuple(rows)
