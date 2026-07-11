@@ -172,8 +172,10 @@ _SYSTEM_PROMPT = (
     "cash it generates), valuation (whether its price looks cheap or expensive for "
     "its earnings and versus its industry peers), earnings (its recent track "
     "record of beating or missing expectations and what's expected next), and the "
-    "analyst view (what the sell-side currently recommends). For each, give a "
-    "stance, a short label, and a plain-language summary.\n"
+    "analyst view (what the sell-side currently recommends). For every one of the "
+    "four sections you MUST give a stance, a short non-empty label, and a non-empty "
+    "one-to-two-sentence plain-language summary — never leave a section's label or "
+    "summary blank, and do not fold the whole read into the thesis.\n"
     "When an industry benchmark is provided, weigh the stock's own price-to-"
     "earnings against it in the valuation section — a much higher figure than its "
     "peers means it's priced richly (expensive) for its industry, a much lower one "
@@ -187,6 +189,55 @@ _SYSTEM_PROMPT = (
     "plainly and lower your overall confidence. Be honest in every section about "
     "both the good and the bad. This is general information, not personal "
     "financial advice. Respond by calling the submit_scorecard tool."
+)
+
+# Recovery tool for the retry path. The fast Haiku tier sometimes fills the overall
+# verdict richly but hands back the four sections *blank* (empty label/summary) —
+# folding the whole read into the thesis. This lighter tool asks for ONLY the four
+# section reads (stance/label/summary), grounded in the same figures, so the narrower
+# ask lands reliably (and regenerates a fraction of the tokens). The metric chips are
+# attached by the service regardless, so the recovery only needs the model's words.
+_SECTIONS_TOOL = {
+    "name": "submit_sections",
+    "description": (
+        "Record ONLY the four section reads for the stock — a stance, a short label, "
+        "and a plain-language summary for each of business quality, valuation, "
+        "earnings, and the analyst view — grounded only in the figures provided. Every "
+        "section must have a non-empty label and a non-empty summary."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "business_quality": _section_schema(
+                "the company's profitability and cash generation"
+            ),
+            "valuation": _section_schema(
+                "the stock's price relative to its earnings and its industry peers"
+            ),
+            "earnings": _section_schema(
+                "the company's recent earnings track record and what's expected next"
+            ),
+            "analyst_view": _section_schema(
+                "what Wall Street analysts currently recommend"
+            ),
+        },
+        "required": ["business_quality", "valuation", "earnings", "analyst_view"],
+    },
+}
+
+_SECTIONS_SYSTEM = (
+    "You already gave the overall read on this stock. Now give ONLY the four section "
+    "reads — for business quality, valuation, earnings, and the analyst view. For each, "
+    "give a stance (positive/neutral/negative), a short non-empty label, and a non-empty "
+    "one-to-two-sentence plain-language summary a non-expert can follow, grounded only "
+    "in the figures below. Never leave a section's label or summary blank. Respond by "
+    "calling the submit_sections tool."
+)
+
+# Prepended to the same figures the first pass saw, so the recovered sections stay grounded.
+_SECTIONS_INSTRUCTION = (
+    "Give the four section reads (a stance, label, and summary each) for this stock, "
+    "grounded only in these figures:\n\n"
 )
 
 
@@ -215,8 +266,17 @@ class BedrockScorecardProvider(StockScorecardProvider):
     # The output is short and plain by design (a one-line thesis + four brief
     # sections), so a moderate cap is ample — and fewer generated tokens is the main
     # lever on this endpoint's latency, since output generation dominates the model
-    # call. Kept above the worst case so a full scorecard is never truncated.
-    _MAX_TOKENS = 1200
+    # call. Kept well above the worst case so a full scorecard is never truncated
+    # mid-section (a truncated section is one way the read comes back incomplete).
+    _MAX_TOKENS = 2048
+    # Bedrock does not enforce the tool schema's required/non-empty fields, and the
+    # fast Haiku tier occasionally returns the overall verdict with the four sections
+    # left blank (empty label/summary). Re-issue a *targeted* sections-only call up to
+    # this many extra times to fill them; paired with the use case refusing to cache an
+    # incomplete read, a blank-section result is effectively never served (and never
+    # frozen for the TTL). Only fires on the miss — zero cost when the first call is
+    # already complete.
+    _MAX_INCOMPLETE_RETRIES = 3
 
     def __init__(
         self,
@@ -257,6 +317,19 @@ class BedrockScorecardProvider(StockScorecardProvider):
                 raise StockDataUnavailable(
                     stock.symbol, "analysis model returned no structured result"
                 )
+            # The forced tool requires every section's label + summary, but Bedrock does
+            # not enforce it, and the fast tier sometimes packs the whole read into the
+            # thesis and hands the four sections back blank. Re-issue a *targeted*
+            # sections-only call to fill the blanks — a narrower ask that lands reliably
+            # and regenerates a fraction of the tokens. Bounded; the use case won't cache
+            # an incomplete one, so a truly stuck read regenerates next view rather than
+            # freezing empty sections for the TTL.
+            for _ in range(self._MAX_INCOMPLETE_RETRIES):
+                if not _missing_sections(payload):
+                    break
+                recovered = self._recover_sections(prompt, stock.symbol, costs)
+                if recovered is not None:
+                    payload = _merge_section_reads(payload, recovered)
             return _build_scorecard(
                 stock.symbol,
                 payload,
@@ -271,18 +344,29 @@ class BedrockScorecardProvider(StockScorecardProvider):
                 label="stock analysis", model_id=self._model_id, key=stock.symbol
             )
 
-    def _invoke(self, prompt: str, key: str, costs: CostAccumulator) -> dict | None:
+    def _invoke(
+        self,
+        prompt: str,
+        key: str,
+        costs: CostAccumulator,
+        *,
+        tool: dict = _SCORECARD_TOOL,
+        tool_name: str = "submit_scorecard",
+        system: str = _SYSTEM_PROMPT,
+    ) -> dict | None:
         """One forced-tool call, returning the tool's arguments (or ``None`` if the
-        model somehow didn't call the forced tool). Any SDK/botocore failure is
-        mapped to this port's documented ``StockDataUnavailable``. The call's token
-        usage is folded into ``costs`` for the caller's single per-endpoint cost line."""
+        model somehow didn't call the forced tool). Defaults to the full scorecard
+        tool; the retry path passes the lighter ``submit_sections`` tool. Any
+        SDK/botocore failure is mapped to this port's documented ``StockDataUnavailable``.
+        The call's token usage is folded into ``costs`` for the caller's single
+        per-endpoint cost line."""
         try:
             message = self._client.messages.create(
                 model=self._model_id,
                 max_tokens=self._MAX_TOKENS,
-                system=_SYSTEM_PROMPT,
-                tools=[_SCORECARD_TOOL],
-                tool_choice={"type": "tool", "name": "submit_scorecard"},
+                system=system,
+                tools=[tool],
+                tool_choice={"type": "tool", "name": tool_name},
                 messages=[{"role": "user", "content": prompt}],
             )
         except Exception as exc:  # SDK/botocore raise a family of errors; map them all
@@ -290,7 +374,25 @@ class BedrockScorecardProvider(StockScorecardProvider):
                 key, f"analysis model call failed: {exc}"
             ) from exc
         costs.add(message)
-        return _tool_payload(message, "submit_scorecard")
+        return _tool_payload(message, tool_name)
+
+    def _recover_sections(
+        self, prompt: str, key: str, costs: CostAccumulator
+    ) -> dict | None:
+        """One targeted retry that regenerates *only* the four section reads
+        (stance/label/summary), grounded in the same figures the first pass saw — far
+        fewer output tokens than re-running the whole scorecard, and a narrower ask that
+        lands more reliably. Returns the ``submit_sections`` arguments, or ``None`` when
+        the model didn't call the tool (the caller then leaves the payload unchanged and
+        consumes a bounded retry)."""
+        return self._invoke(
+            _SECTIONS_INSTRUCTION + prompt,
+            key,
+            costs,
+            tool=_SECTIONS_TOOL,
+            tool_name="submit_sections",
+            system=_SECTIONS_SYSTEM,
+        )
 
 
 def _tool_payload(message, name: str) -> dict | None:
@@ -304,6 +406,40 @@ def _tool_payload(message, name: str) -> dict | None:
             if isinstance(inputs, dict):
                 return inputs
     return None
+
+
+def _section_read_complete(read: object) -> bool:
+    """Whether a section's model-authored read carries its substance — a non-empty
+    label *and* a non-empty summary (the two fields the card shows in words). The
+    stance defaults harmlessly to neutral, so it's not the completeness signal."""
+    if not isinstance(read, dict):
+        return False
+    return bool(str(read.get("label") or "").strip()) and bool(
+        str(read.get("summary") or "").strip()
+    )
+
+
+def _missing_sections(payload: dict | None) -> bool:
+    """True when a returned scorecard is present but any of the four sections is missing
+    or blank — the signal to retry. A ``None`` payload (the model didn't call the tool at
+    all) is left for the caller to surface as ``StockDataUnavailable``, not retried."""
+    if payload is None:
+        return False
+    return any(not _section_read_complete(payload.get(key)) for key, _ in _SECTIONS)
+
+
+def _merge_section_reads(payload: dict, recovered: dict) -> dict:
+    """Fill only the *blank* section reads from a targeted recovery call, leaving any
+    section the first pass already wrote untouched — so a retry that recovers three
+    sections never overwrites the good fourth. The overall verdict and the metric chips
+    are untouched (the recovery only carries the four sections' words)."""
+    merged = dict(payload)
+    for key, _ in _SECTIONS:
+        if not _section_read_complete(merged.get(key)) and _section_read_complete(
+            recovered.get(key)
+        ):
+            merged[key] = recovered[key]
+    return merged
 
 
 def _build_scorecard(
