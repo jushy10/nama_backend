@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.adapters.bedrock.analysis_adapter import BedrockAnalysisProvider
+from app.stocks.adapters.bedrock.analysis_adapter import BedrockScorecardProvider
 from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
     BedrockEarningsAnalysisProvider,
 )
@@ -31,7 +31,6 @@ from app.stocks.entities import (
     Confidence,
     EarningsTrend,
     GrowthMetrics,
-    InvestmentAnalysis,
     KeyMetrics,
     Logo,
     MarketIndexPerformance,
@@ -42,12 +41,16 @@ from app.stocks.entities import (
     MarketTone,
     Quote,
     Recommendation,
+    ScorecardSection,
+    SectionMetric,
+    SectionStance,
     SectorAnalysis,
     SectorHighlight,
     SectorPerformance,
     Stock,
     StockFundamentals,
     StockPerformance,
+    StockScorecard,
     Timeframe,
 )
 from app.stocks.earnings.annual.entities import (
@@ -66,8 +69,6 @@ from app.stocks.ports import (
     AnalystEstimatesProvider,
     CandleProvider,
     CompanyProfileProvider,
-    InvestmentAnalysisCache,
-    InvestmentAnalysisProvider,
     LogoProvider,
     MarketOverviewProvider,
     MarketSummaryProvider,
@@ -76,6 +77,8 @@ from app.stocks.ports import (
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
+    StockScorecardCache,
+    StockScorecardProvider,
 )
 from app.stocks.recommendations.entities import (
     AnalystRecommendations,
@@ -372,14 +375,14 @@ class FakeSearchRepo(StockSearchRepository):
         raise NotImplementedError
 
 
-class FakeAnalysisProvider(InvestmentAnalysisProvider):
+class FakeAnalysisProvider(StockScorecardProvider):
     """Returns/raises whatever the test configured; records (symbol, had_quarterly)
     and stashes the last quarterly/annual/recommendations/industry context it was
     handed."""
 
     def __init__(
         self,
-        analysis: InvestmentAnalysis | None = None,
+        analysis: StockScorecard | None = None,
         raises: Exception | None = None,
     ):
         self._analysis = analysis
@@ -397,7 +400,7 @@ class FakeAnalysisProvider(InvestmentAnalysisProvider):
         annual=None,
         recommendations=None,
         industry_valuation=None,
-    ) -> InvestmentAnalysis:
+    ) -> StockScorecard:
         self.received.append((stock.symbol, quarterly is not None))
         self.last_quarterly = quarterly
         self.last_annual = annual
@@ -409,32 +412,72 @@ class FakeAnalysisProvider(InvestmentAnalysisProvider):
         return self._analysis
 
 
-def an_analysis(**overrides) -> InvestmentAnalysis:
+def a_section(**overrides) -> ScorecardSection:
+    base = dict(
+        key="business_quality",
+        title="Business quality",
+        stance=SectionStance.POSITIVE,
+        label="Exceptional",
+        summary="Keeps roughly half of every dollar of sales as profit.",
+        metrics=(SectionMetric("Net margin", "25.00%"),),
+    )
+    base.update(overrides)
+    return ScorecardSection(**base)
+
+
+def an_analysis(**overrides) -> StockScorecard:
+    """A complete four-section scorecard (named ``an_analysis`` for continuity with the
+    context tests that only assert the overall verdict)."""
     base = dict(
         symbol="AAPL",
         recommendation=Recommendation.HOLD,
         confidence=Confidence.MEDIUM,
         thesis="Solid franchise; the valuation already reflects much of the growth.",
-        strengths=("Consistent earnings beats", "Strong net margin"),
-        risks=("Above-average P/E", "Decelerating revenue growth"),
+        sections=(
+            a_section(),
+            a_section(
+                key="valuation",
+                title="Valuation",
+                stance=SectionStance.NEGATIVE,
+                label="Expensive",
+                summary="Priced well above its industry peers.",
+                metrics=(SectionMetric("P/E (trailing)", "28.50"),),
+            ),
+            a_section(
+                key="earnings",
+                title="Earnings",
+                stance=SectionStance.POSITIVE,
+                label="Beating estimates",
+                summary="Has topped expectations every recent quarter.",
+                metrics=(SectionMetric("Beat rate", "4/4 quarters"),),
+            ),
+            a_section(
+                key="analyst_view",
+                title="Analyst view",
+                stance=SectionStance.POSITIVE,
+                label="Mostly buys",
+                summary="Most covering analysts rate it a buy.",
+                metrics=(SectionMetric("Consensus", "Buy"),),
+            ),
+        ),
         model="claude-opus-4-8",
         generated_at=datetime(2026, 6, 18, 20, 0, tzinfo=timezone.utc),
     )
     base.update(overrides)
-    return InvestmentAnalysis(**base)
+    return StockScorecard(**base)
 
 
-class FakeAnalysisCache(InvestmentAnalysisCache):
-    """In-memory stand-in for the analysis result cache; records what it stored."""
+class FakeAnalysisCache(StockScorecardCache):
+    """In-memory stand-in for the scorecard result cache; records what it stored."""
 
-    def __init__(self, stored: InvestmentAnalysis | None = None) -> None:
+    def __init__(self, stored: StockScorecard | None = None) -> None:
         self._store = {stored.symbol: stored} if stored is not None else {}
-        self.puts: list[InvestmentAnalysis] = []
+        self.puts: list[StockScorecard] = []
 
-    def get(self, symbol: str) -> InvestmentAnalysis | None:
+    def get(self, symbol: str) -> StockScorecard | None:
         return self._store.get(symbol)
 
-    def put(self, analysis: InvestmentAnalysis) -> None:
+    def put(self, analysis: StockScorecard) -> None:
         self.puts.append(analysis)
         self._store[analysis.symbol] = analysis
 
@@ -1288,7 +1331,7 @@ def make_client():
         earnings_provider: QuarterlyEarningsProvider | None = None,
         annual_earnings_provider: AnnualEarningsProvider | None = None,
         recommendations_provider: RecommendationProvider | None = None,
-        analysis_provider: InvestmentAnalysisProvider | None = None,
+        analysis_provider: StockScorecardProvider | None = None,
         industry_repository: StockSearchRepository | None = None,
         sector_analysis_provider: SectorAnalysisProvider | None = None,
         market_overview_provider: MarketOverviewProvider | None = None,
@@ -1413,26 +1456,24 @@ class _SeqStubClient:
         self.messages = _SeqStubMessages(messages, self.calls)
 
 
+def _section_payload(**overrides) -> dict:
+    base = dict(stance="positive", label="Solid", summary="Reads well on balance.")
+    base.update(overrides)
+    return base
+
+
 def _tool_message(**input_overrides) -> _StubMessage:
     payload = dict(
         recommendation="hold",
         confidence="medium",
         thesis="Balanced.",
-        strengths=["High net margin", ""],  # the blank entry should be dropped
-        risks=["Elevated P/E"],
+        business_quality=_section_payload(stance="positive", label="Strong"),
+        valuation=_section_payload(stance="negative", label="Expensive"),
+        earnings=_section_payload(stance="positive", label="Beating estimates"),
+        analyst_view=_section_payload(stance="positive", label="Mostly buys"),
     )
     payload.update(input_overrides)
-    return _StubMessage([_StubBlock("tool_use", name="submit_analysis", input=payload)])
-
-
-def _bullets_message(**input_overrides) -> _StubMessage:
-    # The lighter recovery tool the retry path forces — only the two bullet lists.
-    payload = dict(
-        strengths=["High net margin", ""],  # the blank entry should be dropped
-        risks=["Elevated P/E"],
-    )
-    payload.update(input_overrides)
-    return _StubMessage([_StubBlock("tool_use", name="submit_bullets", input=payload)])
+    return _StubMessage([_StubBlock("tool_use", name="submit_scorecard", input=payload)])
 
 
 def test_analysis_use_case_passes_stock_and_earnings():
@@ -1487,10 +1528,12 @@ def test_analysis_cache_miss_generates_and_stores():
 
 
 def test_analysis_incomplete_read_is_not_cached():
-    # A model read missing its bullet lists is returned to the caller but never
-    # frozen in the cache, so the next view regenerates instead of serving empty
-    # strengths/risks for the whole TTL.
-    incomplete = an_analysis(strengths=(), risks=())
+    # A model read with a blank section summary is returned to the caller but never
+    # frozen in the cache, so the next view regenerates instead of serving an empty
+    # section for the whole TTL.
+    incomplete = an_analysis(
+        sections=(a_section(summary=""),)  # a section with no summary -> not complete
+    )
     analyzer = FakeAnalysisProvider(incomplete)
     info = GetStockInfo(FakeProvider(stock=a_stock()))
     cache = FakeAnalysisCache()  # empty
@@ -1764,24 +1807,39 @@ def test_analysis_use_case_propagates_model_failure():
 
 def test_bedrock_adapter_parses_tool_call_into_entity():
     client = _StubClient(_tool_message())
-    provider = BedrockAnalysisProvider(client=client, model_id="test-model")
-    analysis = provider.analyze(
+    provider = BedrockScorecardProvider(client=client, model_id="test-model")
+    scorecard = provider.analyze(
         a_stock(metrics=a_key_metrics()), a_quarterly_timeline()
     )
-    assert analysis.symbol == "AAPL"
-    assert analysis.recommendation is Recommendation.HOLD
-    assert analysis.confidence is Confidence.MEDIUM
-    assert analysis.strengths == ("High net margin",)  # blank entry dropped
-    assert analysis.risks == ("Elevated P/E",)
-    assert analysis.model == "test-model"
+    assert scorecard.symbol == "AAPL"
+    assert scorecard.recommendation is Recommendation.HOLD
+    assert scorecard.confidence is Confidence.MEDIUM
+    # The four sections come back in card order, each carrying the model's read.
+    assert [s.key for s in scorecard.sections] == [
+        "business_quality",
+        "valuation",
+        "earnings",
+        "analyst_view",
+    ]
+    valuation = scorecard.sections[1]
+    assert valuation.stance is SectionStance.NEGATIVE
+    assert valuation.label == "Expensive"
+    assert valuation.summary  # a plain-language read is present
+    # The supporting chips are attached from the gathered data, not the model — the
+    # trailing P/E rides the KeyMetrics figure.
+    assert any(m.label == "P/E (trailing)" for m in valuation.metrics)
+    assert scorecard.model == "test-model"
     # The model was actually pinned to the forced tool, with our model id.
-    assert client.calls[0]["tool_choice"] == {"type": "tool", "name": "submit_analysis"}
+    assert client.calls[0]["tool_choice"] == {
+        "type": "tool",
+        "name": "submit_scorecard",
+    }
     assert client.calls[0]["model"] == "test-model"
 
 
 def test_bedrock_adapter_renders_figures_into_prompt():
     client = _StubClient(_tool_message())
-    BedrockAnalysisProvider(client=client).analyze(
+    BedrockScorecardProvider(client=client).analyze(
         a_stock(metrics=a_key_metrics()), a_quarterly_timeline()
     )
     prompt = client.calls[0]["messages"][0]["content"]
@@ -1796,7 +1854,7 @@ def test_bedrock_adapter_renders_forward_recommendations_and_annual_into_prompt(
     # The richer context — forward consensus (from estimates), the analyst
     # recommendations, and the annual timeline — each renders into its own section.
     client = _StubClient(_tool_message())
-    BedrockAnalysisProvider(client=client).analyze(
+    BedrockScorecardProvider(client=client).analyze(
         a_stock(metrics=a_key_metrics(), analyst_estimates=an_estimates()),
         a_quarterly_timeline(),
         an_annual_timeline(),
@@ -1817,7 +1875,7 @@ def test_bedrock_adapter_renders_industry_valuation_into_prompt():
     # The industry benchmark renders its own labelled block, so the model can weigh
     # the stock's own trailing P/E against its peers.
     client = _StubClient(_tool_message())
-    BedrockAnalysisProvider(client=client).analyze(
+    BedrockScorecardProvider(client=client).analyze(
         a_stock(metrics=a_key_metrics()),
         a_quarterly_timeline(),
         industry_valuation=IndustryValuation.from_pe_ratios(
@@ -1843,7 +1901,7 @@ def test_bedrock_adapter_renders_a_tier_scoped_cohort_as_same_size_peers():
         (8.0, MarketCapTier.MID),
         (9.0, MarketCapTier.MID),
     )
-    BedrockAnalysisProvider(client=client).analyze(
+    BedrockScorecardProvider(client=client).analyze(
         a_stock(metrics=a_key_metrics()),
         a_quarterly_timeline(),
         industry_valuation=IndustryValuation.for_stock_peers(
@@ -1858,7 +1916,7 @@ def test_bedrock_adapter_renders_a_tier_scoped_cohort_as_same_size_peers():
 def test_bedrock_adapter_omits_industry_valuation_block_when_absent():
     # No benchmark supplied -> no block (the section is skipped, not rendered empty).
     client = _StubClient(_tool_message())
-    BedrockAnalysisProvider(client=client).analyze(a_stock(metrics=a_key_metrics()))
+    BedrockScorecardProvider(client=client).analyze(a_stock(metrics=a_key_metrics()))
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Industry valuation benchmark" not in prompt
 
@@ -1866,50 +1924,27 @@ def test_bedrock_adapter_omits_industry_valuation_block_when_absent():
 def test_bedrock_adapter_raises_when_no_tool_call():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # model didn't call it
     with pytest.raises(StockDataUnavailable):
-        BedrockAnalysisProvider(client=client).analyze(a_stock())
+        BedrockScorecardProvider(client=client).analyze(a_stock())
 
 
 def test_bedrock_adapter_maps_client_error_to_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockAnalysisProvider(client=_BoomClient()).analyze(a_stock())
+        BedrockScorecardProvider(client=_BoomClient()).analyze(a_stock())
 
 
 def test_bedrock_adapter_rejects_offschema_value():
     client = _StubClient(_tool_message(recommendation="strong_buy"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
-        BedrockAnalysisProvider(client=client).analyze(a_stock())
+        BedrockScorecardProvider(client=client).analyze(a_stock())
 
 
-def test_bedrock_adapter_retries_once_when_bullets_come_back_empty():
-    # The fast Haiku tier sometimes packs everything into the thesis and returns
-    # empty strengths/risks; the adapter retries with the lighter bullets-only tool
-    # and merges the recovered lists in (before the result-cache could freeze the
-    # empty one) — a fraction of the tokens of re-running the whole analysis.
-    empty = _tool_message(strengths=[], risks=[])
-    bullets = _bullets_message()  # the targeted recovery call
-    client = _SeqStubClient([empty, bullets])
-
-    analysis = BedrockAnalysisProvider(client=client).analyze(a_stock())
-
-    assert len(client.calls) == 2  # retried exactly once
-    # the recovery is the lighter, bullets-only forced tool, not the full analysis
-    assert client.calls[1]["tool_choice"] == {"type": "tool", "name": "submit_bullets"}
-    assert analysis.strengths == ("High net margin",)
-    assert analysis.risks == ("Elevated P/E",)
-
-
-def test_bedrock_adapter_accepts_empty_bullets_after_exhausting_retries():
-    # If every attempt comes back empty, keep the read (a thesis with no bullets
-    # beats failing the endpoint) rather than looping forever or raising — and the
-    # use case refuses to cache it, so the next view regenerates.
-    empty = _tool_message(strengths=[], risks=[])
-    client = _SeqStubClient([empty])  # the stub repeats the empty message every call
-
-    analysis = BedrockAnalysisProvider(client=client).analyze(a_stock())
-
-    assert len(client.calls) == 5  # initial call + 4 bounded retries, then accept
-    assert analysis.strengths == () and analysis.risks == ()
-    assert analysis.thesis  # the rest of the read still comes through
+def test_bedrock_adapter_neutral_stance_when_section_stance_off_enum():
+    # A section whose stance isn't a known value degrades to neutral rather than
+    # sinking the whole scorecard (a cosmetic field, unlike the overall verdict).
+    client = _StubClient(_tool_message(valuation=_section_payload(stance="wildly_off")))
+    scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
+    valuation = next(s for s in scorecard.sections if s.key == "valuation")
+    assert valuation.stance is SectionStance.NEUTRAL
 
 
 def test_get_analysis_returns_200(make_client):
@@ -1923,7 +1958,17 @@ def test_get_analysis_returns_200(make_client):
     assert body["symbol"] == "AAPL"
     assert body["recommendation"] == "hold"
     assert body["confidence"] == "medium"
-    assert body["strengths"] and body["risks"]
+    assert [s["key"] for s in body["sections"]] == [
+        "business_quality",
+        "valuation",
+        "earnings",
+        "analyst_view",
+    ]
+    valuation = body["sections"][1]
+    assert valuation["stance"] == "negative"
+    assert valuation["label"] == "Expensive"
+    assert valuation["summary"]
+    assert valuation["metrics"][0]["label"] == "P/E (trailing)"
     assert "not financial advice" in body["disclaimer"].lower()
     assert body["model"] == "claude-opus-4-8"
 

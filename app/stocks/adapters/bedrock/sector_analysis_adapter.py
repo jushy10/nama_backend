@@ -156,7 +156,7 @@ _SYSTEM_PROMPT = (
 class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
     """Generates a ``SectorAnalysis`` with Claude on Amazon Bedrock.
 
-    Structured exactly like ``BedrockAnalysisProvider`` (its per-stock sibling):
+    Structured exactly like ``BedrockScorecardProvider`` (its per-stock sibling):
     defaults to the fast Haiku tier since the output is short and plain, takes
     ``model_id``/``region`` as deploy-time config (the model id may be a
     cross-region inference profile, env-overridable so a deploy can swap models

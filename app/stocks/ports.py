@@ -29,6 +29,7 @@ from app.stocks.entities import (
     Stock,
     StockFundamentals,
     StockPerformance,
+    StockScorecard,
     Timeframe,
 )
 from app.stocks.recommendations.entities import AnalystRecommendations, FirmRating
@@ -275,9 +276,9 @@ class MarketOverviewProvider(ABC):
         raise NotImplementedError
 
 
-class InvestmentAnalysisProvider(ABC):
+class StockScorecardProvider(ABC):
     """A gateway that turns the data already gathered for a stock into a short,
-    AI-generated buy / hold / sell read.
+    AI-generated, **sectioned** buy / hold / sell read (a ``StockScorecard``).
 
     Unlike the other ports this one isn't handed a symbol to look up — the use
     case has already assembled everything the read reasons over: the enriched
@@ -298,8 +299,8 @@ class InvestmentAnalysisProvider(ABC):
         annual: AnnualEarningsTimeline | None = None,
         recommendations: AnalystRecommendations | None = None,
         industry_valuation: IndustryValuation | None = None,
-    ) -> InvestmentAnalysis:
-        """Return a buy/hold/sell analysis built from the supplied data.
+    ) -> StockScorecard:
+        """Return a sectioned buy/hold/sell scorecard built from the supplied data.
 
         Every argument beyond ``stock`` is best-effort *context* the use case
         gathers — the same data the earnings and recommendations endpoints serve.
@@ -325,6 +326,36 @@ class InvestmentAnalysisProvider(ABC):
         raise NotImplementedError
 
 
+class StockScorecardCache(ABC):
+    """A persistence gateway that stores the most recent ``StockScorecard`` per symbol.
+
+    The scorecard is expensive to produce (a language-model call on top of a
+    multi-source data gather) yet only drifts as the underlying figures do, so a
+    read-through cache lets a burst of viewers — and repeat views within the
+    window — collapse onto one generation. The **freshness policy is the use
+    case's** (it compares ``generated_at`` against a TTL): this port only stores
+    and returns the latest stored read, one row per symbol.
+
+    The sectioned sibling of ``InvestmentAnalysisCache`` (which the ETF analysis
+    still uses): same best-effort contract, a different stored shape. Both
+    operations are best-effort — a read failure (a DB hiccup) is treated as a miss
+    so the caller regenerates, and a write failure is swallowed (the caller already
+    holds a good answer). Neither ever raises.
+    """
+
+    @abstractmethod
+    def get(self, symbol: str) -> StockScorecard | None:
+        """Return the stored scorecard for ``symbol`` (any age), or ``None`` on a
+        miss or a cache-read failure. The caller decides whether it's fresh."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def put(self, scorecard: StockScorecard) -> None:
+        """Store ``scorecard`` as the latest for its symbol (upsert). A write
+        failure is swallowed — caching must never sink the request."""
+        raise NotImplementedError
+
+
 class InvestmentAnalysisCache(ABC):
     """A persistence gateway that stores the most recent AI analysis per symbol.
 
@@ -333,9 +364,11 @@ class InvestmentAnalysisCache(ABC):
     read-through cache lets a burst of viewers — and repeat views within the
     window — collapse onto one generation. The **freshness policy is the use
     case's** (it compares ``generated_at`` against a TTL): this port only stores
-    and returns the latest stored read, one row per symbol. Both the stock and the
-    ETF analysers share the port; the concrete adapter is instantiated per *kind*
-    (a stock vs. a fund) so the two never collide on a shared ticker.
+    and returns the latest stored read, one row per symbol.
+
+    Now the **ETF** analysis's cache (the stock endpoint moved to the sectioned
+    ``StockScorecardCache``); the concrete adapter is instantiated per *kind* so a
+    fund never collides with a stock of the same ticker.
 
     Being a cache, both operations are best-effort: a read failure (a DB hiccup)
     is treated as a miss so the caller regenerates, and a write failure is
@@ -359,7 +392,7 @@ class SectorAnalysisProvider(ABC):
     """A gateway that turns the day's ranked sector board into a short,
     AI-generated read of which market sectors are leading and lagging.
 
-    The market-wide sibling of ``InvestmentAnalysisProvider``: like it, this port
+    The market-wide sibling of ``StockScorecardProvider``: like it, this port
     isn't handed a lookup key — the use case has already assembled the board (each
     sector's daily move + trailing returns). The adapter reasons only over what
     it's given and fetches nothing. This backs a dedicated endpoint (its own reason
@@ -413,7 +446,7 @@ class EarningsAnalysisProvider(ABC):
     """A gateway that turns a stock's earnings timelines into a short,
     AI-generated read of its earnings story.
 
-    The earnings-focused sibling of ``InvestmentAnalysisProvider``: the use case
+    The earnings-focused sibling of ``StockScorecardProvider``: the use case
     has already gathered the quarterly and annual earnings timelines, and the
     adapter reasons only over what it's handed (the beats/misses, EPS and revenue
     trajectory, and the forward consensus) — it fetches nothing itself. This backs

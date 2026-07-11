@@ -23,7 +23,6 @@ from app.stocks.entities import (
     CompanyProfile,
     EarningsAnalysis,
     FundamentalsAnalysis,
-    InvestmentAnalysis,
     Logo,
     MarketIndexPerformance,
     MarketSummary,
@@ -33,6 +32,7 @@ from app.stocks.entities import (
     Stock,
     StockFundamentals,
     StockPerformance,
+    StockScorecard,
     Timeframe,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
@@ -49,8 +49,6 @@ from app.stocks.ports import (
     CompanyProfileProvider,
     EarningsAnalysisProvider,
     FundamentalsAnalysisProvider,
-    InvestmentAnalysisCache,
-    InvestmentAnalysisProvider,
     LogoProvider,
     MarketOverviewProvider,
     MarketSummaryProvider,
@@ -60,6 +58,8 @@ from app.stocks.ports import (
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
+    StockScorecardCache,
+    StockScorecardProvider,
 )
 from app.stocks.recommendations.entities import (
     AnalystRatingChanges,
@@ -378,12 +378,12 @@ class GetStockAnalysis:
     def __init__(
         self,
         stock_info: GetStockInfo,
-        analyzer: InvestmentAnalysisProvider,
+        analyzer: StockScorecardProvider,
         quarterly_provider: QuarterlyEarningsProvider | None = None,
         annual_provider: AnnualEarningsProvider | None = None,
         recommendations_provider: RecommendationProvider | None = None,
         industry_repository: StockSearchRepository | None = None,
-        cache: InvestmentAnalysisCache | None = None,
+        cache: StockScorecardCache | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._stock_info = stock_info
@@ -395,36 +395,37 @@ class GetStockAnalysis:
         self._cache = cache
         self._cache_ttl = cache_ttl
 
-    def execute(self, symbol: str) -> InvestmentAnalysis:
+    def execute(self, symbol: str) -> StockScorecard:
         normalized = _normalize_symbol(symbol)
         # A fresh cached read short-circuits the whole gather + model call — the
-        # analysis only drifts as the figures do, so a repeat view within the TTL
+        # scorecard only drifts as the figures do, so a repeat view within the TTL
         # (and any burst of viewers) is served straight from the store.
         cached = self._fresh_cached(normalized)
         if cached is not None:
             return cached
         # The enriched snapshot is primary: a bad symbol (ValueError), an unknown
         # one (StockNotFound), or an upstream failure (StockDataUnavailable) all
-        # propagate rather than yielding an analysis of nothing. Everything else is
+        # propagate rather than yielding a scorecard of nothing. Everything else is
         # best-effort context assembled below.
         stock = self._stock_info.execute(normalized)
-        analysis = self._analyzer.analyze(
+        scorecard = self._analyzer.analyze(
             stock,
             self._quarterly(normalized),
             self._annual(normalized),
             self._recommendations(normalized),
             self._industry_valuation(normalized),
         )
-        # Store for the next viewer — but only a *complete* read (both strengths
-        # and risks present). Refusing to cache an incomplete analysis means a rare
-        # empty-list model result is never frozen for the TTL: the next view
-        # regenerates instead of serving empty bullets. Best-effort by contract (a
-        # write failure is swallowed in the adapter), so it never sinks the analysis.
-        if self._cache is not None and analysis.is_complete:
-            self._cache.put(analysis)
-        return analysis
+        # Store for the next viewer — but only a *complete* read (every section
+        # present with a non-empty summary). Refusing to cache an incomplete
+        # scorecard means a rare model miss is never frozen for the TTL: the next
+        # view regenerates instead of serving a blank section. Best-effort by
+        # contract (a write failure is swallowed in the adapter), so it never sinks
+        # the scorecard.
+        if self._cache is not None and scorecard.is_complete:
+            self._cache.put(scorecard)
+        return scorecard
 
-    def _fresh_cached(self, symbol: str) -> InvestmentAnalysis | None:
+    def _fresh_cached(self, symbol: str) -> StockScorecard | None:
         # A stored read is a hit only while it's within the TTL; past that it's
         # stale and we regenerate (overwriting it). A cache-read failure degrades to
         # a miss in the adapter, so this simply returns None and we regenerate.
@@ -435,8 +436,8 @@ class GetStockAnalysis:
             return None
         return stored
 
-    def _is_fresh(self, analysis: InvestmentAnalysis) -> bool:
-        generated = analysis.generated_at
+    def _is_fresh(self, scorecard: StockScorecard) -> bool:
+        generated = scorecard.generated_at
         if generated is None:
             return False
         if generated.tzinfo is None:  # a naive stamp (e.g. from SQLite) is UTC
