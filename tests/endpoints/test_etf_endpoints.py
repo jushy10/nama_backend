@@ -27,6 +27,7 @@ from app.stocks.etfs.entities import (
     EtfDetail,
     EtfHolding,
     EtfProfile,
+    EtfScreenIntent,
     EtfSearchPage,
     EtfSearchResult,
     EtfSectorWeight,
@@ -164,6 +165,89 @@ def test_categories_endpoint_returns_the_slugs():
         "categories": ["commodities_focused", "large_blend", "large_growth"]
     }
     assert resp.headers["cache-control"] == "public, max-age=300"
+
+
+# --- GET /stocks/etfs/ai-search (the AI-driven screen) ------------------------------------
+
+
+class _FakeAiScreen:
+    """Stands in for AiScreenEtfs; records the kwargs, returns an EtfScreenIntent (or raises)."""
+
+    def __init__(self, *, result=None, error=None) -> None:
+        self._result = result if result is not None else EtfScreenIntent()
+        self._error = error
+        self.kwargs: dict | None = None
+
+    def execute(self, **kwargs):
+        self.kwargs = kwargs
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def _ai_client(use_case) -> TestClient:
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    app.dependency_overrides[endpoints.get_ai_etf_search_use_case] = lambda: use_case
+    return TestClient(app)
+
+
+def test_ai_search_returns_the_interpreted_filters_only():
+    intent = EtfScreenIntent(
+        categories=("large_blend",),
+        sort=EtfSort.EXPENSE_RATIO,
+        direction=SortDirection.ASC,
+        limit=10,
+    )
+    resp = _ai_client(_FakeAiScreen(result=intent)).get(
+        "/stocks/etfs/ai-search", params={"q": "cheap index funds"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {
+        "interpreted": {
+            "query": None,
+            "categories": ["large_blend"],
+            "sort": "expense_ratio",
+            "direction": "asc",
+            "limit": 10,
+        }
+    }
+    # The endpoint returns only the interpretation — no result page.
+    assert "results" not in body
+
+
+def test_ai_search_passes_the_query_through():
+    fake = _FakeAiScreen(result=EtfScreenIntent())
+    resp = _ai_client(fake).get(
+        "/stocks/etfs/ai-search", params={"q": "  top 5 gold funds "}
+    )
+    assert resp.status_code == 200
+    assert fake.kwargs == {"query": "  top 5 gold funds "}
+
+
+def test_ai_search_requires_a_query():
+    # Missing q -> 422 (the param is required).
+    resp = _ai_client(_FakeAiScreen()).get("/stocks/etfs/ai-search")
+    assert resp.status_code == 422
+
+
+def test_ai_search_blank_query_is_a_400():
+    fake = _FakeAiScreen(error=ValueError("A search request is required."))
+    resp = _ai_client(fake).get("/stocks/etfs/ai-search", params={"q": "x"})
+    assert resp.status_code == 400
+
+
+def test_ai_search_translation_failure_is_a_502():
+    fake = _FakeAiScreen(error=StockDataUnavailable("q", "model down"))
+    resp = _ai_client(fake).get("/stocks/etfs/ai-search", params={"q": "funds"})
+    assert resp.status_code == 502
+
+
+def test_ai_search_sets_a_short_cache_header():
+    fake = _FakeAiScreen(result=EtfScreenIntent())
+    resp = _ai_client(fake).get("/stocks/etfs/ai-search", params={"q": "funds"})
+    assert resp.headers["cache-control"] == "public, max-age=60"
 
 
 # --- GET /stocks/etf/{ticker} (the detail card) -------------------------------------------
