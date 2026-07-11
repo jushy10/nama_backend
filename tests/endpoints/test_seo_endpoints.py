@@ -76,7 +76,7 @@ def test_screened_stock_renders_indexable_page() -> None:
     assert "Micron Technology (MU) Stock" in body
     assert '<meta name="description"' in body
     # Canonical points at the public origin's singular /stock/ path.
-    assert '<link rel="canonical" href="https://namainsights.com/stock/MU"' in body
+    assert '<link rel="canonical" href="https://www.namainsights.com/stock/MU"' in body
     # Screened -> indexable.
     assert '<meta name="robots" content="index,follow"' in body
     # Structured data present, with the entity's ticker.
@@ -145,7 +145,7 @@ def test_robots_txt_welcomes_ai_crawlers_and_points_at_sitemap() -> None:
     assert "User-agent: GPTBot" in body  # AI crawlers explicitly allowed
     assert "User-agent: ClaudeBot" in body
     assert "User-agent: PerplexityBot" in body
-    assert "Sitemap: https://namainsights.com/sitemap.xml" in body
+    assert "Sitemap: https://www.namainsights.com/sitemap.xml" in body
 
 
 def test_llms_txt_served() -> None:
@@ -169,9 +169,9 @@ def test_sitemap_lists_stock_pages_with_lastmod() -> None:
     assert resp.headers["content-type"].startswith("application/xml")
     body = resp.text
     assert "<urlset" in body
-    assert "<loc>https://namainsights.com/stock/MU</loc>" in body
+    assert "<loc>https://www.namainsights.com/stock/MU</loc>" in body
     assert "<lastmod>2026-07-03</lastmod>" in body
     # The stampless page still appears, just without a lastmod element.
-    assert "<loc>https://namainsights.com/stock/AAPL</loc>" in body
+    assert "<loc>https://www.namainsights.com/stock/AAPL</loc>" in body
     # Homepage is included.
-    assert "<loc>https://namainsights.com/</loc>" in body
+    assert "<loc>https://www.namainsights.com/</loc>" in body

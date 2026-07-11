@@ -37,6 +37,18 @@ variable "default_root_object" {
   default     = "index.html"
 }
 
+variable "backend_origin_domain_name" {
+  description = "Optional custom-origin hostname (e.g. the API's api.namainsights.com) that specific path patterns are routed to, so server-rendered/dynamic routes are served by the app behind the SAME distribution (and hostname) as the static SPA — this is what lets the SEO content pages inherit the site's authority instead of sitting on a separate host. Null (default) = static-only, no backend origin, behaves exactly as before."
+  type        = string
+  default     = null
+}
+
+variable "backend_path_patterns" {
+  description = "Path patterns routed to backend_origin_domain_name (e.g. [\"/stock/*\", \"/sitemap.xml\", \"/robots.txt\", \"/llms.txt\"]). Each becomes an ordered cache behavior ahead of the SPA default. Ignored when backend_origin_domain_name is null."
+  type        = list(string)
+  default     = []
+}
+
 variable "price_class" {
   description = "CloudFront price class. PriceClass_100 (US/Canada/Europe edges) is the cheapest; _200 adds Asia, _All is global."
   type        = string

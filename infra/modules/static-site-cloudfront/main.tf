@@ -9,6 +9,20 @@ locals {
   # apex + any extras (e.g. www) — the names the cert covers and CloudFront serves.
   all_domain_names = toset(concat([var.domain_name], var.additional_domain_names))
   origin_id        = "s3-${var.name}"
+
+  # When a backend origin is configured, a set of path patterns is routed to it (the
+  # dynamic SEO content pages served by the app) while everything else stays on S3.
+  backend_enabled   = var.backend_origin_domain_name != null
+  backend_origin_id = "backend-${var.name}"
+
+  # AWS managed policies (fixed, well-known ids):
+  #  - CachingOptimized: cache key = path only (no query/headers/cookies), honors the
+  #    origin's Cache-Control — so the app's per-route max-age drives edge caching.
+  #  - AllViewerExceptHostHeader: forwards the viewer request to the origin but lets
+  #    CloudFront set Host to the origin's own hostname, which an API Gateway custom
+  #    domain requires to route (forwarding the viewer Host would 403 at the gateway).
+  caching_optimized_policy_id            = "658327ea-f89d-4fab-a63d-7e88639e58f6"
+  all_viewer_except_host_request_policy  = "b689b0a8-53d0-40ab-baf2-68738e2966ac"
 }
 
 # Private bucket holding the build. Never public — CloudFront reads it through
@@ -68,6 +82,52 @@ resource "aws_cloudfront_distribution" "this" {
     origin_access_control_id = aws_cloudfront_origin_access_control.this.id
   }
 
+  # The app origin (e.g. the API Gateway custom domain), added only when configured. A
+  # custom (non-S3) origin reached over HTTPS; CloudFront verifies its cert against the
+  # origin hostname, which is why we route to the API's own domain rather than the raw
+  # execute-api endpoint.
+  dynamic "origin" {
+    for_each = local.backend_enabled ? [1] : []
+    content {
+      domain_name = var.backend_origin_domain_name
+      origin_id   = local.backend_origin_id
+
+      custom_origin_config {
+        http_port              = 80
+        https_port             = 443
+        origin_protocol_policy = "https-only"
+        origin_ssl_protocols   = ["TLSv1.2"]
+      }
+    }
+  }
+
+  # Route the configured path patterns to the app origin, ahead of the SPA default. These
+  # carry the same canonical-host redirect as the default behavior so the apex still
+  # 301s to www on a content URL. The patterns are non-overlapping, so their relative
+  # order doesn't matter; each just needs to sit ahead of the (default) S3 behavior.
+  dynamic "ordered_cache_behavior" {
+    for_each = local.backend_enabled ? toset(var.backend_path_patterns) : toset([])
+    content {
+      path_pattern           = ordered_cache_behavior.value
+      target_origin_id       = local.backend_origin_id
+      viewer_protocol_policy = "redirect-to-https"
+      allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+      cached_methods         = ["GET", "HEAD"]
+      compress               = true
+
+      cache_policy_id          = local.caching_optimized_policy_id
+      origin_request_policy_id = local.all_viewer_except_host_request_policy
+
+      dynamic "function_association" {
+        for_each = var.redirect_to_domain == null ? [] : [1]
+        content {
+          event_type   = "viewer-request"
+          function_arn = aws_cloudfront_function.canonical_redirect[0].arn
+        }
+      }
+    }
+  }
+
   default_cache_behavior {
     target_origin_id       = local.origin_id
     viewer_protocol_policy = "redirect-to-https"
@@ -93,6 +153,13 @@ resource "aws_cloudfront_distribution" "this" {
   # SPA client-side routing: a deep link like /dashboard isn't a real object, so
   # S3 returns 403 (no ListBucket) or 404. Serve index.html with a 200 instead so
   # the app's router can take over.
+  #
+  # Caveat with a backend origin: these responses are DISTRIBUTION-wide (CloudFront has no
+  # per-behavior error config), so a 404 from the app origin — e.g. /stock/{unknown-ticker}
+  # — is also rewritten to index.html. That only affects *unadvertised* URLs (the sitemap
+  # lists only real, screened tickers, which the app serves 200), so the indexed set is
+  # unaffected; it just means a stray unknown /stock/* renders the SPA shell rather than a
+  # hard 404. Non-404/403 statuses (400 on a malformed ticker, 5xx) pass through unchanged.
   custom_error_response {
     error_code            = 403
     response_code         = 200

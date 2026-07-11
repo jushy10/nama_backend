@@ -35,23 +35,32 @@ literals like `/stocks/etfs` and `/stocks/classifications`.
 | Glossary | `/learn/{term}` | planned |
 | Crawler files | `/robots.txt`, `/sitemap.xml`, `/llms.txt` | planned |
 
-Canonical/OG URLs point at the **public** origin (`PUBLIC_SITE_ORIGIN`, default
-`https://namainsights.com`), even though the FastAPI backend is the rendering origin.
+Canonical/OG URLs point at the **public canonical** origin (`PUBLIC_SITE_ORIGIN`, default
+`https://www.namainsights.com` — www, because the CloudFront edge 301-redirects the apex to
+www), even though the FastAPI backend is the rendering origin.
 
-## Edge routing (deploy step — not code)
+## Edge routing (in Terraform)
 
-The pages must be served from the **main domain** so they share the site's authority (not
-a separate API host). At CloudFront, route these path patterns to the backend origin;
-everything else continues to the SPA (S3):
+The pages are served from the **main domain** so they share the site's authority (not a
+separate API host). This is wired in the frontend CloudFront distribution: the
+`static-site-cloudfront` module takes an optional `backend_origin_domain_name` +
+`backend_path_patterns`, and `infra/environments/dev/main.tf` routes these paths to the
+app origin (`api.namainsights.com`) while everything else stays the S3 SPA:
 
 ```
-/stock/*      → backend      /sitemap.xml  → backend
-/etf/*        → backend      /robots.txt   → backend
-/sector/*     → backend      /llms.txt     → backend
-/screen/*     → backend
-/compare/*    → backend      (default)     → SPA (S3)
-/learn/*      → backend
+/stock/*      → app origin
+/sitemap.xml  → app origin
+/robots.txt   → app origin
+/llms.txt     → app origin
+(default)     → SPA (S3)
 ```
 
-No path rewrite is needed — the backend serves the same paths. The JSON API stays on its
-own `api.` subdomain, untouched.
+No path rewrite is needed — the app serves the same paths (the API Gateway `$default`
+route passes them through). The apex→www canonical redirect applies to these paths too, so
+`PUBLIC_SITE_ORIGIN` is set to the **www** host. The distribution-level SPA 404→index.html
+rewrite also applies to the app origin, so an *unknown* `/stock/*` renders the SPA shell
+rather than a hard 404 — harmless, since only real (screened) tickers are ever advertised
+in the sitemap. Adding `/etf/*`, `/sector/*`, etc. later is one line in `backend_path_patterns`.
+
+Ship it with `terraform apply` (or merge to main — the infra workflow applies), then submit
+`/sitemap.xml` in Google Search Console + Bing Webmaster.

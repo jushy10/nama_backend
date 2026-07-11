@@ -43,8 +43,11 @@ _TEMPLATES = Jinja2Templates(
 
 # The public origin the pages are served from (canonical/OG URLs point here even though
 # the backend is the origin behind the edge). Env-driven so prod and local differ without
-# a code change, read only here in the wiring like every other secret/config.
-_DEFAULT_SITE_ORIGIN = "https://namainsights.com"
+# a code change, read only here in the wiring like every other secret/config. Defaults to
+# the *canonical* host — www, not the apex, which the CloudFront edge 301-redirects to www
+# (so a canonical/sitemap URL on the apex would needlessly bounce). Prod sets
+# PUBLIC_SITE_ORIGIN explicitly (see infra/environments/dev/main.tf).
+_DEFAULT_SITE_ORIGIN = "https://www.namainsights.com"
 
 
 def _site_origin() -> str:
