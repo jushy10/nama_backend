@@ -22,6 +22,9 @@ from app.stocks.adapters.bedrock.analysis_adapter import BedrockAnalysisProvider
 from app.stocks.adapters.bedrock.screener_query_adapter import (
     BedrockScreenerQueryTranslator,
 )
+from app.stocks.adapters.bedrock.etf_screener_query_adapter import (
+    BedrockEtfScreenerQueryTranslator,
+)
 from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
     BedrockEarningsAnalysisProvider,
 )
@@ -94,6 +97,7 @@ from app.stocks.recommendations.db_repository import (
 )
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.universe.ports import ScreenerQueryTranslator
+from app.stocks.etfs.ports import EtfScreenerQueryTranslator
 from app.stocks.schemas import (
     CandleResponse,
     CandleSeriesResponse,
@@ -273,6 +277,26 @@ def get_screener_translator() -> ScreenerQueryTranslator:
     except ImportError as exc:
         raise HTTPException(
             503, "AI stock screening is not configured (install the 'bedrock' extra)."
+        ) from exc
+
+
+@lru_cache(maxsize=1)
+def get_etf_screener_translator() -> EtfScreenerQueryTranslator:
+    # The ETF sibling of get_screener_translator: the AI ETF screener's translation is its primary
+    # data, so it's required, but there's no secret to gate on (Bedrock authenticates through the
+    # process's AWS credentials — the ECS task role in prod). It shares the stock screener's env so
+    # one config drives both: BEDROCK_REGION (default us-east-1) and the optional
+    # BEDROCK_SCREENER_MODEL_ID (a cross-region inference profile). A missing 'bedrock' extra
+    # surfaces as a clean 503 here rather than a 500.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_SCREENER_MODEL_ID")
+    try:
+        if model_id:
+            return BedrockEtfScreenerQueryTranslator(model_id=model_id, region=region)
+        return BedrockEtfScreenerQueryTranslator(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI ETF screening is not configured (install the 'bedrock' extra)."
         ) from exc
 
 

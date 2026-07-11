@@ -25,7 +25,7 @@ from app.stocks.etfs.entities import (
     EtfCategories,
     EtfHolding,
     EtfProfile,
-    EtfSearchCriteria,
+    EtfScreenIntent,
     EtfSearchPage,
     EtfSearchResult,
     EtfSectorWeight,
@@ -33,7 +33,12 @@ from app.stocks.etfs.entities import (
     ScreenedEtf,
     SortDirection,
 )
-from app.stocks.etfs.ports import EtfAnalysisProvider, EtfProfileProvider, EtfScreener
+from app.stocks.etfs.ports import (
+    EtfAnalysisProvider,
+    EtfProfileProvider,
+    EtfScreener,
+    EtfScreenerQueryTranslator,
+)
 from app.stocks.etfs.repository import (
     EtfLookupRepository,
     EtfRepository,
@@ -41,6 +46,7 @@ from app.stocks.etfs.repository import (
     EtfSyncCounts,
 )
 from app.stocks.etfs.use_cases import (
+    AiScreenEtfs,
     EtfSyncReport,
     GetEtfAnalysis,
     GetEtfDetail,
@@ -368,6 +374,54 @@ def test_list_categories_passes_through():
     result = ListEtfCategories(repo).execute()
 
     assert result is categories
+
+
+# --- AiScreenEtfs (the AI-driven read side) ------------------------------------------------
+
+
+class _FakeEtfTranslator(EtfScreenerQueryTranslator):
+    """Records the query + allowed vocabulary it was handed; returns a canned intent (or raises)."""
+
+    def __init__(self, *, result=None, error=None) -> None:
+        self._result = result if result is not None else EtfScreenIntent()
+        self._error = error
+        self.query: str | None = None
+        self.categories: tuple[str, ...] | None = None
+
+    def translate(self, query, *, categories):
+        self.query = query
+        self.categories = tuple(categories)
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def test_ai_screen_translates_with_the_allowed_category_vocabulary():
+    repo = _FakeSearchRepo(categories=EtfCategories(("large_blend", "large_growth")))
+    intent = EtfScreenIntent(categories=("large_growth",), sort=EtfSort.NET_ASSETS)
+    translator = _FakeEtfTranslator(result=intent)
+
+    result = AiScreenEtfs(translator, repo).execute(query="  big growth funds ")
+
+    # The intent is returned as-is; the request is trimmed and the stored categories are handed to
+    # the translator as its allowed vocabulary.
+    assert result is intent
+    assert translator.query == "big growth funds"
+    assert translator.categories == ("large_blend", "large_growth")
+    assert repo.categories_calls == 1
+
+
+def test_ai_screen_requires_a_query():
+    repo = _FakeSearchRepo()
+    with pytest.raises(ValueError):
+        AiScreenEtfs(_FakeEtfTranslator(), repo).execute(query="   ")
+
+
+def test_ai_screen_propagates_a_translation_failure():
+    repo = _FakeSearchRepo(categories=EtfCategories(("large_blend",)))
+    translator = _FakeEtfTranslator(error=StockDataUnavailable("q", "model down"))
+    with pytest.raises(StockDataUnavailable):
+        AiScreenEtfs(translator, repo).execute(query="tech funds")
     assert repo.categories_calls == 1
 
 

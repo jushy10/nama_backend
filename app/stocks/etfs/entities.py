@@ -138,6 +138,28 @@ class EtfSearchPage:
 
 
 @dataclass(frozen=True)
+class EtfScreenIntent:
+    """A plain-English ETF-screen request translated into the search's own filters.
+
+    The shape an AI translator returns and the ``AiScreenEtfs`` use case hands back — every field
+    maps one-to-one onto an ``EtfSearchCriteria`` parameter, so the AI leg only decides *which
+    filters to set* and the ordinary ``GET /stocks/etfs`` search does the querying (no new query
+    engine, no way to reach a fund outside the screened set). All fields default to "not set" (an
+    empty request is a neutral browse): ``categories`` is an OR set of stored category slugs,
+    ``sort`` is optional — ``None`` lets the search's own ``net_assets`` default apply, and
+    ``direction`` only bites once a sort is set — and ``limit`` is the count the user asked for
+    (``None`` to let the search default apply). The intent is advisory: the search re-normalizes
+    every field, so an off-vocabulary slug the model invents simply matches nothing rather than
+    erroring."""
+
+    query: str | None = None
+    categories: tuple[str, ...] = ()
+    sort: EtfSort | None = None
+    direction: SortDirection = SortDirection.DESC
+    limit: int | None = None
+
+
+@dataclass(frozen=True)
 class EtfCategories:
     """The distinct ETF category slugs present in the stored set — the FE's filter menu.
 
