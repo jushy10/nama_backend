@@ -135,3 +135,39 @@ resource "aws_instance" "this" {
 
   tags = merge(var.tags, { Name = var.name })
 }
+
+# Idle auto-stop: a safety net so a manual start that's forgotten doesn't run up a
+# bill. When the box sits at/below auto_stop_cpu_threshold_percent CPU for
+# auto_stop_idle_minutes, this alarm fires the built-in EC2 "stop" action — no
+# Lambda and no IAM role, since arn:aws:automate:<region>:ec2:stop is a native EC2
+# alarm action. A running bastion carrying real tunnel traffic keeps CPU above the
+# threshold, so it only trips on a genuinely idle box.
+#
+# treat_missing_data = notBreaching: a stopped box publishes no CPU metric, so
+# "missing" must read as not-idle — otherwise the alarm would sit in ALARM against
+# an already-stopped instance. On start, boot CPU is high, so the window naturally
+# begins counting from when the box goes quiet.
+data "aws_region" "current" {}
+
+resource "aws_cloudwatch_metric_alarm" "idle_stop" {
+  count = var.auto_stop_idle_minutes > 0 ? 1 : 0
+
+  alarm_name        = "${var.name}-idle-stop"
+  alarm_description = "Stop ${var.name} after ${var.auto_stop_idle_minutes} min at/below ${var.auto_stop_cpu_threshold_percent}% CPU (a forgotten/idle bastion)."
+
+  namespace   = "AWS/EC2"
+  metric_name = "CPUUtilization"
+  statistic   = "Average"
+  dimensions  = { InstanceId = aws_instance.this.id }
+
+  period              = 300
+  evaluation_periods  = ceil(var.auto_stop_idle_minutes / 5)
+  datapoints_to_alarm = ceil(var.auto_stop_idle_minutes / 5)
+  threshold           = var.auto_stop_cpu_threshold_percent
+  comparison_operator = "LessThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = ["arn:aws:automate:${data.aws_region.current.name}:ec2:stop"]
+
+  tags = var.tags
+}
