@@ -12,7 +12,7 @@ import pytest
 
 from app.stocks.entities import KeyMetrics, StockFundamentals
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
+from app.stocks.adapters.finnhub_fundamentals_adapter import FinnhubFundamentalsProvider
 
 
 class FakeHttpClient:

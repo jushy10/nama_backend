@@ -5,7 +5,7 @@ a tile sized by market cap, coloured by the day's price change, grouped sector â
 stock. Controller + presenter + wiring, the composition-root way, sitting in
 ``app/stocks/endpoints/`` beside the other read endpoints.
 
-Wiring reuses the composition root's factories from ``router.py``: the universe read is a pure
+Wiring reuses the shared factories from ``wiring.py``: the universe read is a pure
 request-scoped DB read over the shared ``stocks`` anchor (no key), and the batched quote feed is
 the same Alpaca singleton every other price view uses (so a missing key is the usual 503). The
 map's structure and tile sizes come from the DB; the colours are best-effort live quotes, so a
@@ -25,7 +25,7 @@ from app.stocks.heatmap.schemas import (
     HeatMapStockResponse,
 )
 from app.stocks.heatmap.use_cases import GetStockHeatMap
-from app.stocks.router import get_provider
+from app.stocks.wiring import get_provider
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 
 router = APIRouter(tags=["heatmap"])

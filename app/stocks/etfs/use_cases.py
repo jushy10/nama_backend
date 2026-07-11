@@ -28,7 +28,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
-from app.stocks.entities import InvestmentAnalysis, StockPerformance
+from app.stocks.analysis.entities import InvestmentAnalysis
+from app.stocks.entities import StockPerformance
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfDetail,
@@ -46,8 +47,8 @@ from app.stocks.etfs.repository import (
     EtfSearchRepository,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.analysis.ports import InvestmentAnalysisCache
 from app.stocks.ports import (
-    InvestmentAnalysisCache,
     StockPerformanceProvider,
     StockQuoteProvider,
 )

@@ -22,12 +22,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import ticker_endpoints as endpoints
-from app.stocks.entities import (
-    KeyMetrics,
-    Quote,
-    StockFundamentals,
-    StockPerformance,
-)
+from app.stocks.entities import KeyMetrics, Quote, StockFundamentals, StockPerformance
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ticker.entities import TickerOptionsMetrics, TickerValuation
 from app.stocks.ticker.use_cases import TickerCard, TickerClassification

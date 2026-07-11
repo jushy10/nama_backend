@@ -33,9 +33,9 @@ from datetime import datetime, timezone
 from app.stocks.adapters.bedrock.cost import CostAccumulator
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
-from app.stocks.entities import EarningsAnalysis, EarningsTrend
+from app.stocks.analysis.entities import EarningsAnalysis, EarningsTrend
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ports import EarningsAnalysisProvider
+from app.stocks.analysis.ports import EarningsAnalysisProvider
 
 # How many recent reported periods to feed the model — enough to show a trend
 # without a wall of history the plain-language read would only skim. Four quarters

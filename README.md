@@ -11,7 +11,7 @@ app/
 └── stocks/     # Alpaca stock-info feature (clean-architecture vertical slice)
 tests/
 ├── test_stocks.py           # stock entity/use-case/API tests (offline)
-├── test_stocks_provider.py  # Alpaca adapter tests (offline, faked SDK)
+├── adapters/                # vendor adapter tests (offline, faked SDKs)
 └── test_migrations.py       # alembic migration applies cleanly (offline sqlite)
 alembic/                     # database migrations (alembic upgrade head)
 └── versions/
@@ -100,7 +100,7 @@ quote (price, day change), fetched from Alpaca via the official
 [`alpaca-py`](https://alpaca.markets/sdks/python/) SDK. The stocks feature is a
 self-contained **clean-architecture vertical slice** under
 [`app/stocks/`](app/stocks/): use cases depend on ports, and only
-`alpaca_provider.py` knows Alpaca exists — so the tests run fully offline with a
+`adapters/alpaca_adapter.py` knows Alpaca exists — so the tests run fully offline with a
 fake provider.
 
 The card also carries best-effort enrichment: the company **name** and
@@ -163,7 +163,7 @@ curl "localhost:8080/stocks/ticker/AAPL/candles?start=2026-01-01T00:00:00Z&end=2
 `GET /stocks/{symbol}/logo` returns the company logo as an image, sourced from
 [Logo.dev](https://logo.dev) keyed by ticker. Logo.dev resolves to the *current*
 logo through mergers, rebrands, and symbol changes, so the image stays up to date
-rather than going stale. Only [`logodev_provider.py`](app/stocks/logodev_provider.py)
+rather than going stale. Only [`logodev_adapter.py`](app/stocks/adapters/logodev_adapter.py)
 knows the source exists — swap that one adapter and nothing else changes.
 
 It needs a free **publishable** token (logo.dev, 500k requests/month, no card).

@@ -35,16 +35,16 @@ Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
-from app.stocks.entities import (
-    MarketIndexPerformance,
+from app.stocks.analysis.entities import (
     MarketIndexReturn,
     MarketPeriod,
     MarketPeriodHighlight,
     MarketSummary,
     MarketTone,
 )
+from app.stocks.analysis.ports import MarketSummaryProvider
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ports import MarketSummaryProvider
+from app.stocks.market.entities import MarketIndexPerformance
 
 # The key the adapter reports failures under — there is no single symbol here, so
 # the market as a whole is named, the same convention the Alpaca overview uses.

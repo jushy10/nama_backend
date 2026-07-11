@@ -50,7 +50,7 @@ from app.stocks.adapters.yfinance_etf_profile_adapter import (
     YfinanceEtfProfileProvider,
 )
 from app.stocks.analysis.db_repository import SqlInvestmentAnalysisCache
-from app.stocks.entities import InvestmentAnalysis
+from app.stocks.analysis.entities import InvestmentAnalysis
 from app.stocks.etfs.db_repository import (
     SqlEtfLookupRepository,
     SqlEtfSearchRepository,
@@ -82,12 +82,12 @@ from app.stocks.etfs.use_cases import (
     SearchEtfs,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.analysis.ports import InvestmentAnalysisCache
 from app.stocks.ports import (
-    InvestmentAnalysisCache,
     StockPerformanceProvider,
     StockQuoteProvider,
 )
-from app.stocks.router import analysis_cache_ttl, get_provider
+from app.stocks.wiring import analysis_cache_ttl, get_provider
 
 router = APIRouter(tags=["etfs"])
 

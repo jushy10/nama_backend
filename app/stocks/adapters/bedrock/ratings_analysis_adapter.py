@@ -33,9 +33,9 @@ Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import log_model_cost
-from app.stocks.entities import Confidence, RatingsAnalysis, RatingsVerdict
+from app.stocks.analysis.entities import Confidence, RatingsAnalysis, RatingsVerdict
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ports import RatingsAnalysisProvider
+from app.stocks.analysis.ports import RatingsAnalysisProvider
 from app.stocks.recommendations.entities import AnalystRecommendations, FirmRating
 
 # A single forced tool pins the model to structured output: Claude must call

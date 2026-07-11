@@ -13,14 +13,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.stocks.entities import (
-    Confidence,
-    InvestmentAnalysis,
-    Quote,
-    Recommendation,
-    StockPerformance,
-)
-from app.stocks.ports import InvestmentAnalysisCache
+from app.stocks.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
+from app.stocks.analysis.ports import InvestmentAnalysisCache
+from app.stocks.entities import Quote, StockPerformance
+from app.stocks.ports import StockPerformanceProvider, StockQuoteProvider
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfHolding,
@@ -49,7 +45,6 @@ from app.stocks.etfs.use_cases import (
     SyncEtfs,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import StockPerformanceProvider, StockQuoteProvider
 
 
 def _etf(ticker, *, net_assets=1e10):

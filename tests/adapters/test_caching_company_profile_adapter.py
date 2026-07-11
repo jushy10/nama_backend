@@ -8,10 +8,10 @@ pin a failure.
 
 import pytest
 
-from app.stocks.caching_company_profile_provider import CachingCompanyProfileProvider
+from app.stocks.adapters.caching_company_profile_adapter import CachingCompanyProfileProvider
 from app.stocks.entities import CompanyProfile
-from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.ports import CompanyProfileProvider
+from app.stocks.exceptions import StockDataUnavailable
 
 
 class FakeClock:

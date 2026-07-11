@@ -14,10 +14,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks import router as stocks_router
-from app.stocks.entities import Confidence, RatingsAnalysis, RatingsVerdict
+from app.stocks.endpoints import analysis_endpoints
+from app.stocks.analysis.entities import Confidence, RatingsAnalysis, RatingsVerdict
+from app.stocks.analysis.ports import RatingsAnalysisProvider
+from app.stocks.analysis.use_cases import GetRatingsFindings
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import RatingsAnalysisProvider
 from app.stocks.recommendations.entities import (
     AnalystPriceTargets,
     AnalystRatingChanges,
@@ -29,7 +30,6 @@ from app.stocks.recommendations.ports import (
     RatingChangeProvider,
     RecommendationProvider,
 )
-from app.stocks.use_cases import GetRatingsFindings
 
 
 # --- fakes / fixtures --------------------------------------------------------------------------
@@ -219,8 +219,8 @@ class _FakeUseCase:
 
 def _client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
-    app.include_router(stocks_router.router)
-    app.dependency_overrides[stocks_router.get_ratings_findings] = lambda: fake
+    app.include_router(analysis_endpoints.router)
+    app.dependency_overrides[analysis_endpoints.get_ratings_findings] = lambda: fake
     return TestClient(app)
 
 

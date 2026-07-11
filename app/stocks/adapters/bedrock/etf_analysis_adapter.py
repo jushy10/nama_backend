@@ -33,7 +33,7 @@ Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
-from app.stocks.entities import Confidence, InvestmentAnalysis, Recommendation
+from app.stocks.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
 from app.stocks.etfs.entities import EtfDetail
 from app.stocks.etfs.ports import EtfAnalysisProvider
 from app.stocks.exceptions import StockDataUnavailable

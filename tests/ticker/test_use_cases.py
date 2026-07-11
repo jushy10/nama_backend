@@ -26,7 +26,6 @@ from app.stocks.entities import (
     StockFundamentals,
     StockPerformance,
 )
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     CompanyProfileProvider,
     StockDataProvider,
@@ -34,6 +33,7 @@ from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,
 )
+from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.etfs.repository import EtfLookupRepository
 from app.stocks.ticker.entities import (
     OptionContract,

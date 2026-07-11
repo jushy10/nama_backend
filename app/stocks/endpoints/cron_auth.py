@@ -8,7 +8,7 @@ do **not** come through here — they run each sweep as a one-off ECS task via
 protects the HTTP surface, which is now a manual / emergency trigger.
 
 The secret is ``CRON_SYNC_TOKEN``, read from the environment the composition-root way (like
-every other credential in this app; see the ``get_*`` wiring in ``app/stocks/router.py``). The
+every other credential in this app; see the ``get_*`` factories in ``app/stocks/wiring.py``). The
 guard is deliberately **fail-closed**: if the token isn't configured the endpoints return
 ``503`` and nothing can trigger a sync — the same "missing required credential -> 503" shape the
 router uses for the vendor keys. A caller whose bearer token is missing or wrong gets ``401``.

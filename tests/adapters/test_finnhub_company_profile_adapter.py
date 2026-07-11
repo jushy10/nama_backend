@@ -12,7 +12,7 @@ import pytest
 
 from app.stocks.entities import CompanyProfile
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.finnhub_company_profile_provider import FinnhubCompanyProfileProvider
+from app.stocks.adapters.finnhub_company_profile_adapter import FinnhubCompanyProfileProvider
 
 
 class FakeHttpClient:

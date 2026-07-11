@@ -12,7 +12,8 @@ from datetime import datetime, timezone
 import pytest
 
 from app.stocks.adapters.bedrock.etf_analysis_adapter import BedrockEtfAnalysisProvider
-from app.stocks.entities import Confidence, Quote, Recommendation, StockPerformance
+from app.stocks.analysis.entities import Confidence, Recommendation
+from app.stocks.entities import Quote, StockPerformance
 from app.stocks.etfs.entities import (
     EtfDetail,
     EtfHolding,

@@ -12,9 +12,9 @@ from datetime import date, datetime, timezone
 
 import pytest
 
+from app.stocks.charts.ports import CandleProvider
 from app.stocks.entities import Candle, CandleSeries, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import CandleProvider
 from app.stocks.ticker.entities import (
     PeHistory,
     PeHistoryPoint,

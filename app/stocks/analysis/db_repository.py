@@ -23,8 +23,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.stocks.analysis.models import AnalysisCacheRecord
-from app.stocks.entities import Confidence, InvestmentAnalysis, Recommendation
-from app.stocks.ports import InvestmentAnalysisCache
+from app.stocks.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
+from app.stocks.analysis.ports import InvestmentAnalysisCache
 
 logger = logging.getLogger(__name__)
 

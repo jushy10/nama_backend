@@ -35,17 +35,17 @@ Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 
 from datetime import datetime, timezone
 
-from app.stocks.entities import (
+from app.stocks.analysis.entities import (
     Confidence,
     InvestmentAnalysis,
     Recommendation,
-    Stock,
 )
+from app.stocks.analysis.ports import InvestmentAnalysisProvider
 from app.stocks.adapters.bedrock.cost import CostAccumulator
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
+from app.stocks.entities import Stock
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ports import InvestmentAnalysisProvider
 from app.stocks.recommendations.entities import AnalystRecommendations
 from app.stocks.universe.entities import IndustryValuation
 
