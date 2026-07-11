@@ -202,6 +202,12 @@ module "app" {
   extra_environment = {
     BEDROCK_REGION            = "us-east-1"
     BEDROCK_ANALYSIS_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    # The public canonical origin the SEO content pages stamp into their canonical/OG
+    # URLs and sitemap (app/stocks/endpoints/seo_endpoints.py). The *www* host, because
+    # the frontend distribution 301-redirects the apex to www — a canonical/sitemap URL
+    # on the apex would needlessly bounce. Harmless on the sync task def, which ignores it.
+    PUBLIC_SITE_ORIGIN = "https://${var.frontend_canonical_domain}"
   }
 
   # Grant the task role bedrock:InvokeModel for the AI analysis endpoints
@@ -239,6 +245,12 @@ module "dns_frontend" {
 # redirect_to_domain makes www the canonical host: a CloudFront edge function
 # 301-redirects the apex (namainsights.com) to www.namainsights.com, so the site
 # has one canonical URL instead of serving identical content at both.
+#
+# SEO content pages: the same distribution also routes the server-rendered SEO paths to the
+# APP origin (module.app at api.namainsights.com), so /stock/*, /sitemap.xml, /robots.txt and
+# /llms.txt are served by FastAPI *under the main hostname* — inheriting the site's authority
+# — while everything else stays the S3 SPA. The API Gateway's $default route passes these
+# paths straight to the app. See app/stocks/seo/ and its README.
 module "frontend" {
   source = "../../modules/static-site-cloudfront"
 
@@ -248,4 +260,17 @@ module "frontend" {
   redirect_to_domain      = var.frontend_canonical_domain
   certificate_arn         = module.dns_frontend.certificate_arn
   route53_zone_id         = module.dns_frontend.zone_id
+
+  # Route the SEO surface to the app. var.domain_name is the API's custom domain
+  # (api.namainsights.com); its cert covers that host, which the https-only origin needs.
+  backend_origin_domain_name = var.domain_name
+  backend_path_patterns = [
+    "/stock/*",
+    "/etf/*",
+    "/sector/*",
+    "/screen/*",
+    "/sitemap.xml",
+    "/robots.txt",
+    "/llms.txt",
+  ]
 }

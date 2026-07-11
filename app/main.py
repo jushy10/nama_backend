@@ -45,6 +45,7 @@ from app.stocks.endpoints.cron_revenue_segments_endpoints import (
 )
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.endpoints.heatmap_endpoints import router as heatmap_router
+from app.stocks.endpoints.seo_endpoints import router as seo_router
 from app.stocks.router import router as stocks_router
 
 # The web server (uvicorn/gunicorn) installs handlers only on its own `uvicorn*`
@@ -210,6 +211,12 @@ app.include_router(etf_cron_router)
 # anchor; the colours are best-effort live Alpaca quotes. See
 # app/stocks/endpoints/heatmap_endpoints.py.
 app.include_router(heatmap_router)
+# The SEO / server-rendered content pages (GET /stock/{ticker}): public, crawlable HTML
+# per stock, rendered server-side from DB-only anchor facts so search AND AI crawlers that
+# don't run JavaScript see real content (the React app can't give them that). A singular
+# /stock/ prefix keeps it clear of the /stocks/ (plural) JSON API. See
+# app/stocks/endpoints/seo_endpoints.py and app/stocks/seo/README.md.
+app.include_router(seo_router)
 
 
 @app.get("/healthz")
