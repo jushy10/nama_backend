@@ -56,14 +56,33 @@ class StockPageRef:
 
 @dataclass(frozen=True)
 class SectorStock:
-    """One row on a sector page: enough to render a linked, sortable listing without a
-    second read per stock. All the figures come off the anchor (screened rows only)."""
+    """One row on a sector or screen page: enough to render a linked, sortable listing
+    without a second read per stock. All the figures come off the anchor (screened rows)."""
 
     ticker: str
     name: str | None
     market_cap: float | None
     pe_ratio: float | None
     fcf_yield: float | None
+
+
+@dataclass(frozen=True)
+class EtfPageFacts:
+    """The stored facts an ETF content page renders — all DB-only, off the ``etfs`` table.
+
+    ``net_assets`` (AUM) doubles as the *screened* signal (every fund reached the table via
+    the ETF screen, which fills it). ``description`` is Yahoo's fund blurb when the profile
+    enrichment has reached the fund; the rest are the screen + profile figures."""
+
+    name: str | None
+    exchange: str | None
+    category: str | None
+    net_assets: float | None
+    expense_ratio: float | None
+    fund_family: str | None
+    dividend_yield: float | None
+    nav: float | None
+    description: str | None
 
 
 class SeoReadRepository(ABC):
@@ -96,4 +115,25 @@ class SeoReadRepository(ABC):
     def list_sectors(self) -> tuple[str, ...]:
         """The distinct sector slugs across the screened universe, sorted — the set of
         ``/sector/{slug}`` pages that exist, for the sitemap."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_screen_stocks(
+        self, sort_key: str, *, descending: bool, positive_only: bool, limit: int
+    ) -> tuple[SectorStock, ...]:
+        """The top screened stocks for a "best-of" screen, ordered by ``sort_key`` (a stable
+        string the adapter maps to an anchor column). ``positive_only`` drops non-positive
+        values (e.g. a cheapest-P/E screen wants P/E > 0); the ordered figure is never null."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_etf_facts(self, ticker: str) -> EtfPageFacts | None:
+        """The page facts for an ETF (already-normalized ticker), or ``None`` when no ``etfs``
+        row exists — the "not one of our funds" signal the endpoint maps to a 404."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_etf_pages(self, limit: int) -> tuple[StockPageRef, ...]:
+        """Every index-worthy ETF page for the sitemap — funds with an AUM (the screened
+        gate), largest first, capped at ``limit``."""
         raise NotImplementedError

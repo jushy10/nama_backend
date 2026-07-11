@@ -28,12 +28,18 @@ literals like `/stocks/etfs` and `/stocks/classifications`.
 | Page | URL | Status |
 |------|-----|--------|
 | Stock | `/stock/{TICKER}` | **live** |
+| ETF | `/etf/{TICKER}` | **live** |
 | Sector | `/sector/{slug}` (hyphenated, e.g. `/sector/consumer-electronics`) | **live** |
+| Screen landing | `/screen/{slug}` (e.g. `/screen/high-fcf-yield`) | **live** |
 | Crawler files | `/robots.txt`, `/sitemap.xml`, `/llms.txt` | **live** |
-| ETF | `/etf/{TICKER}` | planned |
-| Screen landing | `/screen/{slug}` (e.g. `/screen/high-fcf-yield`) | planned |
 | Comparison | `/compare/{a}-vs-{b}` | planned |
 | Glossary | `/learn/{term}` | planned |
+
+Screens are a curated registry (`SCREENS` in `use_cases.py`): `high-fcf-yield`, `cheapest-pe`,
+`highest-revenue-growth`, `largest-companies` — adding one is a new `ScreenDef` entry. ETF pages
+reuse the generic entity template (`ticker.html`); sector + screen pages share `listing.html`.
+Off-page launch assets (Product Hunt, Reddit, Show HN, directories, outreach) live in
+[`LAUNCH_ASSETS.md`](LAUNCH_ASSETS.md).
 
 Sector pages list the top stocks in a sector (linked to their stock pages) and each stock
 page links back to its sector — the hub/spoke internal-linking structure that helps crawlers

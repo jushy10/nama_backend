@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass
 
 from app.stocks.seo.repository import (
+    EtfPageFacts,
     SectorStock,
     SeoReadRepository,
     StockPageRef,
@@ -142,19 +143,185 @@ class GetSectorPage:
 
 
 @dataclass(frozen=True)
+class EtfPage:
+    """What an ETF content page renders: the normalized ticker and its stored fund facts
+    (``None`` when the symbol isn't one of our funds)."""
+
+    ticker: str
+    facts: EtfPageFacts | None
+
+    @property
+    def has_data(self) -> bool:
+        return self.facts is not None and (
+            self.facts.name is not None or self.facts.net_assets is not None
+        )
+
+    @property
+    def indexable(self) -> bool:
+        # Every fund in the table was screened (AUM filled); this mirrors the stock page's
+        # market_cap gate.
+        return self.facts is not None and self.facts.net_assets is not None
+
+    @property
+    def display_name(self) -> str:
+        if self.facts is not None and self.facts.name:
+            return self.facts.name
+        return self.ticker
+
+
+class GetEtfPage:
+    """Use case: assemble an ETF's content-page view from DB-only facts."""
+
+    def __init__(self, repository: SeoReadRepository) -> None:
+        self._repository = repository
+
+    def execute(self, ticker: str) -> EtfPage:
+        normalized = normalize_ticker(ticker)
+        return EtfPage(ticker=normalized, facts=self._repository.get_etf_facts(normalized))
+
+
+@dataclass(frozen=True)
+class ScreenDef:
+    """A curated "best-of" screen: a titled listing of the top stocks by one metric. The
+    ``sort_key`` is the stable string the repository maps to an anchor column."""
+
+    slug: str
+    heading: str
+    description: str  # meta description
+    subtitle: str
+    sort_key: str
+    descending: bool = True
+    positive_only: bool = False
+
+
+# The curated screens — each a high-intent long-tail landing page, generated from the same
+# universe the search sorts. Keyed by URL slug.
+SCREENS: dict[str, ScreenDef] = {
+    screen.slug: screen
+    for screen in (
+        ScreenDef(
+            slug="high-fcf-yield",
+            heading="Stocks with the Highest Free Cash Flow Yield",
+            description=(
+                "The US stocks with the highest free-cash-flow yield — cheap on the cash "
+                "they actually generate. Updated daily on Nama Insights."
+            ),
+            subtitle=(
+                "The screened US stocks (≥$1B market cap) with the highest free-cash-flow "
+                "yield — free cash flow as a percent of market value."
+            ),
+            sort_key="fcf_yield",
+            descending=True,
+        ),
+        ScreenDef(
+            slug="cheapest-pe",
+            heading="Cheapest Stocks by Trailing P/E",
+            description=(
+                "The US stocks trading at the lowest trailing price-to-earnings ratios. "
+                "Updated daily on Nama Insights."
+            ),
+            subtitle=(
+                "The screened US stocks (≥$1B market cap) with the lowest positive trailing "
+                "P/E — priced cheaply against their earnings."
+            ),
+            sort_key="pe_ratio",
+            descending=False,
+            positive_only=True,
+        ),
+        ScreenDef(
+            slug="highest-revenue-growth",
+            heading="Stocks with the Highest Revenue Growth",
+            description=(
+                "The US stocks growing revenue fastest year-over-year. Updated daily on "
+                "Nama Insights."
+            ),
+            subtitle=(
+                "The screened US stocks (≥$1B market cap) with the highest trailing "
+                "year-over-year revenue growth."
+            ),
+            sort_key="revenue_growth_yoy",
+            descending=True,
+        ),
+        ScreenDef(
+            slug="largest-companies",
+            heading="Largest US Companies by Market Cap",
+            description=(
+                "The largest US companies by market capitalization, with valuation and "
+                "cash-flow metrics. Updated daily on Nama Insights."
+            ),
+            subtitle="The biggest US companies by market capitalization.",
+            sort_key="market_cap",
+            descending=True,
+        ),
+    )
+}
+
+
+def normalize_screen_slug(raw: str) -> str:
+    """Lower-case/trim a screen slug and reject non-slug input. Screen slugs are hyphenated
+    and matched against the ``SCREENS`` registry (an unknown-but-valid slug is a 404)."""
+    slug = (raw or "").strip().lower()
+    if not slug:
+        raise ValueError("A screen is required.")
+    if not re.match(r"^[a-z0-9-]+$", slug):
+        raise ValueError(f"'{raw}' is not a valid screen.")
+    return slug
+
+
+@dataclass(frozen=True)
+class ScreenPage:
+    """What a screen listing page renders: the screen definition and its top stocks."""
+
+    screen: ScreenDef | None
+    stocks: tuple[SectorStock, ...]
+
+    @property
+    def has_data(self) -> bool:
+        """A real screen (a known slug) with at least one stock; an unknown slug or an empty
+        universe is a 404."""
+        return self.screen is not None and len(self.stocks) > 0
+
+
+class GetScreenPage:
+    """Use case: a "best-of" screen listing page, from DB-only facts."""
+
+    LIMIT = 100
+
+    def __init__(self, repository: SeoReadRepository) -> None:
+        self._repository = repository
+
+    def execute(self, slug: str) -> ScreenPage:
+        normalized = normalize_screen_slug(slug)
+        screen = SCREENS.get(normalized)
+        if screen is None:
+            return ScreenPage(screen=None, stocks=())
+        return ScreenPage(
+            screen=screen,
+            stocks=self._repository.list_screen_stocks(
+                screen.sort_key,
+                descending=screen.descending,
+                positive_only=screen.positive_only,
+                limit=self.LIMIT,
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class SitemapData:
-    """Everything the sitemap lists: the stock pages and the sector pages."""
+    """Everything the sitemap lists: stock pages, ETF pages, sector pages, screen pages."""
 
     stock_pages: tuple[StockPageRef, ...]
+    etf_pages: tuple[StockPageRef, ...]
     sector_slugs: tuple[str, ...]
+    screen_slugs: tuple[str, ...]
 
 
 class GetSitemap:
-    """Use case: the URLs for ``sitemap.xml`` — the index-worthy stock pages plus the
-    sector pages.
+    """Use case: the URLs for ``sitemap.xml`` — the index-worthy stock and ETF pages plus
+    the sector and screen pages.
 
     Owns the per-file URL ceiling: a single sitemap file tops out at 50,000 URLs, so the
-    stock cap keeps us under it (the universe is a few thousand today; when it approaches
+    per-list caps keep us under it (the universe is a few thousand today; when it approaches
     the limit this becomes a sitemap *index* of paginated children). Most-valuable-first
     ordering means a future truncation drops only the smallest names.
     """
@@ -168,5 +335,7 @@ class GetSitemap:
     def execute(self) -> SitemapData:
         return SitemapData(
             stock_pages=self._repository.list_stock_pages(self.MAX_URLS),
+            etf_pages=self._repository.list_etf_pages(self.MAX_URLS),
             sector_slugs=self._repository.list_sectors(),
+            screen_slugs=tuple(SCREENS.keys()),
         )

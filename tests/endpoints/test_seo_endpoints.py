@@ -12,8 +12,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import seo_endpoints as endpoints
-from app.stocks.seo.repository import SectorStock, StockPageRef, TickerPageFacts
+from app.stocks.seo.repository import (
+    EtfPageFacts,
+    SectorStock,
+    StockPageRef,
+    TickerPageFacts,
+)
 from app.stocks.seo.use_cases import (
+    SCREENS,
+    EtfPage,
+    ScreenPage,
     SectorPage,
     SitemapData,
     TickerStockPage,
@@ -167,7 +175,9 @@ def test_sitemap_lists_stock_and_sector_pages() -> None:
             StockPageRef(ticker="MU", last_modified=date(2026, 7, 3)),
             StockPageRef(ticker="AAPL", last_modified=None),  # no stamp -> no <lastmod>
         ),
+        etf_pages=(StockPageRef(ticker="VOO", last_modified=date(2026, 7, 5)),),
         sector_slugs=("technology", "consumer_electronics"),
+        screen_slugs=("high-fcf-yield", "cheapest-pe"),
     )
     app.dependency_overrides[endpoints.get_sitemap_use_case] = lambda: _FakeSitemap(data)
     resp = TestClient(app).get("/sitemap.xml")
@@ -182,9 +192,12 @@ def test_sitemap_lists_stock_and_sector_pages() -> None:
     assert "<loc>https://www.namainsights.com/stock/AAPL</loc>" in body
     # Homepage is included.
     assert "<loc>https://www.namainsights.com/</loc>" in body
-    # Sector pages are listed, with the stored underscore slug hyphenated for the URL.
+    # ETF, sector and screen pages are all listed.
+    assert "<loc>https://www.namainsights.com/etf/VOO</loc>" in body
     assert "<loc>https://www.namainsights.com/sector/technology</loc>" in body
+    # Stored underscore slug hyphenated for the sector URL.
     assert "<loc>https://www.namainsights.com/sector/consumer-electronics</loc>" in body
+    assert "<loc>https://www.namainsights.com/screen/high-fcf-yield</loc>" in body
 
 
 # --- Sector pages ------------------------------------------------------------------------
@@ -251,4 +264,117 @@ def test_unknown_sector_is_404() -> None:
 def test_malformed_sector_is_400() -> None:
     fake = _FakeSectorUseCase(error=ValueError("'a/b' is not a valid sector."))
     resp = _sector_client(fake).get("/sector/a b")
+    assert resp.status_code == 400
+
+
+# --- Screen ("best-of") pages ------------------------------------------------------------
+
+
+class _FakeScreenUseCase:
+    def __init__(self, *, result=None, error=None) -> None:
+        self._result = result
+        self._error = error
+
+    def execute(self, slug: str) -> ScreenPage:
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def _screen_client(fake: _FakeScreenUseCase) -> TestClient:
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    app.dependency_overrides[endpoints.get_screen_page_use_case] = lambda: fake
+    return TestClient(app)
+
+
+def test_screen_page_renders_ranked_listing() -> None:
+    page = ScreenPage(
+        screen=SCREENS["high-fcf-yield"],
+        stocks=(
+            SectorStock(ticker="GM", name="General Motors", market_cap=6.0e10, pe_ratio=5.4, fcf_yield=18.2),
+            SectorStock(ticker="F", name="Ford Motor", market_cap=4.5e10, pe_ratio=6.9, fcf_yield=14.0),
+        ),
+    )
+    resp = _screen_client(_FakeScreenUseCase(result=page)).get("/screen/high-fcf-yield")
+
+    assert resp.status_code == 200
+    body = resp.text
+    assert "Highest Free Cash Flow Yield" in body
+    assert '<link rel="canonical" href="https://www.namainsights.com/screen/high-fcf-yield"' in body
+    assert '<meta name="robots" content="index,follow"' in body
+    assert 'href="https://www.namainsights.com/stock/GM"' in body
+    assert '"@type": "ItemList"' in body
+
+
+def test_unknown_screen_is_404() -> None:
+    page = ScreenPage(screen=None, stocks=())
+    resp = _screen_client(_FakeScreenUseCase(result=page)).get("/screen/not-a-screen")
+    assert resp.status_code == 404
+
+
+# --- ETF pages ---------------------------------------------------------------------------
+
+
+class _FakeEtfUseCase:
+    def __init__(self, *, result=None, error=None) -> None:
+        self._result = result
+        self._error = error
+        self.calls: list[str] = []
+
+    def execute(self, ticker: str) -> EtfPage:
+        self.calls.append(ticker)
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def _etf_client(fake: _FakeEtfUseCase) -> TestClient:
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    app.dependency_overrides[endpoints.get_etf_page_use_case] = lambda: fake
+    return TestClient(app)
+
+
+def _etf_facts(**overrides) -> EtfPageFacts:
+    base = dict(
+        name="Vanguard S&P 500 ETF",
+        exchange="NYSE",
+        category="large_blend",
+        net_assets=1.3e12,
+        expense_ratio=0.03,
+        fund_family="Vanguard",
+        dividend_yield=1.29,
+        nav=512.34,
+        description="The fund seeks to track the S&P 500 Index.",
+    )
+    base.update(overrides)
+    return EtfPageFacts(**base)
+
+
+def test_etf_page_renders_indexable() -> None:
+    page = EtfPage(ticker="VOO", facts=_etf_facts())
+    fake = _FakeEtfUseCase(result=page)
+    resp = _etf_client(fake).get("/etf/voo")
+
+    assert resp.status_code == 200
+    assert fake.calls == ["voo"]
+    body = resp.text
+    assert "Vanguard S&amp;P 500 ETF (VOO) ETF" in body  # title (ampersand escaped)
+    assert '<link rel="canonical" href="https://www.namainsights.com/etf/VOO"' in body
+    assert '<meta name="robots" content="index,follow"' in body
+    assert '"@type": "FinancialProduct"' in body
+    assert "$1.30T" in body  # AUM
+    assert "0.03%" in body  # expense ratio (2 decimals for the tiny ETF figures)
+
+
+def test_unknown_etf_is_404() -> None:
+    page = EtfPage(ticker="NOPE", facts=None)
+    resp = _etf_client(_FakeEtfUseCase(result=page)).get("/etf/NOPE")
+    assert resp.status_code == 404
+
+
+def test_malformed_etf_ticker_is_400() -> None:
+    fake = _FakeEtfUseCase(error=ValueError("'1' is not a valid ticker."))
+    resp = _etf_client(fake).get("/etf/1")
     assert resp.status_code == 400

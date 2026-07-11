@@ -31,11 +31,15 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.stocks.seo.db_repository import SqlSeoReadRepository
-from app.stocks.seo.repository import TickerPageFacts
+from app.stocks.seo.repository import EtfPageFacts, TickerPageFacts
 from app.stocks.seo.use_cases import (
+    EtfPage,
+    GetEtfPage,
+    GetScreenPage,
     GetSectorPage,
     GetSitemap,
     GetTickerStockPage,
+    ScreenPage,
     SectorPage,
     SitemapData,
     TickerStockPage,
@@ -296,13 +300,14 @@ def _sector_description(page: SectorPage) -> str:
     return desc if len(desc) <= 160 else desc[:159].rstrip(" ,.") + "…"
 
 
-def _sector_jsonld(page: SectorPage, canonical: str, site: str) -> str:
-    """schema.org JSON-LD: an ItemList of the sector's stocks (each linking to its page) and
-    a breadcrumb trail. ``<`` escaped so data can't break out of the <script> block."""
+def _listing_jsonld(list_name: str, stocks, canonical: str, site: str) -> str:
+    """schema.org JSON-LD for a stock listing (sector or screen): an ItemList of the stocks
+    (each linking to its page) + a breadcrumb. ``<`` escaped so data can't break out of the
+    <script> block."""
     item_list = {
         "@context": "https://schema.org",
         "@type": "ItemList",
-        "name": f"{page.label} Stocks",
+        "name": list_name,
         "itemListElement": [
             {
                 "@type": "ListItem",
@@ -310,7 +315,7 @@ def _sector_jsonld(page: SectorPage, canonical: str, site: str) -> str:
                 "url": f"{site}/stock/{stock.ticker}",
                 "name": stock.name or stock.ticker,
             }
-            for i, stock in enumerate(page.stocks)
+            for i, stock in enumerate(stocks)
         ],
     }
     breadcrumbs = {
@@ -319,17 +324,20 @@ def _sector_jsonld(page: SectorPage, canonical: str, site: str) -> str:
         "itemListElement": [
             {"@type": "ListItem", "position": 1, "name": "Nama Insights", "item": site},
             {"@type": "ListItem", "position": 2, "name": "Stocks", "item": f"{site}/search"},
-            {"@type": "ListItem", "position": 3, "name": f"{page.label} Stocks", "item": canonical},
+            {"@type": "ListItem", "position": 3, "name": list_name, "item": canonical},
         ],
     }
     return json.dumps([item_list, breadcrumbs]).replace("<", "\\u003c")
 
 
-def _render_sector(request: Request, page: SectorPage) -> Response:
-    site = _site_origin()
-    label = page.label
-    canonical = f"{site}/sector/{page.url_slug}"
-    rows = [
+def _sector_jsonld(page: SectorPage, canonical: str, site: str) -> str:
+    return _listing_jsonld(f"{page.label} Stocks", page.stocks, canonical, site)
+
+
+def _listing_rows(stocks, site: str) -> list[dict[str, str]]:
+    """Format a run of stocks into the shared listing template's rows — each linking to its
+    /stock/ page. Used by both the sector and screen pages."""
+    return [
         {
             "ticker": stock.ticker,
             "url": f"{site}/stock/{stock.ticker}",
@@ -338,8 +346,14 @@ def _render_sector(request: Request, page: SectorPage) -> Response:
             "pe": _fmt_ratio(stock.pe_ratio) or "—",
             "fcf_yield": _fmt_pct(stock.fcf_yield) or "—",
         }
-        for stock in page.stocks
+        for stock in stocks
     ]
+
+
+def _render_sector(request: Request, page: SectorPage) -> Response:
+    site = _site_origin()
+    label = page.label
+    canonical = f"{site}/sector/{page.url_slug}"
     context = {
         "title": f"{label} Stocks — Top Companies by Market Cap | Nama Insights",
         "description": _sector_description(page),
@@ -347,17 +361,19 @@ def _render_sector(request: Request, page: SectorPage) -> Response:
         "robots": "index,follow",  # a sector page only renders when it has stocks
         "site": site,
         "app_url": f"{site}/search",
-        "label": label,
+        "heading": f"{label} Stocks",
+        "crumb": label,
         "subtitle": (
             f"The {len(page.stocks)} largest {label} companies by market cap, with "
             "valuation and cash-flow metrics."
         ),
-        "stocks": rows,
+        "stocks": _listing_rows(page.stocks, site),
+        "cta_text": f"Screen {label} stocks on Nama Insights →",
         "jsonld": _sector_jsonld(page, canonical, site),
         "year": datetime.now(timezone.utc).year,
     }
     response = _TEMPLATES.TemplateResponse(
-        request=request, name="sector.html", context=context
+        request=request, name="listing.html", context=context
     )
     response.headers["Cache-Control"] = "public, max-age=3600"
     return response
@@ -378,6 +394,198 @@ def sector_page_endpoint(
     if not page.has_data:
         raise HTTPException(404, f"No stocks found for sector '{sector}'.")
     return _render_sector(request, page)
+
+
+# --- Screen ("best-of") landing pages: /screen/{slug} ------------------------------------
+#
+# High-intent long-tail pages generated from the same universe the search sorts (e.g.
+# "highest FCF yield", "cheapest by P/E"). Each lists its top stocks, linked to their pages.
+
+
+def get_screen_page_use_case(db: Session = Depends(get_db)) -> GetScreenPage:
+    return GetScreenPage(SqlSeoReadRepository(db))
+
+
+def _render_screen(request: Request, page: ScreenPage) -> Response:
+    site = _site_origin()
+    screen = page.screen
+    assert screen is not None  # guarded by has_data before calling
+    canonical = f"{site}/screen/{screen.slug}"
+    context = {
+        "title": f"{screen.heading} | Nama Insights",
+        "description": screen.description,
+        "canonical": canonical,
+        "robots": "index,follow",
+        "site": site,
+        "app_url": f"{site}/screener",
+        "heading": screen.heading,
+        "crumb": screen.heading,
+        "subtitle": screen.subtitle,
+        "stocks": _listing_rows(page.stocks, site),
+        "cta_text": "Build your own screen on Nama Insights →",
+        "jsonld": _listing_jsonld(screen.heading, page.stocks, canonical, site),
+        "year": datetime.now(timezone.utc).year,
+    }
+    response = _TEMPLATES.TemplateResponse(
+        request=request, name="listing.html", context=context
+    )
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
+@router.get("/screen/{slug}")
+def screen_page_endpoint(
+    slug: str,
+    request: Request,
+    use_case: GetScreenPage = Depends(get_screen_page_use_case),
+):
+    """A "best-of" screen listing page. A malformed slug is a 400; an unknown screen (or an
+    empty universe) is a 404."""
+    try:
+        page = use_case.execute(slug)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not page.has_data:
+        raise HTTPException(404, f"No screen found for '{slug}'.")
+    return _render_screen(request, page)
+
+
+# --- ETF pages: /etf/{ticker} ------------------------------------------------------------
+#
+# A per-fund page, reusing the generic entity template (ticker.html) — the same shape as a
+# stock page (name + metrics + summary), just with fund facts (AUM, expense ratio, category).
+
+
+def get_etf_page_use_case(db: Session = Depends(get_db)) -> GetEtfPage:
+    return GetEtfPage(SqlSeoReadRepository(db))
+
+
+def _etf_description(name: str, ticker: str, facts: EtfPageFacts) -> str:
+    category = _humanize(facts.category)
+    lead = f"{name} ({ticker})" + (f" — {category} ETF" if category else " ETF")
+    parts: list[str] = []
+    if facts.net_assets is not None:
+        parts.append(f"AUM {_fmt_cap(facts.net_assets)}")
+    if facts.expense_ratio is not None:
+        parts.append(f"expense ratio {facts.expense_ratio:.2f}%")
+    stats = f" {', '.join(parts)}." if parts else "."
+    desc = f"{lead}.{stats} AUM, expense ratio, dividend yield and key facts on Nama Insights."
+    return desc if len(desc) <= 160 else desc[:159].rstrip(" ,.") + "…"
+
+
+def _etf_summary(name: str, ticker: str, facts: EtfPageFacts) -> str:
+    category = _humanize(facts.category)
+    lead = f"{name} ({ticker}) is an exchange-traded fund" + (
+        f" in the {category} category." if category else "."
+    )
+    bits: list[str] = []
+    if facts.net_assets is not None:
+        bits.append(f"{_fmt_cap(facts.net_assets)} in assets")
+    if facts.expense_ratio is not None:
+        bits.append(f"an expense ratio of {facts.expense_ratio:.2f}%")
+    if facts.dividend_yield is not None:
+        bits.append(f"a {facts.dividend_yield:.2f}% dividend yield")
+    if bits:
+        lead += " It has " + _join_and(bits) + "."
+    if facts.description:
+        desc = facts.description.strip()
+        lead += " " + (desc if len(desc) <= 500 else desc[:499].rstrip() + "…")
+    return lead
+
+
+def _fmt_pct2(value: float | None) -> str | None:
+    """A percent to 2 decimals — for the small ETF figures (a 0.03% expense ratio would
+    round to 0.0% at 1 decimal)."""
+    return None if value is None else f"{value:.2f}%"
+
+
+def _etf_metrics(facts: EtfPageFacts) -> list[dict[str, str]]:
+    rows = [
+        ("Assets under management", _fmt_cap(facts.net_assets)),
+        ("Expense ratio", _fmt_pct2(facts.expense_ratio)),
+        ("Category", _humanize(facts.category)),
+        ("Dividend yield", _fmt_pct2(facts.dividend_yield)),
+        ("NAV", None if facts.nav is None else f"${facts.nav:,.2f}"),
+        ("Fund family", facts.fund_family),
+        ("Exchange", facts.exchange),
+    ]
+    return [{"label": label, "value": value or "—"} for label, value in rows]
+
+
+def _etf_jsonld(name: str, ticker: str, facts: EtfPageFacts, canonical: str, site: str) -> str:
+    product: dict = {
+        "@context": "https://schema.org",
+        "@type": "FinancialProduct",
+        "name": name,
+        "tickerSymbol": ticker,
+        "url": canonical,
+        "category": "Exchange-Traded Fund",
+    }
+    if facts.description:
+        product["description"] = facts.description.strip()[:300]
+    breadcrumbs = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "Nama Insights", "item": site},
+            {"@type": "ListItem", "position": 2, "name": "ETFs", "item": f"{site}/etf-screener"},
+            {"@type": "ListItem", "position": 3, "name": f"{name} ({ticker})", "item": canonical},
+        ],
+    }
+    return json.dumps([product, breadcrumbs]).replace("<", "\\u003c")
+
+
+def _render_etf(request: Request, page: EtfPage) -> Response:
+    facts = page.facts
+    assert facts is not None  # guarded by has_data before calling
+    site = _site_origin()
+    ticker = page.ticker
+    name = page.display_name
+    canonical = f"{site}/etf/{ticker}"
+    category = _humanize(facts.category)
+    chips = [c for c in (category,) if c] + ["ETF"]
+    subtitle_bits = [b for b in (category, facts.fund_family, facts.exchange) if b]
+    context = {
+        "title": f"{name} ({ticker}) ETF — AUM, Expense Ratio & Facts | Nama Insights",
+        "description": _etf_description(name, ticker, facts),
+        "canonical": canonical,
+        "robots": "index,follow" if page.indexable else "noindex,follow",
+        "site": site,
+        "app_url": f"{site}/etf-screener",
+        "name": name,
+        "ticker": ticker,
+        "subtitle": " · ".join(subtitle_bits),
+        "chips": chips,
+        "summary": _etf_summary(name, ticker, facts),
+        "metrics": _etf_metrics(facts),
+        "jsonld": _etf_jsonld(name, ticker, facts, canonical, site),
+        # A fund has no sector page, so the generic template's related link is skipped.
+        "sector_url": None,
+        "sector_label": None,
+        "year": datetime.now(timezone.utc).year,
+    }
+    response = _TEMPLATES.TemplateResponse(
+        request=request, name="ticker.html", context=context
+    )
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
+@router.get("/etf/{ticker}")
+def etf_page_endpoint(
+    ticker: str,
+    request: Request,
+    use_case: GetEtfPage = Depends(get_etf_page_use_case),
+):
+    """A single ETF's server-rendered content page. A malformed ticker is a 400; a symbol
+    that isn't one of our funds is a 404."""
+    try:
+        page = use_case.execute(ticker)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not page.has_data:
+        raise HTTPException(404, f"No ETF data available for {page.ticker}.")
+    return _render_etf(request, page)
 
 
 # --- Crawler files: robots.txt, llms.txt, sitemap.xml ------------------------------------
@@ -444,6 +652,14 @@ The full list is in /sitemap.xml.
 The largest stocks in each sector by market cap — e.g. /sector/technology,
 /sector/financial-services, /sector/healthcare.
 
+## Screens (best-of lists)
+Ranked lists updated daily — /screen/high-fcf-yield, /screen/cheapest-pe,
+/screen/highest-revenue-growth, /screen/largest-companies.
+
+## ETF pages
+Per-fund pages with AUM, expense ratio, category, dividend yield and NAV —
+e.g. /etf/VOO, /etf/QQQ, /etf/SPY.
+
 ## Tools
 - /search — search and filter the >=$1B US stock universe
 - /screener — stock screener
@@ -471,19 +687,25 @@ def _sitemap_xml(data: SitemapData, site: str) -> str:
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
         f"  <url><loc>{escape(site + '/')}</loc></url>",
     ]
-    for ref in data.stock_pages:
-        loc = escape(f"{site}/stock/{ref.ticker}")
+    def _entity_url(prefix: str, ref) -> str:
+        loc = escape(f"{site}/{prefix}/{ref.ticker}")
         if ref.last_modified is not None:
-            parts.append(
+            return (
                 f"  <url><loc>{loc}</loc>"
                 f"<lastmod>{ref.last_modified.isoformat()}</lastmod></url>"
             )
-        else:
-            parts.append(f"  <url><loc>{loc}</loc></url>")
+        return f"  <url><loc>{loc}</loc></url>"
+
+    for ref in data.stock_pages:
+        parts.append(_entity_url("stock", ref))
+    for ref in data.etf_pages:
+        parts.append(_entity_url("etf", ref))
     for slug in data.sector_slugs:
         # Hyphenated URL form of the stored snake_case slug.
         loc = escape(f"{site}/sector/{slug.replace('_', '-')}")
         parts.append(f"  <url><loc>{loc}</loc></url>")
+    for slug in data.screen_slugs:
+        parts.append(f"  <url><loc>{escape(f'{site}/screen/{slug}')}</loc></url>")
     parts.append("</urlset>")
     return "\n".join(parts)
 

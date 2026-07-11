@@ -264,7 +264,9 @@ module "frontend" {
   backend_origin_domain_name = var.domain_name
   backend_path_patterns = [
     "/stock/*",
+    "/etf/*",
     "/sector/*",
+    "/screen/*",
     "/sitemap.xml",
     "/robots.txt",
     "/llms.txt",
