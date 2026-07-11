@@ -613,10 +613,11 @@ class StockScorecard:
     @property
     def is_complete(self) -> bool:
         """Whether the read carries its full substance — at least one section, every
-        one of them with a non-empty summary. The use case refuses to cache an
-        incomplete read, so a rare model miss (a section with an empty summary) is
-        never frozen for the cache TTL; the next view regenerates."""
-        return bool(self.sections) and all(s.summary for s in self.sections)
+        one of them with a non-empty label *and* summary (the two fields the card
+        shows in words). The use case refuses to cache an incomplete read, so a rare
+        model miss (a section left blank) is never frozen for the cache TTL; the next
+        view regenerates."""
+        return bool(self.sections) and all(s.label and s.summary for s in self.sections)
 
 
 class MarketTone(str, Enum):

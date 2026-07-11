@@ -1476,6 +1476,54 @@ def _tool_message(**input_overrides) -> _StubMessage:
     return _StubMessage([_StubBlock("tool_use", name="submit_scorecard", input=payload)])
 
 
+def _blank_section() -> dict:
+    # The fast-tier failure: a section returned with its words left empty (the metrics
+    # are attached by the service regardless).
+    return {"stance": "neutral", "label": "", "summary": ""}
+
+
+def _blank_sections_message(**overrides) -> _StubMessage:
+    # A scorecard whose overall verdict is filled but every section is blank — the miss
+    # the targeted sections-only retry recovers from. `overrides` can fill a section (or
+    # the verdict) back in.
+    fields = {
+        "business_quality": _blank_section(),
+        "valuation": _blank_section(),
+        "earnings": _blank_section(),
+        "analyst_view": _blank_section(),
+    }
+    fields.update(overrides)
+    return _tool_message(**fields)
+
+
+def _sections_recovery_message(**input_overrides) -> _StubMessage:
+    # The lighter recovery tool the retry path forces — only the four section reads.
+    payload = {
+        "business_quality": {
+            "stance": "positive",
+            "label": "Strong",
+            "summary": "Very profitable.",
+        },
+        "valuation": {
+            "stance": "negative",
+            "label": "Expensive",
+            "summary": "Priced richly.",
+        },
+        "earnings": {
+            "stance": "positive",
+            "label": "Beating",
+            "summary": "Beats often.",
+        },
+        "analyst_view": {
+            "stance": "positive",
+            "label": "Mostly buys",
+            "summary": "Bullish coverage.",
+        },
+    }
+    payload.update(input_overrides)
+    return _StubMessage([_StubBlock("tool_use", name="submit_sections", input=payload)])
+
+
 def test_analysis_use_case_passes_stock_and_earnings():
     analyzer = FakeAnalysisProvider(an_analysis())
     info = GetStockInfo(FakeProvider(stock=a_stock()))
@@ -1945,6 +1993,67 @@ def test_bedrock_adapter_neutral_stance_when_section_stance_off_enum():
     scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
     valuation = next(s for s in scorecard.sections if s.key == "valuation")
     assert valuation.stance is SectionStance.NEUTRAL
+
+
+def test_bedrock_adapter_recovers_blank_sections_with_targeted_retry():
+    # The verdict comes back rich but the four sections blank (the SNDK failure); the
+    # adapter re-issues a *sections-only* call and merges the recovered reads in, so the
+    # served scorecard is complete (and cacheable) rather than showing empty sections.
+    client = _SeqStubClient([_blank_sections_message(), _sections_recovery_message()])
+
+    scorecard = BedrockScorecardProvider(client=client).analyze(
+        a_stock(metrics=a_key_metrics())
+    )
+
+    assert len(client.calls) == 2  # retried exactly once
+    # the recovery is the lighter, sections-only forced tool, not the full scorecard
+    assert client.calls[1]["tool_choice"] == {"type": "tool", "name": "submit_sections"}
+    valuation = next(s for s in scorecard.sections if s.key == "valuation")
+    assert valuation.label == "Expensive"
+    assert valuation.summary  # the recovered read filled the blank
+    assert scorecard.is_complete
+    # The overall verdict from the first pass is preserved through the merge.
+    assert scorecard.thesis == "Balanced."
+
+
+def test_bedrock_adapter_merge_keeps_a_section_the_first_pass_already_wrote():
+    # A first pass that filled one section but blanked the rest: the retry fills only the
+    # blanks and never overwrites the good section.
+    first = _blank_sections_message(
+        business_quality=_section_payload(label="Exceptional", summary="Best in class.")
+    )
+    client = _SeqStubClient([first, _sections_recovery_message()])
+
+    scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
+
+    bq = next(s for s in scorecard.sections if s.key == "business_quality")
+    assert bq.label == "Exceptional"  # kept from the first pass, not the recovery
+    assert scorecard.is_complete
+
+
+def test_bedrock_adapter_accepts_blank_sections_after_exhausting_retries():
+    # If every attempt comes back blank, keep the read (the verdict still lands) rather
+    # than looping forever or raising — and the use case refuses to cache it, so the next
+    # view regenerates.
+    client = _SeqStubClient([_blank_sections_message()])  # repeats the blank message
+
+    scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
+
+    # initial call + the bounded retries, then accept
+    assert len(client.calls) == 1 + BedrockScorecardProvider._MAX_INCOMPLETE_RETRIES
+    assert not scorecard.is_complete
+    assert scorecard.thesis  # the overall verdict still comes through
+
+
+def test_bedrock_adapter_does_not_retry_a_complete_scorecard():
+    # The happy path pays no retry cost: a first pass with all four sections filled is
+    # returned after a single call.
+    client = _SeqStubClient([_tool_message(), _sections_recovery_message()])
+
+    scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
+
+    assert len(client.calls) == 1  # no recovery call
+    assert scorecard.is_complete
 
 
 def test_get_analysis_returns_200(make_client):
