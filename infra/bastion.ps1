@@ -11,7 +11,7 @@
 
     A manually started box stays up until the next `terraform apply` reconciles
     it back to "stopped". Run `down` when you're done to stop paying sooner. As a
-    backstop, a CloudWatch alarm also auto-stops the box after ~30 min of near-idle
+    backstop, a CloudWatch alarm also auto-stops the box after ~15 min of near-idle
     CPU, so a start you forget to stop won't run up a bill (an open-but-idle tunnel
     is stopped too - just reconnect).
 

@@ -48,7 +48,7 @@ variable "bastion_desired_state" {
 variable "bastion_auto_stop_idle_minutes" {
   description = "Auto-stop the bastion after this many minutes of near-idle CPU — a safety net for a manual `bastion.ps1 up` that's left running. Only armed while bastion_desired_state = \"stopped\" (in always-on mode the box is meant to stay up). Set 0 to disable."
   type        = number
-  default     = 30
+  default     = 15
 }
 
 variable "frontend_domain_name" {
