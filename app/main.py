@@ -43,6 +43,9 @@ from app.stocks.endpoints.revenue_segments_endpoints import (
 from app.stocks.endpoints.cron_revenue_segments_endpoints import (
     router as revenue_segments_cron_router,
 )
+from app.stocks.endpoints.insider_transactions_endpoints import (
+    router as insider_transactions_router,
+)
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.endpoints.heatmap_endpoints import router as heatmap_router
 from app.stocks.router import router as stocks_router
@@ -153,6 +156,12 @@ app.include_router(news_router)
 # its latest 10-K on SEC EDGAR and served from the DB cache. See
 # app/stocks/endpoints/revenue_segments_endpoints.py.
 app.include_router(revenue_segments_router)
+# The insider-transactions read endpoint (GET /stocks/{symbol}/insider-transactions): a stock's
+# recent SEC Form 4 buys and sells — open-market purchases/sales flagged apart from the
+# grant/exercise/tax noise, with a net buy-vs-sell summary. Served from a TTL read-through DB
+# cache over SEC EDGAR (no cron — the TTL keeps it fresh on read). See
+# app/stocks/endpoints/insider_transactions_endpoints.py.
+app.include_router(insider_transactions_router)
 # The quarterly-earnings refresh cron endpoint (POST /internal/earnings/quarterly/sync);
 # it drives the SyncQuarterlyEarnings use case out of band. See
 # app/stocks/endpoints/cron_quarterly_earnings_endpoints.py.
