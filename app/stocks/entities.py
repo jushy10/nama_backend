@@ -532,6 +532,93 @@ class InvestmentAnalysis:
         return bool(self.strengths and self.risks)
 
 
+class SectionStance(str, Enum):
+    """How one scorecard section reads *for the stock* — the favorability signal the
+    card colours on.
+
+    ``POSITIVE`` is a point in the stock's favour (a cheap valuation, strong margins,
+    a bullish analyst consensus), ``NEGATIVE`` a point against, ``NEUTRAL`` mixed or
+    unremarkable. Deliberately one shared scale across every section so the client
+    colours consistently (green / amber / red), while each section's own ``label``
+    carries the human read ("Exceptional", "Expensive"). The string values double as
+    the JSON the model returns and the API serves, the same convention as
+    ``Recommendation``.
+    """
+
+    POSITIVE = "positive"
+    NEUTRAL = "neutral"
+    NEGATIVE = "negative"
+
+
+@dataclass(frozen=True)
+class SectionMetric:
+    """One supporting figure rendered as a chip under a scorecard section — a
+    ``label`` and a pre-formatted display ``value`` (e.g. ``("Net margin", "25%")``).
+
+    The values are attached from the figures the use case already gathered, **never
+    authored by the model**, so a chip can never carry a hallucinated number — the
+    same split the analysis has always drawn between the model's words and the
+    service's numbers.
+    """
+
+    label: str
+    value: str
+
+
+@dataclass(frozen=True)
+class ScorecardSection:
+    """One graded facet of a ``StockScorecard``.
+
+    ``key`` is a stable id the client renders off (``business_quality`` /
+    ``valuation`` / ``earnings`` / ``analyst_view``) and ``title`` its display name.
+    ``stance`` is the favourability signal (colours the card), ``label`` a
+    one-to-few-word human tag ("Exceptional", "Expensive"), and ``summary`` a plain,
+    everyday-language read of a sentence or two. ``metrics`` are the supporting chips,
+    attached from gathered data. The model authors only ``stance`` / ``label`` /
+    ``summary``; everything numeric comes from the service.
+    """
+
+    key: str
+    title: str
+    stance: SectionStance
+    label: str
+    summary: str
+    metrics: tuple[SectionMetric, ...] = ()
+
+
+@dataclass(frozen=True)
+class StockScorecard:
+    """An AI-generated, sectioned buy / hold / sell read on a stock.
+
+    The section-based successor to ``InvestmentAnalysis`` for the stock endpoint
+    (the ETF analysis still returns ``InvestmentAnalysis``). Rather than one flat
+    thesis with bull/bear bullet lists, it grades a handful of facets — business
+    quality, valuation, earnings, and the analyst view — each with its own
+    plain-language read and supporting figures, over one overall verdict.
+
+    ``recommendation`` is the headline call and ``confidence`` how firmly it's held;
+    ``thesis`` is a one-line headline. ``sections`` are the graded facets.
+    ``model`` records which model produced it and ``generated_at`` when, so a cached
+    read stays traceable — the same as ``InvestmentAnalysis``.
+    """
+
+    symbol: str
+    recommendation: Recommendation
+    confidence: Confidence
+    thesis: str
+    sections: tuple[ScorecardSection, ...]
+    model: str
+    generated_at: datetime
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its full substance — at least one section, every
+        one of them with a non-empty summary. The use case refuses to cache an
+        incomplete read, so a rare model miss (a section with an empty summary) is
+        never frozen for the cache TTL; the next view regenerates."""
+        return bool(self.sections) and all(s.summary for s in self.sections)
+
+
 class MarketTone(str, Enum):
     """The risk posture the day's sector rotation implies.
 

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.stocks.alpaca_provider import AlpacaStockDataProvider
-from app.stocks.adapters.bedrock.analysis_adapter import BedrockAnalysisProvider
+from app.stocks.adapters.bedrock.analysis_adapter import BedrockScorecardProvider
 from app.stocks.adapters.bedrock.screener_query_adapter import (
     BedrockScreenerQueryTranslator,
 )
@@ -41,7 +41,6 @@ from app.stocks.chart_window import ChartRange, resolve_window
 from app.stocks.entities import (
     CandleSeries,
     EarningsAnalysis,
-    InvestmentAnalysis,
     MarketIndexReturn,
     MarketPeriodHighlight,
     MarketSummary,
@@ -50,6 +49,7 @@ from app.stocks.entities import (
     SectorHighlight,
     SectorPerformance,
     StockPerformance,
+    StockScorecard,
     Timeframe,
 )
 from app.stocks.caching_company_profile_provider import CachingCompanyProfileProvider
@@ -71,7 +71,7 @@ from app.stocks.adapters.db_only_context_providers import (
     DbOnlyRecommendationsProvider,
 )
 from app.stocks.adapters.yfinance_options_adapter import YfinanceOptionChainProvider
-from app.stocks.analysis.db_repository import SqlInvestmentAnalysisCache
+from app.stocks.analysis.scorecard_db_repository import SqlStockScorecardCache
 from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
 from app.stocks.earnings.quarterly.db_repository import (
     SqlQuarterlyEarningsRepository,
@@ -81,8 +81,6 @@ from app.stocks.ports import (
     AnalystEstimatesProvider,
     CompanyProfileProvider,
     EarningsAnalysisProvider,
-    InvestmentAnalysisCache,
-    InvestmentAnalysisProvider,
     LogoProvider,
     MarketSummaryProvider,
     RatingsAnalysisProvider,
@@ -90,6 +88,8 @@ from app.stocks.ports import (
     StockDataProvider,
     StockFundamentalsProvider,
     StockPerformanceProvider,
+    StockScorecardCache,
+    StockScorecardProvider,
 )
 from app.stocks.recommendations.db_repository import (
     SqlRatingChangesRepository,
@@ -106,6 +106,8 @@ from app.stocks.schemas import (
     EmaPointResponse,
     EmaResponse,
     InvestmentAnalysisResponse,
+    ScorecardSectionResponse,
+    SectionMetricResponse,
     MarketIndexReturnResponse,
     MarketPeriodResponse,
     MarketSummaryResponse,
@@ -240,7 +242,7 @@ def get_sector_performance(
 
 
 @lru_cache(maxsize=1)
-def get_analysis_provider() -> InvestmentAnalysisProvider:
+def get_analysis_provider() -> StockScorecardProvider:
     # AI analysis is this endpoint's primary data, so it's required — but unlike
     # the API-key vendors there's no secret to gate on: Bedrock authenticates
     # through the process's AWS credentials (the ECS task role in production), so
@@ -251,8 +253,8 @@ def get_analysis_provider() -> InvestmentAnalysisProvider:
     model_id = os.environ.get("BEDROCK_ANALYSIS_MODEL_ID")
     try:
         if model_id:
-            return BedrockAnalysisProvider(model_id=model_id, region=region)
-        return BedrockAnalysisProvider(region=region)
+            return BedrockScorecardProvider(model_id=model_id, region=region)
+        return BedrockScorecardProvider(region=region)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -302,12 +304,12 @@ def get_etf_screener_translator() -> EtfScreenerQueryTranslator:
 
 def get_analysis_cache(
     db: Session = Depends(get_db),
-) -> InvestmentAnalysisCache:
-    # The read-through result cache for the stock analysis (kind="stock", so it
+) -> StockScorecardCache:
+    # The read-through result cache for the stock scorecard (kind="stock", so it
     # never collides with a fund of the same ticker). One row per symbol, refreshed
     # whenever a served read ages past the use case's TTL — best-effort, so a DB
     # problem degrades to a regeneration, never an error.
-    return SqlInvestmentAnalysisCache(db, "stock")
+    return SqlStockScorecardCache(db, "stock")
 
 
 def analysis_cache_ttl() -> timedelta:
@@ -323,8 +325,8 @@ def analysis_cache_ttl() -> timedelta:
 
 def get_stock_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
-    analyzer: InvestmentAnalysisProvider = Depends(get_analysis_provider),
-    cache: InvestmentAnalysisCache = Depends(get_analysis_cache),
+    analyzer: StockScorecardProvider = Depends(get_analysis_provider),
+    cache: StockScorecardCache = Depends(get_analysis_cache),
     # Best-effort *context* for the analysis: the quarterly and annual earnings
     # timelines and the analyst recommendation trends. Read **DB-only** here (via the
     # slices' repositories, not their read-through providers) — this path must never
@@ -527,21 +529,33 @@ _ANALYSIS_DISCLAIMER = (
 )
 
 
-def _present_analysis(analysis: InvestmentAnalysis) -> InvestmentAnalysisResponse:
-    """Presenter: investment-analysis entity -> HTTP response DTO.
+def _present_scorecard(scorecard: StockScorecard) -> InvestmentAnalysisResponse:
+    """Presenter: stock-scorecard entity -> HTTP response DTO.
 
     The disclaimer is attached here, at the edge — it's a property of the service,
     not something the model is trusted to author."""
     return InvestmentAnalysisResponse(
-        symbol=analysis.symbol,
-        recommendation=analysis.recommendation.value,
-        confidence=analysis.confidence.value,
-        thesis=analysis.thesis,
-        strengths=list(analysis.strengths),
-        risks=list(analysis.risks),
+        symbol=scorecard.symbol,
+        recommendation=scorecard.recommendation.value,
+        confidence=scorecard.confidence.value,
+        thesis=scorecard.thesis,
+        sections=[
+            ScorecardSectionResponse(
+                key=section.key,
+                title=section.title,
+                stance=section.stance.value,
+                label=section.label,
+                summary=section.summary,
+                metrics=[
+                    SectionMetricResponse(label=m.label, value=m.value)
+                    for m in section.metrics
+                ],
+            )
+            for section in scorecard.sections
+        ],
         disclaimer=_ANALYSIS_DISCLAIMER,
-        model=analysis.model,
-        generated_at=analysis.generated_at,
+        model=scorecard.model,
+        generated_at=scorecard.generated_at,
     )
 
 
@@ -681,7 +695,7 @@ def _present_sector_highlight(highlight: SectorHighlight) -> SectorHighlightResp
 def _present_sector_analysis(analysis: SectorAnalysis) -> SectorAnalysisResponse:
     """Presenter: sector-analysis entity -> HTTP response DTO.
 
-    Same shape as ``_present_analysis`` — the disclaimer is attached here, at the
+    Same shape as ``_present_scorecard`` — the disclaimer is attached here, at the
     edge, since it's a property of the service, not something the model authors."""
     return SectorAnalysisResponse(
         summary=analysis.summary,
@@ -957,7 +971,7 @@ def get_stock_analysis_endpoint(
     # underlying figures do — cache briefly so a burst of viewers collapses onto
     # one generation rather than re-billing per request.
     response.headers["Cache-Control"] = "public, max-age=300"
-    return _present_analysis(analysis)
+    return _present_scorecard(analysis)
 
 
 @router.get(

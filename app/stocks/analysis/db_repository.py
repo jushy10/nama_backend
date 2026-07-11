@@ -1,9 +1,11 @@
 """Interface Adapter: the DB-backed AI-analysis result cache.
 
 Implements ``InvestmentAnalysisCache`` over the ``investment_analysis_cache`` table
-(``models.py``), mapping rows to and from the ``InvestmentAnalysis`` entity. One
-instance is bound to a *kind* (``"stock"`` / ``"etf"``) and the request session, so
-the two analysers never collide on a shared ticker.
+(``models.py``), mapping rows to and from the ``InvestmentAnalysis`` entity. Now the
+**ETF** analysis's cache — the stock endpoint moved to the sectioned
+``SqlStockScorecardCache`` (same table, ``sections`` column). One instance is bound to
+a *kind* (``"etf"`` in practice) and the request session, so a fund never collides
+with a stock of the same ticker.
 
 Being a cache, both operations are deliberately best-effort (the port's contract):
 

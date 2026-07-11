@@ -179,7 +179,7 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
     (the model id may be a cross-region inference profile), so a deploy can swap in a larger model
     via env without a code change. ``client`` is an injection seam: pass a ready-made client (e.g. a
     test stub) to bypass the Anthropic SDK entirely; otherwise the Bedrock client is built lazily and
-    authenticates through the process's AWS credentials. Mirrors the stock ``BedrockAnalysisProvider``
+    authenticates through the process's AWS credentials. Mirrors the stock ``BedrockScorecardProvider``
     (same defaults, same env), so one deploy config drives both analysers.
     """
 

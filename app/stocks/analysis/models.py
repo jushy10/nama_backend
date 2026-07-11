@@ -6,6 +6,12 @@ expensive gather + model call. It is a **cache**, not a source of record: every
 row is regenerated once its stored ``generated_at`` ages past the use case's TTL,
 so nothing here is authoritative and a lost row just triggers one regeneration.
 
+The table backs two shapes, told apart by ``kind``: the **ETF** analysis's flat
+``InvestmentAnalysis`` (``thesis`` + the ``strengths``/``risks`` bullet lists), and
+the **stock** endpoint's sectioned ``StockScorecard`` (``thesis`` + the ``sections``
+JSON, with the bullet columns left empty). Each repository (see the two
+``db_repository`` modules) reads and writes only the columns its shape uses.
+
 Unlike the earnings time-series, this is **not** a child of the ``stocks`` anchor:
 an analysis is served for any valid ticker (including ones the universe screen has
 never touched), and forcing a ``stocks`` row per analysed symbol would leak
@@ -41,6 +47,11 @@ class AnalysisCacheRecord(Base):
     bullet points, not worth their own child table). ``model`` records which model
     produced the read and ``generated_at`` when — the latter is what the use case
     ages against its TTL to decide a hit is still fresh.
+
+    ``sections`` (nullable JSON, migration 0027) holds the **stock** endpoint's
+    sectioned scorecard — a list of ``{key, title, stance, label, summary,
+    metrics:[{label, value}]}`` — and is null for the ETF rows, which use
+    ``strengths`` / ``risks`` instead.
     """
 
     __tablename__ = "investment_analysis_cache"
@@ -56,6 +67,9 @@ class AnalysisCacheRecord(Base):
     thesis: Mapped[str] = mapped_column(Text, nullable=False)
     strengths: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     risks: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # The stock endpoint's sectioned scorecard (null for the ETF rows, which use the
+    # strengths/risks bullet columns above instead).
+    sections: Mapped[list | None] = mapped_column(JSON, nullable=True, default=None)
     model: Mapped[str] = mapped_column(String(64), nullable=False)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
