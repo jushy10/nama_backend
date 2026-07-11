@@ -156,6 +156,14 @@ reconciles it back to stopped; set `bastion_desired_state = "running"` to keep i
 up continuously, or `bastion_enabled = false` to remove it entirely (it's
 stateless — nothing is lost).
 
+As a backstop for a start you forget to stop, a CloudWatch alarm auto-stops the
+box after `bastion_auto_stop_idle_minutes` (default **30**) of near-idle CPU —
+the built-in EC2 stop action, no Lambda. Real tunnel traffic keeps CPU up so it
+won't trip mid-use; the tradeoff is that a tunnel left **open but idle** for the
+full window is also stopped (just reconnect). It's only armed in the parked
+default (`bastion_desired_state = "stopped"`); set `bastion_auto_stop_idle_minutes
+= 0` to disable it.
+
 > Provisioning RDS takes several minutes, so the `apply` step runs longer than
 > the SSM-only deploys did.
 

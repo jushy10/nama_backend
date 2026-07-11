@@ -10,7 +10,10 @@
     recreate (which would re-trigger the first-boot OOM the t4g.nano hits).
 
     A manually started box stays up until the next `terraform apply` reconciles
-    it back to "stopped". Run `down` when you're done to stop paying sooner.
+    it back to "stopped". Run `down` when you're done to stop paying sooner. As a
+    backstop, a CloudWatch alarm also auto-stops the box after ~30 min of near-idle
+    CPU, so a start you forget to stop won't run up a bill (an open-but-idle tunnel
+    is stopped too - just reconnect).
 
     Requires the AWS CLI (v2) and the Session Manager plugin:
       https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html

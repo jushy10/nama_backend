@@ -81,6 +81,12 @@ module "bastion" {
   subnet_id = local.app_subnet_ids[0]
 
   extra_security_group_ids = [module.database.app_security_group_id]
+
+  # Idle auto-stop safety net: if a manual `bastion.ps1 up` is forgotten, a
+  # CloudWatch alarm stops the box after this many minutes of near-idle CPU. Only
+  # armed while the bastion is parked-by-default (bastion_desired_state =
+  # "stopped"); the "running" always-on mode wants it up, so it's disabled there.
+  auto_stop_idle_minutes = var.bastion_desired_state == "stopped" ? var.bastion_auto_stop_idle_minutes : 0
 }
 
 # Hold the bastion's power state. Defaults to "stopped" (bastion_desired_state) so
