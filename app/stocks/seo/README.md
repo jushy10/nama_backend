@@ -31,6 +31,7 @@ literals like `/stocks/etfs` and `/stocks/classifications`.
 | ETF | `/etf/{TICKER}` | **live** |
 | Sector | `/sector/{slug}` (hyphenated, e.g. `/sector/consumer-electronics`) | **live** |
 | Screen landing | `/screen/{slug}` (e.g. `/screen/high-fcf-yield`) | **live** |
+| AI screener landing | `/ai-stock-screener` (static keyword/marketing page, FAQPage + WebApplication JSON-LD) | **live** |
 | Crawler files | `/robots.txt`, `/sitemap.xml`, `/llms.txt` | **live** |
 | Comparison | `/compare/{a}-vs-{b}` | planned |
 | Glossary | `/learn/{term}` | planned |

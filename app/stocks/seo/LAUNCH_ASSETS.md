@@ -28,17 +28,22 @@ AI-generated analysis (Claude on Amazon Bedrock).
 
 ## 1. Product Hunt launch kit
 
+**Primary positioning: a free, *easy* AI stock screener.** Lead with the AI screener — it's
+the clearest hook (describe stocks in plain English vs. learning 50 filters) — then let the
+cash-flow depth be the "and it's actually good research too" follow-through.
+
 **Tagline (≤60 chars):**
-> Free stock research with a cash-flow focus + AI (50 chars)
+> Free AI stock screener — screen stocks in plain English (54)
 
 Alternates:
-> Free stock & ETF research, FCF-first, AI-analyzed (49)
-> See any stock's free cash flow — free, no login (47)
+> Describe the stocks you want. AI builds the screen. Free (56)
+> Free AI stock screener + cash-flow-first research (49)
+> Stock screening in plain English — free, no login (49)
 
 **Short description (the one-liner under the name):**
-> Nama Insights is a free stock & ETF research tool for US-listed companies — live quotes,
-> fundamentals, earnings history, analyst coverage, and free-cash-flow metrics most free tools
-> bury, plus plain-English AI analysis. No login, no paywall.
+> Nama Insights is a free AI stock screener: describe the US stocks you want in plain English
+> ("mega-cap tech with high free cash flow yield") and it builds the screen — no filters to
+> learn. Plus deep cash-flow metrics, earnings, analyst coverage and AI analysis. No login.
 
 **Longer description:**
 > I kept opening five tabs to research a stock's cash flow — free cash flow yield, price/FCF,
