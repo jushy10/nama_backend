@@ -447,7 +447,7 @@ class _FakeSearchRepo(StockSearchRepository):
         self.ticker_asked = ticker
         return self._industry
 
-    def fcf_per_share_for_ticker(self, ticker):  # pragma: no cover - not the search path
+    def anchor_metrics_for_ticker(self, ticker):  # pragma: no cover - not the search path
         raise NotImplementedError
 
     def tier_for_ticker(self, ticker):  # pragma: no cover - the endpoint path is industry-wide

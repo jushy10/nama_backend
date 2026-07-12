@@ -155,7 +155,7 @@ class _FakeSearchRepo(StockSearchRepository):
             raise self._raises
         return self._industry
 
-    def fcf_per_share_for_ticker(self, ticker):  # pragma: no cover - not this analysis
+    def anchor_metrics_for_ticker(self, ticker):  # pragma: no cover - not this analysis
         raise NotImplementedError
 
     def tier_for_ticker(self, ticker):

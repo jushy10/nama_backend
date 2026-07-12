@@ -91,7 +91,11 @@ from app.stocks.recommendations.entities import (
     RecommendationTrend,
 )
 from app.stocks.recommendations.ports import RecommendationProvider
-from app.stocks.universe.entities import IndustryValuation, MarketCapTier
+from app.stocks.universe.entities import (
+    AnchorMetrics,
+    IndustryValuation,
+    MarketCapTier,
+)
 from app.stocks.universe.repository import StockSearchRepository
 from app.stocks.router import (
     analysis_cache_ttl,
@@ -342,6 +346,8 @@ class FakeSearchRepo(StockSearchRepository):
         peers: tuple[tuple[float, MarketCapTier], ...] | None = None,
         anchor_tier: MarketCapTier | None = MarketCapTier.MID,
         fcf_per_share: float | None = None,
+        revenue_growth_yoy: float | None = None,
+        eps_growth_yoy: float | None = None,
         raises: Exception | None = None,
     ):
         self._industry = industry
@@ -351,7 +357,11 @@ class FakeSearchRepo(StockSearchRepository):
             else tuple((pe, MarketCapTier.MID) for pe in pe_ratios)
         )
         self._anchor_tier = anchor_tier
-        self._fcf_per_share = fcf_per_share
+        self._anchor_metrics = AnchorMetrics(
+            fcf_per_share=fcf_per_share,
+            revenue_growth_yoy=revenue_growth_yoy,
+            eps_growth_yoy=eps_growth_yoy,
+        )
         self._raises = raises
 
     def industry_for_ticker(self, ticker: str) -> str | None:
@@ -359,10 +369,10 @@ class FakeSearchRepo(StockSearchRepository):
             raise self._raises
         return self._industry
 
-    def fcf_per_share_for_ticker(self, ticker: str) -> float | None:
+    def anchor_metrics_for_ticker(self, ticker: str) -> AnchorMetrics:
         if self._raises is not None:
             raise self._raises
-        return self._fcf_per_share
+        return self._anchor_metrics
 
     def tier_for_ticker(self, ticker: str) -> MarketCapTier | None:
         if self._raises is not None:
@@ -2048,6 +2058,99 @@ def test_analysis_use_case_fcf_is_none_when_anchor_unsynced():
     )
     use_case.execute("AAPL")
     assert analyzer.last_stock.metrics.fcf_per_share is None  # not the vendor's 6.43
+
+
+def test_analysis_use_case_sources_growth_from_the_anchor():
+    # Trailing revenue/EPS growth, like FCF, comes from the DB the annual slice
+    # materializes on the anchor (consensus basis) — not the live vendor — so the
+    # scorecard's Growth section matches the rest of the app rather than Finnhub's
+    # differently-based figures.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock()),
+        fundamentals_provider=FakeFundamentalsProvider(
+            a_fundamentals(
+                metrics=a_key_metrics(revenue_growth_yoy=8.0, eps_growth_yoy=12.0)
+            )
+        ),
+    )
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        industry_repository=FakeSearchRepo(
+            revenue_growth_yoy=15.5, eps_growth_yoy=22.0
+        ),
+    )
+    use_case.execute("AAPL")
+    metrics = analyzer.last_stock.metrics
+    assert metrics.revenue_growth_yoy == 15.5  # anchor's, not the vendor's 8.0
+    assert metrics.eps_growth_yoy == 22.0  # anchor's, not the vendor's 12.0
+
+
+def test_analysis_use_case_growth_is_none_when_anchor_unsynced():
+    # DB-only, same as FCF: an unsynced anchor leaves the growth reads empty rather than
+    # falling back to the vendor's differently-based figures.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock()),
+        fundamentals_provider=FakeFundamentalsProvider(
+            a_fundamentals(
+                metrics=a_key_metrics(revenue_growth_yoy=8.0, eps_growth_yoy=12.0)
+            )
+        ),
+    )
+    use_case = GetStockAnalysis(info, analyzer, industry_repository=FakeSearchRepo())
+    use_case.execute("AAPL")
+    metrics = analyzer.last_stock.metrics
+    assert metrics.revenue_growth_yoy is None  # not the vendor's 8.0
+    assert metrics.eps_growth_yoy is None  # not the vendor's 12.0
+
+
+def test_analysis_use_case_prices_pe_on_the_consensus_basis():
+    # The trailing P/E handed to the analyzer is recomputed on the consensus basis — the
+    # live price over the quarterly slice's TTM EPS (the ticker card's figure) — so it sits
+    # on the same basis as the industry-median P/E it's compared against, not Finnhub's GAAP
+    # peTTM. Four reported quarters of 2.0 -> TTM 8.0; price 200 -> P/E 25.0.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock(price=200.0)),
+        fundamentals_provider=FakeFundamentalsProvider(
+            a_fundamentals(metrics=a_key_metrics(pe=28.5))
+        ),
+    )
+    quarters = tuple(
+        a_quarter(fiscal_year=2025, fiscal_quarter=q, eps_actual=2.0) for q in (1, 2, 3, 4)
+    )
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        quarterly_provider=FakeQuarterlyEarningsProvider(a_quarterly_timeline(quarters)),
+        industry_repository=FakeSearchRepo(),
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_stock.metrics.pe == 25.0  # 200 / 8.0, not the vendor's 28.5
+
+
+def test_analysis_use_case_pe_is_none_without_four_cached_quarters():
+    # No consensus P/E is derivable without a full trailing year, so the vendor's GAAP peTTM
+    # is dropped rather than shown — the same DB-only stance as FCF/growth.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock(price=200.0)),
+        fundamentals_provider=FakeFundamentalsProvider(
+            a_fundamentals(metrics=a_key_metrics(pe=28.5))
+        ),
+    )
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        quarterly_provider=FakeQuarterlyEarningsProvider(
+            a_quarterly_timeline((a_quarter(eps_actual=2.0),))  # one quarter -> no TTM
+        ),
+        industry_repository=FakeSearchRepo(),
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_stock.metrics.pe is None  # not the vendor's 28.5
 
 
 def test_analysis_use_case_propagates_stock_not_found():

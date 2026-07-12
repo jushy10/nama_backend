@@ -92,6 +92,21 @@ def _analysis_is_fresh(generated_at: datetime | None, ttl: timedelta) -> bool:
     return datetime.now(timezone.utc) - generated_at <= ttl
 
 
+def _consensus_pe(price: float | None, ttm_eps: float | None) -> float | None:
+    """Trailing P/E on the analyst-consensus (adjusted) basis — the live price over the
+    quarterly slice's TTM consensus EPS, the exact figure ``TickerValuation.trailing_pe``
+    and the universe sync's valuation pass serve.
+
+    ``None`` on a non-positive/absent price or EPS (a trailing loss, or fewer than four
+    cached quarters), the same guard those use — so the scorecard's P/E is the canonical
+    consensus one or absent, never Finnhub's GAAP ``peTTM``, keeping it on the same basis
+    as the industry-median P/E it's weighed against.
+    """
+    if price is None or ttm_eps is None or price <= 0 or ttm_eps <= 0:
+        return None
+    return round(price / ttm_eps, 2)
+
+
 def _normalize_symbol(symbol: str) -> str:
     normalized = (symbol or "").strip().upper()
     if not normalized:
@@ -424,10 +439,15 @@ class GetStockAnalysis:
         # one (StockNotFound), or an upstream failure (StockDataUnavailable) all
         # propagate rather than yielding a scorecard of nothing. Everything else is
         # best-effort context assembled below.
-        stock = self._with_stored_fcf(self._stock_info.execute(normalized), normalized)
+        stock = self._stock_info.execute(normalized)
+        # Gathered before the overlay so its TTM EPS can price the snapshot's trailing
+        # P/E on the consensus basis (the analyzer needs it either way as the beat-history
+        # context).
+        quarterly = self._quarterly(normalized)
+        stock = self._with_stored_metrics(stock, normalized, quarterly)
         scorecard = self._analyzer.analyze(
             stock,
-            self._quarterly(normalized),
+            quarterly,
             self._annual(normalized),
             self._recommendations(normalized),
             self._industry_valuation(normalized),
@@ -456,26 +476,44 @@ class GetStockAnalysis:
     def _is_fresh(self, scorecard: StockScorecard) -> bool:
         return _analysis_is_fresh(scorecard.generated_at, self._cache_ttl)
 
-    def _with_stored_fcf(self, stock: Stock, symbol: str) -> Stock:
-        # The scorecard's Cash Generation reads FCF per share; source it from the DB the
-        # annual-earnings slice materializes on the anchor (Yahoo cash-flow statement,
-        # currency-normalized) — the same figure the ticker card's cash reads use — rather
-        # than the live fundamentals vendor's number, so the two never diverge. Overwrites
-        # the snapshot's fcf_per_share (including to None): DB-only, no vendor fallback, so
-        # an unsynced stock just leaves the cash section empty. Best-effort — an unconfigured
-        # repository or a failed read leaves the snapshot untouched.
+    def _with_stored_metrics(
+        self, stock: Stock, symbol: str, quarterly: QuarterlyEarningsTimeline | None
+    ) -> Stock:
+        # Overlay the figures the app materializes/derives itself onto the live snapshot, so
+        # the scorecard's cash, growth, and valuation reads are the DB-canonical ones the
+        # ticker card and universe search show — never a divergent live-vendor figure.
+        #
+        # Three come straight off the `stocks` anchor (the annual-earnings slice's trailing
+        # FCF per share and its consensus-basis revenue/EPS growth); the trailing P/E is
+        # recomputed on the *consensus* basis — the live price over the quarterly slice's TTM
+        # EPS, exactly as `TickerValuation.trailing_pe` does — so it sits on the same basis as
+        # the industry-median P/E it's weighed against (rather than Finnhub's GAAP peTTM), and
+        # `KeyMetrics.peg` (P/E over EPS growth) inherits that consistent basis.
+        #
+        # All DB-sourced and DB-only: each overwrites the vendor's value (including to None),
+        # so a figure is always the canonical one or absent — an unsynced stock simply omits
+        # it (and the thinner coverage reads as lower confidence). Best-effort — an
+        # unconfigured repository or a failed read leaves the snapshot untouched.
         if self._industry_repository is None:
             return stock
         try:
-            fcf = self._industry_repository.fcf_per_share_for_ticker(symbol)
+            anchor = self._industry_repository.anchor_metrics_for_ticker(symbol)
         except (StockNotFound, StockDataUnavailable):
             return stock
+        ttm_eps = quarterly.ttm_eps if quarterly is not None else None
+        overlay = {
+            "fcf_per_share": anchor.fcf_per_share,
+            "revenue_growth_yoy": anchor.revenue_growth_yoy,
+            "eps_growth_yoy": anchor.eps_growth_yoy,
+            "pe": _consensus_pe(stock.price, ttm_eps),
+        }
         if stock.metrics is not None:
-            return replace(stock, metrics=replace(stock.metrics, fcf_per_share=fcf))
-        # No live fundamentals came back, but the anchor has the figure — carry it on a
-        # minimal metrics block so the cash read (and the prompt) still show it.
-        if fcf is not None:
-            return replace(stock, metrics=KeyMetrics(fcf_per_share=fcf))
+            return replace(stock, metrics=replace(stock.metrics, **overlay))
+        # No live fundamentals came back, but the DB has some of these — carry them on a
+        # minimal metrics block so the cash/growth/valuation reads (and the prompt) still show
+        # them.
+        if any(value is not None for value in overlay.values()):
+            return replace(stock, metrics=KeyMetrics(**overlay))
         return stock
 
     def _quarterly(self, symbol: str) -> QuarterlyEarningsTimeline | None:
