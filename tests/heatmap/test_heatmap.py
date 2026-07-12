@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.stocks.entities import Quote
+from app.stocks.entities import Quote, StockPerformance
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.heatmap.entities import HeatMap, HeatMapRow, HeatMapScope
 from app.stocks.heatmap.use_cases import GetStockHeatMap
@@ -62,6 +62,18 @@ def _quote(symbol, price, previous_close):
     )
 
 
+def _perf(one_year=None, **windows):
+    """A StockPerformance with the named windows set (the rest None)."""
+    return StockPerformance(
+        one_week=windows.get("one_week"),
+        one_month=windows.get("one_month"),
+        three_month=windows.get("three_month"),
+        six_month=windows.get("six_month"),
+        ytd=windows.get("ytd"),
+        one_year=one_year,
+    )
+
+
 class FakeSearchRepo(StockSearchRepository):
     """Serves a fixed page and records the criteria it was called with."""
 
@@ -102,6 +114,19 @@ class FakeBulkQuotes:
         if self._error is not None:
             raise self._error
         return dict(self._quotes)
+
+
+class FakeBulkPerformance:
+    def __init__(self, performance=None, error=None):
+        self._performance = performance or {}
+        self._error = error
+        self.requested: tuple[str, ...] | None = None
+
+    def get_bulk_performance(self, symbols):
+        self.requested = tuple(symbols)
+        if self._error is not None:
+            raise self._error
+        return dict(self._performance)
 
 
 # --- entity: HeatMap.build -----------------------------------------------------------------
@@ -159,6 +184,26 @@ def test_build_missing_quote_leaves_cell_uncoloured():
     assert heatmap.sectors[0].industries[0].cells[0].change_percent is None
 
 
+def test_build_attaches_trailing_performance_by_ticker():
+    rows = (
+        _row("NVDA", "technology", "semiconductors", 3e12),
+        _row("AVGO", "technology", "semiconductors", 8e11),
+    )
+    perf = {"NVDA": _perf(one_year=120.0, ytd=40.0)}
+    heatmap = HeatMap.build(HeatMapScope.SP500, rows, {}, perf)
+    cells = {c.ticker: c for c in heatmap.sectors[0].industries[0].cells}
+    assert cells["NVDA"].performance.one_year == 120.0
+    assert cells["NVDA"].performance.ytd == 40.0
+    # A ticker absent from the performance map keeps a blank (None) trailing block.
+    assert cells["AVGO"].performance is None
+
+
+def test_build_without_a_performance_map_leaves_every_block_blank():
+    rows = (_row("NVDA", "technology", "semiconductors", 3e12),)
+    heatmap = HeatMap.build(HeatMapScope.SP500, rows, {})  # day-move-only board
+    assert heatmap.sectors[0].industries[0].cells[0].performance is None
+
+
 # --- use case: GetStockHeatMap -------------------------------------------------------------
 
 
@@ -172,7 +217,8 @@ def test_execute_filters_sp500_and_builds_coloured_map():
     quotes = FakeBulkQuotes(
         {"NVDA": _quote("NVDA", 99.0, 100.0), "JPM": _quote("JPM", 102.0, 100.0)}
     )
-    heatmap = GetStockHeatMap(repo, quotes).execute(HeatMapScope.SP500)
+    perf = FakeBulkPerformance({"NVDA": _perf(one_year=120.0)})
+    heatmap = GetStockHeatMap(repo, quotes, perf).execute(HeatMapScope.SP500)
 
     assert repo.criteria.in_sp500 is True
     assert repo.criteria.in_nasdaq100 is None
@@ -184,9 +230,29 @@ def test_execute_filters_sp500_and_builds_coloured_map():
     assert nvda_cell.change_percent == -1.0  # (99-100)/100*100
 
 
+def test_execute_attaches_bulk_trailing_performance():
+    repo = FakeSearchRepo(
+        [
+            _result("NVDA", "technology", "semiconductors", 3e12),
+            _result("JPM", "financials", "banks", 6e11),
+        ]
+    )
+    perf = FakeBulkPerformance({"NVDA": _perf(one_year=120.0, ytd=40.0)})
+    heatmap = GetStockHeatMap(repo, FakeBulkQuotes(), perf).execute(HeatMapScope.SP500)
+
+    assert perf.requested == ("NVDA", "JPM")
+    nvda_cell = heatmap.sectors[0].industries[0].cells[0]
+    assert nvda_cell.performance.one_year == 120.0
+    assert nvda_cell.performance.ytd == 40.0
+    # JPM had no performance row -> its trailing block stays blank.
+    assert heatmap.sectors[1].industries[0].cells[0].performance is None
+
+
 def test_execute_nasdaq100_scope_flips_the_flag():
     repo = FakeSearchRepo([_result("AAPL", "technology", "consumer-electronics", 3e12)])
-    GetStockHeatMap(repo, FakeBulkQuotes()).execute(HeatMapScope.NASDAQ100)
+    GetStockHeatMap(repo, FakeBulkQuotes(), FakeBulkPerformance()).execute(
+        HeatMapScope.NASDAQ100
+    )
     assert repo.criteria.in_nasdaq100 is True
     assert repo.criteria.in_sp500 is None
 
@@ -194,14 +260,29 @@ def test_execute_nasdaq100_scope_flips_the_flag():
 def test_execute_quote_failure_yields_uncoloured_map_not_an_error():
     repo = FakeSearchRepo([_result("NVDA", "technology", "semiconductors", 3e12)])
     quotes = FakeBulkQuotes(error=StockDataUnavailable("quotes", "boom"))
-    heatmap = GetStockHeatMap(repo, quotes).execute(HeatMapScope.SP500)
+    heatmap = GetStockHeatMap(repo, quotes, FakeBulkPerformance()).execute(
+        HeatMapScope.SP500
+    )
     assert heatmap.cell_count == 1
     assert heatmap.sectors[0].industries[0].cells[0].change_percent is None
+
+
+def test_execute_performance_failure_leaves_windows_blank_not_an_error():
+    repo = FakeSearchRepo([_result("NVDA", "technology", "semiconductors", 3e12)])
+    quotes = FakeBulkQuotes({"NVDA": _quote("NVDA", 99.0, 100.0)})
+    perf = FakeBulkPerformance(error=StockDataUnavailable("performance", "boom"))
+    heatmap = GetStockHeatMap(repo, quotes, perf).execute(HeatMapScope.SP500)
+    cell = heatmap.sectors[0].industries[0].cells[0]
+    # A performance-feed failure is swallowed: the day tile still colours, windows stay blank.
+    assert cell.change_percent == -1.0
+    assert cell.performance is None
 
 
 def test_execute_empty_universe_is_an_empty_map_no_quote_call():
     repo = FakeSearchRepo([])
     quotes = FakeBulkQuotes({"X": _quote("X", 1.0, 1.0)})
-    heatmap = GetStockHeatMap(repo, quotes).execute(HeatMapScope.SP500)
+    perf = FakeBulkPerformance({"X": _perf(one_year=1.0)})
+    heatmap = GetStockHeatMap(repo, quotes, perf).execute(HeatMapScope.SP500)
     assert heatmap.sectors == ()
     assert quotes.requested is None  # no symbols -> provider never called
+    assert perf.requested is None  # ...and neither is the performance feed

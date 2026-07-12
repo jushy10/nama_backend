@@ -33,6 +33,7 @@ from app.stocks.entities import (
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
     AllTimeHighProvider,
+    BulkPerformanceProvider,
     BulkQuoteProvider,
     CandleProvider,
     MarketOverviewProvider,
@@ -96,6 +97,7 @@ class AlpacaStockDataProvider(
     StockQuoteProvider,
     BulkQuoteProvider,
     StockPerformanceProvider,
+    BulkPerformanceProvider,
     AllTimeHighProvider,
     CandleProvider,
     SectorPerformanceProvider,
@@ -117,6 +119,13 @@ class AlpacaStockDataProvider(
     # Lookback long enough to cover the 1-year window with margin for
     # weekends/holidays, so a bar exists at or before each target date.
     _PERFORMANCE_LOOKBACK_DAYS = 400
+
+    # Symbols per batched daily-bars request (get_bulk_performance). A year of daily
+    # bars is far heavier per symbol than a snapshot, so this chunks the ~500-name S&P
+    # 500 board into a handful of requests: it bounds each request's size, and — like
+    # the snapshot chunking — keeps one rejected symbol's failure from taking the whole
+    # board's trailing windows down with it (per-chunk best-effort below).
+    _BARS_CHUNK = 100
 
     # Floor for the all-time-high history scan. Alpaca's market data begins
     # ~2016; this sits well before that so the scan covers everything the feed
@@ -232,6 +241,53 @@ class AlpacaStockDataProvider(
 
     def get_performance(self, symbol: str) -> StockPerformance:
         return self._compute_performance(self._fetch_daily_bars(symbol))
+
+    def get_bulk_performance(self, symbols) -> dict[str, StockPerformance]:
+        # The board's trailing windows as a handful of chunked daily-bars calls — the
+        # bulk cousin of get_quotes, over the same historical SIP feed the single-symbol
+        # performance path uses. Best-effort at two levels, mirroring get_quotes: per
+        # symbol — a name the feed carries no history for is simply absent from the map,
+        # so its tile keeps the day-move colour but blank trailing windows; and per chunk
+        # — a chunk Alpaca rejects (a bad symbol, or the batch) is logged and skipped so
+        # it can't discard the other chunks' performance. Only when *every* chunk fails
+        # (and nothing was collected) is it a hard feed failure worth surfacing. Dedupe +
+        # uppercase once so a repeated/lowercase symbol maps cleanly.
+        unique = list(dict.fromkeys(s.upper() for s in symbols if s))
+        if not unique:
+            return {}
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=self._PERFORMANCE_LOOKBACK_DAYS)
+        end = now - self._SIP_FREE_DELAY
+        performance: dict[str, StockPerformance] = {}
+        failures = 0
+        for chunk_start in range(0, len(unique), self._BARS_CHUNK):
+            chunk = unique[chunk_start : chunk_start + self._BARS_CHUNK]
+            # Ask Alpaca in its own symbology (BRK-B -> BRK.B); keep the map back so the
+            # computed performance is keyed by the caller's original symbol.
+            alpaca_of = {s: self._to_alpaca_symbol(s) for s in chunk}
+            try:
+                request = StockBarsRequest(
+                    symbol_or_symbols=list(alpaca_of.values()),
+                    timeframe=TimeFrame.Day,
+                    start=start,
+                    end=end,
+                    adjustment=Adjustment.SPLIT,  # price-return, matching the single path
+                    feed=self._HISTORICAL_FEED,
+                )
+                barset = self._data.get_stock_bars(request)
+            except APIError as exc:
+                # One chunk's failure must not blank the board's windows — skip it.
+                failures += 1
+                logger.warning("bars chunk of %d symbols failed: %s", len(chunk), exc)
+                continue
+            for symbol in chunk:
+                bars = barset.data.get(alpaca_of[symbol], [])
+                if bars:  # a symbol with no history is left out (blank windows)
+                    performance[symbol] = self._compute_performance(bars)
+        # Every chunk failed and we got nothing back: a real feed outage, not sparse history.
+        if failures and not performance:
+            raise StockDataUnavailable("performance", "every bars chunk failed")
+        return performance
 
     def get_all_time_high(self, symbol: str) -> AllTimeHigh:
         bars = self._fetch_all_daily_bars(symbol)
