@@ -175,8 +175,9 @@ def get_etf_analysis_use_case(
     # exactly what the detail card shows — same quote, same stored facts, same profile) and pairs it
     # with the Bedrock analyser + the read-through result cache (a fresh stored read skips the
     # snapshot build and the model call). The detail's missing-keys 503 (Alpaca quote) and the
-    # analyser's 503 (missing extra) both ride through. TTL shares the stock analysis's config.
-    return GetEtfAnalysis(detail, analyzer, cache=cache, cache_ttl=analysis_cache_ttl())
+    # analyser's 503 (missing extra) both ride through. TTL is the "etf" kind's (profile is slow,
+    # only the quote is live), overridable via ANALYSIS_CACHE_TTL_MINUTES_ETF.
+    return GetEtfAnalysis(detail, analyzer, cache=cache, cache_ttl=analysis_cache_ttl("etf"))
 
 
 def _present_search(page: EtfSearchPage) -> EtfSearchResponse:

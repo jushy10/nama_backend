@@ -91,6 +91,7 @@ from app.stocks.recommendations.ports import RecommendationProvider
 from app.stocks.universe.entities import IndustryValuation, MarketCapTier
 from app.stocks.universe.repository import StockSearchRepository
 from app.stocks.router import (
+    analysis_cache_ttl,
     get_market_summary,
     get_sector_analysis,
     get_sector_performance,
@@ -1733,6 +1734,46 @@ def test_market_summary_cache_miss_generates_and_stores():
     ).execute()
     assert result is generated
     assert cache.puts == [(_MARKET_KEY, generated)]
+
+
+def test_analysis_ttl_defaults_reflect_how_often_each_input_changes(monkeypatch):
+    # Each kind's default is tuned to its input's change cadence — slow per-symbol
+    # fundamentals data caches for hours; the intraday market board stays short.
+    for var in (
+        "ANALYSIS_CACHE_TTL_MINUTES", "ANALYSIS_CACHE_TTL_MINUTES_EARNINGS",
+        "ANALYSIS_CACHE_TTL_MINUTES_SECTOR",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    assert analysis_cache_ttl("earnings") == timedelta(minutes=720)   # ~quarterly data
+    assert analysis_cache_ttl("ratings") == timedelta(minutes=360)
+    assert analysis_cache_ttl("etf") == timedelta(minutes=360)
+    assert analysis_cache_ttl("stock") == timedelta(minutes=240)
+    assert analysis_cache_ttl("fundamentals") == timedelta(minutes=240)
+    assert analysis_cache_ttl("sector") == timedelta(minutes=30)      # intraday board
+    assert analysis_cache_ttl("market") == timedelta(minutes=60)
+    assert analysis_cache_ttl("nonesuch") == timedelta(minutes=30)    # unknown -> fallback
+
+
+def test_analysis_ttl_per_kind_env_override_wins(monkeypatch):
+    monkeypatch.delenv("ANALYSIS_CACHE_TTL_MINUTES", raising=False)
+    monkeypatch.setenv("ANALYSIS_CACHE_TTL_MINUTES_EARNINGS", "90")
+    assert analysis_cache_ttl("earnings") == timedelta(minutes=90)
+    assert analysis_cache_ttl("ratings") == timedelta(minutes=360)  # others unaffected
+    # A garbage per-kind value is skipped, falling through to the kind's default.
+    monkeypatch.setenv("ANALYSIS_CACHE_TTL_MINUTES_EARNINGS", "later")
+    assert analysis_cache_ttl("earnings") == timedelta(minutes=720)
+
+
+def test_analysis_ttl_global_override_pins_every_kind(monkeypatch):
+    # The global var (no per-kind override set) pins all kinds to one value.
+    monkeypatch.delenv("ANALYSIS_CACHE_TTL_MINUTES_EARNINGS", raising=False)
+    monkeypatch.setenv("ANALYSIS_CACHE_TTL_MINUTES", "45")
+    assert analysis_cache_ttl("earnings") == timedelta(minutes=45)
+    assert analysis_cache_ttl("sector") == timedelta(minutes=45)
+    # ...but a per-kind override still beats the global.
+    monkeypatch.setenv("ANALYSIS_CACHE_TTL_MINUTES_SECTOR", "10")
+    assert analysis_cache_ttl("sector") == timedelta(minutes=10)
+    assert analysis_cache_ttl("earnings") == timedelta(minutes=45)
 
 
 def test_stock_info_gathers_the_enrichment_calls_concurrently():
