@@ -45,6 +45,7 @@ from app.stocks.adapters.db_only_context_providers import (
     DbOnlyRatingChangesProvider,
     DbOnlyRecommendationsProvider,
 )
+from app.stocks.adapters.yfinance_eps_history_adapter import YfinanceEpsHistoryProvider
 from app.stocks.analysis.ai_analysis_cache_repository import (
     earnings_analysis_cache,
     fundamentals_analysis_cache,
@@ -95,6 +96,7 @@ from app.stocks.analysis.use_cases import (
     GetStockAnalysis,
     GetStockInfo,
 )
+from app.stocks.ticker.use_cases import GetStockPeHistory
 from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
 from app.stocks.earnings.quarterly.db_repository import (
     SqlQuarterlyEarningsRepository,
@@ -369,9 +371,21 @@ def get_fundamentals_analysis_provider() -> FundamentalsAnalysisProvider:
         ) from exc
 
 
+@lru_cache(maxsize=1)
+def _eps_history_provider() -> YfinanceEpsHistoryProvider:
+    # Keyless yfinance singleton (like the options provider): shares the module-level pacing
+    # state and is best-effort at read, so it's always constructable — no key to gate on. Backs
+    # the fundamentals analysis's P/E-history context (the same adapter the pe-history endpoint
+    # uses).
+    return YfinanceEpsHistoryProvider()
+
+
 def get_fundamentals_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
     analyzer: FundamentalsAnalysisProvider = Depends(get_fundamentals_analysis_provider),
+    # The Alpaca singleton supplies the daily closes for the P/E-history context (it implements
+    # CandleProvider — the same instance the candle chart and pe-history endpoint use).
+    candles: StockDataProvider = Depends(get_provider),
     # The industry-P/E benchmark is a pure DB read off the shared anchor (the same screened
     # universe the /stocks/industries/{industry}/pe endpoint groups on) — best-effort context
     # for the fundamentals read, so a miss just omits it.
@@ -380,14 +394,18 @@ def get_fundamentals_analysis(
     # Reuses the stock snapshot wiring wholesale (price + forward estimates), then overlays the
     # trailing fundamentals (margins, valuation, dividend, market cap) from the shared anchor —
     # the DB-canonical figures the syncs materialize, replacing the retired live Finnhub call —
-    # before layering the analyzer, the industry benchmark, and the read-through result cache (a
-    # fresh stored read within the TTL skips the whole gather + model call). The quarterly
-    # provider is the same DB-only cache the per-stock scorecard uses, backing the consensus P/E.
+    # before layering the analyzer, the industry benchmark, the P/E-history read, and the
+    # read-through result cache (a fresh stored read within the TTL skips the whole gather +
+    # model call). The quarterly provider is the same DB-only cache the per-stock scorecard
+    # uses, backing the consensus P/E. The P/E-history read (candles + the keyless EPS adapter)
+    # is the one non-DB-only context leg — best-effort, so a Yahoo block just omits the "cheap
+    # for this stock?" signal; the result cache amortizes its live legs to once per TTL.
     return GetFundamentalsAnalysis(
         stock_info,
         analyzer,
         SqlStockSearchRepository(db),
         DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
+        pe_history=GetStockPeHistory(candles, _eps_history_provider()),
         cache=fundamentals_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("fundamentals"),
     )

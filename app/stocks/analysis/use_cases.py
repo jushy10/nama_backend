@@ -59,6 +59,8 @@ from app.stocks.recommendations.ports import (
     RatingChangeProvider,
     RecommendationProvider,
 )
+from app.stocks.ticker.entities import PeHistoryStats
+from app.stocks.ticker.use_cases import GetStockPeHistory
 from app.stocks.universe.entities import AnchorMetrics, IndustryValuation
 from app.stocks.universe.repository import StockSearchRepository
 
@@ -143,8 +145,10 @@ def _with_stored_fundamentals(
         "debt_to_equity": anchor.debt_to_equity,
         "beta": anchor.beta,
         "fcf_per_share": anchor.fcf_per_share,
+        "ocf_per_share": anchor.ocf_per_share,
         "revenue_growth_yoy": anchor.revenue_growth_yoy,
         "eps_growth_yoy": anchor.eps_growth_yoy,
+        "fcf_growth_yoy": anchor.fcf_growth_yoy,
         "eps": ttm_eps,
         "pe": _consensus_pe(price, ttm_eps),
         "pb": _price_multiple(price, anchor.book_value_per_share),
@@ -630,6 +634,7 @@ class GetFundamentalsAnalysis:
         analyzer: FundamentalsAnalysisProvider,
         industry_repository: StockSearchRepository | None = None,
         quarterly_provider: QuarterlyEarningsProvider | None = None,
+        pe_history: GetStockPeHistory | None = None,
         cache: AiAnalysisCache[FundamentalsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
@@ -637,6 +642,7 @@ class GetFundamentalsAnalysis:
         self._analyzer = analyzer
         self._industry_repository = industry_repository
         self._quarterly_provider = quarterly_provider
+        self._pe_history = pe_history
         self._cache = cache
         self._cache_ttl = cache_ttl
 
@@ -658,7 +664,11 @@ class GetFundamentalsAnalysis:
             # dividend or market cap. Nothing fundamental to read, so fail rather than ask the
             # model to reason over a bare quote (mirrors the earnings/ratings no-data guards).
             raise StockDataUnavailable(normalized, "no fundamentals data to analyse")
-        analysis = self._analyzer.analyze(stock, self._industry_valuation(normalized))
+        analysis = self._analyzer.analyze(
+            stock,
+            self._industry_valuation(normalized),
+            self._pe_history_stats(normalized),
+        )
         # Store for the next viewer — complete reads only, best-effort (see GetEarningsAnalysis).
         if self._cache is not None and analysis.is_complete:
             self._cache.put(normalized, analysis)
@@ -690,6 +700,21 @@ class GetFundamentalsAnalysis:
             return None
         valuation = IndustryValuation.for_stock_peers(industry, anchor_tier, peers)
         return valuation if valuation.is_representative else None
+
+    def _pe_history_stats(self, symbol: str) -> PeHistoryStats | None:
+        # Best-effort context: where the current trailing P/E sits in the stock's own history
+        # (percentile + cheap/fair/expensive signal), the "cheap for this stock?" anchor that
+        # complements the peer benchmark. Unlike the rest of the analysis context this is not
+        # DB-only — the P/E walk needs the deep reported-EPS run (Yahoo) and the daily closes
+        # (Alpaca) — so it's wrapped best-effort: a blocked/failed read (or a series too short
+        # to rank) just omits the signal. The result cache amortizes the live legs to once per
+        # TTL, and a `None` here simply shortens the prompt (mirrors the industry benchmark).
+        if self._pe_history is None:
+            return None
+        try:
+            return self._pe_history.execute(symbol).stats
+        except (StockNotFound, StockDataUnavailable):
+            return None
 
     def _with_stored_metrics(self, stock: Stock, symbol: str) -> Stock:
         # Same anchor overlay the per-stock scorecard uses (``GetStockAnalysis``): fill the

@@ -68,6 +68,7 @@ class KeyMetrics:
     ps: float | None = None  # price / sales
     eps: float | None = None  # trailing earnings per share
     fcf_per_share: float | None = None  # trailing free cash flow per share
+    ocf_per_share: float | None = None  # trailing operating cash flow per share (pre-capex)
     # Profitability (percent)
     gross_margin: float | None = None
     operating_margin: float | None = None
@@ -79,6 +80,7 @@ class KeyMetrics:
     # Growth (percent, year over year)
     eps_growth_yoy: float | None = None
     revenue_growth_yoy: float | None = None
+    fcf_growth_yoy: float | None = None  # trailing free-cash-flow-per-share growth (percent)
     # Market / price
     beta: float | None = None  # volatility vs the market (1.0 = moves with it)
     week_52_high: float | None = None

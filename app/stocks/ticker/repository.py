@@ -29,16 +29,19 @@ class StoredTickerFacts(NamedTuple):
     ``name`` / ``exchange`` are the fill-once identity facts the card lazily learns;
     the rest are read-only reflections of other slices' writes onto the anchor —
     ``market_cap`` / ``sector`` / ``industry`` from the universe screen, and
-    ``revenue_growth_yoy`` / ``eps_growth_yoy`` (percent, consensus-basis EPS) plus
-    ``fcf_per_share`` / ``ocf_per_share`` (newest reported year, trading currency) and
-    ``fcf_growth_yoy`` (percent) the annual slice's latest snapshots. The card prices
-    the two per-share cash figures against its live quote (into P/FCF, FCF yield, OCF
-    yield); ``fcf_growth_yoy`` it serves directly.
+    ``revenue_growth_yoy`` / ``eps_growth_yoy`` (percent, consensus-basis EPS) with their
+    forward counterparts ``forward_revenue_growth_yoy`` / ``forward_eps_growth_yoy``
+    (FY1→FY2 consensus, percent) plus ``fcf_per_share`` / ``ocf_per_share`` (newest
+    reported year, trading currency) and ``fcf_growth_yoy`` (percent) the annual slice's
+    latest snapshots. The card prices the two per-share cash figures against its live
+    quote (into P/FCF, FCF yield, OCF yield); the growth figures it serves directly.
 
-    ``gross_margin`` / ``operating_margin`` / ``net_margin`` (percent) and
-    ``dividend_per_share`` (trading currency) are the fundamentals slice's writes (Yahoo
-    ``.info``) — the card serves the margins directly in its metrics block and prices the
-    dividend per share against its live quote into the dividend yield, replacing the live
+    The fundamentals slice's writes (Yahoo ``.info``): ``gross_margin`` /
+    ``operating_margin`` / ``net_margin`` / ``return_on_equity`` (percent),
+    ``current_ratio``, ``debt_to_equity`` (a ratio) and ``beta`` are trailing ratios the
+    card serves directly; ``book_value_per_share`` / ``sales_per_share`` /
+    ``dividend_per_share`` (trading currency) are the per-share inputs it prices against
+    its live quote (book value → P/B, sales → P/S, dividend → yield), replacing the live
     Finnhub fundamentals call it used to make."""
 
     name: str | None = None
@@ -48,12 +51,20 @@ class StoredTickerFacts(NamedTuple):
     industry: str | None = None
     revenue_growth_yoy: float | None = None
     eps_growth_yoy: float | None = None
+    forward_revenue_growth_yoy: float | None = None
+    forward_eps_growth_yoy: float | None = None
     fcf_per_share: float | None = None
     ocf_per_share: float | None = None
     fcf_growth_yoy: float | None = None
     gross_margin: float | None = None
     operating_margin: float | None = None
     net_margin: float | None = None
+    return_on_equity: float | None = None
+    current_ratio: float | None = None
+    debt_to_equity: float | None = None
+    beta: float | None = None
+    book_value_per_share: float | None = None
+    sales_per_share: float | None = None
     dividend_per_share: float | None = None
 
 

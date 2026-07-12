@@ -85,6 +85,14 @@ class TickerValuation:
     the consensus EPS. The OCF yield sits beside the FCF yield so the gap between
     them reads as the capex drag (a heavy capex-spender's OCF yield runs well above
     its FCF yield).
+
+    ``book_value_per_share`` / ``sales_per_share`` are the fundamentals slice's
+    per-share *inputs* (Yahoo ``.info``, trading currency, off the anchor), priced
+    here against the live quote into ``pb`` / ``ps`` — the same "store the input,
+    price it live" split the cash-flow reads use, so P/B and P/S sit on the same
+    to-the-second price as the P/E. ``eps_growth_yoy`` is the annual slice's trailing
+    EPS growth (percent, consensus basis), carried only so the entity can form the
+    trailing ``peg`` (P/E over growth) from figures that already sit on one basis.
     """
 
     symbol: str
@@ -92,6 +100,9 @@ class TickerValuation:
     ttm_eps: float | None = None  # trailing 12m EPS, consensus basis (4 reported quarters)
     fcf_per_share: float | None = None  # trailing free cash flow per share (annual slice, anchor)
     ocf_per_share: float | None = None  # trailing operating cash flow per share (annual slice, anchor)
+    book_value_per_share: float | None = None  # P/B input (fundamentals slice, anchor)
+    sales_per_share: float | None = None  # P/S input (fundamentals slice, anchor)
+    eps_growth_yoy: float | None = None  # trailing EPS growth %, consensus basis (for peg)
 
     @property
     def trailing_pe(self) -> float | None:
@@ -150,6 +161,46 @@ class TickerValuation:
         if self.ocf_per_share is None or self.price <= 0:
             return None
         return round(self.ocf_per_share / self.price * 100, 2)
+
+    @property
+    def pb(self) -> float | None:
+        """Price-to-book: price over ``book_value_per_share``.
+
+        ``None`` unless both legs are positive — a negative book value (accumulated
+        losses eroding equity) makes the multiple meaningless, the same guard
+        ``trailing_pe`` and ``price_to_fcf`` use.
+        """
+        if self.book_value_per_share is None or self.book_value_per_share <= 0 or self.price <= 0:
+            return None
+        return round(self.price / self.book_value_per_share, 2)
+
+    @property
+    def ps(self) -> float | None:
+        """Price-to-sales: price over ``sales_per_share``.
+
+        ``None`` unless both legs are positive (revenue per share is always positive
+        for a going concern, so this mostly guards a missing input / broken quote).
+        """
+        if self.sales_per_share is None or self.sales_per_share <= 0 or self.price <= 0:
+            return None
+        return round(self.price / self.sales_per_share, 2)
+
+    @property
+    def peg(self) -> float | None:
+        """Trailing PEG: the consensus-basis trailing P/E over trailing EPS growth
+        (percent) — a rough "is the multiple justified by the growth it's shown" read
+        (near 1 the price roughly matches growth, well above ~2 it doesn't).
+
+        Both legs sit on the analyst-consensus basis (``trailing_pe`` on the quarterly
+        TTM, ``eps_growth_yoy`` on the annual consensus figure), so the ratio is a
+        growth story rather than a GAAP-vs-adjusted artifact. ``None`` unless the P/E
+        resolves and growth is positive — a non-positive growth makes it meaningless,
+        the same guard the shared ``KeyMetrics.peg`` uses.
+        """
+        pe = self.trailing_pe
+        if pe is None or self.eps_growth_yoy is None or self.eps_growth_yoy <= 0:
+            return None
+        return round(pe / self.eps_growth_yoy, 2)
 
 
 @dataclass(frozen=True)
