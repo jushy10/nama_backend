@@ -62,8 +62,9 @@ from app.stocks.endpoints.quarterly_earnings_endpoints import (
 from app.stocks.entities import StockPerformance
 from app.stocks.etfs.db_repository import SqlEtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import StockPerformanceProvider
+from app.stocks.ports import AnalystEstimatesProvider, StockPerformanceProvider
 from app.stocks.router import (
+    get_estimates_provider,
     get_options_provider,
     get_provider,
     get_screener_translator,
@@ -121,17 +122,19 @@ def get_ticker_card_use_case(
     provider=Depends(get_provider),
     options: OptionChainProvider = Depends(get_options_provider),
     earnings: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
+    estimates: AnalystEstimatesProvider = Depends(get_estimates_provider),
     db: Session = Depends(get_db),
 ) -> GetTickerCard:
     # The Alpaca singleton backs the quote, the trailing performance windows, and the
     # one-time exchange lookup (the same instance every other price view uses). The
     # repository serves the anchor read — the stored name, exchange, screen facts, and the
-    # annual/fundamentals slices' materialized figures (growth, cash, margins, dividend) —
-    # off the stocks row, so the card needs no live fundamentals/profile vendor. The options
-    # chain is the keyless yfinance singleton — always wired, best-effort at read — and the
-    # quarterly-earnings provider is the same DB cache the earnings endpoint reads (lazy-filled
-    # on a miss, refreshed by its cron), so the trailing P/E's TTM sum rides rows the earnings
-    # view already keeps warm.
+    # annual/fundamentals slices' materialized figures (growth, cash, margins, ratios,
+    # dividend) — off the stocks row, so the card needs no live fundamentals/profile vendor.
+    # The options chain is the keyless yfinance singleton — always wired, best-effort at read —
+    # the quarterly-earnings provider is the same DB cache the earnings endpoint reads (backing
+    # the trailing P/E's TTM sum), and the estimates provider is the DB-only annual-forward
+    # projection (backing forward P/E and P/S — the only fundamentals not on the anchor), read
+    # best-effort only when 'metrics' is requested.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
     return GetTickerCard(
         provider,
@@ -140,6 +143,7 @@ def get_ticker_card_use_case(
         repository=SqlTickerRepository(db),
         options=options,
         earnings=earnings,
+        estimates=estimates,
         # The card's asset_type is a single indexed membership check against the etfs
         # table (same request-scoped session as the anchor read) — "etf" for a screened
         # fund, else "equity".
@@ -218,21 +222,37 @@ def _present(card: TickerCard) -> TickerCardResponse:
         # The trailing P/E rides the valuation (the quarterly slice's TTM sum on the
         # adjusted EPS basis, deliberately NOT a GAAP-ish TTM read); the margins and every
         # other figure here ride the same anchor read — no live vendor call.
+        valuation = card.valuation
         metrics = TickerMetricsResponse(
-            pe=card.valuation.trailing_pe if card.valuation else None,
-            # The FCF/OCF reads ride the valuation too (live price / the annual slice's
-            # stored per-share cash off the anchor), so they're on the same live quote as
-            # the P/E.
-            price_to_fcf=card.valuation.price_to_fcf if card.valuation else None,
-            fcf_yield=card.valuation.fcf_yield if card.valuation else None,
-            ocf_yield=card.valuation.ocf_yield if card.valuation else None,
+            # The price-anchored multiples (P/E, P/B, P/S, PEG, the FCF/OCF reads) all ride
+            # the valuation — live price / the anchor's stored per-share inputs — so they sit
+            # on one live quote. The entity owns the positivity guards; the presenter just reads.
+            pe=valuation.trailing_pe if valuation else None,
+            pb=valuation.pb if valuation else None,
+            ps=valuation.ps if valuation else None,
+            peg=valuation.peg if valuation else None,
+            eps=_round2(valuation.ttm_eps) if valuation else None,
+            # Forward multiples off the annual slice's stored forward consensus (already
+            # rounded by the entity's forward_pe/forward_ps).
+            forward_pe=card.forward_pe,
+            forward_ps=card.forward_ps,
+            price_to_fcf=valuation.price_to_fcf if valuation else None,
+            fcf_yield=valuation.fcf_yield if valuation else None,
+            ocf_yield=valuation.ocf_yield if valuation else None,
+            # The trailing ratios ride the anchor read; margins/ROE rounded here at the edge.
             gross_margin=_round2(card.gross_margin),
             operating_margin=_round2(card.operating_margin),
             net_margin=_round2(card.net_margin),
-            # The trailing YoY figures ride the anchor read (already rounded percent).
+            roe=_round2(card.roe),
+            current_ratio=_round2(card.current_ratio),
+            debt_to_equity=_round2(card.debt_to_equity),
+            beta=_round2(card.beta),
+            # The YoY figures (trailing + forward) ride the anchor read (already rounded percent).
             revenue_growth_yoy=card.revenue_growth_yoy,
             eps_growth_yoy=card.eps_growth_yoy,
             fcf_growth_yoy=card.fcf_growth_yoy,
+            forward_revenue_growth_yoy=card.forward_revenue_growth_yoy,
+            forward_eps_growth_yoy=card.forward_eps_growth_yoy,
         )
     return TickerCardResponse(
         ticker=card.quote.symbol,

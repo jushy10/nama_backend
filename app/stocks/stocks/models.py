@@ -187,12 +187,17 @@ def anchor_facts(session: Session, ticker: str) -> Row | None:
 
     Returns a ``Row`` with named columns (``name``, ``exchange``, ``market_cap``,
     ``sector``, ``industry``, ``revenue_growth_yoy``, ``eps_growth_yoy``,
-    ``fcf_per_share``, ``ocf_per_share``, ``fcf_growth_yoy``, ``gross_margin``,
-    ``operating_margin``, ``net_margin``, ``dividend_per_share``); per-field ``None`` for
-    whatever the row hasn't learned. Widened past name/exchange because the card also
-    serves the universe-screen facts, the annual slice's trailing growth + cash-flow
-    per share, and the fundamentals slice's margins + dividend per share straight off the
-    anchor — the caller maps it into ``StoredTickerFacts``."""
+    ``forward_revenue_growth_yoy``, ``forward_eps_growth_yoy``, ``fcf_per_share``,
+    ``ocf_per_share``, ``fcf_growth_yoy``, ``gross_margin``, ``operating_margin``,
+    ``net_margin``, ``return_on_equity``, ``current_ratio``, ``debt_to_equity``,
+    ``beta``, ``book_value_per_share``, ``sales_per_share``, ``dividend_per_share``);
+    per-field ``None`` for whatever the row hasn't learned. Widened past name/exchange
+    because the card also serves the universe-screen facts, the annual slice's trailing
+    + forward growth and cash-flow per share, and the fundamentals slice's full trailing
+    ratios (margins / ROE / liquidity / leverage / beta) plus the per-share inputs it
+    prices live (book value → P/B, sales → P/S, dividend → yield) straight off the anchor
+    — the caller maps it into ``StoredTickerFacts``. The same set the AI analysis reads
+    via ``AnchorMetrics``, so card and scorecard show one canonical figure."""
     return session.execute(
         select(
             StockRecord.name,
@@ -202,12 +207,20 @@ def anchor_facts(session: Session, ticker: str) -> Row | None:
             StockRecord.industry,
             StockRecord.revenue_growth_yoy,
             StockRecord.eps_growth_yoy,
+            StockRecord.forward_revenue_growth_yoy,
+            StockRecord.forward_eps_growth_yoy,
             StockRecord.fcf_per_share,
             StockRecord.ocf_per_share,
             StockRecord.fcf_growth_yoy,
             StockRecord.gross_margin,
             StockRecord.operating_margin,
             StockRecord.net_margin,
+            StockRecord.return_on_equity,
+            StockRecord.current_ratio,
+            StockRecord.debt_to_equity,
+            StockRecord.beta,
+            StockRecord.book_value_per_share,
+            StockRecord.sales_per_share,
             StockRecord.dividend_per_share,
         ).where(StockRecord.ticker == ticker)
     ).one_or_none()

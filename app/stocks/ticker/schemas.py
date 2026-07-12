@@ -33,38 +33,67 @@ class DividendResponse(BaseModel):
 
 
 class TickerMetricsResponse(BaseModel):
-    """The card's valuation and profitability metrics.
+    """The card's full trailing + forward valuation, profitability, health and growth ladder.
 
-    ``pe`` is the trailing multiple on the **analyst-consensus (adjusted) EPS
-    basis**: live price over the sum of the 4 newest reported quarters'
-    consensus-basis EPS from the quarterly-earnings slice — deliberately not the
-    fundamentals vendor's GAAP-ish TTM read (``null`` until 4 quarters are cached,
-    or when the trailing year is a loss). ``price_to_fcf`` / ``fcf_yield`` /
-    ``ocf_yield`` are the cash-flow reads — live price over the annual-earnings slice's
-    stored trailing free- (and operating-) cash-flow per share, taken off the ``stocks``
-    anchor. ``price_to_fcf`` is ``null`` for a non-positive FCF (an undefined multiple, like
-    ``pe`` on a loss), while ``fcf_yield`` / ``ocf_yield`` keep their sign (a negative yield is
-    a real "burning cash" reading). The gap between ``ocf_yield`` and ``fcf_yield`` is the
-    capex drag — a heavy spender's OCF yield runs well above its FCF yield. The margins are
-    the trailing profitability ladder (percent), off the same anchor read (the fundamentals
-    slice's Yahoo ``.info`` write), so the whole block is served from the DB with no live
-    fundamentals vendor.
-    ``revenue_growth_yoy`` / ``eps_growth_yoy`` / ``fcf_growth_yoy`` are the stock's *latest
-    trailing* year-over-year growth (percent) — the newest reported fiscal year over the
-    prior one, served straight off the ``stocks`` anchor where the annual-earnings slice
-    writes them (EPS on the analyst-consensus basis, FCF on a per-share basis); ``null``
-    until that slice has two reported years cached."""
+    Everything here is served off the one ``stocks`` anchor read (no live fundamentals
+    vendor) except the two price-anchored legs the card prices on its live quote and the
+    forward multiples, which ride the annual slice's stored forward consensus.
 
+    **Valuation.** ``pe`` is the trailing multiple on the **analyst-consensus (adjusted) EPS
+    basis**: live price over the sum of the 4 newest reported quarters' consensus-basis EPS
+    from the quarterly-earnings slice — deliberately not the vendor's GAAP-ish TTM read
+    (``null`` until 4 quarters are cached, or when the trailing year is a loss). ``pb`` / ``ps``
+    are live price over the anchor's stored per-share book value / sales (``null`` on a
+    non-positive input). ``peg`` is ``pe`` over ``eps_growth_yoy`` (both consensus basis;
+    ``null`` unless growth is positive). ``eps`` is the trailing TTM EPS (consensus basis) the
+    ``pe`` divides by. ``forward_pe`` / ``forward_ps`` are the *forward* multiples — live price
+    (or market cap) over the FY1 consensus EPS / revenue the annual slice stores — ``null``
+    for an uncovered symbol.
+
+    **Cash flow.** ``price_to_fcf`` / ``fcf_yield`` / ``ocf_yield`` are live price over the
+    annual-earnings slice's stored trailing free- (and operating-) cash-flow per share.
+    ``price_to_fcf`` is ``null`` for a non-positive FCF (an undefined multiple, like ``pe`` on a
+    loss); ``fcf_yield`` / ``ocf_yield`` keep their sign (a negative yield is a real "burning
+    cash" reading). The gap between ``ocf_yield`` and ``fcf_yield`` is the capex drag.
+
+    **Profitability & health.** ``gross_margin`` / ``operating_margin`` / ``net_margin`` /
+    ``roe`` are percent; ``current_ratio`` and ``debt_to_equity`` are the liquidity / leverage
+    ratios; ``beta`` the volatility vs the market — all the fundamentals slice's Yahoo ``.info``
+    writes off the anchor.
+
+    **Growth.** ``revenue_growth_yoy`` / ``eps_growth_yoy`` / ``fcf_growth_yoy`` are the *latest
+    trailing* YoY growth (newest reported fiscal year over the prior; EPS consensus basis, FCF
+    per-share basis); ``forward_revenue_growth_yoy`` / ``forward_eps_growth_yoy`` their forward
+    (FY1→FY2 consensus) mirror. All percent, straight off the anchor; ``null`` until the annual
+    slice has the years it needs cached (the forward pair the most often, needing two upcoming
+    years)."""
+
+    # Valuation
     pe: float | None = None  # trailing: price / TTM EPS (consensus basis, 4 quarters)
+    pb: float | None = None  # trailing: price / book value per share
+    ps: float | None = None  # trailing: price / sales per share
+    peg: float | None = None  # trailing: pe / eps_growth_yoy (consensus basis)
+    eps: float | None = None  # trailing TTM EPS (consensus basis), the pe denominator
+    forward_pe: float | None = None  # forward: price / FY1 consensus EPS
+    forward_ps: float | None = None  # forward: market cap / FY1 consensus revenue
+    # Cash flow
     price_to_fcf: float | None = None  # trailing: price / FCF per share (null if FCF <= 0)
     fcf_yield: float | None = None  # percent: FCF per share / price (signed)
     ocf_yield: float | None = None  # percent: OCF per share / price (signed; pre-capex)
+    # Profitability & health
     gross_margin: float | None = None  # percent
     operating_margin: float | None = None  # percent
     net_margin: float | None = None  # percent
+    roe: float | None = None  # percent, return on equity
+    current_ratio: float | None = None  # current assets / current liabilities
+    debt_to_equity: float | None = None  # total debt / equity (a ratio)
+    beta: float | None = None  # volatility vs the market (1.0 = moves with it)
+    # Growth
     revenue_growth_yoy: float | None = None  # percent, latest trailing YoY (annual slice)
     eps_growth_yoy: float | None = None  # percent, latest trailing YoY, consensus basis
     fcf_growth_yoy: float | None = None  # percent, latest trailing FCF/share YoY (annual slice)
+    forward_revenue_growth_yoy: float | None = None  # percent, forward FY1->FY2 consensus
+    forward_eps_growth_yoy: float | None = None  # percent, forward FY1->FY2 consensus
 
 
 class OptionsMetricsResponse(BaseModel):

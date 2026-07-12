@@ -13,9 +13,12 @@ HTTP:
   trailing growth + per-share cash, and the fundamentals slice's margins +
   dividend per share. The *opt-in* blocks are gated on the requested includes —
   ``dividend`` (per share off the anchor, yield priced live on the quote),
-  ``performance`` (trailing windows, a live feed call), ``metrics`` (the trailing
-  P/E off the quarterly slice's stored TTM — consensus basis — plus the anchor's
-  margins and trailing YoY growth), and ``options_metrics`` (the options-market
+  ``performance`` (trailing windows, a live feed call), ``metrics`` (the full
+  trailing valuation ladder — P/E off the quarterly slice's stored TTM on the
+  consensus basis, plus P/B / P/S / PEG and the fundamentals slice's margins /
+  ROE / liquidity / leverage / beta off the anchor, the trailing + forward YoY
+  growth, and the forward P/E / P/S priced live off the stored forward
+  consensus), and ``options_metrics`` (the options-market
   read: ATM implied volatility, the priced-in expected move, the cost of a
   protective put, and the day's put/call lean). No live *fundamentals* vendor is
   called at all — the margins and dividend ride the same anchor read as everything
@@ -39,6 +42,7 @@ from typing import Callable, Sequence
 
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.entities import (
+    AnalystEstimates,
     Quote,
     StockPerformance,
     Timeframe,
@@ -46,6 +50,7 @@ from app.stocks.entities import (
 from app.stocks.etfs.repository import EtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
+    AnalystEstimatesProvider,
     CandleProvider,
     StockDataProvider,
     StockPerformanceProvider,
@@ -175,14 +180,27 @@ class TickerCard:
     revenue_growth_yoy: float | None = None  # percent, annual slice's latest trailing YoY
     eps_growth_yoy: float | None = None  # percent (consensus basis), annual slice's latest trailing YoY
     fcf_growth_yoy: float | None = None  # percent, annual slice's latest trailing FCF/share YoY
-    # The fundamentals slice's anchor writes (Yahoo .info): the margins (percent) and the
-    # dividend per share (trading currency; the presenter prices it live into a yield). Served
-    # off the same anchor read — no live vendor call — and only shown when 'metrics'/'dividend'
-    # is requested.
+    # Forward (analyst-consensus FY1->FY2) growth off the anchor — the forward mirror of the
+    # trailing pair, served directly like it. Only shown with 'metrics'.
+    forward_revenue_growth_yoy: float | None = None  # percent, forward consensus (anchor)
+    forward_eps_growth_yoy: float | None = None  # percent, forward consensus (anchor)
+    # The fundamentals slice's anchor writes (Yahoo .info): the trailing profitability /
+    # liquidity / leverage / volatility ratios and the dividend per share (trading currency; the
+    # presenter prices it live into a yield). Served off the same anchor read — no live vendor
+    # call — and only shown when 'metrics'/'dividend' is requested.
     gross_margin: float | None = None
     operating_margin: float | None = None
     net_margin: float | None = None
+    roe: float | None = None  # percent, return on equity
+    current_ratio: float | None = None  # current assets / current liabilities
+    debt_to_equity: float | None = None  # total debt / equity (a ratio)
+    beta: float | None = None  # volatility vs the market
     dividend_per_share: float | None = None
+    # Forward valuation multiples priced on the live quote from the annual slice's stored
+    # forward consensus (FY1 EPS -> forward P/E, FY1 revenue -> forward P/S). Best-effort — an
+    # uncovered symbol (no forward estimates cached) leaves them null. Only shown with 'metrics'.
+    forward_pe: float | None = None
+    forward_ps: float | None = None
     options_metrics: TickerOptionsMetrics | None = None  # only with 'options_metrics'
 
 
@@ -211,6 +229,7 @@ class GetTickerCard:
         repository: TickerRepository | None = None,
         options: OptionChainProvider | None = None,
         earnings: QuarterlyEarningsProvider | None = None,
+        estimates: AnalystEstimatesProvider | None = None,
         etfs: EtfLookupRepository | None = None,
         today: Callable[[], date] | None = None,
     ) -> None:
@@ -220,6 +239,7 @@ class GetTickerCard:
         self._repository = repository
         self._options = options
         self._earnings = earnings
+        self._estimates = estimates
         self._etfs = etfs
         # Injectable clock: the expiry windows are anchored on "today", and the
         # tests pin it the way the yfinance adapters pin theirs.
@@ -243,15 +263,21 @@ class GetTickerCard:
         # The margins + dividend per share ride the same anchor read now (the fundamentals
         # slice materializes them there), so a bare card makes no extra provider call and even
         # the metrics/dividend blocks are served straight from the DB — the presenter just gates
-        # which the response carries on the requested includes.
+        # which the response carries on the requested includes. The one extra read on the metrics
+        # path is the forward estimates (for forward P/E and P/S — the only figures not on the
+        # anchor), so it's made only when 'metrics' is asked for.
+        wants_metrics = "metrics" in wanted
+        forward = (
+            self._get_forward_multiples(normalized, quote, stored)
+            if wants_metrics
+            else (None, None)
+        )
         return TickerCard(
             quote=quote,
             include=wanted,
             asset_type=self._get_asset_type(normalized),
             valuation=(
-                self._get_valuation(normalized, quote, stored)
-                if "metrics" in wanted
-                else None
+                self._get_valuation(normalized, quote, stored) if wants_metrics else None
             ),
             performance=(
                 self._get_performance(normalized) if "performance" in wanted else None
@@ -264,10 +290,18 @@ class GetTickerCard:
             revenue_growth_yoy=stored.revenue_growth_yoy,
             eps_growth_yoy=stored.eps_growth_yoy,
             fcf_growth_yoy=stored.fcf_growth_yoy,
+            forward_revenue_growth_yoy=stored.forward_revenue_growth_yoy,
+            forward_eps_growth_yoy=stored.forward_eps_growth_yoy,
             gross_margin=stored.gross_margin,
             operating_margin=stored.operating_margin,
             net_margin=stored.net_margin,
+            roe=stored.return_on_equity,
+            current_ratio=stored.current_ratio,
+            debt_to_equity=stored.debt_to_equity,
+            beta=stored.beta,
             dividend_per_share=stored.dividend_per_share,
+            forward_pe=forward[0],
+            forward_ps=forward[1],
             options_metrics=(
                 self._get_options_metrics(normalized, quote)
                 if "options_metrics" in wanted
@@ -288,17 +322,44 @@ class GetTickerCard:
         self, symbol: str, quote: Quote, stored: StoredTickerFacts
     ) -> TickerValuation:
         # The trailing multiples at today's quote: the P/E off the quarterly slice's
-        # consensus TTM (the timeline owns the TTM rule), and the FCF/OCF multiples off the
-        # annual slice's stored per-share cash figures on the anchor (already read once, no
-        # extra call — served straight off the anchor, so no live fundamentals vendor is hit).
-        # Every leg best-effort — a symbol the annual/quarterly slices haven't reached yields
-        # null multiples, never a failed card (the entity owns the positivity guards).
+        # consensus TTM (the timeline owns the TTM rule), the FCF/OCF multiples off the annual
+        # slice's stored per-share cash figures, and P/B / P/S off the fundamentals slice's
+        # stored per-share book value / sales — all on the anchor (already read once, no extra
+        # call), all priced against the same live quote. PEG rides the trailing EPS growth also
+        # on the anchor, so both its legs sit on the consensus basis. Every leg best-effort — a
+        # symbol the annual/quarterly/fundamentals slices haven't reached yields null multiples,
+        # never a failed card (the entity owns the positivity guards).
         return TickerValuation(
             symbol=symbol,
             price=quote.price,
             ttm_eps=self._get_ttm_eps(symbol),
             fcf_per_share=stored.fcf_per_share,
             ocf_per_share=stored.ocf_per_share,
+            book_value_per_share=stored.book_value_per_share,
+            sales_per_share=stored.sales_per_share,
+            eps_growth_yoy=stored.eps_growth_yoy,
+        )
+
+    def _get_forward_multiples(
+        self, symbol: str, quote: Quote, stored: StoredTickerFacts
+    ) -> tuple[float | None, float | None]:
+        # Forward P/E and P/S at today's quote, off the annual slice's stored forward consensus
+        # (the only fundamentals not materialized on the anchor — they need the FY1 *absolute*
+        # EPS / revenue, not just the growth). DB-only projection (the same estimates port the
+        # AI analysis context uses), best-effort: no provider, an uncovered symbol, or a failed
+        # read just leaves both null. The entity owns the positivity guards (a non-positive
+        # estimate makes the multiple meaningless).
+        if self._estimates is None:
+            return None, None
+        try:
+            estimates = self._estimates.get_estimates(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None, None
+        if estimates.is_empty:
+            return None, None
+        return (
+            estimates.forward_pe(quote.price),
+            estimates.forward_ps(stored.market_cap),
         )
 
     def _get_ttm_eps(self, symbol: str) -> float | None:

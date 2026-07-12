@@ -89,26 +89,41 @@ def _a_card(
                 # fcf_yield = 48.7 / 975.56 * 100 -> 4.99; ocf_yield = 60 / 975.56 * 100 -> 6.15.
                 fcf_per_share=48.7,
                 ocf_per_share=60.0,
+                # Per-share book value / sales off the anchor -> pb = 975.56 / 65 -> 15.01,
+                # ps = 975.56 / 45 -> 21.68; eps_growth feeds peg = 22.4 / 587.4 -> 0.04.
+                book_value_per_share=65.0,
+                sales_per_share=45.0,
+                eps_growth_yoy=587.4,
             )
             if "metrics" in include
             else None
         ),
         name="Micron Technology",
-        # Market cap, margins and the dividend all ride the anchor read now.
+        # Market cap, ratios and the dividend all ride the anchor read now.
         market_cap=1_090_000_000_000.0,
         sector="technology",
         industry="semiconductors",
         revenue_growth_yoy=61.6,
         eps_growth_yoy=587.4,
         fcf_growth_yoy=42.0,  # off the anchor (annual slice), like the growth pair
-        # The margins ride the anchor (fundamentals slice) and the presenter serves them
-        # directly. The dividend per share is vendor-noisy on purpose (0.4649): the presenter
-        # rounds it to 0.46 and prices the yield off the live quote (0.4649 / 975.56 * 100
-        # -> 0.05), replacing the retired stored dividend_yield.
+        forward_revenue_growth_yoy=25.0,  # forward consensus off the anchor
+        forward_eps_growth_yoy=30.0,
+        # The trailing ratios ride the anchor (fundamentals slice) and the presenter serves
+        # them directly. The dividend per share is vendor-noisy on purpose (0.4649): the
+        # presenter rounds it to 0.46 and prices the yield off the live quote (0.4649 / 975.56
+        # * 100 -> 0.05), replacing the retired stored dividend_yield.
         gross_margin=52.1,
         operating_margin=38.9,
         net_margin=33.5,
+        roe=40.0,
+        current_ratio=2.5,
+        debt_to_equity=0.3,
+        beta=1.24,
         dividend_per_share=0.4649,
+        # Forward multiples priced off the stored forward consensus (set directly on the fake
+        # card the way the use case computes them from the estimates read).
+        forward_pe=18.0,
+        forward_ps=8.0,
         performance=(
             StockPerformance(
                 one_week=1.5, one_month=8.0, three_month=40.0, six_month=90.0,
@@ -187,21 +202,32 @@ def test_presents_the_optin_blocks_when_included():
     assert body["performance"] == {
         "1w": 1.5, "1m": 8.0, "3m": 40.0, "6m": 90.0, "ytd": 120.0, "1y": 150.0,
     }
-    # The trailing P/E and the FCF/OCF reads ride the valuation (P/E off the
-    # consensus-basis TTM, the cash reads off the anchor's per-share cash at the live
-    # quote); the margins and the growth trio (incl. FCF/share growth) ride the same
-    # anchor read.
+    # The price-anchored multiples (P/E, P/B, P/S, PEG, FCF/OCF) ride the valuation at the
+    # live quote; the forward multiples come off the stored forward consensus; the trailing
+    # ratios and the growth (trailing trio + forward pair) ride the same anchor read.
     assert body["metrics"] == {
         "pe": 22.4,  # 975.56 / 43.55 — the valuation's trailing_pe
+        "pb": 15.01,  # 975.56 / 65
+        "ps": 21.68,  # 975.56 / 45
+        "peg": 0.04,  # 22.4 / 587.4
+        "eps": 43.55,  # the TTM EPS the P/E divides by
+        "forward_pe": 18.0,
+        "forward_ps": 8.0,
         "price_to_fcf": 20.03,  # 975.56 / 48.7
         "fcf_yield": 4.99,  # 48.7 / 975.56 * 100
         "ocf_yield": 6.15,  # 60 / 975.56 * 100
         "gross_margin": 52.1,
         "operating_margin": 38.9,
         "net_margin": 33.5,
+        "roe": 40.0,
+        "current_ratio": 2.5,
+        "debt_to_equity": 0.3,
+        "beta": 1.24,
         "revenue_growth_yoy": 61.6,  # off the anchor
         "eps_growth_yoy": 587.4,
         "fcf_growth_yoy": 42.0,  # off the anchor
+        "forward_revenue_growth_yoy": 25.0,
+        "forward_eps_growth_yoy": 30.0,
     }
     # The options figures are rounded at the edge; the sampled expiries are dates.
     assert body["options_metrics"] == {
@@ -250,21 +276,34 @@ def test_blocks_requested_but_anchor_unsynced_degrade_to_nulls():
     # The dividend block appears (it was requested) with null fields — nothing on the
     # anchor to serve or to price a yield from.
     assert body["dividend"] == {"yield_percentage": None, "per_share": None}
-    # The metrics block still appears (it was requested) with its anchor-backed margins
-    # null; the FCF/OCF reads are null because this hand-built valuation carries no
-    # per-share cash (an uncovered anchor). The valuation-backed trailing P/E (quarterly
-    # TTM) and the anchor-backed growth trio still serve.
+    # The metrics block still appears (it was requested) with its anchor-backed ratios
+    # null; the FCF/OCF/P-B/P-S reads and PEG null out because this hand-built valuation
+    # carries no per-share inputs or growth (an uncovered anchor), and the forward
+    # multiples/growth null with no estimates. The valuation-backed trailing P/E (quarterly
+    # TTM) with its EPS and the anchor-backed trailing growth pair still serve.
     assert body["metrics"] == {
         "pe": 22.4,
+        "pb": None,
+        "ps": None,
+        "peg": None,
+        "eps": 43.55,
+        "forward_pe": None,
+        "forward_ps": None,
         "price_to_fcf": None,
         "fcf_yield": None,
         "ocf_yield": None,
         "gross_margin": None,
         "operating_margin": None,
         "net_margin": None,
+        "roe": None,
+        "current_ratio": None,
+        "debt_to_equity": None,
+        "beta": None,
         "revenue_growth_yoy": 61.6,
         "eps_growth_yoy": 587.4,
         "fcf_growth_yoy": None,
+        "forward_revenue_growth_yoy": None,
+        "forward_eps_growth_yoy": None,
     }
 
 
