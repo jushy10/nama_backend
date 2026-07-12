@@ -186,12 +186,10 @@ module "app" {
   app_security_group_id = module.database.app_security_group_id
   database_url_ssm_arn  = module.database.database_url_ssm_arn
 
-  # Capacity. The always-on API task runs 0.5 vCPU / 1 GiB (up from the module
-  # default 0.25/0.5) — one uvicorn worker fully uses 0.5 vCPU (GIL-bound), and
-  # 1 GiB gives headroom for the live pandas/yfinance + Bedrock request paths.
-  cpu    = 512
-  memory = 1024
-
+  # Capacity. The always-on API task keeps the module default 0.25 vCPU / 0.5 GiB,
+  # so idle cost is unchanged; added concurrency comes from scaling OUT under load
+  # rather than a bigger always-on box.
+  #
   # Target-tracking autoscaling: hold ~60% CPU by scaling 1→3 tasks. Min 1 keeps
   # idle cost unchanged; scale-out only under real load. The gateway throttle is
   # raised to match ~3 tasks' throughput so it isn't the new ceiling. NOTE: with
