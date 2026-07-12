@@ -477,15 +477,20 @@ class CandleSeries:
 
 
 class Recommendation(str, Enum):
-    """The headline buy / hold / sell call of an AI stock analysis.
+    """The headline call of an AI stock analysis, on the five-point sell-side scale.
 
-    The string values double as the JSON the model returns and the API serves,
-    the same convention as ``Timeframe``.
+    ``STRONG_BUY`` … ``STRONG_SELL`` mirror the analyst-consensus vocabulary, with
+    ``HOLD`` the neutral middle — the 'strong' calls are reserved for when the figures
+    line up especially clearly one way. The string values double as the JSON the model
+    returns and the API serves, the same convention as ``Timeframe``. (Shared with the
+    ETF analysis's ``InvestmentAnalysis``.)
     """
 
+    STRONG_BUY = "strong_buy"
     BUY = "buy"
     HOLD = "hold"
     SELL = "sell"
+    STRONG_SELL = "strong_sell"
 
 
 class Confidence(str, Enum):

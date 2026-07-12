@@ -11,7 +11,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.adapters.bedrock.analysis_adapter import BedrockScorecardProvider
+from app.stocks.adapters.bedrock.analysis_adapter import (
+    BedrockScorecardProvider,
+    _SECTIONS as _SCORECARD_SECTIONS,
+)
 from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
     BedrockEarningsAnalysisProvider,
 )
@@ -1460,6 +1463,12 @@ class _SeqStubClient:
         self.messages = _SeqStubMessages(messages, self.calls)
 
 
+# The adapter stubs derive their sections from the live registry, so adding a section
+# to the scorecard doesn't break these fixtures (they always fill exactly what the
+# forced tool requires).
+_SCORECARD_SECTION_KEYS = tuple(s.key for s in _SCORECARD_SECTIONS)
+
+
 def _section_payload(**overrides) -> dict:
     base = dict(stance="positive", label="Solid", summary="Reads well on balance.")
     base.update(overrides)
@@ -1467,15 +1476,10 @@ def _section_payload(**overrides) -> dict:
 
 
 def _tool_message(**input_overrides) -> _StubMessage:
-    payload = dict(
-        recommendation="hold",
-        confidence="medium",
-        thesis="Balanced.",
-        business_quality=_section_payload(stance="positive", label="Strong"),
-        valuation=_section_payload(stance="negative", label="Expensive"),
-        earnings=_section_payload(stance="positive", label="Beating estimates"),
-        analyst_view=_section_payload(stance="positive", label="Mostly buys"),
-    )
+    # A complete scorecard: the overall verdict plus a filled read for every registry
+    # section. `input_overrides` can replace the verdict or any section.
+    payload = dict(recommendation="hold", confidence="medium", thesis="Balanced.")
+    payload.update({key: _section_payload() for key in _SCORECARD_SECTION_KEYS})
     payload.update(input_overrides)
     return _StubMessage([_StubBlock("tool_use", name="submit_scorecard", input=payload)])
 
@@ -1490,39 +1494,16 @@ def _blank_sections_message(**overrides) -> _StubMessage:
     # A scorecard whose overall verdict is filled but every section is blank — the miss
     # the targeted sections-only retry recovers from. `overrides` can fill a section (or
     # the verdict) back in.
-    fields = {
-        "business_quality": _blank_section(),
-        "valuation": _blank_section(),
-        "earnings": _blank_section(),
-        "analyst_view": _blank_section(),
-    }
+    fields = {key: _blank_section() for key in _SCORECARD_SECTION_KEYS}
     fields.update(overrides)
     return _tool_message(**fields)
 
 
 def _sections_recovery_message(**input_overrides) -> _StubMessage:
-    # The lighter recovery tool the retry path forces — only the four section reads.
+    # The lighter recovery tool the retry path forces — only the section reads.
     payload = {
-        "business_quality": {
-            "stance": "positive",
-            "label": "Strong",
-            "summary": "Very profitable.",
-        },
-        "valuation": {
-            "stance": "negative",
-            "label": "Expensive",
-            "summary": "Priced richly.",
-        },
-        "earnings": {
-            "stance": "positive",
-            "label": "Beating",
-            "summary": "Beats often.",
-        },
-        "analyst_view": {
-            "stance": "positive",
-            "label": "Mostly buys",
-            "summary": "Bullish coverage.",
-        },
+        key: {"stance": "positive", "label": "Solid", "summary": "A clear read."}
+        for key in _SCORECARD_SECTION_KEYS
     }
     payload.update(input_overrides)
     return _StubMessage([_StubBlock("tool_use", name="submit_sections", input=payload)])
@@ -1999,7 +1980,15 @@ def test_analysis_use_case_propagates_model_failure():
 
 
 def test_bedrock_adapter_parses_tool_call_into_entity():
-    client = _StubClient(_tool_message())
+    client = _StubClient(
+        _tool_message(
+            valuation={
+                "stance": "negative",
+                "label": "Expensive",
+                "summary": "Priced richly.",
+            }
+        )
+    )
     provider = BedrockScorecardProvider(client=client, model_id="test-model")
     scorecard = provider.analyze(
         a_stock(metrics=a_key_metrics()), a_quarterly_timeline()
@@ -2007,14 +1996,9 @@ def test_bedrock_adapter_parses_tool_call_into_entity():
     assert scorecard.symbol == "AAPL"
     assert scorecard.recommendation is Recommendation.HOLD
     assert scorecard.confidence is Confidence.MEDIUM
-    # The four sections come back in card order, each carrying the model's read.
-    assert [s.key for s in scorecard.sections] == [
-        "business_quality",
-        "valuation",
-        "earnings",
-        "analyst_view",
-    ]
-    valuation = scorecard.sections[1]
+    # Every registry section comes back, in card order, each carrying the model's read.
+    assert [s.key for s in scorecard.sections] == [s.key for s in _SCORECARD_SECTIONS]
+    valuation = next(s for s in scorecard.sections if s.key == "valuation")
     assert valuation.stance is SectionStance.NEGATIVE
     assert valuation.label == "Expensive"
     assert valuation.summary  # a plain-language read is present
@@ -2126,7 +2110,7 @@ def test_bedrock_adapter_maps_client_error_to_domain_error():
 
 
 def test_bedrock_adapter_rejects_offschema_value():
-    client = _StubClient(_tool_message(recommendation="strong_buy"))  # not in the enum
+    client = _StubClient(_tool_message(recommendation="mega_buy"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
         BedrockScorecardProvider(client=client).analyze(a_stock())
 
@@ -2144,7 +2128,18 @@ def test_bedrock_adapter_recovers_blank_sections_with_targeted_retry():
     # The verdict comes back rich but the four sections blank (the SNDK failure); the
     # adapter re-issues a *sections-only* call and merges the recovered reads in, so the
     # served scorecard is complete (and cacheable) rather than showing empty sections.
-    client = _SeqStubClient([_blank_sections_message(), _sections_recovery_message()])
+    client = _SeqStubClient(
+        [
+            _blank_sections_message(),
+            _sections_recovery_message(
+                valuation={
+                    "stance": "negative",
+                    "label": "Expensive",
+                    "summary": "Priced richly.",
+                }
+            ),
+        ]
+    )
 
     scorecard = BedrockScorecardProvider(client=client).analyze(
         a_stock(metrics=a_key_metrics())
@@ -2165,14 +2160,14 @@ def test_bedrock_adapter_merge_keeps_a_section_the_first_pass_already_wrote():
     # A first pass that filled one section but blanked the rest: the retry fills only the
     # blanks and never overwrites the good section.
     first = _blank_sections_message(
-        business_quality=_section_payload(label="Exceptional", summary="Best in class.")
+        profitability=_section_payload(label="Exceptional", summary="Best in class.")
     )
     client = _SeqStubClient([first, _sections_recovery_message()])
 
     scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
 
-    bq = next(s for s in scorecard.sections if s.key == "business_quality")
-    assert bq.label == "Exceptional"  # kept from the first pass, not the recovery
+    prof = next(s for s in scorecard.sections if s.key == "profitability")
+    assert prof.label == "Exceptional"  # kept from the first pass, not the recovery
     assert scorecard.is_complete
 
 

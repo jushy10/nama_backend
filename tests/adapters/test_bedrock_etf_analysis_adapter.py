@@ -245,7 +245,7 @@ def test_maps_a_client_error_to_a_domain_error():
 
 
 def test_rejects_an_offschema_enum_value():
-    client = _StubClient(_tool_message(recommendation="strong_buy"))  # not in the enum
+    client = _StubClient(_tool_message(recommendation="mega_buy"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
         BedrockEtfAnalysisProvider(client=client).analyze(_detail())
 

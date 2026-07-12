@@ -45,8 +45,8 @@ from app.stocks.exceptions import StockDataUnavailable
 _ANALYSIS_TOOL = {
     "name": "submit_analysis",
     "description": (
-        "Record a balanced buy/hold/sell read on the ETF in plain, everyday language, grounded "
-        "only in the figures provided in the prompt."
+        "Record a balanced strong-buy/buy/hold/sell/strong-sell read on the ETF in plain, "
+        "everyday language, grounded only in the figures provided in the prompt."
     ),
     "input_schema": {
         "type": "object",
@@ -54,7 +54,10 @@ _ANALYSIS_TOOL = {
             "recommendation": {
                 "type": "string",
                 "enum": [r.value for r in Recommendation],
-                "description": "The overall call, weighing everything on balance.",
+                "description": (
+                    "The overall call on the five-point scale (strong buy / buy / hold / sell / "
+                    "strong sell), weighing everything on balance."
+                ),
             },
             "confidence": {
                 "type": "string",
@@ -103,8 +106,9 @@ _SYSTEM_PROMPT = (
     "what it costs to own each year, what it pays out, and how it has performed. You are given a "
     "snapshot of the fund: its price and recent move, its size, its yearly cost, its dividend, its "
     "recent and longer-term returns, its biggest holdings, and how its money is split across market "
-    "sectors. From only those figures, give a clear, balanced read on whether it currently looks "
-    "like a buy, hold, or sell for a long-term investor.\n"
+    "sectors. From only those figures, give a clear, balanced read on a five-point scale — strong "
+    "buy, buy, hold, sell, or strong sell — for a long-term investor, reserving the 'strong' calls "
+    "for when the figures line up especially clearly one way.\n"
     "Weigh the yearly cost (the expense ratio) — even a small one quietly eats into returns over "
     "many years, so a cheaper fund has an edge over a pricier one holding much the same thing. Weigh "
     "how concentrated the fund is — if a handful of holdings or a single sector make up most of it, "

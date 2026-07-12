@@ -242,7 +242,8 @@ class ScorecardSectionResponse(BaseModel):
 class InvestmentAnalysisResponse(BaseModel):
     """An AI-generated, **sectioned** buy/hold/sell scorecard for a stock.
 
-    ``recommendation`` is the overall call ("buy"/"hold"/"sell") and ``confidence``
+    ``recommendation`` is the overall call on the five-point scale
+    ("strong_buy"/"buy"/"hold"/"sell"/"strong_sell") and ``confidence``
     how firmly it's held ("low"/"medium"/"high"); ``thesis`` is a one-line headline.
     ``sections`` grade the individual facets — business quality, valuation, earnings,
     and the analyst view — each with its own stance, label, plain-language summary,
@@ -252,7 +253,7 @@ class InvestmentAnalysisResponse(BaseModel):
     only over the figures the other stock endpoints expose; descriptive, not advice."""
 
     symbol: str
-    recommendation: str  # "buy" | "hold" | "sell"
+    recommendation: str  # "strong_buy" | "buy" | "hold" | "sell" | "strong_sell"
     confidence: str  # "low" | "medium" | "high"
     thesis: str
     sections: list[ScorecardSectionResponse]
