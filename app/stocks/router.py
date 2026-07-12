@@ -337,6 +337,19 @@ def analysis_cache_ttl() -> timedelta:
         return timedelta(minutes=30)
 
 
+def market_analysis_cache_ttl() -> timedelta:
+    # The market-wide reads (sector, market summary) get their own, longer TTL — a
+    # separate knob from the per-symbol analyses. They're the same for every viewer
+    # (one shared cached row, keyed on the market sentinel), so a longer window
+    # collapses far more traffic onto one Bedrock call; default 60 min. Config via
+    # MARKET_ANALYSIS_CACHE_TTL_MINUTES.
+    minutes = os.environ.get("MARKET_ANALYSIS_CACHE_TTL_MINUTES")
+    try:
+        return timedelta(minutes=float(minutes)) if minutes else timedelta(minutes=60)
+    except ValueError:
+        return timedelta(minutes=60)
+
+
 def get_stock_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
     analyzer: StockScorecardProvider = Depends(get_analysis_provider),
@@ -399,7 +412,7 @@ def get_sector_analysis(
         sectors,
         analyzer,
         cache=sector_analysis_cache(db),
-        cache_ttl=analysis_cache_ttl(),
+        cache_ttl=market_analysis_cache_ttl(),
     )
 
 
@@ -445,7 +458,7 @@ def get_market_summary(
         overview,
         analyzer,
         cache=market_summary_cache(db),
-        cache_ttl=analysis_cache_ttl(),
+        cache_ttl=market_analysis_cache_ttl(),
     )
 
 

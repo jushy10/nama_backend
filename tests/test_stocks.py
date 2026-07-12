@@ -91,6 +91,7 @@ from app.stocks.recommendations.ports import RecommendationProvider
 from app.stocks.universe.entities import IndustryValuation, MarketCapTier
 from app.stocks.universe.repository import StockSearchRepository
 from app.stocks.router import (
+    analysis_cache_ttl,
     get_market_summary,
     get_sector_analysis,
     get_sector_performance,
@@ -99,6 +100,7 @@ from app.stocks.router import (
     get_stock_ema,
     get_stock_logo,
     get_stock_support_levels,
+    market_analysis_cache_ttl,
 )
 from app.stocks.use_cases import (
     GetEarningsAnalysis,
@@ -1733,6 +1735,21 @@ def test_market_summary_cache_miss_generates_and_stores():
     ).execute()
     assert result is generated
     assert cache.puts == [(_MARKET_KEY, generated)]
+
+
+def test_market_analysis_ttl_defaults_to_an_hour(monkeypatch):
+    # The market-wide reads get their own, longer TTL than the per-symbol analyses.
+    monkeypatch.delenv("MARKET_ANALYSIS_CACHE_TTL_MINUTES", raising=False)
+    assert market_analysis_cache_ttl() == timedelta(minutes=60)
+    assert analysis_cache_ttl() == timedelta(minutes=30)  # per-symbol stays 30
+
+
+def test_market_analysis_ttl_reads_its_env_override(monkeypatch):
+    monkeypatch.setenv("MARKET_ANALYSIS_CACHE_TTL_MINUTES", "15")
+    assert market_analysis_cache_ttl() == timedelta(minutes=15)
+    # A garbage value falls back to the 60-min default rather than raising.
+    monkeypatch.setenv("MARKET_ANALYSIS_CACHE_TTL_MINUTES", "soon")
+    assert market_analysis_cache_ttl() == timedelta(minutes=60)
 
 
 def test_stock_info_gathers_the_enrichment_calls_concurrently():

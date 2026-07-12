@@ -531,7 +531,7 @@ wiring functions (`APCA_API_KEY_ID`, `FINNHUB_API_KEY`, `LOGODEV_TOKEN`,
 `BEDROCK_ANALYSIS_MODEL_ID` — plus per-analyser model overrides like
 `BEDROCK_EARNINGS_ANALYSIS_MODEL_ID` / `BEDROCK_RATINGS_ANALYSIS_MODEL_ID`, and the AI screener's
 `BEDROCK_SCREENER_MODEL_ID` — and the analysis
-result cache adds the optional `ANALYSIS_CACHE_TTL_MINUTES`, default 30; the insider-transactions read cache adds the optional `INSIDER_CACHE_TTL_HOURS`, default 24). The `/internal/*/sync` cron endpoints are guarded
+result cache adds the optional `ANALYSIS_CACHE_TTL_MINUTES`, default 30 — with the two market-wide reads (sector/market summary) taking their own longer `MARKET_ANALYSIS_CACHE_TTL_MINUTES`, default 60, since one shared cached row serves every viewer; the insider-transactions read cache adds the optional `INSIDER_CACHE_TTL_HOURS`, default 24). The `/internal/*/sync` cron endpoints are guarded
 by a shared bearer token: each `@router.post` depends on `require_cron_token`
 (`app/stocks/endpoints/cron_auth.py`), which requires `Authorization: Bearer
 $CRON_SYNC_TOKEN` (constant-time compared) and is **fail-closed** — a `503` when the token is
