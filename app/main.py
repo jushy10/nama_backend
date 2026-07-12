@@ -24,6 +24,9 @@ from app.stocks.endpoints.cron_recommendations_endpoints import (
     router as recommendations_cron_router,
 )
 from app.stocks.endpoints.cron_news_endpoints import router as news_cron_router
+from app.stocks.endpoints.cron_fundamentals_endpoints import (
+    router as fundamentals_cron_router,
+)
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     router as quarterly_earnings_router,
 )
@@ -188,6 +191,11 @@ app.include_router(recommendations_cron_router)
 # use case out of band (yfinance -> DB), seeding + refreshing each stock's recent
 # headlines. See app/stocks/endpoints/cron_news_endpoints.py.
 app.include_router(news_cron_router)
+# The fundamentals refresh cron endpoint (POST /internal/fundamentals/sync); it drives the
+# SyncFundamentals use case out of band (yfinance .info -> stocks anchor), seeding + refreshing
+# each stock's trailing margins/ROE/liquidity/leverage/beta + the per-share P/B / P/S / dividend
+# inputs. See app/stocks/endpoints/cron_fundamentals_endpoints.py.
+app.include_router(fundamentals_cron_router)
 # The revenue-segments refresh cron endpoint (POST /internal/revenue-segments/sync); it drives
 # the SyncRevenueSegments use case out of band (SEC EDGAR 10-K -> DB), seeding + refreshing each
 # stock's revenue disaggregation. See app/stocks/endpoints/cron_revenue_segments_endpoints.py.
