@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.heatmap.entities import HeatMap, HeatMapScope
 from app.stocks.heatmap.schemas import (
@@ -26,6 +27,7 @@ from app.stocks.heatmap.schemas import (
 )
 from app.stocks.heatmap.use_cases import GetStockHeatMap
 from app.stocks.router import get_provider
+from app.stocks.schemas import StockPerformanceResponse
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 
 router = APIRouter(tags=["heatmap"])
@@ -36,9 +38,27 @@ def get_heatmap_use_case(
     provider=Depends(get_provider),
 ) -> GetStockHeatMap:
     # The universe read is a request-scoped DB read over the shared anchor (no vendor, no key).
-    # The Alpaca singleton (a BulkQuoteProvider) supplies the live day-change board — the same
-    # instance every price view uses, so it inherits the missing-keys 503 gate.
-    return GetStockHeatMap(SqlStockSearchRepository(db), provider)
+    # The Alpaca singleton supplies both the live day-change board (BulkQuoteProvider) and the
+    # batched trailing-window returns (BulkPerformanceProvider) — the same instance every price
+    # view uses, so it inherits the missing-keys 503 gate; one dependency serves both roles.
+    return GetStockHeatMap(SqlStockSearchRepository(db), provider, provider)
+
+
+def _present_performance(
+    perf: StockPerformance | None,
+) -> StockPerformanceResponse | None:
+    """Presenter: the shared trailing-window value object -> its HTTP DTO (``null`` when a
+    tile carried no history)."""
+    if perf is None:
+        return None
+    return StockPerformanceResponse(
+        one_week=perf.one_week,
+        one_month=perf.one_month,
+        three_month=perf.three_month,
+        six_month=perf.six_month,
+        ytd=perf.ytd,
+        one_year=perf.one_year,
+    )
 
 
 def _present(heatmap: HeatMap) -> HeatMapResponse:
@@ -60,6 +80,7 @@ def _present(heatmap: HeatMap) -> HeatMapResponse:
                                 name=cell.name,
                                 market_cap=cell.market_cap,
                                 change_percent=cell.change_percent,
+                                performance=_present_performance(cell.performance),
                             )
                             for cell in industry.cells
                         ],

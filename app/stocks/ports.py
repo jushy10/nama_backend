@@ -113,6 +113,35 @@ class StockPerformanceProvider(ABC):
         raise NotImplementedError
 
 
+class BulkPerformanceProvider(ABC):
+    """A gateway for many symbols' trailing performance in one batched read — the bulk
+    cousin of ``StockPerformanceProvider``.
+
+    Backs the heat map's timeframe windows: instead of colouring the board only by the
+    day's move, each tile also carries its trailing return over the standard windows
+    (1W…1Y, YTD), computed once for the whole index rather than N per-symbol calls.
+    **Best-effort per symbol** — a symbol the feed has no history for (e.g. not on the
+    historical feed, or too newly listed) is simply *absent* from the returned map, so
+    the caller leaves that tile's trailing windows blank; only a hard feed failure over
+    the whole batch is fatal.
+    """
+
+    @abstractmethod
+    def get_bulk_performance(
+        self, symbols: Sequence[str]
+    ) -> dict[str, StockPerformance]:
+        """Return trailing-window performance for each recognized symbol, keyed by symbol.
+
+        Symbols the feed has no history for are omitted (a partial map is normal, not an
+        error); order and duplicates in the input don't matter. Given an empty input,
+        returns an empty map without a call.
+
+        Raises:
+            StockDataUnavailable: the upstream feed failed for the whole request.
+        """
+        raise NotImplementedError
+
+
 class AllTimeHighProvider(ABC):
     """A gateway for a stock's all-time high over its available price history.
 
