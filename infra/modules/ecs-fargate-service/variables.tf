@@ -50,9 +50,45 @@ variable "container_port" {
 }
 
 variable "desired_count" {
-  description = "Number of task copies to run."
+  description = "Number of task copies to run. When enable_autoscaling is true this is only the INITIAL count — autoscaling owns the running count thereafter (the service ignores later desired_count changes), so bounds are set by autoscaling_min/max_capacity."
   type        = number
   default     = 1
+}
+
+variable "enable_autoscaling" {
+  description = "Attach ECS target-tracking autoscaling to the service (scales the task count on average CPU). Off by default so the module stays generic; the consuming service opts in. When on, the service's desired_count is managed by autoscaling between autoscaling_min_capacity and autoscaling_max_capacity."
+  type        = bool
+  default     = false
+}
+
+variable "autoscaling_min_capacity" {
+  description = "Minimum task count when enable_autoscaling is true. Keep at 1 so idle cost is unchanged (still one always-on task)."
+  type        = number
+  default     = 1
+}
+
+variable "autoscaling_max_capacity" {
+  description = "Maximum task count when enable_autoscaling is true. Cap sized against the DB connection budget: each task holds up to (DB_POOL_SIZE + DB_MAX_OVERFLOW) connections, so max_tasks * that + the sync task's pool must stay under RDS max_connections (~112 on db.t4g.micro)."
+  type        = number
+  default     = 3
+}
+
+variable "autoscaling_cpu_target" {
+  description = "Target average CPU utilization (percent) for the target-tracking policy. The service scales out to hold CPU near this; 60 leaves headroom for a burst before a new task is warm."
+  type        = number
+  default     = 60
+}
+
+variable "apigw_throttle_rate_limit" {
+  description = "API Gateway stage steady-state throttle (requests/second across all clients). A global cost + load ceiling under which the per-IP app limiter sits; raise alongside autoscaling_max_capacity."
+  type        = number
+  default     = 50
+}
+
+variable "apigw_throttle_burst_limit" {
+  description = "API Gateway stage burst throttle (concurrent request bucket). Paired with apigw_throttle_rate_limit."
+  type        = number
+  default     = 100
 }
 
 variable "cpu" {
