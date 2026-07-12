@@ -78,6 +78,27 @@ class CompanyClassification:
         return cls(sector=slugify(sector), industry=slugify(industry))
 
 
+@dataclass(frozen=True)
+class AnchorMetrics:
+    """The figures the annual-earnings slice materializes on the ``stocks`` anchor that the
+    AI scorecard prefers over the live fundamentals vendor — the newest reported year's
+    trailing free cash flow per share and the trailing year-over-year revenue/EPS growth
+    (EPS on the analyst-consensus basis).
+
+    Read DB-only so the scorecard's Cash Generation and Growth reads are the same canonical
+    figures the ticker card and universe search show — never a divergent vendor number (the
+    reason the analysis prefers the anchor: Finnhub's cash-flow and growth figures sit on a
+    different basis and drift from Yahoo's). Every field is nullable — unset until the annual
+    slice reaches the stock — so an unsynced stock simply omits them rather than falling back
+    to the vendor. A small read-model, the multi-column sibling of ``industry_for_ticker`` /
+    ``tier_for_ticker``.
+    """
+
+    fcf_per_share: float | None = None
+    revenue_growth_yoy: float | None = None
+    eps_growth_yoy: float | None = None
+
+
 class StockSort(str, Enum):
     """The sortable columns of a universe search.
 

@@ -96,6 +96,9 @@ class FakeSearchRepo(StockSearchRepository):
     def industry_for_ticker(self, ticker):  # pragma: no cover - unused
         raise NotImplementedError
 
+    def anchor_metrics_for_ticker(self, ticker):  # pragma: no cover - unused
+        raise NotImplementedError
+
     def tier_for_ticker(self, ticker):  # pragma: no cover - unused
         raise NotImplementedError
 

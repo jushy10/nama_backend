@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.stocks.stocks.models import StockRecord, get_or_create_stock
 from app.stocks.universe.entities import (
+    AnchorMetrics,
     Classifications,
     CompanyClassification,
     MarketCapTier,
@@ -351,6 +352,26 @@ class SqlStockSearchRepository(StockSearchRepository):
         return self._session.execute(
             select(StockRecord.industry).where(StockRecord.ticker == ticker)
         ).scalar_one_or_none()
+
+    def anchor_metrics_for_ticker(self, ticker: str) -> AnchorMetrics:
+        # One row read of the annual slice's materialized figures, same null-collapsing as
+        # `industry_for_ticker`: no row -> an empty AnchorMetrics (all None), so the analysis's
+        # DB-first overlay simply leaves those fields empty until the annual slice has reached
+        # the stock (no live-vendor fallback).
+        row = self._session.execute(
+            select(
+                StockRecord.fcf_per_share,
+                StockRecord.revenue_growth_yoy,
+                StockRecord.eps_growth_yoy,
+            ).where(StockRecord.ticker == ticker)
+        ).one_or_none()
+        if row is None:
+            return AnchorMetrics()
+        return AnchorMetrics(
+            fcf_per_share=row.fcf_per_share,
+            revenue_growth_yoy=row.revenue_growth_yoy,
+            eps_growth_yoy=row.eps_growth_yoy,
+        )
 
     def tier_for_ticker(self, ticker: str) -> MarketCapTier | None:
         # The anchor's cap, bucketed to its tier. Same null-collapsing as
