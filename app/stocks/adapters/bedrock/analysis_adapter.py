@@ -5,10 +5,16 @@ data the use case already gathered — the price snapshot, trailing performance,
 the trailing *and* forward valuation/health/growth metrics, the recent quarterly
 and annual earnings, the analyst recommendation trends, and the stock's industry
 P/E benchmark (how its valuation sits against its peers) — renders it into a
-compact prompt, and asks Claude for a balanced buy/hold/sell read **broken into
-graded sections** (business quality, valuation, earnings, analyst view), written
-in plain, everyday language a non-expert can follow. Swap models or vendors and
-only this file changes.
+compact prompt, and asks Claude for a five-point strong-buy…strong-sell read
+**broken into graded sections** (profitability, cash generation, growth,
+valuation, financial health, earnings, analyst view), written in plain, everyday
+language a non-expert can follow. Swap models or vendors and only this file changes.
+
+The sections are a **single registry** (``_SECTIONS``) — one entry per facet, with
+its key, title, a prompt hint, and the builder that turns gathered data into its
+numeric chips. The forced-tool schema, the recovery tool, the prompt's section list,
+and the entity assembly all derive from that one list, so adding a category is one
+entry plus one metric builder, not an edit in four places.
 
 Two deliberate choices keep it robust and on-pattern:
 
@@ -37,6 +43,8 @@ through the constructor / env (see ``router.get_analysis_provider``).
 Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 """
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.stocks.entities import (
@@ -56,15 +64,203 @@ from app.stocks.ports import StockScorecardProvider
 from app.stocks.recommendations.entities import AnalystRecommendations
 from app.stocks.universe.entities import IndustryValuation
 
-# The four facets the scorecard grades, in card order. Each pairs the stable key the
-# client renders off with its display title; the metric chips for each are attached
-# from gathered data (see ``_build_scorecard``), not authored by the model.
-_SECTIONS: tuple[tuple[str, str], ...] = (
-    ("business_quality", "Business quality"),
-    ("valuation", "Valuation"),
-    ("earnings", "Earnings"),
-    ("analyst_view", "Analyst view"),
+
+@dataclass(frozen=True)
+class _Facts:
+    """Everything the use case gathered, bundled so each section's metric builder
+    takes one argument. The model never sees this — it's what the *service* turns
+    into the numeric chips (so a chip can never carry a hallucinated number)."""
+
+    stock: Stock
+    quarterly: QuarterlyEarningsTimeline | None
+    recommendations: AnalystRecommendations | None
+    industry_valuation: IndustryValuation | None
+
+
+# --- per-section chip builders (each takes the gathered _Facts) --------------------
+# Every displayed number comes from here, never the model. A chip is dropped when its
+# figure is absent, so thin coverage just yields fewer chips.
+
+
+def _profitability_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """How much profit the company keeps — margins and return on equity."""
+    m = f.stock.metrics
+    if m is None:
+        return ()
+    return _metrics(
+        ("Net margin", m.net_margin, "%"),
+        ("Operating margin", m.operating_margin, "%"),
+        ("Gross margin", m.gross_margin, "%"),
+        ("Return on equity", m.roe, "%"),
+    )
+
+
+def _cash_generation_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """How much real cash the business throws off — free cash flow per share and yield."""
+    m = f.stock.metrics
+    if m is None:
+        return ()
+    out = list(_metrics(("FCF / share", m.fcf_per_share, "")))
+    fcf_yield = _fcf_yield(m.fcf_per_share, f.stock.price)
+    if fcf_yield is not None:
+        out.append(SectionMetric("FCF yield", f"{_num(fcf_yield)}%"))
+    return tuple(out)
+
+
+def _growth_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """Trailing revenue/EPS growth plus what analysts expect next year."""
+    m = f.stock.metrics
+    growth = f.stock.growth
+    return _metrics(
+        ("Revenue growth YoY", m.revenue_growth_yoy if m else None, "%"),
+        ("EPS growth YoY", m.eps_growth_yoy if m else None, "%"),
+        (
+            "Est. revenue growth (next yr)",
+            growth.forward_revenue_growth if growth else None,
+            "%",
+        ),
+        ("Est. EPS growth (next yr)", growth.forward_eps_growth if growth else None, "%"),
+    )
+
+
+def _valuation_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """Trailing + forward multiples, plus the industry median for the peer anchor."""
+    m = f.stock.metrics
+    iv = f.industry_valuation
+    rows = [
+        ("P/E (trailing)", m.pe if m else None, ""),
+        ("Forward P/E", f.stock.forward_pe, ""),
+        ("PEG", m.peg if m else None, ""),
+        ("P/B", m.pb if m else None, ""),
+        ("P/S", m.ps if m else None, ""),
+    ]
+    if iv is not None and iv.median_pe is not None:
+        rows.append(("Industry median P/E", iv.median_pe, ""))
+    return _metrics(*rows)
+
+
+def _financial_health_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """Balance-sheet strength — liquidity and leverage."""
+    m = f.stock.metrics
+    if m is None:
+        return ()
+    return _metrics(
+        ("Current ratio", m.current_ratio, ""),
+        ("Debt / equity", m.debt_to_equity, ""),
+    )
+
+
+def _earnings_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """The recent beat track record and the latest surprise."""
+    out: list[SectionMetric] = []
+    quarterly = f.quarterly
+    if quarterly is not None and quarterly.past:
+        reported = list(reversed(quarterly.past))  # the timeline is oldest-first
+        scoreable = [q for q in reported if q.beat is not None]
+        if scoreable:
+            beats = sum(1 for q in scoreable if q.beat)
+            out.append(
+                SectionMetric("Beat rate", f"{beats}/{len(scoreable)} quarters")
+            )
+        newest = reported[0]
+        if newest.eps_surprise_percent is not None:
+            out.append(
+                SectionMetric(
+                    "Latest surprise", f"{_num(newest.eps_surprise_percent)}%"
+                )
+            )
+    return tuple(out)
+
+
+def _analyst_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """The current consensus, its analyst count, and the average 1-5 score."""
+    recommendations = f.recommendations
+    if recommendations is None or recommendations.is_empty:
+        return ()
+    latest = recommendations.latest
+    if latest is None or latest.total == 0:
+        return ()
+    out: list[SectionMetric] = []
+    if latest.consensus is not None:
+        out.append(SectionMetric("Consensus", str(latest.consensus)))
+    out.append(SectionMetric("Analysts", str(latest.total)))
+    if latest.score is not None:
+        out.append(SectionMetric("Avg score (1-5)", _num(latest.score)))
+    return tuple(out)
+
+
+def _fcf_yield(fcf_per_share: float | None, price: float | None) -> float | None:
+    """Free-cash-flow yield (percent): FCF per share over the live price. Keeps its
+    sign (a negative yield is a real 'burning cash' read); ``None`` without both inputs
+    or a non-positive price."""
+    if fcf_per_share is None or not price or price <= 0:
+        return None
+    return round(fcf_per_share / price * 100, 2)
+
+
+@dataclass(frozen=True)
+class _SectionSpec:
+    """One graded facet of the scorecard — the single source of truth. ``key`` is the
+    stable id the client renders off, ``title`` its display name, ``hint`` what the
+    section is about (feeds the tool schema + the prompt's section list), and
+    ``metrics`` the builder that turns gathered data into its chips."""
+
+    key: str
+    title: str
+    hint: str
+    metrics: Callable[[_Facts], tuple[SectionMetric, ...]]
+
+
+# The section catalogue, in card order. Add a facet by adding an entry (plus its
+# builder above) — the tool schemas, the prompt, and the entity assembly all derive
+# from this list.
+_SECTIONS: tuple[_SectionSpec, ...] = (
+    _SectionSpec(
+        "profitability",
+        "Profitability",
+        "how much profit the company keeps (its margins and return on equity)",
+        _profitability_metrics,
+    ),
+    _SectionSpec(
+        "cash_generation",
+        "Cash generation",
+        "how much real cash the business throws off (free cash flow)",
+        _cash_generation_metrics,
+    ),
+    _SectionSpec(
+        "growth",
+        "Growth",
+        "how fast revenue and earnings are growing, recently and expected next year",
+        _growth_metrics,
+    ),
+    _SectionSpec(
+        "valuation",
+        "Valuation",
+        "the price relative to earnings and growth, and versus its industry peers",
+        _valuation_metrics,
+    ),
+    _SectionSpec(
+        "financial_health",
+        "Financial health",
+        "the strength of its balance sheet — how easily it covers its debts",
+        _financial_health_metrics,
+    ),
+    _SectionSpec(
+        "earnings",
+        "Earnings track record",
+        "its recent record of beating or missing expectations",
+        _earnings_metrics,
+    ),
+    _SectionSpec(
+        "analyst_view",
+        "Analyst view",
+        "what Wall Street analysts currently recommend",
+        _analyst_metrics,
+    ),
 )
+
+# The section list rendered into the system prompt, kept in lock-step with the registry.
+_SECTION_LIST_TEXT = "; ".join(f"{s.title} ({s.hint})" for s in _SECTIONS)
 
 
 def _section_schema(what: str) -> dict:
@@ -86,7 +282,7 @@ def _section_schema(what: str) -> dict:
                 "type": "string",
                 "description": (
                     "A 1-3 word plain-language tag for this section (e.g. 'Exceptional', "
-                    "'Expensive', 'Beating estimates', 'Mostly buys'). No jargon."
+                    "'Expensive', 'Accelerating', 'Mostly buys'). No jargon."
                 ),
             },
             "summary": {
@@ -101,79 +297,89 @@ def _section_schema(what: str) -> dict:
     }
 
 
-# A single forced tool is how the model is pinned to structured output: Claude must
-# call submit_scorecard, so the response comes back as validated JSON arguments
-# instead of prose. The schema mirrors the StockScorecard entity's *words* — the
-# overall verdict plus each section's stance/label/summary — minus the fields the
-# adapter stamps itself (symbol, model, generated_at) and every numeric chip (those
-# are attached from gathered data, never trusted to the model).
-_SCORECARD_TOOL = {
-    "name": "submit_scorecard",
-    "description": (
-        "Record a balanced buy/hold/sell scorecard on the stock in plain, everyday "
-        "language, grounded only in the figures provided in the prompt. Give an "
-        "overall verdict plus a read on each of the four sections."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "recommendation": {
-                "type": "string",
-                "enum": [r.value for r in Recommendation],
-                "description": "The overall call, weighing everything on balance.",
-            },
-            "confidence": {
-                "type": "string",
-                "enum": [c.value for c in Confidence],
-                "description": "How sure you are, given how much clear data there is.",
-            },
-            "thesis": {
-                "type": "string",
-                "description": (
-                    "One short sentence in plain, everyday language — the overall take "
-                    "and the main reason for it, as if to a friend who doesn't follow "
-                    "the markets. No jargon."
-                ),
-            },
-            "business_quality": _section_schema(
-                "the company's profitability and cash generation"
-            ),
-            "valuation": _section_schema(
-                "the stock's price relative to its earnings and its industry peers"
-            ),
-            "earnings": _section_schema(
-                "the company's recent earnings track record and what's expected next"
-            ),
-            "analyst_view": _section_schema(
-                "what Wall Street analysts currently recommend"
+def _scorecard_tool() -> dict:
+    """Build the forced ``submit_scorecard`` tool from the section registry — the
+    overall verdict plus one object per section, so a new section flows through
+    automatically."""
+    props: dict = {
+        "recommendation": {
+            "type": "string",
+            "enum": [r.value for r in Recommendation],
+            "description": (
+                "The overall call on the five-point scale (strong buy / buy / hold / "
+                "sell / strong sell), weighing every section on balance."
             ),
         },
-        "required": [
-            "recommendation",
-            "confidence",
-            "thesis",
-            "business_quality",
-            "valuation",
-            "earnings",
-            "analyst_view",
-        ],
-    },
-}
+        "confidence": {
+            "type": "string",
+            "enum": [c.value for c in Confidence],
+            "description": "How sure you are, given how much clear data there is.",
+        },
+        "thesis": {
+            "type": "string",
+            "description": (
+                "One short sentence in plain, everyday language — the overall take and "
+                "the main reason for it, as if to a friend who doesn't follow the "
+                "markets. No jargon."
+            ),
+        },
+    }
+    props.update({s.key: _section_schema(s.hint) for s in _SECTIONS})
+    return {
+        "name": "submit_scorecard",
+        "description": (
+            "Record a balanced strong-buy/buy/hold/sell/strong-sell scorecard on the "
+            "stock in plain, everyday language, grounded only in the figures provided. "
+            "Give an overall verdict plus a read on each section."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": props,
+            "required": [
+                "recommendation",
+                "confidence",
+                "thesis",
+                *[s.key for s in _SECTIONS],
+            ],
+        },
+    }
+
+
+def _sections_tool() -> dict:
+    """Build the lighter ``submit_sections`` recovery tool — only the section reads,
+    derived from the same registry."""
+    return {
+        "name": "submit_sections",
+        "description": (
+            "Record ONLY the section reads for the stock — a stance, a short label, and "
+            "a plain-language summary for each section — grounded only in the figures "
+            "provided. Every section must have a non-empty label and a non-empty summary."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {s.key: _section_schema(s.hint) for s in _SECTIONS},
+            "required": [s.key for s in _SECTIONS],
+        },
+    }
+
+
+# A single forced tool pins the model to structured output; both schemas derive from
+# the section registry so they never drift from it.
+_SCORECARD_TOOL = _scorecard_tool()
+_SECTIONS_TOOL = _sections_tool()
 
 _SYSTEM_PROMPT = (
     "You are a friendly investing assistant explaining one stock to an everyday "
     "person with no finance background. You are given a snapshot of the stock's "
-    "price, its valuation and profitability figures, its recent quarterly and "
-    "annual earnings, what Wall Street analysts recommend, and how its valuation "
-    "compares with other companies in the same industry. From only those figures, "
-    "grade the stock across four sections and give a clear, balanced overall read "
-    "on whether it currently looks like a buy, hold, or sell.\n"
-    "The four sections are: business quality (how profitable it is and how much "
-    "cash it generates), valuation (whether its price looks cheap or expensive for "
-    "its earnings and versus its industry peers), earnings (its recent track "
-    "record of beating or missing expectations and what's expected next), and the "
-    "analyst view (what the sell-side currently recommends). For every one of the "
-    "four sections you MUST give a stance, a short non-empty label, and a non-empty "
+    "price, its valuation, profitability, growth and balance-sheet figures, its "
+    "recent quarterly and annual earnings, what Wall Street analysts recommend, and "
+    "how its valuation compares with other companies in the same industry. From only "
+    "those figures, grade the stock across the sections below and give a clear, "
+    "balanced overall read on a five-point scale — strong buy, buy, hold, sell, or "
+    "strong sell — reserving the 'strong' calls for when the figures line up "
+    "especially clearly one way.\n"
+    f"The sections are: {_SECTION_LIST_TEXT}. For every section you MUST give a "
+    "stance (positive/neutral/negative), a short non-empty label, and a non-empty "
     "one-to-two-sentence plain-language summary — never leave a section's label or "
     "summary blank, and do not fold the whole read into the thesis.\n"
     "When an industry benchmark is provided, weigh the stock's own price-to-"
@@ -191,52 +397,18 @@ _SYSTEM_PROMPT = (
     "financial advice. Respond by calling the submit_scorecard tool."
 )
 
-# Recovery tool for the retry path. The fast Haiku tier sometimes fills the overall
-# verdict richly but hands back the four sections *blank* (empty label/summary) —
-# folding the whole read into the thesis. This lighter tool asks for ONLY the four
-# section reads (stance/label/summary), grounded in the same figures, so the narrower
-# ask lands reliably (and regenerates a fraction of the tokens). The metric chips are
-# attached by the service regardless, so the recovery only needs the model's words.
-_SECTIONS_TOOL = {
-    "name": "submit_sections",
-    "description": (
-        "Record ONLY the four section reads for the stock — a stance, a short label, "
-        "and a plain-language summary for each of business quality, valuation, "
-        "earnings, and the analyst view — grounded only in the figures provided. Every "
-        "section must have a non-empty label and a non-empty summary."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "business_quality": _section_schema(
-                "the company's profitability and cash generation"
-            ),
-            "valuation": _section_schema(
-                "the stock's price relative to its earnings and its industry peers"
-            ),
-            "earnings": _section_schema(
-                "the company's recent earnings track record and what's expected next"
-            ),
-            "analyst_view": _section_schema(
-                "what Wall Street analysts currently recommend"
-            ),
-        },
-        "required": ["business_quality", "valuation", "earnings", "analyst_view"],
-    },
-}
-
 _SECTIONS_SYSTEM = (
-    "You already gave the overall read on this stock. Now give ONLY the four section "
-    "reads — for business quality, valuation, earnings, and the analyst view. For each, "
-    "give a stance (positive/neutral/negative), a short non-empty label, and a non-empty "
-    "one-to-two-sentence plain-language summary a non-expert can follow, grounded only "
-    "in the figures below. Never leave a section's label or summary blank. Respond by "
-    "calling the submit_sections tool."
+    "You already gave the overall read on this stock. Now give ONLY the section reads. "
+    "For each section give a stance (positive/neutral/negative), a short non-empty "
+    "label, and a non-empty one-to-two-sentence plain-language summary a non-expert can "
+    "follow, grounded only in the figures below. Never leave a section's label or "
+    "summary blank. The sections are: "
+    f"{_SECTION_LIST_TEXT}. Respond by calling the submit_sections tool."
 )
 
 # Prepended to the same figures the first pass saw, so the recovered sections stay grounded.
 _SECTIONS_INSTRUCTION = (
-    "Give the four section reads (a stance, label, and summary each) for this stock, "
+    "Give the section reads (a stance, label, and summary each) for this stock, "
     "grounded only in these figures:\n\n"
 )
 
@@ -263,16 +435,16 @@ class BedrockScorecardProvider(StockScorecardProvider):
     # us.anthropic.claude-haiku-4-5 400s with "invalid model identifier").
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     _DEFAULT_REGION = "us-east-1"
-    # The output is short and plain by design (a one-line thesis + four brief
-    # sections), so a moderate cap is ample — and fewer generated tokens is the main
-    # lever on this endpoint's latency, since output generation dominates the model
-    # call. Kept well above the worst case so a full scorecard is never truncated
-    # mid-section (a truncated section is one way the read comes back incomplete).
-    _MAX_TOKENS = 2048
+    # The output is short and plain by design (a one-line thesis + a handful of brief
+    # sections), so a moderate cap is ample — but it scales with the section count, so
+    # this is kept well above the worst case for the full registry so a scorecard is
+    # never truncated mid-section (a truncated section is one way it comes back
+    # incomplete). Fewer generated tokens is the main lever on this endpoint's latency.
+    _MAX_TOKENS = 3000
     # Bedrock does not enforce the tool schema's required/non-empty fields, and the
-    # fast Haiku tier occasionally returns the overall verdict with the four sections
-    # left blank (empty label/summary). Re-issue a *targeted* sections-only call up to
-    # this many extra times to fill them; paired with the use case refusing to cache an
+    # fast Haiku tier occasionally returns the overall verdict with the sections left
+    # blank (empty label/summary). Re-issue a *targeted* sections-only call up to this
+    # many extra times to fill them; paired with the use case refusing to cache an
     # incomplete read, a blank-section result is effectively never served (and never
     # frozen for the TTL). Only fires on the miss — zero cost when the first call is
     # already complete.
@@ -319,7 +491,7 @@ class BedrockScorecardProvider(StockScorecardProvider):
                 )
             # The forced tool requires every section's label + summary, but Bedrock does
             # not enforce it, and the fast tier sometimes packs the whole read into the
-            # thesis and hands the four sections back blank. Re-issue a *targeted*
+            # thesis and hands the sections back blank. Re-issue a *targeted*
             # sections-only call to fill the blanks — a narrower ask that lands reliably
             # and regenerates a fraction of the tokens. Bounded; the use case won't cache
             # an incomplete one, so a truly stuck read regenerates next view rather than
@@ -379,7 +551,7 @@ class BedrockScorecardProvider(StockScorecardProvider):
     def _recover_sections(
         self, prompt: str, key: str, costs: CostAccumulator
     ) -> dict | None:
-        """One targeted retry that regenerates *only* the four section reads
+        """One targeted retry that regenerates *only* the section reads
         (stance/label/summary), grounded in the same figures the first pass saw — far
         fewer output tokens than re-running the whole scorecard, and a narrower ask that
         lands more reliably. Returns the ``submit_sections`` arguments, or ``None`` when
@@ -420,25 +592,25 @@ def _section_read_complete(read: object) -> bool:
 
 
 def _missing_sections(payload: dict | None) -> bool:
-    """True when a returned scorecard is present but any of the four sections is missing
-    or blank — the signal to retry. A ``None`` payload (the model didn't call the tool at
-    all) is left for the caller to surface as ``StockDataUnavailable``, not retried."""
+    """True when a returned scorecard is present but any section is missing or blank —
+    the signal to retry. A ``None`` payload (the model didn't call the tool at all) is
+    left for the caller to surface as ``StockDataUnavailable``, not retried."""
     if payload is None:
         return False
-    return any(not _section_read_complete(payload.get(key)) for key, _ in _SECTIONS)
+    return any(not _section_read_complete(payload.get(s.key)) for s in _SECTIONS)
 
 
 def _merge_section_reads(payload: dict, recovered: dict) -> dict:
     """Fill only the *blank* section reads from a targeted recovery call, leaving any
-    section the first pass already wrote untouched — so a retry that recovers three
-    sections never overwrites the good fourth. The overall verdict and the metric chips
-    are untouched (the recovery only carries the four sections' words)."""
+    section the first pass already wrote untouched — so a retry that recovers some
+    sections never overwrites the good ones. The overall verdict and the metric chips
+    are untouched (the recovery only carries the sections' words)."""
     merged = dict(payload)
-    for key, _ in _SECTIONS:
-        if not _section_read_complete(merged.get(key)) and _section_read_complete(
-            recovered.get(key)
+    for s in _SECTIONS:
+        if not _section_read_complete(merged.get(s.key)) and _section_read_complete(
+            recovered.get(s.key)
         ):
-            merged[key] = recovered[key]
+            merged[s.key] = recovered[s.key]
     return merged
 
 
@@ -457,7 +629,8 @@ def _build_scorecard(
     recommendation/confidence surfaces as this port's documented
     ``StockDataUnavailable`` rather than leaking out). Each section merges the model's
     *words* (stance / label / summary) with metric chips computed here from the data
-    already gathered, so the numbers are always the service's, never the model's.
+    already gathered (via the section registry), so the numbers are always the
+    service's, never the model's.
     """
     try:
         recommendation = Recommendation(payload["recommendation"])
@@ -467,15 +640,10 @@ def _build_scorecard(
         raise StockDataUnavailable(
             symbol, f"analysis model returned an unexpected result: {exc}"
         ) from exc
-    metrics_by_key = {
-        "business_quality": _business_quality_metrics(stock),
-        "valuation": _valuation_metrics(stock, industry_valuation),
-        "earnings": _earnings_metrics(stock, quarterly),
-        "analyst_view": _analyst_metrics(recommendations),
-    }
+    facts = _Facts(stock, quarterly, recommendations, industry_valuation)
     sections = tuple(
-        _section(key, title, payload.get(key), metrics_by_key[key])
-        for key, title in _SECTIONS
+        _section(s.key, s.title, payload.get(s.key), s.metrics(facts))
+        for s in _SECTIONS
     )
     return StockScorecard(
         symbol=symbol,
@@ -509,82 +677,6 @@ def _section(
         summary=str(read.get("summary") or "").strip(),
         metrics=metrics,
     )
-
-
-def _business_quality_metrics(stock: Stock) -> tuple[SectionMetric, ...]:
-    """Profitability + cash-generation chips, off the trailing metrics."""
-    m = stock.metrics
-    if m is None:
-        return ()
-    return _metrics(
-        ("Net margin", m.net_margin, "%"),
-        ("Return on equity", m.roe, "%"),
-        ("Operating margin", m.operating_margin, "%"),
-        ("FCF / share", m.fcf_per_share, ""),
-    )
-
-
-def _valuation_metrics(
-    stock: Stock, industry_valuation: IndustryValuation | None
-) -> tuple[SectionMetric, ...]:
-    """Trailing + forward multiples, plus the industry median for the peer anchor."""
-    m = stock.metrics
-    rows = [
-        ("P/E (trailing)", m.pe if m else None, ""),
-        ("Forward P/E", stock.forward_pe, ""),
-        ("PEG", m.peg if m else None, ""),
-    ]
-    if industry_valuation is not None and industry_valuation.median_pe is not None:
-        rows.append(("Industry median P/E", industry_valuation.median_pe, ""))
-    return _metrics(*rows)
-
-
-def _earnings_metrics(
-    stock: Stock, quarterly: QuarterlyEarningsTimeline | None
-) -> tuple[SectionMetric, ...]:
-    """The beat track record + latest surprise + the forward EPS-growth expectation."""
-    out: list[SectionMetric] = []
-    if quarterly is not None and quarterly.past:
-        reported = list(reversed(quarterly.past))  # the timeline is oldest-first
-        scoreable = [q for q in reported if q.beat is not None]
-        if scoreable:
-            beats = sum(1 for q in scoreable if q.beat)
-            out.append(
-                SectionMetric("Beat rate", f"{beats}/{len(scoreable)} quarters")
-            )
-        newest = reported[0]
-        if newest.eps_surprise_percent is not None:
-            out.append(
-                SectionMetric(
-                    "Latest surprise", f"{_num(newest.eps_surprise_percent)}%"
-                )
-            )
-    growth = stock.growth
-    if growth is not None and growth.forward_eps_growth is not None:
-        out.append(
-            SectionMetric(
-                "Est. EPS growth (next yr)", f"{_num(growth.forward_eps_growth)}%"
-            )
-        )
-    return tuple(out)
-
-
-def _analyst_metrics(
-    recommendations: AnalystRecommendations | None,
-) -> tuple[SectionMetric, ...]:
-    """The current consensus, its analyst count, and the average 1-5 score."""
-    if recommendations is None or recommendations.is_empty:
-        return ()
-    latest = recommendations.latest
-    if latest is None or latest.total == 0:
-        return ()
-    out: list[SectionMetric] = []
-    if latest.consensus is not None:
-        out.append(SectionMetric("Consensus", str(latest.consensus)))
-    out.append(SectionMetric("Analysts", str(latest.total)))
-    if latest.score is not None:
-        out.append(SectionMetric("Avg score (1-5)", _num(latest.score)))
-    return tuple(out)
 
 
 def _metrics(*rows: tuple[str, object, str]) -> tuple[SectionMetric, ...]:

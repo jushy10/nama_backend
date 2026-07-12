@@ -87,7 +87,7 @@ def test_corrupt_enum_row_is_treated_as_a_miss(session):
         AnalysisCacheRecord(
             kind="stock",
             symbol="AAPL",
-            recommendation="strong_buy",  # not a Recommendation value
+            recommendation="mega_buy",  # not a Recommendation value
             confidence="high",
             thesis="x",
             strengths=[],
