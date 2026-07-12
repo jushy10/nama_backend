@@ -22,6 +22,7 @@ Three data legs, two stances:
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable
@@ -77,9 +78,28 @@ class GetStockHeatMap:
             if r.market_cap is not None
         )
         tickers = tuple(row.ticker for row in rows)
-        change_by_ticker = self._change_by_ticker(tickers)
-        performance_by_ticker = self._performance_by_ticker(tickers)
+        change_by_ticker, performance_by_ticker = self._colours(tickers)
         return HeatMap.build(scope, rows, change_by_ticker, performance_by_ticker)
+
+    def _colours(
+        self, tickers
+    ) -> tuple[dict[str, float | None], dict[str, StockPerformance]]:
+        """The board's two colour legs — day-change and trailing performance — fetched
+        **concurrently**.
+
+        They're independent Alpaca reads (no shared DB session — the universe read already
+        completed on the calling thread), and the trailing-performance leg is far the heavier
+        (a year of daily bars for the whole index) while the quote leg is a handful of light
+        snapshots, so running them in parallel makes a cache-cold board cost ``max`` of the two
+        rather than their sum. Both helpers swallow their own feed failures to an empty map, so
+        neither future raises — a plain fan-out over ``concurrent.futures``, the same I/O
+        orchestration ``GetStockInfo`` uses, with no framework or vendor leaking into the core."""
+        if not tickers:
+            return {}, {}
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            change_future = pool.submit(self._change_by_ticker, tickers)
+            performance_future = pool.submit(self._performance_by_ticker, tickers)
+            return change_future.result(), performance_future.result()
 
     def _criteria(self, scope: HeatMapScope) -> StockSearchCriteria:
         """The whole chosen index, biggest cap first — the board's natural reading order (the
