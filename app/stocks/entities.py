@@ -185,7 +185,7 @@ class GrowthMetrics:
     """Revenue and earnings growth — trailing actuals and forward consensus.
 
     Two complementary reads on the same two lines (revenue, EPS): ``*_yoy`` is the
-    *trailing* one-year change from reported figures (the Finnhub TTM growth carried
+    *trailing* one-year change from reported figures (the trailing YoY growth carried
     on ``KeyMetrics``); ``forward_*_growth`` is the analyst-*expected* one-year change
     next year — FY1 → FY2 from ``AnalystEstimates``. All percent. Best-effort: any leg
     whose source is absent is ``None``."""
@@ -216,37 +216,6 @@ class GrowthMetrics:
             forward_revenue_growth=fwd_rev,
             forward_eps_growth=fwd_eps,
         )
-
-
-@dataclass(frozen=True)
-class CompanyProfile:
-    """A company's clean display name.
-
-    Sourced from a company-profile vendor, not the price feed. Market data APIs
-    (e.g. Alpaca) return a ticker's name and exchange, but Alpaca's name is the
-    full legal instrument title ("Apple Inc. Common Stock") rather than the tidy
-    display name. The profile vendor carries the clean ``name`` ("Apple Inc.") the
-    stock view prefers; ``None`` when the vendor doesn't cover the symbol
-    (best-effort enrichment). The call yields more (description, sector, website,
-    …), left out until something needs it.
-    """
-
-    name: str | None = None
-
-
-@dataclass(frozen=True)
-class StockFundamentals:
-    """Company fundamentals that live outside the live price snapshot.
-
-    Sourced from a fundamentals vendor rather than the price feed, since market
-    data APIs (e.g. Alpaca) don't expose shares outstanding or dividends. The
-    same vendor call also yields the richer ``metrics`` block.
-    """
-
-    market_cap: float | None
-    dividend_per_share: float | None
-    dividend_yield: float | None
-    metrics: KeyMetrics | None = None
 
 
 @dataclass(frozen=True)

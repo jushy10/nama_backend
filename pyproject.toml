@@ -17,6 +17,9 @@ dependencies = [
     "slowapi>=0.1.9",   # in-process per-client (per-IP) rate limiting — a token bucket keyed on the
                         # caller's IP so one abusive client can't exhaust the service. In-memory
                         # counter (fine for a single task); swap storage_uri for Redis to scale out.
+    "jinja2>=3.1",      # server-rendered SEO content pages (app/stocks/seo): FastAPI's
+                        # Jinja2Templates renders the crawlable per-entity HTML that the
+                        # client-rendered React app can't give search / AI crawlers.
 ]
 
 # PostgreSQL driver — install with `pip install -e ".[postgres]"` anywhere that

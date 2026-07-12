@@ -27,6 +27,7 @@ from app.stocks.universe.db_repository import (
     SqlUniverseRepository,
 )
 from app.stocks.universe.entities import (
+    AnchorMetrics,
     CompanyClassification,
     MarketCapTier,
     ScreenedStock,
@@ -336,6 +337,7 @@ def _seed(
     market_cap=1e10,
     pe_ratio=None,
     fcf_yield=None,
+    fcf_per_share=None,
     revenue_growth_yoy=None,
     eps_growth_yoy=None,
     fcf_growth_yoy=None,
@@ -356,6 +358,7 @@ def _seed(
             market_cap=market_cap,
             pe_ratio=pe_ratio,
             fcf_yield=fcf_yield,
+            fcf_per_share=fcf_per_share,
             revenue_growth_yoy=revenue_growth_yoy,
             eps_growth_yoy=eps_growth_yoy,
             fcf_growth_yoy=fcf_growth_yoy,
@@ -800,6 +803,46 @@ def test_industry_for_ticker_none_when_unknown_or_unclassified(session):
     r = SqlStockSearchRepository(session)
     assert r.industry_for_ticker("ZZZZ") is None  # no such anchor row
     assert r.industry_for_ticker("NEW") is None  # row exists, industry unclassified
+
+
+def test_anchor_metrics_for_ticker_returns_the_stored_figures(session):
+    # The analysis reads every anchor-materialized fundamental off the row in one go — the
+    # annual slice's cash/growth, the fundamentals slice's margins/ratios/per-share inputs,
+    # plus the screen's market cap and the clean display name.
+    _seed(
+        session,
+        "NVDA",
+        name="Nvidia",
+        market_cap=3e12,
+        fcf_per_share=9.99,
+        revenue_growth_yoy=15.5,
+        eps_growth_yoy=22.0,
+    )
+    metrics = SqlStockSearchRepository(session).anchor_metrics_for_ticker("NVDA")
+    assert metrics == AnchorMetrics(
+        fcf_per_share=9.99,
+        revenue_growth_yoy=15.5,
+        eps_growth_yoy=22.0,
+        market_cap=3e12,
+        name="Nvidia",
+    )
+
+
+def test_anchor_metrics_for_ticker_all_none_when_unknown_or_unsynced(session):
+    # No row, and a row present but not yet given the figures (nor a market cap or name),
+    # both read as an empty AnchorMetrics — the analysis's DB-only overlay then simply omits
+    # those reads.
+    _seed(
+        session,
+        "NEW",
+        market_cap=None,
+        fcf_per_share=None,
+        revenue_growth_yoy=None,
+        eps_growth_yoy=None,
+    )
+    r = SqlStockSearchRepository(session)
+    assert r.anchor_metrics_for_ticker("ZZZZ") == AnchorMetrics()  # no such anchor row
+    assert r.anchor_metrics_for_ticker("NEW") == AnchorMetrics()  # row exists, unsynced
 
 
 def test_tier_for_ticker_buckets_the_stored_cap(session):

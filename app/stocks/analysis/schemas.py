@@ -9,24 +9,52 @@ from datetime import datetime
 from pydantic import BaseModel
 
 
-class InvestmentAnalysisResponse(BaseModel):
-    """An AI-generated, balanced buy/hold/sell read on a stock.
+class SectionMetricResponse(BaseModel):
+    """One supporting figure under a scorecard section — a ``label`` and a
+    pre-formatted display ``value`` (e.g. ``"Net margin"`` / ``"25.00%"``). Attached
+    by the service from gathered data, never authored by the model."""
 
-    ``recommendation`` is the headline call ("buy"/"hold"/"sell") and
-    ``confidence`` how firmly it's held ("low"/"medium"/"high"); ``thesis`` is a
-    few sentences of reasoning, with ``strengths`` (the bull case) and ``risks``
-    (the bear case) as short bullets. ``disclaimer`` is a fixed reminder that this
-    is informational, not financial advice — authored by the service, not the
-    model. ``model`` and ``generated_at`` record what produced the analysis and
-    when. Reasoned only over the figures the other stock endpoints expose;
-    descriptive, not advice."""
+    label: str
+    value: str
+
+
+class ScorecardSectionResponse(BaseModel):
+    """One graded facet of the stock scorecard.
+
+    ``key`` is a stable id the client renders off (``business_quality`` /
+    ``valuation`` / ``earnings`` / ``analyst_view``); ``title`` its display name.
+    ``stance`` is the favourability signal ("positive"/"neutral"/"negative", the
+    client colours on it), ``label`` a short human tag, ``summary`` a plain-language
+    read, and ``metrics`` the supporting chips."""
+
+    key: str
+    title: str
+    stance: str  # "positive" | "neutral" | "negative"
+    label: str
+    summary: str
+    metrics: list[SectionMetricResponse]
+
+
+class InvestmentAnalysisResponse(BaseModel):
+    """An AI-generated, **sectioned** buy/hold/sell scorecard for a stock.
+
+    ``recommendation`` is the overall call on the five-point scale
+    ("strong_buy"/"buy"/"hold"/"sell"/"strong_sell"); ``confidence``
+    ("low"/"medium"/"high") is how much of the read is backed by real data — a
+    service-computed measure of how many sections' figures resolved, not a model
+    guess. ``thesis`` is a one-line headline. ``sections`` grade the individual facets
+    — profitability, cash generation, growth, valuation, financial health, earnings,
+    and the analyst view — each with its own stance, label, plain-language summary,
+    and supporting figures. ``disclaimer`` is a fixed reminder that this is
+    informational, not financial advice — authored by the service, not the model.
+    ``model`` and ``generated_at`` record what produced the read and when. Reasoned
+    only over the figures the other stock endpoints expose; descriptive, not advice."""
 
     symbol: str
-    recommendation: str  # "buy" | "hold" | "sell"
+    recommendation: str  # "strong_buy" | "buy" | "hold" | "sell" | "strong_sell"
     confidence: str  # "low" | "medium" | "high"
     thesis: str
-    strengths: list[str]  # bull-case points
-    risks: list[str]  # bear-case points
+    sections: list[ScorecardSectionResponse]
     disclaimer: str
     model: str  # the model that produced the analysis
     generated_at: datetime
@@ -64,6 +92,28 @@ class RatingsAnalysisResponse(BaseModel):
 
     symbol: str
     verdict: str  # "bullish" | "mixed" | "cautious"
+    confidence: str  # "low" | "medium" | "high"
+    summary: str
+    findings: list[str]
+    disclaimer: str
+    model: str  # the model that produced the analysis
+    generated_at: datetime
+
+
+class FundamentalsAnalysisResponse(BaseModel):
+    """An AI-generated, plain-language read of a stock's fundamentals.
+
+    ``verdict`` is the overall read ("strong"/"mixed"/"weak") of the company's fundamentals —
+    profitability, growth, balance-sheet health, and whether the shares look reasonably priced
+    against all that — and ``confidence`` how firmly it's held ("low"/"medium"/"high");
+    ``summary`` is the plain-language headline and ``findings`` a few short, concrete takeaways.
+    ``disclaimer`` is a fixed reminder that this is informational, not financial advice — authored
+    by the service, not the model. ``model`` and ``generated_at`` record what produced the
+    analysis and when. Reasoned only over the fundamentals the ticker card exposes plus the
+    industry-P/E peer benchmark; descriptive, not advice."""
+
+    symbol: str
+    verdict: str  # "strong" | "mixed" | "weak"
     confidence: str  # "low" | "medium" | "high"
     summary: str
     findings: list[str]

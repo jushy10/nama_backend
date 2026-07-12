@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }}</title>
+    <meta name="description" content="{{ description }}" />
+    <link rel="canonical" href="{{ canonical }}" />
+    <meta name="robots" content="{{ robots }}" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Nama Insights" />
+    <meta property="og:title" content="{{ title }}" />
+    <meta property="og:description" content="{{ description }}" />
+    <meta property="og:url" content="{{ canonical }}" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="{{ title }}" />
+    <meta name="twitter:description" content="{{ description }}" />
+
+    <script type="application/ld+json">{{ jsonld | safe }}</script>
+
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f7f8fa; --card: #ffffff; --fg: #10131a; --muted: #5b6472;
+        --line: #e5e8ee; --accent: #2f63b4; --accent-fg: #ffffff; --chip: #eef2f9;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0a0a0f; --card: #14151c; --fg: #e8eaf0; --muted: #99a1b3;
+          --line: #262932; --accent: #6ea0e6; --accent-fg: #0a0a0f; --chip: #1c1f28;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; background: var(--bg); color: var(--fg);
+        font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      }
+      a { color: var(--accent); }
+      .wrap { max-width: 860px; margin: 0 auto; padding: 24px 20px 64px; }
+      header.site { display: flex; align-items: center; gap: 10px; padding: 8px 0 8px; }
+      header.site .brand { font-weight: 700; font-size: 1.1rem; color: var(--fg); text-decoration: none; }
+      .hero { text-align: center; padding: 40px 0 8px; }
+      .hero h1 { font-size: 2.4rem; line-height: 1.12; margin: 0 0 14px; letter-spacing: -0.02em; }
+      .hero p.lead { font-size: 1.15rem; color: var(--muted); margin: 0 auto 26px; max-width: 46ch; }
+      .btn {
+        display: inline-block; background: var(--accent); color: var(--accent-fg);
+        text-decoration: none; font-weight: 700; padding: 14px 26px; border-radius: 12px; font-size: 1.05rem;
+      }
+      section { margin-top: 48px; }
+      h2 { font-size: 1.5rem; letter-spacing: -0.01em; margin: 0 0 18px; }
+      .features { display: grid; grid-template-columns: 1fr; gap: 16px; }
+      @media (min-width: 640px) { .features { grid-template-columns: repeat(2, 1fr); } }
+      .feature { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+      .feature h3 { margin: 0 0 6px; font-size: 1.05rem; }
+      .feature p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+      .links { display: flex; flex-wrap: wrap; gap: 10px; }
+      .links a { background: var(--chip); border: 1px solid var(--line); border-radius: 10px; padding: 10px 15px; text-decoration: none; font-weight: 600; font-size: 0.95rem; }
+      .callout { margin-top: 40px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; }
+      .callout h3 { margin: 0 0 6px; font-size: 1.1rem; }
+      .callout p { margin: 0; color: var(--muted); }
+      details { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 4px 18px; margin-bottom: 10px; }
+      details > summary { cursor: pointer; font-weight: 600; padding: 12px 0; list-style: none; }
+      details > summary::-webkit-details-marker { display: none; }
+      details > summary::after { content: "+"; float: right; color: var(--muted); font-weight: 400; }
+      details[open] > summary::after { content: "–"; }
+      details p { margin: 0 0 14px; color: var(--muted); }
+      .cta-band { text-align: center; margin-top: 48px; }
+      footer.site { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.8rem; }
+      .disclaimer { margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="site">
+        <a class="brand" href="{{ site }}">Nama Insights</a>
+      </header>
+
+      <div class="hero">
+        <h1>Free Stock Screener</h1>
+        <p class="lead">
+          Filter US stocks by market cap, sector, valuation, free-cash-flow yield and growth —
+          free, no login. Or just describe what you want and let AI build the screen.
+        </p>
+        <a class="btn" href="{{ app_url }}">Open the screener →</a>
+      </div>
+
+      <section>
+        <h2>What you can screen by</h2>
+        <div class="features">
+          {% for feature in features %}
+          <div class="feature">
+            <h3>{{ feature.title }}</h3>
+            <p>{{ feature.body }}</p>
+          </div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section>
+        <h2>Popular screens</h2>
+        <div class="links">
+          {% for item in popular %}<a href="{{ item.url }}">{{ item.label }}</a>{% endfor %}
+        </div>
+      </section>
+
+      <div class="callout">
+        <h3>Prefer plain English?</h3>
+        <p>
+          Don't want to set filters? The
+          <a href="{{ ai_url }}">AI stock screener</a> turns a request like "mega-cap tech with
+          high free cash flow yield" into a screen for you.
+        </p>
+      </div>
+
+      <section>
+        <h2>Frequently asked questions</h2>
+        {% for faq in faqs %}
+        <details>
+          <summary>{{ faq.q }}</summary>
+          <p>{{ faq.a }}</p>
+        </details>
+        {% endfor %}
+      </section>
+
+      <div class="cta-band">
+        <a class="btn" href="{{ app_url }}">Open the stock screener →</a>
+      </div>
+
+      <footer class="site">
+        <div>© {{ year }} Nama Insights.</div>
+        <div class="disclaimer">
+          Nama Insights is a research tool, for informational purposes only — not investment
+          advice. Market data may lag and is the most recently synced value.
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

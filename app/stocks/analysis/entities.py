@@ -13,15 +13,20 @@ from enum import Enum
 
 
 class Recommendation(str, Enum):
-    """The headline buy / hold / sell call of an AI stock analysis.
+    """The headline call of an AI stock analysis, on the five-point sell-side scale.
 
-    The string values double as the JSON the model returns and the API serves,
-    the same convention as ``Timeframe``.
+    ``STRONG_BUY`` … ``STRONG_SELL`` mirror the analyst-consensus vocabulary, with
+    ``HOLD`` the neutral middle — the 'strong' calls are reserved for when the figures
+    line up especially clearly one way. The string values double as the JSON the model
+    returns and the API serves, the same convention as ``Timeframe``. (Shared with the
+    ETF analysis's ``InvestmentAnalysis``.)
     """
 
+    STRONG_BUY = "strong_buy"
     BUY = "buy"
     HOLD = "hold"
     SELL = "sell"
+    STRONG_SELL = "strong_sell"
 
 
 class Confidence(str, Enum):
@@ -66,6 +71,94 @@ class InvestmentAnalysis:
         refuse to cache an analysis that isn't complete, so a rare empty-list model
         result is never frozen for the cache TTL; the next view regenerates."""
         return bool(self.strengths and self.risks)
+
+
+class SectionStance(str, Enum):
+    """How one scorecard section reads *for the stock* — the favorability signal the
+    card colours on.
+
+    ``POSITIVE`` is a point in the stock's favour (a cheap valuation, strong margins,
+    a bullish analyst consensus), ``NEGATIVE`` a point against, ``NEUTRAL`` mixed or
+    unremarkable. Deliberately one shared scale across every section so the client
+    colours consistently (green / amber / red), while each section's own ``label``
+    carries the human read ("Exceptional", "Expensive"). The string values double as
+    the JSON the model returns and the API serves, the same convention as
+    ``Recommendation``.
+    """
+
+    POSITIVE = "positive"
+    NEUTRAL = "neutral"
+    NEGATIVE = "negative"
+
+
+@dataclass(frozen=True)
+class SectionMetric:
+    """One supporting figure rendered as a chip under a scorecard section — a
+    ``label`` and a pre-formatted display ``value`` (e.g. ``("Net margin", "25%")``).
+
+    The values are attached from the figures the use case already gathered, **never
+    authored by the model**, so a chip can never carry a hallucinated number — the
+    same split the analysis has always drawn between the model's words and the
+    service's numbers.
+    """
+
+    label: str
+    value: str
+
+
+@dataclass(frozen=True)
+class ScorecardSection:
+    """One graded facet of a ``StockScorecard``.
+
+    ``key`` is a stable id the client renders off (``business_quality`` /
+    ``valuation`` / ``earnings`` / ``analyst_view``) and ``title`` its display name.
+    ``stance`` is the favourability signal (colours the card), ``label`` a
+    one-to-few-word human tag ("Exceptional", "Expensive"), and ``summary`` a plain,
+    everyday-language read of a sentence or two. ``metrics`` are the supporting chips,
+    attached from gathered data. The model authors only ``stance`` / ``label`` /
+    ``summary``; everything numeric comes from the service.
+    """
+
+    key: str
+    title: str
+    stance: SectionStance
+    label: str
+    summary: str
+    metrics: tuple[SectionMetric, ...] = ()
+
+
+@dataclass(frozen=True)
+class StockScorecard:
+    """An AI-generated, sectioned buy / hold / sell read on a stock.
+
+    The section-based successor to ``InvestmentAnalysis`` for the stock endpoint
+    (the ETF analysis still returns ``InvestmentAnalysis``). Rather than one flat
+    thesis with bull/bear bullet lists, it grades a handful of facets — business
+    quality, valuation, earnings, and the analyst view — each with its own
+    plain-language read and supporting figures, over one overall verdict.
+
+    ``recommendation`` is the headline call and ``confidence`` how firmly it's held;
+    ``thesis`` is a one-line headline. ``sections`` are the graded facets.
+    ``model`` records which model produced it and ``generated_at`` when, so a cached
+    read stays traceable — the same as ``InvestmentAnalysis``.
+    """
+
+    symbol: str
+    recommendation: Recommendation
+    confidence: Confidence
+    thesis: str
+    sections: tuple[ScorecardSection, ...]
+    model: str
+    generated_at: datetime
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its full substance — at least one section, every
+        one of them with a non-empty label *and* summary (the two fields the card
+        shows in words). The use case refuses to cache an incomplete read, so a rare
+        model miss (a section left blank) is never frozen for the cache TTL; the next
+        view regenerates."""
+        return bool(self.sections) and all(s.label and s.summary for s in self.sections)
 
 
 class MarketTone(str, Enum):
@@ -121,6 +214,15 @@ class SectorAnalysis:
     laggards: tuple[SectorHighlight, ...]
     model: str
     generated_at: datetime
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its substance — a headline ``summary`` and at
+        least one standout sector (a ``leader`` or a ``laggard``). The AI-analysis
+        use case refuses to cache an incomplete read, so a rare empty model result is
+        never frozen for the cache TTL; the next view regenerates (mirrors
+        ``InvestmentAnalysis.is_complete``)."""
+        return bool(self.summary and (self.leaders or self.laggards))
 
 
 class MarketPeriod(str, Enum):
@@ -185,6 +287,14 @@ class MarketSummary:
     model: str
     generated_at: datetime
 
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its substance — a headline ``summary`` and at
+        least one ``period`` highlight. The AI-analysis use case refuses to cache an
+        incomplete read, so a rare empty model result is never frozen for the cache
+        TTL; the next view regenerates (mirrors ``InvestmentAnalysis.is_complete``)."""
+        return bool(self.summary and self.periods)
+
 
 class EarningsTrend(str, Enum):
     """Where a company's earnings story is heading.
@@ -222,6 +332,14 @@ class EarningsAnalysis:
     highlights: tuple[str, ...]
     model: str
     generated_at: datetime
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its substance — a headline ``summary`` and at
+        least one ``highlight``. The AI-analysis use case refuses to cache an
+        incomplete read, so a rare empty model result is never frozen for the cache
+        TTL; the next view regenerates (mirrors ``InvestmentAnalysis.is_complete``)."""
+        return bool(self.summary and self.highlights)
 
 
 class RatingsVerdict(str, Enum):
@@ -261,3 +379,63 @@ class RatingsAnalysis:
     findings: tuple[str, ...]
     model: str
     generated_at: datetime
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its substance — a headline ``summary`` and at
+        least one ``finding``. The AI-analysis use case refuses to cache an
+        incomplete read, so a rare empty model result is never frozen for the cache
+        TTL; the next view regenerates (mirrors ``InvestmentAnalysis.is_complete``)."""
+        return bool(self.summary and self.findings)
+
+
+class FundamentalsVerdict(str, Enum):
+    """The overall read of a company's *fundamentals*.
+
+    A holistic quality read of the business behind the price — how profitable it is, whether
+    revenue and earnings are growing, how sound the balance sheet looks, and whether the shares
+    are reasonably priced against all that. ``strong`` when the fundamentals clearly hold up
+    (healthy margins and growth, a solid balance sheet, a valuation the numbers support),
+    ``weak`` when they clearly don't (thin or falling margins, shrinking growth, heavy debt, or
+    a valuation the business can't justify), ``mixed`` when the picture is uneven or the signals
+    conflict. The string values double as the JSON the model returns and the API serves, the
+    same convention as ``RatingsVerdict`` and ``EarningsTrend``.
+    """
+
+    STRONG = "strong"
+    MIXED = "mixed"
+    WEAK = "weak"
+
+
+@dataclass(frozen=True)
+class FundamentalsAnalysis:
+    """An AI-generated, plain-language read of a company's *fundamentals*.
+
+    The fundamentals-focused sibling of ``EarningsAnalysis`` and ``RatingsAnalysis``: produced by
+    a language model from the fundamentals the slice already gathers — the trailing and forward
+    valuation multiples (P/E, P/B, P/S, PEG, forward P/E), the profitability ladder (gross /
+    operating / net margins, ROE), balance-sheet health (current ratio, debt-to-equity), the
+    trailing and forward growth in revenue and earnings, the dividend, the market cap, and how the
+    stock's P/E sits against its industry peers — never from outside data the model happens to
+    recall. ``verdict`` is the overall read and ``confidence`` how firmly it's held; ``summary`` is
+    the plain-language headline and ``findings`` a few short, concrete takeaways (e.g. a fat net
+    margin, a stretched forward multiple versus peers, growth that is fading). Informational, not
+    advice — the model fills in the substance and the presenter attaches the disclaimer.
+    ``model``/``generated_at`` keep a read traceable, as with ``RatingsAnalysis``.
+    """
+
+    symbol: str
+    verdict: FundamentalsVerdict
+    confidence: Confidence
+    summary: str
+    findings: tuple[str, ...]
+    model: str
+    generated_at: datetime
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its substance — a headline ``summary`` and at
+        least one ``finding``. The AI-analysis use case refuses to cache an
+        incomplete read, so a rare empty model result is never frozen for the cache
+        TTL; the next view regenerates (mirrors ``InvestmentAnalysis.is_complete``)."""
+        return bool(self.summary and self.findings)

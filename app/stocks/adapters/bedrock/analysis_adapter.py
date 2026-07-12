@@ -1,13 +1,20 @@
-"""Interface Adapter: AI investment analysis via Claude on Amazon Bedrock.
+"""Interface Adapter: AI investment scorecard via Claude on Amazon Bedrock.
 
 The only module that knows Bedrock (and the Anthropic SDK) exists. It takes the
 data the use case already gathered — the price snapshot, trailing performance,
 the trailing *and* forward valuation/health/growth metrics, the recent quarterly
 and annual earnings, the analyst recommendation trends, and the stock's industry
 P/E benchmark (how its valuation sits against its peers) — renders it into a
-compact prompt, and asks Claude for a balanced buy/hold/sell read written in
-plain, everyday language a non-expert can follow. Swap models or vendors and only
-this file changes.
+compact prompt, and asks Claude for a five-point strong-buy…strong-sell read
+**broken into graded sections** (profitability, cash generation, growth,
+valuation, financial health, earnings, analyst view), written in plain, everyday
+language a non-expert can follow. Swap models or vendors and only this file changes.
+
+The sections are a **single registry** (``_SECTIONS``) — one entry per facet, with
+its key, title, a prompt hint, and the builder that turns gathered data into its
+numeric chips. The forced-tool schema, the recovery tool, the prompt's section list,
+and the entity assembly all derive from that one list, so adding a category is one
+entry plus one metric builder, not an edit in four places.
 
 Two deliberate choices keep it robust and on-pattern:
 
@@ -16,9 +23,12 @@ Two deliberate choices keep it robust and on-pattern:
   every other vendor in this slice — there is no API key to read or pass. The
   IAM policy on the task role is what grants access.
 * **Structured output via a forced tool call.** Rather than parse free text we
-  hand Claude one ``submit_analysis`` tool and require it, so the model returns
-  the analysis as validated JSON arguments that map straight onto the
-  ``InvestmentAnalysis`` entity — no brittle prose parsing.
+  hand Claude one ``submit_scorecard`` tool and require it, so the model returns
+  the read as validated JSON arguments that map straight onto the
+  ``StockScorecard`` entity — no brittle prose parsing. The model authors only the
+  *words* (each section's stance / label / summary + the overall verdict); every
+  supporting **number** is attached here from the figures already gathered, so a
+  chip can never carry a hallucinated value.
 
 The Anthropic SDK is imported lazily inside ``__init__`` so the app (and the
 offline test suite, which injects a fake or a stub client) imports cleanly
@@ -33,14 +43,19 @@ through the constructor / env (see ``router.get_analysis_provider``).
 Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 """
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.stocks.analysis.entities import (
     Confidence,
-    InvestmentAnalysis,
     Recommendation,
+    ScorecardSection,
+    SectionMetric,
+    SectionStance,
+    StockScorecard,
 )
-from app.stocks.analysis.ports import InvestmentAnalysisProvider
+from app.stocks.analysis.ports import StockScorecardProvider
 from app.stocks.adapters.bedrock.cost import CostAccumulator
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
@@ -49,150 +64,357 @@ from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.recommendations.entities import AnalystRecommendations
 from app.stocks.universe.entities import IndustryValuation
 
-# A single forced tool is how the model is pinned to structured output: Claude
-# must call submit_analysis, so the response comes back as validated JSON
-# arguments instead of prose. The schema mirrors the InvestmentAnalysis entity,
-# minus the fields the adapter stamps itself (symbol, model, generated_at).
-_ANALYSIS_TOOL = {
-    "name": "submit_analysis",
-    "description": (
-        "Record a balanced buy/hold/sell read on the stock in plain, everyday "
-        "language, grounded only in the figures provided in the prompt."
+
+@dataclass(frozen=True)
+class _Facts:
+    """Everything the use case gathered, bundled so each section's metric builder
+    takes one argument. The model never sees this — it's what the *service* turns
+    into the numeric chips (so a chip can never carry a hallucinated number)."""
+
+    stock: Stock
+    quarterly: QuarterlyEarningsTimeline | None
+    recommendations: AnalystRecommendations | None
+    industry_valuation: IndustryValuation | None
+
+
+# --- per-section chip builders (each takes the gathered _Facts) --------------------
+# Every displayed number comes from here, never the model. A chip is dropped when its
+# figure is absent, so thin coverage just yields fewer chips.
+
+
+def _profitability_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """How much profit the company keeps — margins and return on equity."""
+    m = f.stock.metrics
+    if m is None:
+        return ()
+    return _metrics(
+        ("Net margin", m.net_margin, "%"),
+        ("Operating margin", m.operating_margin, "%"),
+        ("Gross margin", m.gross_margin, "%"),
+        ("Return on equity", m.roe, "%"),
+    )
+
+
+def _cash_generation_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """How much real cash the business throws off — free cash flow per share and yield."""
+    m = f.stock.metrics
+    if m is None:
+        return ()
+    out = list(_metrics(("FCF / share", m.fcf_per_share, "")))
+    fcf_yield = _fcf_yield(m.fcf_per_share, f.stock.price)
+    if fcf_yield is not None:
+        out.append(SectionMetric("FCF yield", f"{_num(fcf_yield)}%"))
+    return tuple(out)
+
+
+def _growth_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """Trailing revenue/EPS growth plus what analysts expect next year."""
+    m = f.stock.metrics
+    growth = f.stock.growth
+    return _metrics(
+        ("Revenue growth YoY", m.revenue_growth_yoy if m else None, "%"),
+        ("EPS growth YoY", m.eps_growth_yoy if m else None, "%"),
+        (
+            "Est. revenue growth (next yr)",
+            growth.forward_revenue_growth if growth else None,
+            "%",
+        ),
+        ("Est. EPS growth (next yr)", growth.forward_eps_growth if growth else None, "%"),
+    )
+
+
+def _valuation_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """Trailing + forward multiples, plus the industry median for the peer anchor."""
+    m = f.stock.metrics
+    iv = f.industry_valuation
+    rows = [
+        ("P/E (trailing)", m.pe if m else None, ""),
+        ("Forward P/E", f.stock.forward_pe, ""),
+        ("PEG", m.peg if m else None, ""),
+        ("P/B", m.pb if m else None, ""),
+        ("P/S", m.ps if m else None, ""),
+    ]
+    if iv is not None and iv.median_pe is not None:
+        rows.append(("Industry median P/E", iv.median_pe, ""))
+    return _metrics(*rows)
+
+
+def _financial_health_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """Balance-sheet strength — liquidity and leverage."""
+    m = f.stock.metrics
+    if m is None:
+        return ()
+    return _metrics(
+        ("Current ratio", m.current_ratio, ""),
+        ("Debt / equity", m.debt_to_equity, ""),
+    )
+
+
+def _earnings_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """The recent beat track record and the latest surprise."""
+    out: list[SectionMetric] = []
+    quarterly = f.quarterly
+    if quarterly is not None and quarterly.past:
+        reported = list(reversed(quarterly.past))  # the timeline is oldest-first
+        scoreable = [q for q in reported if q.beat is not None]
+        if scoreable:
+            beats = sum(1 for q in scoreable if q.beat)
+            out.append(
+                SectionMetric("Beat rate", f"{beats}/{len(scoreable)} quarters")
+            )
+        newest = reported[0]
+        if newest.eps_surprise_percent is not None:
+            out.append(
+                SectionMetric(
+                    "Latest surprise", f"{_num(newest.eps_surprise_percent)}%"
+                )
+            )
+    return tuple(out)
+
+
+def _analyst_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
+    """The current consensus, its analyst count, and the average 1-5 score."""
+    recommendations = f.recommendations
+    if recommendations is None or recommendations.is_empty:
+        return ()
+    latest = recommendations.latest
+    if latest is None or latest.total == 0:
+        return ()
+    out: list[SectionMetric] = []
+    if latest.consensus is not None:
+        out.append(SectionMetric("Consensus", str(latest.consensus)))
+    out.append(SectionMetric("Analysts", str(latest.total)))
+    if latest.score is not None:
+        out.append(SectionMetric("Avg score (1-5)", _num(latest.score)))
+    return tuple(out)
+
+
+def _fcf_yield(fcf_per_share: float | None, price: float | None) -> float | None:
+    """Free-cash-flow yield (percent): FCF per share over the live price. Keeps its
+    sign (a negative yield is a real 'burning cash' read); ``None`` without both inputs
+    or a non-positive price."""
+    if fcf_per_share is None or not price or price <= 0:
+        return None
+    return round(fcf_per_share / price * 100, 2)
+
+
+@dataclass(frozen=True)
+class _SectionSpec:
+    """One graded facet of the scorecard — the single source of truth. ``key`` is the
+    stable id the client renders off, ``title`` its display name, ``hint`` what the
+    section is about (feeds the tool schema + the prompt's section list), and
+    ``metrics`` the builder that turns gathered data into its chips."""
+
+    key: str
+    title: str
+    hint: str
+    metrics: Callable[[_Facts], tuple[SectionMetric, ...]]
+
+
+# The section catalogue, in card order. Add a facet by adding an entry (plus its
+# builder above) — the tool schemas, the prompt, and the entity assembly all derive
+# from this list.
+_SECTIONS: tuple[_SectionSpec, ...] = (
+    _SectionSpec(
+        "profitability",
+        "Profitability",
+        "how much profit the company keeps (its margins and return on equity)",
+        _profitability_metrics,
     ),
-    "input_schema": {
+    _SectionSpec(
+        "cash_generation",
+        "Cash generation",
+        "how much real cash the business throws off (free cash flow)",
+        _cash_generation_metrics,
+    ),
+    _SectionSpec(
+        "growth",
+        "Growth",
+        "how fast revenue and earnings are growing, recently and expected next year",
+        _growth_metrics,
+    ),
+    _SectionSpec(
+        "valuation",
+        "Valuation",
+        "the price relative to earnings and growth, and versus its industry peers",
+        _valuation_metrics,
+    ),
+    _SectionSpec(
+        "financial_health",
+        "Financial health",
+        "the strength of its balance sheet — how easily it covers its debts",
+        _financial_health_metrics,
+    ),
+    _SectionSpec(
+        "earnings",
+        "Earnings track record",
+        "its recent record of beating or missing expectations",
+        _earnings_metrics,
+    ),
+    _SectionSpec(
+        "analyst_view",
+        "Analyst view",
+        "what Wall Street analysts currently recommend",
+        _analyst_metrics,
+    ),
+)
+
+# The section list rendered into the system prompt, kept in lock-step with the registry.
+_SECTION_LIST_TEXT = "; ".join(f"{s.title} ({s.hint})" for s in _SECTIONS)
+
+
+def _section_schema(what: str) -> dict:
+    """The forced-tool schema for one section — the model authors only these three
+    fields; the numbers are attached by the service afterwards."""
+    return {
         "type": "object",
         "properties": {
-            "recommendation": {
+            "stance": {
                 "type": "string",
-                "enum": [r.value for r in Recommendation],
-                "description": "The overall call, weighing everything on balance.",
-            },
-            "confidence": {
-                "type": "string",
-                "enum": [c.value for c in Confidence],
-                "description": "How sure you are, given how much clear data there is.",
-            },
-            "thesis": {
-                "type": "string",
+                "enum": [s.value for s in SectionStance],
                 "description": (
-                    "1-2 short sentences in plain, everyday language explaining the "
-                    "overall take and the main reason for it — as if to a friend who "
-                    "doesn't follow the markets. No jargon."
+                    f"Whether {what} reads well for the stock: 'positive' (a point in "
+                    "its favour), 'negative' (a point against), or 'neutral' (mixed or "
+                    "unremarkable)."
                 ),
             },
-            "strengths": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 2,
-                "maxItems": 2,
+            "label": {
+                "type": "string",
                 "description": (
-                    "Exactly 2 short, plain-language reasons the stock looks good — "
-                    "each clear on its own to someone with no finance background. "
-                    "Never return an empty list (put them here, not only in the thesis)."
+                    "A 1-3 word plain-language tag for this section (e.g. 'Exceptional', "
+                    "'Expensive', 'Accelerating', 'Mostly buys'). No jargon."
                 ),
             },
-            "risks": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 2,
-                "maxItems": 2,
+            "summary": {
+                "type": "string",
                 "description": (
-                    "Exactly 2 short, plain-language reasons to be cautious — each "
-                    "clear on its own to someone with no finance background. "
-                    "Never return an empty list (put them here, not only in the thesis)."
+                    "1-2 short sentences in plain, everyday language explaining this "
+                    "section, as if to a friend with no finance background. Never empty."
                 ),
             },
         },
-        "required": ["recommendation", "confidence", "thesis", "strengths", "risks"],
-    },
-}
+        "required": ["stance", "label", "summary"],
+    }
+
+
+def _scorecard_tool() -> dict:
+    """Build the forced ``submit_scorecard`` tool from the section registry — the
+    overall verdict plus one object per section, so a new section flows through
+    automatically."""
+    props: dict = {
+        "recommendation": {
+            "type": "string",
+            "enum": [r.value for r in Recommendation],
+            "description": (
+                "The overall call on the five-point scale (strong buy / buy / hold / "
+                "sell / strong sell), weighing every section on balance."
+            ),
+        },
+        "thesis": {
+            "type": "string",
+            "description": (
+                "One short sentence in plain, everyday language — the overall take and "
+                "the main reason for it, as if to a friend who doesn't follow the "
+                "markets. No jargon."
+            ),
+        },
+    }
+    # Note: the model does not author `confidence` — the service computes it from data
+    # coverage (see ``_confidence_for``), so it's not in the schema.
+    props.update({s.key: _section_schema(s.hint) for s in _SECTIONS})
+    return {
+        "name": "submit_scorecard",
+        "description": (
+            "Record a balanced strong-buy/buy/hold/sell/strong-sell scorecard on the "
+            "stock in plain, everyday language, grounded only in the figures provided. "
+            "Give an overall verdict plus a read on each section."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": props,
+            "required": ["recommendation", "thesis", *[s.key for s in _SECTIONS]],
+        },
+    }
+
+
+def _sections_tool() -> dict:
+    """Build the lighter ``submit_sections`` recovery tool — only the section reads,
+    derived from the same registry."""
+    return {
+        "name": "submit_sections",
+        "description": (
+            "Record ONLY the section reads for the stock — a stance, a short label, and "
+            "a plain-language summary for each section — grounded only in the figures "
+            "provided. Every section must have a non-empty label and a non-empty summary."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {s.key: _section_schema(s.hint) for s in _SECTIONS},
+            "required": [s.key for s in _SECTIONS],
+        },
+    }
+
+
+# A single forced tool pins the model to structured output; both schemas derive from
+# the section registry so they never drift from it.
+_SCORECARD_TOOL = _scorecard_tool()
+_SECTIONS_TOOL = _sections_tool()
 
 _SYSTEM_PROMPT = (
     "You are a friendly investing assistant explaining one stock to an everyday "
     "person with no finance background. You are given a snapshot of the stock's "
-    "price, its valuation and profitability figures, its recent quarterly and "
-    "annual earnings, what Wall Street analysts recommend, and how its valuation "
-    "compares with other companies in the same industry. From only those figures, "
-    "give a clear, balanced read on whether it currently looks like a buy, hold, "
-    "or sell.\n"
+    "price, its valuation, profitability, growth and balance-sheet figures, its "
+    "recent quarterly and annual earnings, what Wall Street analysts recommend, and "
+    "how its valuation compares with other companies in the same industry. From only "
+    "those figures, grade the stock across the sections below and give a clear, "
+    "balanced overall read on a five-point scale — strong buy, buy, hold, sell, or "
+    "strong sell — reserving the 'strong' calls for when the figures line up "
+    "especially clearly one way.\n"
+    f"The sections are: {_SECTION_LIST_TEXT}. For every section you MUST give a "
+    "stance (positive/neutral/negative), a short non-empty label, and a non-empty "
+    "one-to-two-sentence plain-language summary — never leave a section's label or "
+    "summary blank, and do not fold the whole read into the thesis.\n"
     "When an industry benchmark is provided, weigh the stock's own price-to-"
-    "earnings against it — a much higher figure than its peers means it's "
-    "priced richly (expensive) for its industry, a much lower one means cheaply "
-    "— and explain that comparison in plain words.\n"
+    "earnings against it in the valuation section — a much higher figure than its "
+    "peers means it's priced richly (expensive) for its industry, a much lower one "
+    "means cheaply — and explain that comparison in plain words.\n"
     "Write in plain, warm, everyday language — short sentences, no jargon. When a "
     "figure matters, say what it means in a few plain words (e.g. 'its price is "
     "high compared with its earnings') rather than naming the ratio. Never assume "
     "the reader knows finance terms. Ground every statement ONLY in the figures "
     "provided — do not use outside knowledge, recent news, or prices you may "
-    "recall, and never invent numbers. If the data is thin, say so plainly and "
-    "lower your confidence. Be honest about both the good and the bad — always "
-    "name at least two strengths and at least two risks, and never leave either "
-    "list empty. This is general information, not personal financial advice. "
-    "Respond by calling the submit_analysis tool."
+    "recall, and never invent numbers. If the data for a section is thin, say so "
+    "plainly. Be honest in every section about both the good and the bad. This is "
+    "general information, not personal financial advice. Respond by calling the "
+    "submit_scorecard tool."
 )
 
-# The recovery tool for the retry path: when the first pass packs everything into the
-# thesis and hands back empty strengths/risks, the retry asks for *only* the two bullet
-# lists — a far shorter generation than re-running the whole analysis (recommendation +
-# confidence + thesis + bullets). Output tokens dominate this endpoint's cost, so a
-# bullets-only retry is the cheap way to recover, and the narrower ask lands more reliably.
-_BULLETS_TOOL = {
-    "name": "submit_bullets",
-    "description": (
-        "Record only the plain-language strengths and risks for the stock, grounded "
-        "only in the figures provided. Exactly two of each; never leave either empty."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "strengths": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 2,
-                "maxItems": 2,
-                "description": (
-                    "Exactly 2 short, plain-language reasons the stock looks good — each "
-                    "clear on its own to someone with no finance background. Never empty."
-                ),
-            },
-            "risks": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 2,
-                "maxItems": 2,
-                "description": (
-                    "Exactly 2 short, plain-language reasons to be cautious — each clear "
-                    "on its own to someone with no finance background. Never empty."
-                ),
-            },
-        },
-        "required": ["strengths", "risks"],
-    },
-}
-
-_BULLETS_SYSTEM = (
-    "You already gave the overall read on this stock. Now give ONLY the plain-language "
-    "strengths and risks — exactly two of each, grounded only in the figures below, each "
-    "clear to someone with no finance background. Never leave either list empty. Respond "
-    "by calling the submit_bullets tool."
+_SECTIONS_SYSTEM = (
+    "You already gave the overall read on this stock. Now give ONLY the section reads. "
+    "For each section give a stance (positive/neutral/negative), a short non-empty "
+    "label, and a non-empty one-to-two-sentence plain-language summary a non-expert can "
+    "follow, grounded only in the figures below. Never leave a section's label or "
+    "summary blank. The sections are: "
+    f"{_SECTION_LIST_TEXT}. Respond by calling the submit_sections tool."
 )
 
-# Prepended to the same figures the first pass saw, so the recovered bullets stay grounded.
-_BULLETS_INSTRUCTION = (
-    "List the two strengths and two risks for this stock, grounded only in these figures:\n\n"
+# Prepended to the same figures the first pass saw, so the recovered sections stay grounded.
+_SECTIONS_INSTRUCTION = (
+    "Give the section reads (a stance, label, and summary each) for this stock, "
+    "grounded only in these figures:\n\n"
 )
 
 
-class BedrockAnalysisProvider(InvestmentAnalysisProvider):
-    """Generates an ``InvestmentAnalysis`` with Claude on Amazon Bedrock.
+class BedrockScorecardProvider(StockScorecardProvider):
+    """Generates a ``StockScorecard`` with Claude on Amazon Bedrock.
 
-    Defaults to the fast Haiku tier (``model_id``) since the analysis output is
-    short and plain — speed matters more than extra reasoning here. ``model_id``
-    and ``region`` are deploy-time config (the model id may be a cross-region
-    inference profile), so a deploy can swap in a larger model via env without a
-    code change. ``client`` is an injection seam: pass a ready-made client (e.g. a
-    test stub) to bypass the Anthropic SDK entirely; otherwise the Bedrock client
-    is built lazily and authenticates through the process's AWS credentials.
+    Defaults to the fast Haiku tier (``model_id``) since the output is short and
+    plain — speed matters more than extra reasoning here. ``model_id`` and
+    ``region`` are deploy-time config (the model id may be a cross-region inference
+    profile), so a deploy can swap in a larger model via env without a code change.
+    ``client`` is an injection seam: pass a ready-made client (e.g. a test stub) to
+    bypass the Anthropic SDK entirely; otherwise the Bedrock client is built lazily
+    and authenticates through the process's AWS credentials.
     """
 
     # Defaults to the fast Haiku tier: this endpoint's output is short and plain by
@@ -205,18 +427,20 @@ class BedrockAnalysisProvider(InvestmentAnalysisProvider):
     # us.anthropic.claude-haiku-4-5 400s with "invalid model identifier").
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     _DEFAULT_REGION = "us-east-1"
-    # The output is short and plain by design (a few sentences + two brief bullet
-    # lists), so a tight cap is ample — and fewer generated tokens is the main
-    # lever on this endpoint's latency, since output generation dominates the
-    # model call. Kept above the worst case so a full read is never truncated.
-    _MAX_TOKENS = 800
-    # Bedrock does not enforce the tool schema's minItems, and the fast Haiku tier
-    # occasionally returns empty strengths/risks anyway. Re-issue the forced call up
-    # to this many *extra* times to recover the bullets; paired with the use case
-    # refusing to cache an incomplete read, an empty result is effectively never
-    # served (and never frozen for the TTL). Only fires on the miss — zero cost when
-    # the first call is already complete.
-    _MAX_EMPTY_RETRIES = 4
+    # The output is short and plain by design (a one-line thesis + a handful of brief
+    # sections), so a moderate cap is ample — but it scales with the section count, so
+    # this is kept well above the worst case for the full registry so a scorecard is
+    # never truncated mid-section (a truncated section is one way it comes back
+    # incomplete). Fewer generated tokens is the main lever on this endpoint's latency.
+    _MAX_TOKENS = 3000
+    # Bedrock does not enforce the tool schema's required/non-empty fields, and the
+    # fast Haiku tier occasionally returns the overall verdict with the sections left
+    # blank (empty label/summary). Re-issue a *targeted* sections-only call up to this
+    # many extra times to fill them; paired with the use case refusing to cache an
+    # incomplete read, a blank-section result is effectively never served (and never
+    # frozen for the TTL). Only fires on the miss — zero cost when the first call is
+    # already complete.
+    _MAX_INCOMPLETE_RETRIES = 3
 
     def __init__(
         self,
@@ -244,36 +468,41 @@ class BedrockAnalysisProvider(InvestmentAnalysisProvider):
         annual: AnnualEarningsTimeline | None = None,
         recommendations: AnalystRecommendations | None = None,
         industry_valuation: IndustryValuation | None = None,
-    ) -> InvestmentAnalysis:
+    ) -> StockScorecard:
         prompt = _render_prompt(
             stock, quarterly, annual, recommendations, industry_valuation
         )
-        # One cost line per endpoint call: the retry loop below may make several model
-        # calls, so their token usage is summed and logged once (in a finally, so a
-        # mid-retry failure still records what was spent).
+        # One cost line per endpoint call, logged in a finally so a failure still
+        # records what was spent.
         costs = CostAccumulator()
         try:
             payload = self._invoke(prompt, stock.symbol, costs)
-            # The forced tool asks for both bullet lists, but Bedrock does not enforce
-            # array length, and the fast Haiku tier sometimes packs everything into the
-            # thesis and hands back empty strengths/risks. Re-issue a bounded number of
-            # times to recover them; the use case won't cache an incomplete one, so an
-            # empty result is never frozen for the TTL — it regenerates next view. Each
-            # retry asks for *only* the missing bullets (not the whole analysis again),
-            # so it regenerates a fraction of the tokens — output is this endpoint's
-            # dominant cost. A recovery that doesn't land leaves the payload unchanged
-            # and simply consumes a bounded retry, so a truly stuck read still exits.
-            for _ in range(self._MAX_EMPTY_RETRIES):
-                if not _missing_bullets(payload):
-                    break
-                recovered = self._recover_bullets(prompt, stock.symbol, costs)
-                if recovered is not None:
-                    payload = _merge_bullets(payload, recovered)
             if payload is None:
                 raise StockDataUnavailable(
                     stock.symbol, "analysis model returned no structured result"
                 )
-            return _to_entity(stock.symbol, payload, self._model_id)
+            # The forced tool requires every section's label + summary, but Bedrock does
+            # not enforce it, and the fast tier sometimes packs the whole read into the
+            # thesis and hands the sections back blank. Re-issue a *targeted*
+            # sections-only call to fill the blanks — a narrower ask that lands reliably
+            # and regenerates a fraction of the tokens. Bounded; the use case won't cache
+            # an incomplete one, so a truly stuck read regenerates next view rather than
+            # freezing empty sections for the TTL.
+            for _ in range(self._MAX_INCOMPLETE_RETRIES):
+                if not _missing_sections(payload):
+                    break
+                recovered = self._recover_sections(prompt, stock.symbol, costs)
+                if recovered is not None:
+                    payload = _merge_section_reads(payload, recovered)
+            return _build_scorecard(
+                stock.symbol,
+                payload,
+                self._model_id,
+                stock,
+                quarterly,
+                recommendations,
+                industry_valuation,
+            )
         finally:
             costs.log(
                 label="stock analysis", model_id=self._model_id, key=stock.symbol
@@ -285,16 +514,16 @@ class BedrockAnalysisProvider(InvestmentAnalysisProvider):
         key: str,
         costs: CostAccumulator,
         *,
-        tool: dict = _ANALYSIS_TOOL,
-        tool_name: str = "submit_analysis",
+        tool: dict = _SCORECARD_TOOL,
+        tool_name: str = "submit_scorecard",
         system: str = _SYSTEM_PROMPT,
     ) -> dict | None:
         """One forced-tool call, returning the tool's arguments (or ``None`` if the
-        model somehow didn't call the forced tool). Defaults to the full analysis
-        tool; the retry path passes the lighter ``submit_bullets`` tool. Any
-        SDK/botocore failure is mapped to this port's documented
-        ``StockDataUnavailable``. The call's token usage is folded into ``costs`` for
-        the caller's single per-endpoint cost line."""
+        model somehow didn't call the forced tool). Defaults to the full scorecard
+        tool; the retry path passes the lighter ``submit_sections`` tool. Any
+        SDK/botocore failure is mapped to this port's documented ``StockDataUnavailable``.
+        The call's token usage is folded into ``costs`` for the caller's single
+        per-endpoint cost line."""
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -311,21 +540,22 @@ class BedrockAnalysisProvider(InvestmentAnalysisProvider):
         costs.add(message)
         return _tool_payload(message, tool_name)
 
-    def _recover_bullets(
+    def _recover_sections(
         self, prompt: str, key: str, costs: CostAccumulator
     ) -> dict | None:
-        """One targeted retry that regenerates *only* the strengths/risks bullets,
-        grounded in the same figures the first pass saw — far fewer output tokens than
-        re-running the whole analysis. Returns the ``submit_bullets`` arguments, or
-        ``None`` when the model didn't call the tool (the caller then leaves the payload
-        unchanged and consumes a bounded retry)."""
+        """One targeted retry that regenerates *only* the section reads
+        (stance/label/summary), grounded in the same figures the first pass saw — far
+        fewer output tokens than re-running the whole scorecard, and a narrower ask that
+        lands more reliably. Returns the ``submit_sections`` arguments, or ``None`` when
+        the model didn't call the tool (the caller then leaves the payload unchanged and
+        consumes a bounded retry)."""
         return self._invoke(
-            _BULLETS_INSTRUCTION + prompt,
+            _SECTIONS_INSTRUCTION + prompt,
             key,
             costs,
-            tool=_BULLETS_TOOL,
-            tool_name="submit_bullets",
-            system=_BULLETS_SYSTEM,
+            tool=_SECTIONS_TOOL,
+            tool_name="submit_sections",
+            system=_SECTIONS_SYSTEM,
         )
 
 
@@ -342,61 +572,143 @@ def _tool_payload(message, name: str) -> dict | None:
     return None
 
 
-def _merge_bullets(payload: dict, recovered: dict) -> dict:
-    """Fill only the *empty* bullet lists from a targeted recovery call, leaving any
-    list the first pass already produced untouched — so a retry that recovers one side
-    (say, risks) never overwrites the good other side."""
+def _section_read_complete(read: object) -> bool:
+    """Whether a section's model-authored read carries its substance — a non-empty
+    label *and* a non-empty summary (the two fields the card shows in words). The
+    stance defaults harmlessly to neutral, so it's not the completeness signal."""
+    if not isinstance(read, dict):
+        return False
+    return bool(str(read.get("label") or "").strip()) and bool(
+        str(read.get("summary") or "").strip()
+    )
+
+
+def _missing_sections(payload: dict | None) -> bool:
+    """True when a returned scorecard is present but any section is missing or blank —
+    the signal to retry. A ``None`` payload (the model didn't call the tool at all) is
+    left for the caller to surface as ``StockDataUnavailable``, not retried."""
+    if payload is None:
+        return False
+    return any(not _section_read_complete(payload.get(s.key)) for s in _SECTIONS)
+
+
+def _merge_section_reads(payload: dict, recovered: dict) -> dict:
+    """Fill only the *blank* section reads from a targeted recovery call, leaving any
+    section the first pass already wrote untouched — so a retry that recovers some
+    sections never overwrites the good ones. The overall verdict and the metric chips
+    are untouched (the recovery only carries the sections' words)."""
     merged = dict(payload)
-    for field in ("strengths", "risks"):
-        if not _string_tuple(merged.get(field)) and _string_tuple(recovered.get(field)):
-            merged[field] = recovered[field]
+    for s in _SECTIONS:
+        if not _section_read_complete(merged.get(s.key)) and _section_read_complete(
+            recovered.get(s.key)
+        ):
+            merged[s.key] = recovered[s.key]
     return merged
 
 
-def _to_entity(symbol: str, payload: dict, model_id: str) -> InvestmentAnalysis:
+def _build_scorecard(
+    symbol: str,
+    payload: dict,
+    model_id: str,
+    stock: Stock,
+    quarterly: QuarterlyEarningsTimeline | None,
+    recommendations: AnalystRecommendations | None,
+    industry_valuation: IndustryValuation | None,
+) -> StockScorecard:
     """Map the validated tool arguments onto the domain entity.
 
-    The forced-tool schema constrains the shape, but a defensive guard keeps an
-    off-schema result (e.g. an unknown enum value) from leaking out as something
-    other than this port's documented ``StockDataUnavailable``.
+    The overall verdict comes from the model (with a defensive guard: an off-schema
+    recommendation surfaces as this port's documented ``StockDataUnavailable`` rather
+    than leaking out). Each section merges the model's *words* (stance / label /
+    summary) with metric chips computed here from the data already gathered (via the
+    section registry), so the numbers are always the service's, never the model's. The
+    ``confidence`` is likewise the service's — a deterministic read of data coverage
+    (see ``_confidence_for``), not a guess the model makes.
     """
     try:
         recommendation = Recommendation(payload["recommendation"])
-        confidence = Confidence(payload["confidence"])
         thesis = str(payload["thesis"]).strip()
     except (KeyError, ValueError) as exc:
         raise StockDataUnavailable(
             symbol, f"analysis model returned an unexpected result: {exc}"
         ) from exc
-    return InvestmentAnalysis(
+    facts = _Facts(stock, quarterly, recommendations, industry_valuation)
+    sections = tuple(
+        _section(s.key, s.title, payload.get(s.key), s.metrics(facts))
+        for s in _SECTIONS
+    )
+    return StockScorecard(
         symbol=symbol,
         recommendation=recommendation,
-        confidence=confidence,
+        confidence=_confidence_for(sections),
         thesis=thesis,
-        strengths=_string_tuple(payload.get("strengths")),
-        risks=_string_tuple(payload.get("risks")),
+        sections=sections,
         model=model_id,
         generated_at=datetime.now(timezone.utc),
     )
 
 
-def _string_tuple(value) -> tuple[str, ...]:
-    """Coerce the model's list field into a tuple of non-empty, stripped strings."""
-    if not isinstance(value, list):
-        return ()
-    return tuple(text for item in value if (text := str(item).strip()))
+# How much of the scorecard has to be backed by real figures for each confidence
+# band, as a fraction of the sections. Confidence here is a read of *data coverage* —
+# how many data sources resolved — not the model's conviction: a rich, multi-source
+# snapshot reads HIGH, a bare quote LOW. (With 7 sections: HIGH needs >=6 covered,
+# MEDIUM 3-5, LOW <=2 — i.e. HIGH wants the earnings/analyst context on top of the
+# fundamentals-fed sections, not fundamentals alone.)
+_HIGH_COVERAGE = 0.8
+_MEDIUM_COVERAGE = 0.4
 
 
-def _missing_bullets(payload: dict | None) -> bool:
-    """True when a returned tool result is present but missing either bullet list —
-    the signal to retry. A ``None`` payload (the model didn't call the tool at all)
-    is left for the caller to surface as ``StockDataUnavailable``, not retried, so
-    the existing no-structured-result path is unchanged."""
-    if payload is None:
-        return False
-    return not _string_tuple(payload.get("strengths")) or not _string_tuple(
-        payload.get("risks")
+def _confidence_for(sections: tuple[ScorecardSection, ...]) -> Confidence:
+    """Confidence as a deterministic read of *data coverage* — the share of sections
+    that came back with real figures (i.e. how many data sources resolved). This is the
+    'service owns the numbers' split applied to confidence: how much data we had is a
+    fact about our gather, so we compute it rather than trust the model to guess it. A
+    section with no chips is one whose source (fundamentals / earnings / analyst /
+    industry) didn't resolve for this symbol."""
+    if not sections:
+        return Confidence.LOW
+    covered = sum(1 for s in sections if s.metrics)
+    ratio = covered / len(sections)
+    if ratio >= _HIGH_COVERAGE:
+        return Confidence.HIGH
+    if ratio >= _MEDIUM_COVERAGE:
+        return Confidence.MEDIUM
+    return Confidence.LOW
+
+
+def _section(
+    key: str, title: str, read: object, metrics: tuple[SectionMetric, ...]
+) -> ScorecardSection:
+    """Combine the model's read of one section with its (service-computed) chips.
+
+    A missing or malformed section, or an off-enum stance, degrades to a neutral,
+    empty-summary section rather than sinking the whole scorecard — the use case
+    won't cache an incomplete read (an empty summary), so it regenerates next view."""
+    read = read if isinstance(read, dict) else {}
+    try:
+        stance = SectionStance(read.get("stance"))
+    except ValueError:
+        stance = SectionStance.NEUTRAL
+    return ScorecardSection(
+        key=key,
+        title=title,
+        stance=stance,
+        label=str(read.get("label") or "").strip(),
+        summary=str(read.get("summary") or "").strip(),
+        metrics=metrics,
     )
+
+
+def _metrics(*rows: tuple[str, object, str]) -> tuple[SectionMetric, ...]:
+    """Format a batch of ``(label, value, suffix)`` rows into chips, dropping any whose
+    value is ``None`` (a figure the gather didn't have) — so a chip is only present
+    when its number is real."""
+    out: list[SectionMetric] = []
+    for label, value, suffix in rows:
+        if value is None:
+            continue
+        out.append(SectionMetric(label, f"{_num(value)}{suffix}"))
+    return tuple(out)
 
 
 def _render_prompt(

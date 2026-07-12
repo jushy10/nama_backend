@@ -201,7 +201,7 @@ class EtfAnalysisResponse(BaseModel):
     own figures; the ``disclaimer`` is authored by the service and attached at the edge (never
     trusted to the model), and ``model`` / ``generated_at`` keep a served analysis traceable.
 
-    ``recommendation`` is one of ``buy`` / ``hold`` / ``sell``; ``confidence`` one of ``low`` /
+    ``recommendation`` is one of ``strong_buy`` / ``buy`` / ``hold`` / ``sell`` / ``strong_sell``; ``confidence`` one of ``low`` /
     ``medium`` / ``high``. ``strengths`` (the bull case) and ``risks`` (the bear case) are short
     plain-language bullet points, each up to three. This is general information, not personal
     financial advice.
@@ -209,7 +209,7 @@ class EtfAnalysisResponse(BaseModel):
 
     ticker: str
     asset_type: Literal["etf"] = "etf"
-    recommendation: str  # "buy" | "hold" | "sell"
+    recommendation: str  # "strong_buy" | "buy" | "hold" | "sell" | "strong_sell"
     confidence: str  # "low" | "medium" | "high"
     thesis: str
     strengths: list[str]  # bull-case points

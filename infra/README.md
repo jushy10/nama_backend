@@ -95,23 +95,37 @@ The app reads `DATABASE_URL` (see [`app/db.py`](../app/db.py)). Because the DB i
   becomes publicly reachable. One-time local setup: install the AWS CLI's
   [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html).
 
-  The bastion is **kept running continuously** so the tunnel is always ready —
-  there's no session to start first. Terraform owns its power state (the
-  `aws_ec2_instance_state.bastion` resource holds it `running`, starting it on
-  apply if anything ever stopped it), so there's nothing to toggle. It's a
-  `t4g.nano` (~$7/mo) and is not part of the app's serving path, so none of this
-  affects the API. (`bastion_enabled = false` in `environments/dev/variables.tf`
-  removes it entirely — it's stateless, nothing is lost.)
+  The bastion is **parked (stopped) by default** so it bills only its ~$0.64/mo
+  disk until you need it. Turn it on for a session with the helper — it starts
+  the box, waits for the SSM agent, and opens the tunnel in one step:
+
+  ```powershell
+  ./infra/bastion.ps1 connect   # start (if needed) + tunnel localhost:5432 -> RDS
+  # ... use the DB via localhost:5432, then Ctrl-C to close the tunnel, and:
+  ./infra/bastion.ps1 down      # stop it again (back to disk-only)
+  ```
+
+  `up` / `down` / `status` are the other subcommands. Start/stop reuse the same
+  instance and disk, so there's no recreate (and no first-boot OOM). Terraform
+  holds the power state at `stopped` (`bastion_desired_state`), so a later
+  `terraform apply` re-parks it — set `bastion_desired_state = "running"` to keep
+  it up across applies, or `bastion_enabled = false` to remove it entirely (it's
+  stateless, nothing is lost). It's a `t4g.nano`, not part of the app's serving
+  path, so none of this affects the API.
+
+  Under the hood (or from a shell without the helper) it's a start plus a
+  Session Manager port-forward — always query the instance by tag, since a
+  `bastion_enabled` off/on cycle mints a new id:
 
   ```sh
-  # Look both up live (no local terraform needed). The bastion keeps its id
-  # across stop/start, but a bastion_enabled off/on cycle mints a new one —
-  # so always query by tag rather than hardcoding.
   BASTION=$(aws ec2 describe-instances \
-    --filters Name=tag:Name,Values=nama-dev-bastion Name=instance-state-name,Values=running \
+    --filters Name=tag:Name,Values=nama-dev-bastion Name=instance-state-name,Values=running,stopped \
     --query 'Reservations[].Instances[].InstanceId' --output text)
   DBHOST=$(aws rds describe-db-instances \
     --query "DBInstances[?starts_with(DBInstanceIdentifier,'nama-dev')].Endpoint.Address" --output text)
+
+  aws ec2 start-instances --instance-ids "$BASTION"   # skip if already running
+  aws ec2 wait instance-running --instance-ids "$BASTION"
 
   # Forward localhost:5432 -> RDS:5432 through the bastion. Leave this running.
   aws ssm start-session --target "$BASTION" \
@@ -133,17 +147,22 @@ running. It bills whether or not you use it — `terraform destroy` (or remove t
 `deletion_protection` is off and `skip_final_snapshot` is on for easy teardown.
 
 The `module "bastion"` jump host is a `t4g.nano` + its public IPv4 + 8 GB gp3 —
-roughly **$7/mo**, and it is now **left running continuously** so the database
-tunnel is always available (Terraform holds it in the `running` state). To stop
-paying the running rate for a while, set `bastion_enabled = false` (removes it —
-it's stateless) for a durable pause; a manual `stop-instances` works too but the
-next `terraform apply` starts it back up:
+roughly **$7/mo while running**, but it is **parked (stopped) by default**
+(Terraform holds it in the `stopped` state via `bastion_desired_state`), so a
+parked box costs only its ~**$0.64/mo** disk. Start it on demand with
+`./infra/bastion.ps1 up` (or `connect`) and stop it with `./infra/bastion.ps1
+down`. A manually started box stays up until the next `terraform apply`
+reconciles it back to stopped; set `bastion_desired_state = "running"` to keep it
+up continuously, or `bastion_enabled = false` to remove it entirely (it's
+stateless — nothing is lost).
 
-```sh
-aws ec2 stop-instances --instance-ids "$(aws ec2 describe-instances \
-  --filters Name=tag:Name,Values=nama-dev-bastion Name=instance-state-name,Values=running \
-  --query 'Reservations[].Instances[].InstanceId' --output text)"
-```
+As a backstop for a start you forget to stop, a CloudWatch alarm auto-stops the
+box after `bastion_auto_stop_idle_minutes` (default **15**) of near-idle CPU —
+the built-in EC2 stop action, no Lambda. Real tunnel traffic keeps CPU up so it
+won't trip mid-use; the tradeoff is that a tunnel left **open but idle** for the
+full window is also stopped (just reconnect). It's only armed in the parked
+default (`bastion_desired_state = "stopped"`); set `bastion_auto_stop_idle_minutes
+= 0` to disable it.
 
 > Provisioning RDS takes several minutes, so the `apply` step runs longer than
 > the SSM-only deploys did.

@@ -6,14 +6,18 @@ that nested shape and the rules that build it — the grouping, the cap sums tha
 and the largest-first ordering are all *facts about the map*, so they live here (in
 :meth:`HeatMap.build`), not in the use case.
 
-Vendor-agnostic and self-contained: the module imports only stdlib and its own slice. The use
-case feeds it plain ``HeatMapRow`` inputs (mapped from the universe read) plus a
-change-by-ticker map (mapped from the live quotes), so the entity never depends on another
-slice's shapes or on any framework.
+Vendor-agnostic and framework-free: the module imports only stdlib plus the shared stocks-core
+``StockPerformance`` value object (the same trailing-window shape the sector board and ticker card
+reuse — not another *slice's* shape). The use case feeds it plain ``HeatMapRow`` inputs (mapped
+from the universe read), a change-by-ticker map (mapped from the live quotes) and a
+performance-by-ticker map (mapped from the batched daily bars), so the entity never depends on a
+data vendor or the web framework.
 
 A tile's *size* (market cap) always exists — a screened row always carries one. Its *colour*
 (``change_percent``) is ``None`` when the live feed had no quote for the symbol (e.g. a name the
-free IEX feed doesn't carry, or a feed hiccup): the tile still shows, sized but uncoloured.
+free IEX feed doesn't carry, or a feed hiccup): the tile still shows, sized but uncoloured. Its
+trailing windows (``performance``) are likewise ``None`` when no daily-bar history was fetched for
+the symbol — the day-move tile still renders, just without the longer-timeframe colours.
 """
 
 from __future__ import annotations
@@ -21,6 +25,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+
+from app.stocks.entities import StockPerformance
 
 
 class HeatMapScope(str, Enum):
@@ -55,16 +61,20 @@ class HeatMapRow:
 
 @dataclass(frozen=True)
 class HeatMapCell:
-    """One stock's tile: sized by ``market_cap``, coloured by ``change_percent``.
+    """One stock's tile: sized by ``market_cap``, coloured by ``change_percent`` (or, for a
+    non-day timeframe, by one of ``performance``'s trailing windows).
 
     ``change_percent`` is the day's move (percent), ``None`` when the live feed carried no quote
-    for the symbol — the tile still renders, sized but uncoloured.
+    for the symbol — the tile still renders, sized but uncoloured. ``performance`` carries the
+    trailing-window returns (1W…1Y, YTD) that back the board's timeframe selector, ``None`` when
+    no daily-bar history was fetched for the symbol (the day-move tile still renders).
     """
 
     ticker: str
     name: str | None
     market_cap: float
     change_percent: float | None
+    performance: StockPerformance | None
 
 
 @dataclass(frozen=True)
@@ -120,16 +130,21 @@ class HeatMap:
         scope: HeatMapScope,
         rows: tuple[HeatMapRow, ...],
         change_by_ticker: Mapping[str, float | None],
+        performance_by_ticker: Mapping[str, StockPerformance] | None = None,
     ) -> "HeatMap":
-        """Fold flat rows + their day-change into the nested, sized, ordered treemap.
+        """Fold flat rows + their day-change (+ trailing performance) into the nested, sized,
+        ordered treemap.
 
         Groups sector → industry → cell (a row with no ``sector`` is dropped — there's nowhere
         to place it), attaching each cell's ``change_percent`` from ``change_by_ticker`` (absent
-        → ``None``, an uncoloured tile). Every group's ``market_cap`` is the sum of its members,
-        and every level is ordered **largest cap first** with a stable name tiebreak — so the map
-        is deterministic (tests) and draws big tiles first (the reader's eye). Sectors with no
-        placeable rows simply don't appear; an empty input yields a map with no sectors.
+        → ``None``, an uncoloured tile) and its trailing windows from ``performance_by_ticker``
+        (absent → ``None``, blank timeframe colours; omit the map entirely for a day-move-only
+        board). Every group's ``market_cap`` is the sum of its members, and every level is ordered
+        **largest cap first** with a stable name tiebreak — so the map is deterministic (tests) and
+        draws big tiles first (the reader's eye). Sectors with no placeable rows simply don't
+        appear; an empty input yields a map with no sectors.
         """
+        performance_by_ticker = performance_by_ticker or {}
         grouped: dict[str, dict[str | None, list[HeatMapCell]]] = {}
         for row in rows:
             if row.sector is None:
@@ -139,6 +154,7 @@ class HeatMap:
                 name=row.name,
                 market_cap=row.market_cap,
                 change_percent=change_by_ticker.get(row.ticker),
+                performance=performance_by_ticker.get(row.ticker),
             )
             grouped.setdefault(row.sector, {}).setdefault(row.industry, []).append(cell)
 

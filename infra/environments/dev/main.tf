@@ -64,10 +64,12 @@ module "database" {
 # Session Manager port forwarding (see infra/README.md → "Connecting the app").
 # It carries the database's app SG, so it is allowed to reach Postgres on 5432.
 #
-# Kept running continuously (see aws_ec2_instance_state below) so the tunnel is
-# always available with nothing to toggle. A t4g.nano + its public IPv4 + 8GB
-# disk runs ~$7/mo — we accept that over the hassle of starting it per session.
-# bastion_enabled = false removes it entirely (it's stateless — nothing is
+# Parked (stopped) by default (see aws_ec2_instance_state below) so it costs only
+# its ~$0.64/mo disk until you need it — start it on demand with infra/bastion.ps1
+# (start/stop reuse the same instance + disk, so there's no recreate and no
+# first-boot OOM). A t4g.nano + its public IPv4 + 8GB disk runs ~$7/mo *while
+# running*; set bastion_desired_state = "running" to keep it up across applies, or
+# bastion_enabled = false to remove it entirely (it's stateless — nothing is
 # lost). It is NOT in the app's serving path, so none of this ever affects the
 # API.
 module "bastion" {
@@ -79,19 +81,25 @@ module "bastion" {
   subnet_id = local.app_subnet_ids[0]
 
   extra_security_group_ids = [module.database.app_security_group_id]
+
+  # Idle auto-stop safety net: if a manual `bastion.ps1 up` is forgotten, a
+  # CloudWatch alarm stops the box after this many minutes of near-idle CPU. Only
+  # armed while the bastion is parked-by-default (bastion_desired_state =
+  # "stopped"); the "running" always-on mode wants it up, so it's disabled there.
+  auto_stop_idle_minutes = var.bastion_desired_state == "stopped" ? var.bastion_auto_stop_idle_minutes : 0
 }
 
-# Hold the bastion in the "running" state — this is what makes it always-on.
-# Terraform's aws_instance boots the box running but never reconciles its power
-# state afterward, so this companion resource owns it: on apply it starts the
-# instance if anything stopped it (an accidental stop, an AWS maintenance event,
-# or the freshly-minted instance after a bastion_enabled off→on cycle) and
-# otherwise plans clean. It replaces the old "Bastion session" GitHub workflow
-# that started the box for a bounded window and stopped it after.
+# Hold the bastion's power state. Defaults to "stopped" (bastion_desired_state) so
+# every apply parks it — the box exists but bills only its disk until you need it.
+# Terraform's aws_instance never reconciles power state on its own, so this
+# companion resource owns it: an on-demand `infra/bastion.ps1 up` starts the box
+# and it stays up until the *next* apply reconciles it back to stopped (set
+# bastion_desired_state = "running" to make it persist). It replaces the old
+# always-on hold (and, before that, the "Bastion session" GitHub workflow).
 resource "aws_ec2_instance_state" "bastion" {
   count       = var.bastion_enabled ? 1 : 0
   instance_id = module.bastion[0].instance_id
-  state       = "running"
+  state       = var.bastion_desired_state
 }
 
 # Stock-data credentials for the stocks feature (GET /stocks/{symbol}). Created
@@ -102,8 +110,6 @@ resource "aws_ec2_instance_state" "bastion" {
 #     --name /nama/dev/alpaca-api-key-id     --value <YOUR_KEY_ID>
 #   aws ssm put-parameter --overwrite --type SecureString \
 #     --name /nama/dev/alpaca-api-secret-key --value <YOUR_SECRET>
-#   aws ssm put-parameter --overwrite --type SecureString \
-#     --name /nama/dev/finnhub-api-key       --value <YOUR_FINNHUB_KEY>
 #   aws ssm put-parameter --overwrite --type SecureString \
 #     --name /nama/dev/logodev-token         --value <YOUR_LOGODEV_PUBLISHABLE_KEY>
 #   aws ssm put-parameter --overwrite --type SecureString \
@@ -118,15 +124,6 @@ module "alpaca_api_secret_key" {
   source      = "../../modules/ssm-secret"
   name        = "/nama/dev/alpaca-api-secret-key"
   description = "Alpaca API secret key (stocks feature). Value set out of band."
-}
-
-# Finnhub powers market cap + dividend enrichment. Optional: until the real key
-# is set out of band the app simply returns those fields as null (best-effort),
-# so the placeholder is harmless.
-module "finnhub_api_key" {
-  source      = "../../modules/ssm-secret"
-  name        = "/nama/dev/finnhub-api-key"
-  description = "Finnhub API key (stocks market cap + dividend). Value set out of band."
 }
 
 # Logo.dev serves company logos for GET /stocks/{symbol}/logo. Required: without
@@ -160,6 +157,22 @@ module "dns" {
   create_zone   = var.create_hosted_zone
 }
 
+# Google Search Console domain-property verification. A TXT record at the apex
+# (namainsights.com) proves ownership of the domain and every subdomain, so the SEO
+# sitemap can be submitted in Search Console. module.dns.zone_id is the namainsights.com
+# hosted zone. If a later verification (Bing) or SPF needs the apex TXT too, add its value
+# to this same `records` list — Route 53 keeps all apex TXT values in one record set, so a
+# second record resource for the same name/type would collide.
+resource "aws_route53_record" "google_site_verification" {
+  zone_id = module.dns.zone_id
+  name    = var.parent_domain
+  type    = "TXT"
+  ttl     = 300
+  records = [
+    "google-site-verification=hOAOsyYqg8DUzoo-mO_gTLL9DUmsoi9YOK82ouctwLI",
+  ]
+}
+
 # The app on ECS Fargate, fronted by an API Gateway HTTP API (per-request
 # billing — no always-on load balancer). It carries the database's app
 # security group, reads DATABASE_URL from the SSM SecureString, and is served
@@ -173,16 +186,34 @@ module "app" {
   app_security_group_id = module.database.app_security_group_id
   database_url_ssm_arn  = module.database.database_url_ssm_arn
 
+  # Capacity. The always-on API task keeps the module default 0.25 vCPU / 0.5 GiB,
+  # so idle cost is unchanged; added concurrency comes from scaling OUT under load
+  # rather than a bigger always-on box.
+  #
+  # Target-tracking autoscaling: hold ~60% CPU by scaling 1→3 tasks. Min 1 keeps
+  # idle cost unchanged; scale-out only under real load. The gateway throttle is
+  # raised to match ~3 tasks' throughput so it isn't the new ceiling. NOTE: with
+  # >1 task the in-process per-IP limiter becomes per-task (looser by up to the
+  # task count) until RATE_LIMIT_STORAGE_URI is pointed at Redis — the gateway
+  # throttle below is the hard global backstop meanwhile.
+  enable_autoscaling       = true
+  autoscaling_min_capacity = 1
+  autoscaling_max_capacity = 3
+  autoscaling_cpu_target   = 60
+
+  apigw_throttle_rate_limit  = 100
+  apigw_throttle_burst_limit = 200
+
   # Injected as the env vars the app reads (app/stocks/router.py, plus the cron
   # guard in app/stocks/endpoints/cron_auth.py): the Alpaca keys (required), the
-  # optional Finnhub key (market cap + dividend), the Logo.dev token (required for
-  # the logo endpoint), and the cron sync token (guards the /internal/*/sync
-  # endpoints). These ride onto BOTH task defs; the CLI sync task ignores the cron
-  # token (it calls the runners directly, not over HTTP), which is harmless.
+  # Logo.dev token (required for the logo endpoint), and the cron sync token (guards
+  # the /internal/*/sync endpoints). These ride onto BOTH task defs; the CLI sync
+  # task ignores the cron token (it calls the runners directly, not over HTTP), which
+  # is harmless. (Finnhub was retired — fundamentals now come from the yfinance
+  # `.info` sweep materialized on the stocks anchor, so there's no key to inject.)
   extra_secrets = {
     APCA_API_KEY_ID     = module.alpaca_api_key_id.arn
     APCA_API_SECRET_KEY = module.alpaca_api_secret_key.arn
-    FINNHUB_API_KEY     = module.finnhub_api_key.arn
     LOGODEV_TOKEN       = module.logodev_token.arn
     CRON_SYNC_TOKEN     = module.cron_sync_token.arn
   }
@@ -200,6 +231,12 @@ module "app" {
   extra_environment = {
     BEDROCK_REGION            = "us-east-1"
     BEDROCK_ANALYSIS_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    # The public canonical origin the SEO content pages stamp into their canonical/OG
+    # URLs and sitemap (app/stocks/endpoints/seo_endpoints.py). The *www* host, because
+    # the frontend distribution 301-redirects the apex to www — a canonical/sitemap URL
+    # on the apex would needlessly bounce. Harmless on the sync task def, which ignores it.
+    PUBLIC_SITE_ORIGIN = "https://${var.frontend_canonical_domain}"
   }
 
   # Grant the task role bedrock:InvokeModel for the AI analysis endpoints
@@ -237,6 +274,12 @@ module "dns_frontend" {
 # redirect_to_domain makes www the canonical host: a CloudFront edge function
 # 301-redirects the apex (namainsights.com) to www.namainsights.com, so the site
 # has one canonical URL instead of serving identical content at both.
+#
+# SEO content pages: the same distribution also routes the server-rendered SEO paths to the
+# APP origin (module.app at api.namainsights.com), so /stock/*, /sitemap.xml, /robots.txt and
+# /llms.txt are served by FastAPI *under the main hostname* — inheriting the site's authority
+# — while everything else stays the S3 SPA. The API Gateway's $default route passes these
+# paths straight to the app. See app/stocks/seo/ and its README.
 module "frontend" {
   source = "../../modules/static-site-cloudfront"
 
@@ -246,4 +289,19 @@ module "frontend" {
   redirect_to_domain      = var.frontend_canonical_domain
   certificate_arn         = module.dns_frontend.certificate_arn
   route53_zone_id         = module.dns_frontend.zone_id
+
+  # Route the SEO surface to the app. var.domain_name is the API's custom domain
+  # (api.namainsights.com); its cert covers that host, which the https-only origin needs.
+  backend_origin_domain_name = var.domain_name
+  backend_path_patterns = [
+    "/stock/*",
+    "/etf/*",
+    "/sector/*",
+    "/screen/*",
+    "/ai-stock-screener",
+    "/stock-screener",
+    "/sitemap.xml",
+    "/robots.txt",
+    "/llms.txt",
+  ]
 }

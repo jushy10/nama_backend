@@ -33,7 +33,13 @@ class StoredTickerFacts(NamedTuple):
     ``fcf_per_share`` / ``ocf_per_share`` (newest reported year, trading currency) and
     ``fcf_growth_yoy`` (percent) the annual slice's latest snapshots. The card prices
     the two per-share cash figures against its live quote (into P/FCF, FCF yield, OCF
-    yield); ``fcf_growth_yoy`` it serves directly."""
+    yield); ``fcf_growth_yoy`` it serves directly.
+
+    ``gross_margin`` / ``operating_margin`` / ``net_margin`` (percent) and
+    ``dividend_per_share`` (trading currency) are the fundamentals slice's writes (Yahoo
+    ``.info``) — the card serves the margins directly in its metrics block and prices the
+    dividend per share against its live quote into the dividend yield, replacing the live
+    Finnhub fundamentals call it used to make."""
 
     name: str | None = None
     exchange: str | None = None
@@ -45,6 +51,10 @@ class StoredTickerFacts(NamedTuple):
     fcf_per_share: float | None = None
     ocf_per_share: float | None = None
     fcf_growth_yoy: float | None = None
+    gross_margin: float | None = None
+    operating_margin: float | None = None
+    net_margin: float | None = None
+    dividend_per_share: float | None = None
 
 
 class TickerRepository(ABC):

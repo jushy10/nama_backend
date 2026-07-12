@@ -11,7 +11,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.adapters.bedrock.analysis_adapter import BedrockAnalysisProvider
+from app.stocks.adapters.bedrock.analysis_adapter import (
+    BedrockScorecardProvider,
+    _SECTIONS as _SCORECARD_SECTIONS,
+)
 from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
     BedrockEarningsAnalysisProvider,
 )
@@ -24,24 +27,31 @@ from app.stocks.adapters.bedrock.sector_analysis_adapter import (
 from app.stocks.charts.chart_window import ChartRange, resolve_window
 from app.stocks.analysis.entities import (
     Confidence,
+    EarningsAnalysis,
     EarningsTrend,
-    InvestmentAnalysis,
     MarketIndexReturn,
     MarketPeriod,
     MarketPeriodHighlight,
     MarketSummary,
     MarketTone,
     Recommendation,
+    ScorecardSection,
+    SectionMetric,
+    SectionStance,
     SectorAnalysis,
     SectorHighlight,
+    StockScorecard,
 )
 from app.stocks.analysis.ports import (
-    InvestmentAnalysisCache,
-    InvestmentAnalysisProvider,
+    AiAnalysisCache,
+    EarningsAnalysisProvider,
     MarketSummaryProvider,
     SectorAnalysisProvider,
+    StockScorecardCache,
+    StockScorecardProvider,
 )
 from app.stocks.analysis.use_cases import (
+    GetEarningsAnalysis,
     GetMarketSummary,
     GetSectorAnalysis,
     GetStockAnalysis,
@@ -53,6 +63,16 @@ from app.stocks.charts.use_cases import (
     GetStockEma,
     GetStockSupportLevels,
 )
+from app.stocks.earnings.annual.entities import (
+    AnnualEarnings,
+    AnnualEarningsTimeline,
+)
+from app.stocks.earnings.annual.ports import AnnualEarningsProvider
+from app.stocks.earnings.quarterly.entities import (
+    QuarterlyEarnings,
+    QuarterlyEarningsTimeline,
+)
+from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.endpoints.analysis_endpoints import (
     get_market_summary,
     get_sector_analysis,
@@ -70,15 +90,14 @@ from app.stocks.entities import (
     AnalystEstimates,
     Candle,
     CandleSeries,
-    CompanyProfile,
     GrowthMetrics,
     KeyMetrics,
     Quote,
     Stock,
-    StockFundamentals,
     StockPerformance,
     Timeframe,
 )
+from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.logo.entities import Logo
 from app.stocks.logo.ports import LogoProvider
 from app.stocks.logo.use_cases import GetStockLogo
@@ -88,29 +107,21 @@ from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
 from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
-    CompanyProfileProvider,
     StockDataProvider,
-    StockFundamentalsProvider,
     StockPerformanceProvider,
 )
-from app.stocks.earnings.annual.entities import (
-    AnnualEarnings,
-    AnnualEarningsTimeline,
-)
-from app.stocks.earnings.annual.ports import AnnualEarningsProvider
-from app.stocks.earnings.quarterly.entities import (
-    QuarterlyEarnings,
-    QuarterlyEarningsTimeline,
-)
-from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.recommendations.entities import (
     AnalystRecommendations,
     RecommendationTrend,
 )
 from app.stocks.recommendations.ports import RecommendationProvider
-from app.stocks.universe.entities import IndustryValuation, MarketCapTier
+from app.stocks.universe.entities import (
+    AnchorMetrics,
+    IndustryValuation,
+    MarketCapTier,
+)
 from app.stocks.universe.repository import StockSearchRepository
+from app.stocks.wiring import analysis_cache_ttl
 
 
 class FakeProvider(StockDataProvider):
@@ -175,38 +186,6 @@ class FakeAllTimeHighProvider(AllTimeHighProvider):
             raise self._raises
         assert self._all_time_high is not None
         return self._all_time_high
-
-
-class FakeFundamentalsProvider(StockFundamentalsProvider):
-    """Returns/raises whatever the test configured; records calls."""
-
-    def __init__(self, fundamentals=None, raises=None):
-        self._fundamentals = fundamentals
-        self._raises = raises
-        self.received: list[str] = []
-
-    def get_fundamentals(self, symbol: str) -> StockFundamentals:
-        self.received.append(symbol)
-        if self._raises is not None:
-            raise self._raises
-        assert self._fundamentals is not None
-        return self._fundamentals
-
-
-class FakeProfileProvider(CompanyProfileProvider):
-    """Returns/raises whatever the test configured; records calls."""
-
-    def __init__(self, profile=None, raises=None):
-        self._profile = profile
-        self._raises = raises
-        self.received: list[str] = []
-
-    def get_profile(self, symbol: str) -> CompanyProfile:
-        self.received.append(symbol)
-        if self._raises is not None:
-            raise self._raises
-        assert self._profile is not None
-        return self._profile
 
 
 class FakeEstimatesProvider(AnalystEstimatesProvider):
@@ -335,6 +314,21 @@ class FakeSearchRepo(StockSearchRepository):
         pe_ratios: tuple[float, ...] = (),
         peers: tuple[tuple[float, MarketCapTier], ...] | None = None,
         anchor_tier: MarketCapTier | None = MarketCapTier.MID,
+        fcf_per_share: float | None = None,
+        revenue_growth_yoy: float | None = None,
+        eps_growth_yoy: float | None = None,
+        gross_margin: float | None = None,
+        operating_margin: float | None = None,
+        net_margin: float | None = None,
+        return_on_equity: float | None = None,
+        current_ratio: float | None = None,
+        debt_to_equity: float | None = None,
+        beta: float | None = None,
+        book_value_per_share: float | None = None,
+        sales_per_share: float | None = None,
+        dividend_per_share: float | None = None,
+        market_cap: float | None = None,
+        name: str | None = None,
         raises: Exception | None = None,
     ):
         self._industry = industry
@@ -344,12 +338,34 @@ class FakeSearchRepo(StockSearchRepository):
             else tuple((pe, MarketCapTier.MID) for pe in pe_ratios)
         )
         self._anchor_tier = anchor_tier
+        self._anchor_metrics = AnchorMetrics(
+            fcf_per_share=fcf_per_share,
+            revenue_growth_yoy=revenue_growth_yoy,
+            eps_growth_yoy=eps_growth_yoy,
+            gross_margin=gross_margin,
+            operating_margin=operating_margin,
+            net_margin=net_margin,
+            return_on_equity=return_on_equity,
+            current_ratio=current_ratio,
+            debt_to_equity=debt_to_equity,
+            beta=beta,
+            book_value_per_share=book_value_per_share,
+            sales_per_share=sales_per_share,
+            dividend_per_share=dividend_per_share,
+            market_cap=market_cap,
+            name=name,
+        )
         self._raises = raises
 
     def industry_for_ticker(self, ticker: str) -> str | None:
         if self._raises is not None:
             raise self._raises
         return self._industry
+
+    def anchor_metrics_for_ticker(self, ticker: str) -> AnchorMetrics:
+        if self._raises is not None:
+            raise self._raises
+        return self._anchor_metrics
 
     def tier_for_ticker(self, ticker: str) -> MarketCapTier | None:
         if self._raises is not None:
@@ -377,19 +393,20 @@ class FakeSearchRepo(StockSearchRepository):
         raise NotImplementedError
 
 
-class FakeAnalysisProvider(InvestmentAnalysisProvider):
+class FakeAnalysisProvider(StockScorecardProvider):
     """Returns/raises whatever the test configured; records (symbol, had_quarterly)
     and stashes the last quarterly/annual/recommendations/industry context it was
     handed."""
 
     def __init__(
         self,
-        analysis: InvestmentAnalysis | None = None,
+        analysis: StockScorecard | None = None,
         raises: Exception | None = None,
     ):
         self._analysis = analysis
         self._raises = raises
         self.received: list[tuple[str, bool]] = []
+        self.last_stock = None
         self.last_quarterly = None
         self.last_annual = None
         self.last_recommendations = None
@@ -402,8 +419,9 @@ class FakeAnalysisProvider(InvestmentAnalysisProvider):
         annual=None,
         recommendations=None,
         industry_valuation=None,
-    ) -> InvestmentAnalysis:
+    ) -> StockScorecard:
         self.received.append((stock.symbol, quarterly is not None))
+        self.last_stock = stock
         self.last_quarterly = quarterly
         self.last_annual = annual
         self.last_recommendations = recommendations
@@ -414,32 +432,72 @@ class FakeAnalysisProvider(InvestmentAnalysisProvider):
         return self._analysis
 
 
-def an_analysis(**overrides) -> InvestmentAnalysis:
+def a_section(**overrides) -> ScorecardSection:
+    base = dict(
+        key="business_quality",
+        title="Business quality",
+        stance=SectionStance.POSITIVE,
+        label="Exceptional",
+        summary="Keeps roughly half of every dollar of sales as profit.",
+        metrics=(SectionMetric("Net margin", "25.00%"),),
+    )
+    base.update(overrides)
+    return ScorecardSection(**base)
+
+
+def an_analysis(**overrides) -> StockScorecard:
+    """A complete four-section scorecard (named ``an_analysis`` for continuity with the
+    context tests that only assert the overall verdict)."""
     base = dict(
         symbol="AAPL",
         recommendation=Recommendation.HOLD,
         confidence=Confidence.MEDIUM,
         thesis="Solid franchise; the valuation already reflects much of the growth.",
-        strengths=("Consistent earnings beats", "Strong net margin"),
-        risks=("Above-average P/E", "Decelerating revenue growth"),
+        sections=(
+            a_section(),
+            a_section(
+                key="valuation",
+                title="Valuation",
+                stance=SectionStance.NEGATIVE,
+                label="Expensive",
+                summary="Priced well above its industry peers.",
+                metrics=(SectionMetric("P/E (trailing)", "28.50"),),
+            ),
+            a_section(
+                key="earnings",
+                title="Earnings",
+                stance=SectionStance.POSITIVE,
+                label="Beating estimates",
+                summary="Has topped expectations every recent quarter.",
+                metrics=(SectionMetric("Beat rate", "4/4 quarters"),),
+            ),
+            a_section(
+                key="analyst_view",
+                title="Analyst view",
+                stance=SectionStance.POSITIVE,
+                label="Mostly buys",
+                summary="Most covering analysts rate it a buy.",
+                metrics=(SectionMetric("Consensus", "Buy"),),
+            ),
+        ),
         model="claude-opus-4-8",
         generated_at=datetime(2026, 6, 18, 20, 0, tzinfo=timezone.utc),
     )
     base.update(overrides)
-    return InvestmentAnalysis(**base)
+    return StockScorecard(**base)
 
 
-class FakeAnalysisCache(InvestmentAnalysisCache):
-    """In-memory stand-in for the analysis result cache; records what it stored."""
+class FakeAnalysisCache(StockScorecardCache):
+    """In-memory stand-in for the scorecard result cache; records what it stored."""
 
-    def __init__(self, stored: InvestmentAnalysis | None = None) -> None:
+    def __init__(self, stored: StockScorecard | None = None) -> None:
         self._store = {stored.symbol: stored} if stored is not None else {}
-        self.puts: list[InvestmentAnalysis] = []
+        self.puts: list[StockScorecard] = []
 
-    def get(self, symbol: str) -> InvestmentAnalysis | None:
+    def get(self, symbol: str) -> StockScorecard | None:
         return self._store.get(symbol)
 
-    def put(self, analysis: InvestmentAnalysis) -> None:
+    def put(self, analysis: StockScorecard) -> None:
         self.puts.append(analysis)
         self._store[analysis.symbol] = analysis
 
@@ -640,19 +698,6 @@ def a_key_metrics(**overrides) -> KeyMetrics:
     )
     base.update(overrides)
     return KeyMetrics(**base)
-
-
-def a_fundamentals(**overrides) -> StockFundamentals:
-    base = dict(
-        market_cap=3_120_000_000_000.0, dividend_per_share=1.0, dividend_yield=0.42,
-        metrics=a_key_metrics(),
-    )
-    base.update(overrides)
-    return StockFundamentals(**base)
-
-
-def a_profile(name: str | None = None) -> CompanyProfile:
-    return CompanyProfile(name=name)
 
 
 def an_estimates(**overrides) -> AnalystEstimates:
@@ -944,42 +989,27 @@ def test_use_case_propagates_not_found():
 
 
 def test_use_case_merges_enrichment():
+    # GetStockInfo layers on the best-effort enrichment it still owns — the trailing
+    # performance windows and the forward analyst estimates. The trailing fundamentals
+    # (market cap, dividend, metrics) are no longer read here; they're overlaid from the
+    # ``stocks`` anchor downstream, so this snapshot leaves them unset.
     info = GetStockInfo(
         FakeProvider(stock=a_stock()),
         FakePerformanceProvider(a_performance()),
-        FakeFundamentalsProvider(a_fundamentals()),
-        FakeProfileProvider(a_profile()),
+        estimates_provider=FakeEstimatesProvider(an_estimates()),
     )
     stock = info.execute("AAPL")
-    assert stock.market_cap == 3_120_000_000_000.0
-    assert stock.dividend_per_share == 1.0
-    assert stock.dividend_yield == 0.42
     assert stock.performance.one_year == 21.0
-    assert stock.metrics.pe == 28.5
-    assert stock.metrics.beta == 1.2
+    assert stock.analyst_estimates.eps_avg == 8.0
+    # Not read here anymore — filled from the anchor by the analysis overlay.
+    assert stock.market_cap is None
+    assert stock.dividend_per_share is None
+    assert stock.metrics is None
 
 
-def test_use_case_prefers_profile_name_over_feed_name():
-    # The price feed gives the full legal title; the profile vendor's clean name
-    # wins when present.
-    info = GetStockInfo(
-        FakeProvider(stock=a_stock(name="Apple Inc. Common Stock")),
-        profile_provider=FakeProfileProvider(a_profile(name="Apple Inc.")),
-    )
-    assert info.execute("AAPL").name == "Apple Inc."
-
-
-def test_use_case_keeps_feed_name_when_profile_name_absent():
-    # No clean name from the vendor -> fall back to the feed's name, unchanged.
-    info = GetStockInfo(
-        FakeProvider(stock=a_stock(name="Apple Inc. Common Stock")),
-        profile_provider=FakeProfileProvider(a_profile(name=None)),
-    )
-    assert info.execute("AAPL").name == "Apple Inc. Common Stock"
-
-
-def test_use_case_keeps_feed_name_when_profile_unconfigured():
-    # No profile provider at all -> the feed's name stands.
+def test_use_case_keeps_the_feed_name():
+    # GetStockInfo leaves the price-feed's name as-is; the clean display name is overlaid
+    # from the anchor downstream (the analysis path), not by this use case.
     stock = GetStockInfo(
         FakeProvider(stock=a_stock(name="Apple Inc. Common Stock"))
     ).execute("AAPL")
@@ -1034,16 +1064,16 @@ def test_use_case_enrichment_is_best_effort():
     info = GetStockInfo(
         FakeProvider(stock=a_stock()),
         FakePerformanceProvider(raises=StockDataUnavailable("AAPL", "boom")),
-        FakeFundamentalsProvider(raises=StockNotFound("AAPL")),
-        FakeProfileProvider(raises=StockDataUnavailable("AAPL", "boom")),
         FakeAllTimeHighProvider(raises=StockDataUnavailable("AAPL", "boom")),
+        FakeEstimatesProvider(raises=StockDataUnavailable("AAPL", "boom")),
     )
     stock = info.execute("AAPL")  # enrichment failures must not raise
     assert stock.price == 297.86
     assert stock.performance is None
-    assert stock.market_cap is None
+    assert stock.market_cap is None  # never read here now
     assert stock.all_time_high is None
     assert stock.drawdown_from_high is None
+    assert stock.analyst_estimates is None
 
 
 def test_use_case_attaches_all_time_high():
@@ -1283,8 +1313,6 @@ def make_client():
         logo_provider: LogoProvider | None = None,
         performance_provider: StockPerformanceProvider | None = None,
         ath_provider: AllTimeHighProvider | None = None,
-        fundamentals_provider: StockFundamentalsProvider | None = None,
-        profile_provider: CompanyProfileProvider | None = None,
         estimates_provider: AnalystEstimatesProvider | None = None,
         candle_provider: CandleProvider | None = None,
         ema_provider: CandleProvider | None = None,
@@ -1293,7 +1321,7 @@ def make_client():
         earnings_provider: QuarterlyEarningsProvider | None = None,
         annual_earnings_provider: AnnualEarningsProvider | None = None,
         recommendations_provider: RecommendationProvider | None = None,
-        analysis_provider: InvestmentAnalysisProvider | None = None,
+        analysis_provider: StockScorecardProvider | None = None,
         industry_repository: StockSearchRepository | None = None,
         sector_analysis_provider: SectorAnalysisProvider | None = None,
         market_overview_provider: MarketOverviewProvider | None = None,
@@ -1320,8 +1348,6 @@ def make_client():
                 GetStockInfo(
                     provider,
                     performance_provider,
-                    fundamentals_provider,
-                    profile_provider,
                     ath_provider,
                     estimates_provider,
                 ),
@@ -1418,26 +1444,51 @@ class _SeqStubClient:
         self.messages = _SeqStubMessages(messages, self.calls)
 
 
+# The adapter stubs derive their sections from the live registry, so adding a section
+# to the scorecard doesn't break these fixtures (they always fill exactly what the
+# forced tool requires).
+_SCORECARD_SECTION_KEYS = tuple(s.key for s in _SCORECARD_SECTIONS)
+
+
+def _section_payload(**overrides) -> dict:
+    base = dict(stance="positive", label="Solid", summary="Reads well on balance.")
+    base.update(overrides)
+    return base
+
+
 def _tool_message(**input_overrides) -> _StubMessage:
-    payload = dict(
-        recommendation="hold",
-        confidence="medium",
-        thesis="Balanced.",
-        strengths=["High net margin", ""],  # the blank entry should be dropped
-        risks=["Elevated P/E"],
-    )
+    # A complete scorecard: the overall verdict plus a filled read for every registry
+    # section. `input_overrides` can replace the verdict or any section. (No confidence
+    # — the service computes it from coverage, not the model.)
+    payload = dict(recommendation="hold", thesis="Balanced.")
+    payload.update({key: _section_payload() for key in _SCORECARD_SECTION_KEYS})
     payload.update(input_overrides)
-    return _StubMessage([_StubBlock("tool_use", name="submit_analysis", input=payload)])
+    return _StubMessage([_StubBlock("tool_use", name="submit_scorecard", input=payload)])
 
 
-def _bullets_message(**input_overrides) -> _StubMessage:
-    # The lighter recovery tool the retry path forces — only the two bullet lists.
-    payload = dict(
-        strengths=["High net margin", ""],  # the blank entry should be dropped
-        risks=["Elevated P/E"],
-    )
+def _blank_section() -> dict:
+    # The fast-tier failure: a section returned with its words left empty (the metrics
+    # are attached by the service regardless).
+    return {"stance": "neutral", "label": "", "summary": ""}
+
+
+def _blank_sections_message(**overrides) -> _StubMessage:
+    # A scorecard whose overall verdict is filled but every section is blank — the miss
+    # the targeted sections-only retry recovers from. `overrides` can fill a section (or
+    # the verdict) back in.
+    fields = {key: _blank_section() for key in _SCORECARD_SECTION_KEYS}
+    fields.update(overrides)
+    return _tool_message(**fields)
+
+
+def _sections_recovery_message(**input_overrides) -> _StubMessage:
+    # The lighter recovery tool the retry path forces — only the section reads.
+    payload = {
+        key: {"stance": "positive", "label": "Solid", "summary": "A clear read."}
+        for key in _SCORECARD_SECTION_KEYS
+    }
     payload.update(input_overrides)
-    return _StubMessage([_StubBlock("tool_use", name="submit_bullets", input=payload)])
+    return _StubMessage([_StubBlock("tool_use", name="submit_sections", input=payload)])
 
 
 def test_analysis_use_case_passes_stock_and_earnings():
@@ -1492,10 +1543,12 @@ def test_analysis_cache_miss_generates_and_stores():
 
 
 def test_analysis_incomplete_read_is_not_cached():
-    # A model read missing its bullet lists is returned to the caller but never
-    # frozen in the cache, so the next view regenerates instead of serving empty
-    # strengths/risks for the whole TTL.
-    incomplete = an_analysis(strengths=(), risks=())
+    # A model read with a blank section summary is returned to the caller but never
+    # frozen in the cache, so the next view regenerates instead of serving an empty
+    # section for the whole TTL.
+    incomplete = an_analysis(
+        sections=(a_section(summary=""),)  # a section with no summary -> not complete
+    )
     analyzer = FakeAnalysisProvider(incomplete)
     info = GetStockInfo(FakeProvider(stock=a_stock()))
     cache = FakeAnalysisCache()  # empty
@@ -1504,30 +1557,205 @@ def test_analysis_incomplete_read_is_not_cached():
     assert cache.puts == []  # but not stored
 
 
+# --- result cache: the newer AI analyses (earnings / sector / market) --------------
+#
+# Ratings + fundamentals cache scenarios live in their own test modules; here are the
+# three that share this file's fakes. Each proves the generic AiAnalysisCache wiring: a
+# fresh stored read skips the gather + model call, a miss generates and stores, and an
+# incomplete read is returned but not frozen. The two market-wide reads take no symbol,
+# so they key on the "_MARKET_" sentinel.
+
+_MARKET_KEY = "_MARKET_"
+
+
+class FakeAiAnalysisCache(AiAnalysisCache):
+    """In-memory stand-in for the generic AI-analysis result cache; records puts."""
+
+    def __init__(self, stored=None, key=None):
+        self._store = {key: stored} if stored is not None else {}
+        self.puts: list[tuple] = []
+
+    def get(self, key):
+        return self._store.get(key)
+
+    def put(self, key, analysis):
+        self.puts.append((key, analysis))
+        self._store[key] = analysis
+
+
+class FakeEarningsAnalysisProvider(EarningsAnalysisProvider):
+    """Returns a canned earnings analysis (or raises); records the symbols it saw."""
+
+    def __init__(self, result=None, *, raises=None):
+        self._result = result
+        self._raises = raises
+        self.received: list[str] = []
+
+    def analyze(self, symbol, quarterly=None, annual=None) -> EarningsAnalysis:
+        self.received.append(symbol)
+        if self._raises is not None:
+            raise self._raises
+        return self._result
+
+
+def an_earnings_analysis(
+    symbol="AAPL", *, summary="Earnings are accelerating.", highlights=("Beat streak",),
+    when=None,
+) -> EarningsAnalysis:
+    return EarningsAnalysis(
+        symbol=symbol, summary=summary, trend=EarningsTrend.ACCELERATING,
+        highlights=highlights, model="m",
+        generated_at=when or datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+
+
+def _earnings_use_case(analyzer, cache):
+    return GetEarningsAnalysis(
+        analyzer,
+        FakeQuarterlyEarningsProvider(a_quarterly_timeline()),
+        FakeAnnualEarningsProvider(an_annual_timeline()),
+        cache=cache,
+    )
+
+
+def test_earnings_analysis_fresh_cache_skips_generation():
+    fresh = an_earnings_analysis(when=datetime.now(timezone.utc))
+    analyzer = FakeEarningsAnalysisProvider(raises=AssertionError("model must not run"))
+    result = _earnings_use_case(
+        analyzer, FakeAiAnalysisCache(stored=fresh, key="AAPL")
+    ).execute("aapl")  # normalizes to AAPL, matching the cached key
+    assert result is fresh
+    assert analyzer.received == []  # model never called
+
+
+def test_earnings_analysis_cache_miss_generates_and_stores():
+    generated = an_earnings_analysis()
+    cache = FakeAiAnalysisCache()
+    result = _earnings_use_case(
+        FakeEarningsAnalysisProvider(result=generated), cache
+    ).execute("AAPL")
+    assert result is generated
+    assert cache.puts == [("AAPL", generated)]
+
+
+def test_earnings_analysis_incomplete_read_is_not_cached():
+    incomplete = an_earnings_analysis(summary="", highlights=())  # not is_complete
+    cache = FakeAiAnalysisCache()
+    result = _earnings_use_case(
+        FakeEarningsAnalysisProvider(result=incomplete), cache
+    ).execute("AAPL")
+    assert result is incomplete  # still returned
+    assert cache.puts == []  # but not stored
+
+
+def test_sector_analysis_fresh_cache_skips_generation():
+    fresh = a_sector_analysis(generated_at=datetime.now(timezone.utc))
+    analyzer = FakeSectorAnalysisProvider(raises=AssertionError("model must not run"))
+    board = FakeSectorProvider([a_sector()])
+    cache = FakeAiAnalysisCache(stored=fresh, key=_MARKET_KEY)
+    result = GetSectorAnalysis(
+        GetSectorPerformance(board), analyzer, cache=cache
+    ).execute()
+    assert result is fresh
+    assert analyzer.received is None  # analyze never called
+    assert board.calls == 0  # the board gather is skipped too
+
+
+def test_sector_analysis_cache_miss_generates_and_stores():
+    generated = a_sector_analysis()
+    cache = FakeAiAnalysisCache()
+    result = GetSectorAnalysis(
+        GetSectorPerformance(FakeSectorProvider([a_sector()])),
+        FakeSectorAnalysisProvider(generated),
+        cache=cache,
+    ).execute()
+    assert result is generated
+    assert cache.puts == [(_MARKET_KEY, generated)]
+
+
+def test_market_summary_fresh_cache_skips_generation():
+    fresh = a_market_summary(generated_at=datetime.now(timezone.utc))
+    analyzer = FakeMarketSummaryProvider(raises=AssertionError("model must not run"))
+    board = FakeMarketOverviewProvider([a_market_index()])
+    cache = FakeAiAnalysisCache(stored=fresh, key=_MARKET_KEY)
+    result = GetMarketSummary(
+        GetMarketOverview(board), analyzer, cache=cache
+    ).execute()
+    assert result is fresh
+    assert analyzer.received is None  # analyze never called
+    assert board.calls == 0  # the board gather is skipped too
+
+
+def test_market_summary_cache_miss_generates_and_stores():
+    generated = a_market_summary()
+    cache = FakeAiAnalysisCache()
+    result = GetMarketSummary(
+        GetMarketOverview(FakeMarketOverviewProvider([a_market_index()])),
+        FakeMarketSummaryProvider(generated),
+        cache=cache,
+    ).execute()
+    assert result is generated
+    assert cache.puts == [(_MARKET_KEY, generated)]
+
+
+def test_analysis_ttl_defaults_reflect_how_often_each_input_changes(monkeypatch):
+    # Each kind's default is tuned to its input's change cadence — slow per-symbol
+    # fundamentals data caches for hours; the intraday market board stays short.
+    for var in (
+        "ANALYSIS_CACHE_TTL_MINUTES", "ANALYSIS_CACHE_TTL_MINUTES_EARNINGS",
+        "ANALYSIS_CACHE_TTL_MINUTES_SECTOR",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    assert analysis_cache_ttl("earnings") == timedelta(minutes=720)   # ~quarterly data
+    assert analysis_cache_ttl("ratings") == timedelta(minutes=360)
+    assert analysis_cache_ttl("etf") == timedelta(minutes=360)
+    assert analysis_cache_ttl("stock") == timedelta(minutes=240)
+    assert analysis_cache_ttl("fundamentals") == timedelta(minutes=240)
+    assert analysis_cache_ttl("sector") == timedelta(minutes=30)      # intraday board
+    assert analysis_cache_ttl("market") == timedelta(minutes=60)
+    assert analysis_cache_ttl("nonesuch") == timedelta(minutes=30)    # unknown -> fallback
+
+
+def test_analysis_ttl_per_kind_env_override_wins(monkeypatch):
+    monkeypatch.delenv("ANALYSIS_CACHE_TTL_MINUTES", raising=False)
+    monkeypatch.setenv("ANALYSIS_CACHE_TTL_MINUTES_EARNINGS", "90")
+    assert analysis_cache_ttl("earnings") == timedelta(minutes=90)
+    assert analysis_cache_ttl("ratings") == timedelta(minutes=360)  # others unaffected
+    # A garbage per-kind value is skipped, falling through to the kind's default.
+    monkeypatch.setenv("ANALYSIS_CACHE_TTL_MINUTES_EARNINGS", "later")
+    assert analysis_cache_ttl("earnings") == timedelta(minutes=720)
+
+
+def test_analysis_ttl_global_override_pins_every_kind(monkeypatch):
+    # The global var (no per-kind override set) pins all kinds to one value.
+    monkeypatch.delenv("ANALYSIS_CACHE_TTL_MINUTES_EARNINGS", raising=False)
+    monkeypatch.setenv("ANALYSIS_CACHE_TTL_MINUTES", "45")
+    assert analysis_cache_ttl("earnings") == timedelta(minutes=45)
+    assert analysis_cache_ttl("sector") == timedelta(minutes=45)
+    # ...but a per-kind override still beats the global.
+    monkeypatch.setenv("ANALYSIS_CACHE_TTL_MINUTES_SECTOR", "10")
+    assert analysis_cache_ttl("sector") == timedelta(minutes=10)
+    assert analysis_cache_ttl("earnings") == timedelta(minutes=45)
+
+
 def test_stock_info_gathers_the_enrichment_calls_concurrently():
-    # Deterministic proof the four independent enrichment reads run in parallel, not
-    # in series: each waits on a 4-party barrier. If they truly overlap, all four
-    # arrive and the barrier releases; a regression to serial gather would leave the
-    # first one blocked until the barrier's timeout trips (BrokenBarrierError), failing
-    # this test loudly rather than merely running slower.
+    # Deterministic proof the two independent enrichment reads run in parallel, not in
+    # series: each waits on a 2-party barrier. If they truly overlap, both arrive and the
+    # barrier releases; a regression to serial gather would leave the first one blocked
+    # until the barrier's timeout trips (BrokenBarrierError), failing this test loudly
+    # rather than merely running slower. (The trailing fundamentals/profile are no longer
+    # gathered here — they're overlaid from the anchor — so the pool now fans out over the
+    # performance + all-time-high reads only; estimates stays on the calling thread.)
     import threading
 
-    barrier = threading.Barrier(4)
+    barrier = threading.Barrier(2)
 
     class _ConcurrentFake:
-        """One fake standing in for every enrichment port; the four pooled reads each
+        """One fake standing in for both enrichment ports; the two pooled reads each
         rendezvous at the barrier, the required get_stock does not."""
 
         def get_stock(self, symbol):
             return a_stock()
-
-        def get_fundamentals(self, symbol):
-            barrier.wait(timeout=5)
-            return None
-
-        def get_profile(self, symbol):
-            barrier.wait(timeout=5)
-            return None
 
         def get_performance(self, symbol):
             barrier.wait(timeout=5)
@@ -1538,9 +1766,9 @@ def test_stock_info_gathers_the_enrichment_calls_concurrently():
             raise StockNotFound(symbol)  # caught in the use case -> None
 
     fake = _ConcurrentFake()
-    info = GetStockInfo(fake, fake, fake, fake, fake)  # estimates left None (a DB read)
+    info = GetStockInfo(fake, fake, fake)  # provider + performance + all-time-high
 
-    stock = info.execute("AAPL")  # returns only if all four rendezvous -> concurrent
+    stock = info.execute("AAPL")  # returns only if both rendezvous -> concurrent
 
     assert stock.symbol == "AAPL"
 
@@ -1752,6 +1980,159 @@ def test_analysis_use_case_industry_valuation_is_best_effort():
     assert analyzer.last_industry_valuation is None
 
 
+def test_analysis_use_case_sources_fcf_from_the_anchor():
+    # FCF per share must come from the DB the annual slice materializes on the anchor — the
+    # overlay builds the snapshot's metrics block from it, so the scorecard's cash read
+    # matches the ticker card.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info, analyzer, industry_repository=FakeSearchRepo(fcf_per_share=9.99)
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_stock.metrics.fcf_per_share == 9.99  # from the anchor
+
+
+def test_analysis_use_case_fcf_is_none_when_anchor_unsynced():
+    # The DB is the only source: an unsynced anchor (no stored fcf) overwrites any snapshot
+    # value to None rather than leaving a stale figure.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock(metrics=a_key_metrics(fcf_per_share=6.43)))
+    )
+    use_case = GetStockAnalysis(
+        info, analyzer, industry_repository=FakeSearchRepo(fcf_per_share=None)
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_stock.metrics.fcf_per_share is None  # overwritten, not 6.43
+
+
+def test_analysis_use_case_sources_growth_from_the_anchor():
+    # Trailing revenue/EPS growth, like FCF, comes from the DB the annual slice
+    # materializes on the anchor (consensus basis), so the scorecard's Growth section
+    # matches the rest of the app.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        industry_repository=FakeSearchRepo(
+            revenue_growth_yoy=15.5, eps_growth_yoy=22.0
+        ),
+    )
+    use_case.execute("AAPL")
+    metrics = analyzer.last_stock.metrics
+    assert metrics.revenue_growth_yoy == 15.5  # from the anchor
+    assert metrics.eps_growth_yoy == 22.0
+
+
+def test_analysis_use_case_growth_is_none_when_anchor_unsynced():
+    # DB-only, same as FCF: an unsynced anchor overwrites the growth reads to None rather
+    # than leaving stale snapshot values.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(
+        FakeProvider(
+            stock=a_stock(
+                metrics=a_key_metrics(revenue_growth_yoy=8.0, eps_growth_yoy=12.0)
+            )
+        )
+    )
+    use_case = GetStockAnalysis(info, analyzer, industry_repository=FakeSearchRepo())
+    use_case.execute("AAPL")
+    metrics = analyzer.last_stock.metrics
+    assert metrics.revenue_growth_yoy is None  # overwritten, not 8.0
+    assert metrics.eps_growth_yoy is None  # overwritten, not 12.0
+
+
+def test_analysis_use_case_prices_pe_on_the_consensus_basis():
+    # The trailing P/E handed to the analyzer is recomputed on the consensus basis — the
+    # live price over the quarterly slice's TTM EPS (the ticker card's figure) — so it sits
+    # on the same basis as the industry-median P/E it's compared against. Four reported
+    # quarters of 2.0 -> TTM 8.0; price 200 -> P/E 25.0.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock(price=200.0)))
+    quarters = tuple(
+        a_quarter(fiscal_year=2025, fiscal_quarter=q, eps_actual=2.0) for q in (1, 2, 3, 4)
+    )
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        quarterly_provider=FakeQuarterlyEarningsProvider(a_quarterly_timeline(quarters)),
+        industry_repository=FakeSearchRepo(),
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_stock.metrics.pe == 25.0  # 200 / 8.0
+
+
+def test_analysis_use_case_pe_is_none_without_four_cached_quarters():
+    # No consensus P/E is derivable without a full trailing year, so any snapshot P/E is
+    # overwritten to None — the same DB-only stance as FCF/growth.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock(price=200.0, metrics=a_key_metrics(pe=28.5)))
+    )
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        quarterly_provider=FakeQuarterlyEarningsProvider(
+            a_quarterly_timeline((a_quarter(eps_actual=2.0),))  # one quarter -> no TTM
+        ),
+        industry_repository=FakeSearchRepo(),
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_stock.metrics.pe is None  # overwritten, not 28.5
+
+
+def test_analysis_use_case_sources_margins_from_the_anchor():
+    # The trailing margins fill off the anchor (the fundamentals slice's write), overlaid
+    # onto the snapshot's metrics block so the scorecard's Business-quality section reads
+    # the same figures the ticker card shows.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        industry_repository=FakeSearchRepo(
+            gross_margin=44.0, operating_margin=30.0, net_margin=25.0
+        ),
+    )
+    use_case.execute("AAPL")
+    metrics = analyzer.last_stock.metrics
+    assert metrics.gross_margin == 44.0  # from the anchor
+    assert metrics.operating_margin == 30.0
+    assert metrics.net_margin == 25.0
+
+
+def test_analysis_use_case_sources_market_cap_and_dividend_from_the_anchor():
+    # Market cap and the dividend (per share + a live-priced yield) fill off the anchor —
+    # a $2 dividend at a $200 quote is a 1.0% yield.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock(price=200.0)))
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        industry_repository=FakeSearchRepo(
+            market_cap=2_500_000_000_000.0, dividend_per_share=2.0
+        ),
+    )
+    use_case.execute("AAPL")
+    stock = analyzer.last_stock
+    assert stock.market_cap == 2_500_000_000_000.0  # from the anchor
+    assert stock.dividend_per_share == 2.0
+    assert stock.dividend_yield == 1.0  # 2.0 / 200 * 100, priced on the live quote
+
+
+def test_analysis_use_case_sources_clean_name_from_the_anchor():
+    # The anchor's clean display name replaces the price feed's fuller legal title.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock(name="Apple Inc. Common Stock")))
+    use_case = GetStockAnalysis(
+        info, analyzer, industry_repository=FakeSearchRepo(name="Apple Inc.")
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_stock.name == "Apple Inc."  # from the anchor
+
+
 def test_analysis_use_case_propagates_stock_not_found():
     analyzer = FakeAnalysisProvider(an_analysis())
     info = GetStockInfo(FakeProvider(raises=StockNotFound("ZZZZ")))
@@ -1768,25 +2149,42 @@ def test_analysis_use_case_propagates_model_failure():
 
 
 def test_bedrock_adapter_parses_tool_call_into_entity():
-    client = _StubClient(_tool_message())
-    provider = BedrockAnalysisProvider(client=client, model_id="test-model")
-    analysis = provider.analyze(
+    client = _StubClient(
+        _tool_message(
+            valuation={
+                "stance": "negative",
+                "label": "Expensive",
+                "summary": "Priced richly.",
+            }
+        )
+    )
+    provider = BedrockScorecardProvider(client=client, model_id="test-model")
+    scorecard = provider.analyze(
         a_stock(metrics=a_key_metrics()), a_quarterly_timeline()
     )
-    assert analysis.symbol == "AAPL"
-    assert analysis.recommendation is Recommendation.HOLD
-    assert analysis.confidence is Confidence.MEDIUM
-    assert analysis.strengths == ("High net margin",)  # blank entry dropped
-    assert analysis.risks == ("Elevated P/E",)
-    assert analysis.model == "test-model"
+    assert scorecard.symbol == "AAPL"
+    assert scorecard.recommendation is Recommendation.HOLD
+    # Every registry section comes back, in card order, each carrying the model's read.
+    assert [s.key for s in scorecard.sections] == [s.key for s in _SCORECARD_SECTIONS]
+    valuation = next(s for s in scorecard.sections if s.key == "valuation")
+    assert valuation.stance is SectionStance.NEGATIVE
+    assert valuation.label == "Expensive"
+    assert valuation.summary  # a plain-language read is present
+    # The supporting chips are attached from the gathered data, not the model — the
+    # trailing P/E rides the KeyMetrics figure.
+    assert any(m.label == "P/E (trailing)" for m in valuation.metrics)
+    assert scorecard.model == "test-model"
     # The model was actually pinned to the forced tool, with our model id.
-    assert client.calls[0]["tool_choice"] == {"type": "tool", "name": "submit_analysis"}
+    assert client.calls[0]["tool_choice"] == {
+        "type": "tool",
+        "name": "submit_scorecard",
+    }
     assert client.calls[0]["model"] == "test-model"
 
 
 def test_bedrock_adapter_renders_figures_into_prompt():
     client = _StubClient(_tool_message())
-    BedrockAnalysisProvider(client=client).analyze(
+    BedrockScorecardProvider(client=client).analyze(
         a_stock(metrics=a_key_metrics()), a_quarterly_timeline()
     )
     prompt = client.calls[0]["messages"][0]["content"]
@@ -1801,7 +2199,7 @@ def test_bedrock_adapter_renders_forward_recommendations_and_annual_into_prompt(
     # The richer context — forward consensus (from estimates), the analyst
     # recommendations, and the annual timeline — each renders into its own section.
     client = _StubClient(_tool_message())
-    BedrockAnalysisProvider(client=client).analyze(
+    BedrockScorecardProvider(client=client).analyze(
         a_stock(metrics=a_key_metrics(), analyst_estimates=an_estimates()),
         a_quarterly_timeline(),
         an_annual_timeline(),
@@ -1822,7 +2220,7 @@ def test_bedrock_adapter_renders_industry_valuation_into_prompt():
     # The industry benchmark renders its own labelled block, so the model can weigh
     # the stock's own trailing P/E against its peers.
     client = _StubClient(_tool_message())
-    BedrockAnalysisProvider(client=client).analyze(
+    BedrockScorecardProvider(client=client).analyze(
         a_stock(metrics=a_key_metrics()),
         a_quarterly_timeline(),
         industry_valuation=IndustryValuation.from_pe_ratios(
@@ -1848,7 +2246,7 @@ def test_bedrock_adapter_renders_a_tier_scoped_cohort_as_same_size_peers():
         (8.0, MarketCapTier.MID),
         (9.0, MarketCapTier.MID),
     )
-    BedrockAnalysisProvider(client=client).analyze(
+    BedrockScorecardProvider(client=client).analyze(
         a_stock(metrics=a_key_metrics()),
         a_quarterly_timeline(),
         industry_valuation=IndustryValuation.for_stock_peers(
@@ -1863,7 +2261,7 @@ def test_bedrock_adapter_renders_a_tier_scoped_cohort_as_same_size_peers():
 def test_bedrock_adapter_omits_industry_valuation_block_when_absent():
     # No benchmark supplied -> no block (the section is skipped, not rendered empty).
     client = _StubClient(_tool_message())
-    BedrockAnalysisProvider(client=client).analyze(a_stock(metrics=a_key_metrics()))
+    BedrockScorecardProvider(client=client).analyze(a_stock(metrics=a_key_metrics()))
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Industry valuation benchmark" not in prompt
 
@@ -1871,50 +2269,121 @@ def test_bedrock_adapter_omits_industry_valuation_block_when_absent():
 def test_bedrock_adapter_raises_when_no_tool_call():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # model didn't call it
     with pytest.raises(StockDataUnavailable):
-        BedrockAnalysisProvider(client=client).analyze(a_stock())
+        BedrockScorecardProvider(client=client).analyze(a_stock())
 
 
 def test_bedrock_adapter_maps_client_error_to_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockAnalysisProvider(client=_BoomClient()).analyze(a_stock())
+        BedrockScorecardProvider(client=_BoomClient()).analyze(a_stock())
 
 
 def test_bedrock_adapter_rejects_offschema_value():
-    client = _StubClient(_tool_message(recommendation="strong_buy"))  # not in the enum
+    client = _StubClient(_tool_message(recommendation="mega_buy"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
-        BedrockAnalysisProvider(client=client).analyze(a_stock())
+        BedrockScorecardProvider(client=client).analyze(a_stock())
 
 
-def test_bedrock_adapter_retries_once_when_bullets_come_back_empty():
-    # The fast Haiku tier sometimes packs everything into the thesis and returns
-    # empty strengths/risks; the adapter retries with the lighter bullets-only tool
-    # and merges the recovered lists in (before the result-cache could freeze the
-    # empty one) — a fraction of the tokens of re-running the whole analysis.
-    empty = _tool_message(strengths=[], risks=[])
-    bullets = _bullets_message()  # the targeted recovery call
-    client = _SeqStubClient([empty, bullets])
+def test_bedrock_adapter_neutral_stance_when_section_stance_off_enum():
+    # A section whose stance isn't a known value degrades to neutral rather than
+    # sinking the whole scorecard (a cosmetic field, unlike the overall verdict).
+    client = _StubClient(_tool_message(valuation=_section_payload(stance="wildly_off")))
+    scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
+    valuation = next(s for s in scorecard.sections if s.key == "valuation")
+    assert valuation.stance is SectionStance.NEUTRAL
 
-    analysis = BedrockAnalysisProvider(client=client).analyze(a_stock())
+
+def test_bedrock_adapter_confidence_reflects_data_coverage():
+    # Confidence is the service's deterministic read of how many data sources resolved
+    # (sections with real chips), not the model's guess. A full multi-source snapshot
+    # reads HIGH, a fundamentals-only one MEDIUM, a bare quote LOW.
+    full = BedrockScorecardProvider(client=_StubClient(_tool_message())).analyze(
+        a_stock(metrics=a_key_metrics()),
+        a_quarterly_timeline(),
+        recommendations=an_analyst_recommendations(),
+    )
+    assert full.confidence is Confidence.HIGH
+
+    partial = BedrockScorecardProvider(client=_StubClient(_tool_message())).analyze(
+        a_stock(metrics=a_key_metrics())  # fundamentals only — no earnings/analyst
+    )
+    assert partial.confidence is Confidence.MEDIUM
+
+    bare = BedrockScorecardProvider(client=_StubClient(_tool_message())).analyze(
+        a_stock()  # a quote with no fundamentals, earnings, or analyst coverage
+    )
+    assert bare.confidence is Confidence.LOW
+
+
+def test_bedrock_adapter_recovers_blank_sections_with_targeted_retry():
+    # The verdict comes back rich but the four sections blank (the SNDK failure); the
+    # adapter re-issues a *sections-only* call and merges the recovered reads in, so the
+    # served scorecard is complete (and cacheable) rather than showing empty sections.
+    client = _SeqStubClient(
+        [
+            _blank_sections_message(),
+            _sections_recovery_message(
+                valuation={
+                    "stance": "negative",
+                    "label": "Expensive",
+                    "summary": "Priced richly.",
+                }
+            ),
+        ]
+    )
+
+    scorecard = BedrockScorecardProvider(client=client).analyze(
+        a_stock(metrics=a_key_metrics())
+    )
 
     assert len(client.calls) == 2  # retried exactly once
-    # the recovery is the lighter, bullets-only forced tool, not the full analysis
-    assert client.calls[1]["tool_choice"] == {"type": "tool", "name": "submit_bullets"}
-    assert analysis.strengths == ("High net margin",)
-    assert analysis.risks == ("Elevated P/E",)
+    # the recovery is the lighter, sections-only forced tool, not the full scorecard
+    assert client.calls[1]["tool_choice"] == {"type": "tool", "name": "submit_sections"}
+    valuation = next(s for s in scorecard.sections if s.key == "valuation")
+    assert valuation.label == "Expensive"
+    assert valuation.summary  # the recovered read filled the blank
+    assert scorecard.is_complete
+    # The overall verdict from the first pass is preserved through the merge.
+    assert scorecard.thesis == "Balanced."
 
 
-def test_bedrock_adapter_accepts_empty_bullets_after_exhausting_retries():
-    # If every attempt comes back empty, keep the read (a thesis with no bullets
-    # beats failing the endpoint) rather than looping forever or raising — and the
-    # use case refuses to cache it, so the next view regenerates.
-    empty = _tool_message(strengths=[], risks=[])
-    client = _SeqStubClient([empty])  # the stub repeats the empty message every call
+def test_bedrock_adapter_merge_keeps_a_section_the_first_pass_already_wrote():
+    # A first pass that filled one section but blanked the rest: the retry fills only the
+    # blanks and never overwrites the good section.
+    first = _blank_sections_message(
+        profitability=_section_payload(label="Exceptional", summary="Best in class.")
+    )
+    client = _SeqStubClient([first, _sections_recovery_message()])
 
-    analysis = BedrockAnalysisProvider(client=client).analyze(a_stock())
+    scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
 
-    assert len(client.calls) == 5  # initial call + 4 bounded retries, then accept
-    assert analysis.strengths == () and analysis.risks == ()
-    assert analysis.thesis  # the rest of the read still comes through
+    prof = next(s for s in scorecard.sections if s.key == "profitability")
+    assert prof.label == "Exceptional"  # kept from the first pass, not the recovery
+    assert scorecard.is_complete
+
+
+def test_bedrock_adapter_accepts_blank_sections_after_exhausting_retries():
+    # If every attempt comes back blank, keep the read (the verdict still lands) rather
+    # than looping forever or raising — and the use case refuses to cache it, so the next
+    # view regenerates.
+    client = _SeqStubClient([_blank_sections_message()])  # repeats the blank message
+
+    scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
+
+    # initial call + the bounded retries, then accept
+    assert len(client.calls) == 1 + BedrockScorecardProvider._MAX_INCOMPLETE_RETRIES
+    assert not scorecard.is_complete
+    assert scorecard.thesis  # the overall verdict still comes through
+
+
+def test_bedrock_adapter_does_not_retry_a_complete_scorecard():
+    # The happy path pays no retry cost: a first pass with all four sections filled is
+    # returned after a single call.
+    client = _SeqStubClient([_tool_message(), _sections_recovery_message()])
+
+    scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
+
+    assert len(client.calls) == 1  # no recovery call
+    assert scorecard.is_complete
 
 
 def test_get_analysis_returns_200(make_client):
@@ -1928,7 +2397,17 @@ def test_get_analysis_returns_200(make_client):
     assert body["symbol"] == "AAPL"
     assert body["recommendation"] == "hold"
     assert body["confidence"] == "medium"
-    assert body["strengths"] and body["risks"]
+    assert [s["key"] for s in body["sections"]] == [
+        "business_quality",
+        "valuation",
+        "earnings",
+        "analyst_view",
+    ]
+    valuation = body["sections"][1]
+    assert valuation["stance"] == "negative"
+    assert valuation["label"] == "Expensive"
+    assert valuation["summary"]
+    assert valuation["metrics"][0]["label"] == "P/E (trailing)"
     assert "not financial advice" in body["disclaimer"].lower()
     assert body["model"] == "claude-opus-4-8"
 

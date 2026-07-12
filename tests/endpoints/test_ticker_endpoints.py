@@ -22,7 +22,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import ticker_endpoints as endpoints
-from app.stocks.entities import KeyMetrics, Quote, StockFundamentals, StockPerformance
+from app.stocks.entities import (
+    Quote,
+    StockPerformance,
+)
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ticker.entities import TickerOptionsMetrics, TickerValuation
 from app.stocks.ticker.use_cases import TickerCard, TickerClassification
@@ -91,26 +94,21 @@ def _a_card(
             else None
         ),
         name="Micron Technology",
-        # Market cap now rides the anchor (card.market_cap), so the fundamentals'
-        # own market_cap is a wrong-answer sentinel: the presenter must ignore it.
+        # Market cap, margins and the dividend all ride the anchor read now.
         market_cap=1_090_000_000_000.0,
         sector="technology",
         industry="semiconductors",
         revenue_growth_yoy=61.6,
         eps_growth_yoy=587.4,
         fcf_growth_yoy=42.0,  # off the anchor (annual slice), like the growth pair
-        fundamentals=StockFundamentals(
-            market_cap=999.0,  # sentinel: presenter reads card.market_cap, not this
-            # Vendor-noisy on purpose: the presenter must round both to 2 decimals.
-            dividend_per_share=0.4649,
-            dividend_yield=0.047123,
-            metrics=KeyMetrics(
-                pe=22.4,
-                gross_margin=52.1,
-                operating_margin=38.9,
-                net_margin=33.5,
-            ),
-        ),
+        # The margins ride the anchor (fundamentals slice) and the presenter serves them
+        # directly. The dividend per share is vendor-noisy on purpose (0.4649): the presenter
+        # rounds it to 0.46 and prices the yield off the live quote (0.4649 / 975.56 * 100
+        # -> 0.05), replacing the retired stored dividend_yield.
+        gross_margin=52.1,
+        operating_margin=38.9,
+        net_margin=33.5,
+        dividend_per_share=0.4649,
         performance=(
             StockPerformance(
                 one_week=1.5, one_month=8.0, three_month=40.0, six_month=90.0,
@@ -191,8 +189,8 @@ def test_presents_the_optin_blocks_when_included():
     }
     # The trailing P/E and the FCF/OCF reads ride the valuation (P/E off the
     # consensus-basis TTM, the cash reads off the anchor's per-share cash at the live
-    # quote — not the vendor's own KeyMetrics.pe); the margins ride the fundamentals,
-    # and the growth trio (incl. FCF/share growth) rides the anchor read.
+    # quote); the margins and the growth trio (incl. FCF/share growth) ride the same
+    # anchor read.
     assert body["metrics"] == {
         "pe": 22.4,  # 975.56 / 43.55 — the valuation's trailing_pe
         "price_to_fcf": 20.03,  # 975.56 / 48.7
@@ -224,23 +222,21 @@ def test_passes_the_raw_include_params_through_to_the_use_case():
     assert fake.calls == [("MU", ["dividend,metrics"])]
 
 
-def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
+def test_blocks_requested_but_anchor_unsynced_degrade_to_nulls():
+    # An unsynced anchor (no stored margins/dividend/cash) leaves the requested blocks'
+    # fields null rather than sinking the card. The valuation carries the consensus-basis
+    # TTM but no per-share cash, so the P/E serves while the FCF/OCF reads null out.
     card = _a_card(include=frozenset({"dividend", "metrics"}))
     fake = _FakeUseCase(
         result=TickerCard(
             quote=card.quote,
             include=card.include,
-            # A Finnhub outage no longer touches the FCF leg (it rides the anchor now).
-            # This valuation carries the consensus-basis TTM but no per-share cash — an
-            # uncovered anchor — so the P/E serves while the FCF/OCF reads null out
-            # independently of the (failed) fundamentals call.
             valuation=TickerValuation(symbol="MU", price=975.56, ttm_eps=43.55),
-            fundamentals=None,  # keyless or failed Finnhub
             performance=None,
             name=None,
             exchange=None,
-            # market_cap unset -> null (no anchor row); the growth pair, also off
-            # the anchor, still serves — it never rode Finnhub.
+            # market_cap unset -> null (no anchor row); the growth pair, also off the
+            # anchor, still serves. Margins + dividend_per_share default to null too.
             revenue_growth_yoy=61.6,
             eps_growth_yoy=587.4,
         )
@@ -251,12 +247,13 @@ def test_blocks_requested_but_fundamentals_unavailable_degrade_to_nulls():
     assert body["name"] is None
     assert body["exchange"] is None
     assert body["market_cap"] is None
-    assert body["dividend"] is None  # requested, but nothing to serve
-    # The metrics block still appears (it was requested) with its fundamentals-backed
-    # margins null; the FCF/OCF reads are null here only because this hand-built valuation
-    # carries no per-share cash (an uncovered anchor), not because Finnhub failed. The
-    # valuation-backed trailing P/E (quarterly TTM) and the anchor-backed growth trio still
-    # serve, since none of them ride Finnhub.
+    # The dividend block appears (it was requested) with null fields — nothing on the
+    # anchor to serve or to price a yield from.
+    assert body["dividend"] == {"yield_percentage": None, "per_share": None}
+    # The metrics block still appears (it was requested) with its anchor-backed margins
+    # null; the FCF/OCF reads are null because this hand-built valuation carries no
+    # per-share cash (an uncovered anchor). The valuation-backed trailing P/E (quarterly
+    # TTM) and the anchor-backed growth trio still serve.
     assert body["metrics"] == {
         "pe": 22.4,
         "price_to_fcf": None,
@@ -279,7 +276,6 @@ def test_options_metrics_requested_but_unavailable_is_null():
             quote=card.quote,
             include=frozenset({"options_metrics"}),
             valuation=None,
-            fundamentals=card.fundamentals,
             performance=None,
             name=card.name,
             exchange=card.exchange,

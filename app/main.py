@@ -24,6 +24,9 @@ from app.stocks.endpoints.cron_recommendations_endpoints import (
     router as recommendations_cron_router,
 )
 from app.stocks.endpoints.cron_news_endpoints import router as news_cron_router
+from app.stocks.endpoints.cron_fundamentals_endpoints import (
+    router as fundamentals_cron_router,
+)
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     router as quarterly_earnings_router,
 )
@@ -43,12 +46,22 @@ from app.stocks.endpoints.revenue_segments_endpoints import (
 from app.stocks.endpoints.cron_revenue_segments_endpoints import (
     router as revenue_segments_cron_router,
 )
+from app.stocks.endpoints.insider_transactions_endpoints import (
+    router as insider_transactions_router,
+)
+from app.stocks.endpoints.institutional_ownership_endpoints import (
+    router as institutional_ownership_router,
+)
+from app.stocks.endpoints.cron_institutional_ownership_endpoints import (
+    router as institutional_ownership_cron_router,
+)
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.endpoints.heatmap_endpoints import router as heatmap_router
 from app.stocks.endpoints.analysis_endpoints import router as analysis_router
 from app.stocks.endpoints.chart_endpoints import router as chart_router
 from app.stocks.endpoints.logo_endpoints import router as logo_router
 from app.stocks.endpoints.market_endpoints import router as market_router
+from app.stocks.endpoints.seo_endpoints import router as seo_router
 
 # The web server (uvicorn/gunicorn) installs handlers only on its own `uvicorn*`
 # loggers and leaves the root logger at its default WARNING level, so an app-level
@@ -113,12 +126,22 @@ app = FastAPI(title="nama_backend", lifespan=lifespan)
 
 # Per-client (per-IP) rate limiting so one abusive caller can't exhaust the
 # service — a token bucket per client IP; over it, SlowAPI raises
-# RateLimitExceeded and the handler returns HTTP 429. The counter is in-process,
-# which is exactly right while we run a single task; if desired_count ever goes
-# above 1, point the Limiter at Redis via storage_uri so the count is shared.
-# These limits sit under API Gateway's global 50 req/s throttle: that caps total
-# load/cost, this stops any single IP from consuming it. Tune as traffic grows.
-limiter = Limiter(key_func=_client_ip, default_limits=["20/second", "600/minute"])
+# RateLimitExceeded and the handler returns HTTP 429. These limits sit under API
+# Gateway's global throttle: that caps total load/cost, this stops any single IP
+# from consuming it. Tune as traffic grows.
+#
+# The counter defaults to in-process ("memory://"), which is exact for a single
+# task. Under autoscaling the service can run several tasks, and an in-process
+# counter is then per-task — a single IP can reach up to (task count) * the limit,
+# with the API Gateway throttle as the hard global backstop. Set
+# RATE_LIMIT_STORAGE_URI to a shared store (e.g. redis://host:6379) to make the
+# count exact across tasks; it's a one-env-var flip, no code change.
+_rate_limit_storage = os.environ.get("RATE_LIMIT_STORAGE_URI", "memory://")
+limiter = Limiter(
+    key_func=_client_ip,
+    default_limits=["20/second", "600/minute"],
+    storage_uri=_rate_limit_storage,
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
@@ -163,6 +186,18 @@ app.include_router(news_router)
 # its latest 10-K on SEC EDGAR and served from the DB cache. See
 # app/stocks/endpoints/revenue_segments_endpoints.py.
 app.include_router(revenue_segments_router)
+# The insider-transactions read endpoint (GET /stocks/ticker/{ticker}/insider-transactions): a stock's
+# recent SEC Form 4 buys and sells — open-market purchases/sales flagged apart from the
+# grant/exercise/tax noise, with a net buy-vs-sell summary. Served from a TTL read-through DB
+# cache over SEC EDGAR (no cron — the TTL keeps it fresh on read). See
+# app/stocks/endpoints/insider_transactions_endpoints.py.
+app.include_router(insider_transactions_router)
+# The institutional-ownership read endpoint (GET /stocks/ticker/{ticker}/institutional-ownership): a
+# stock's top 13F holders (institutions + funds) with each one's quarter-over-quarter position change
+# (the "big money buys and sells"), the "institutions own X%" breakdown, and a net buy-vs-sell flow.
+# Served from the DB cache over yfinance. See
+# app/stocks/endpoints/institutional_ownership_endpoints.py.
+app.include_router(institutional_ownership_router)
 # The quarterly-earnings refresh cron endpoint (POST /internal/earnings/quarterly/sync);
 # it drives the SyncQuarterlyEarnings use case out of band. See
 # app/stocks/endpoints/cron_quarterly_earnings_endpoints.py.
@@ -188,6 +223,16 @@ app.include_router(recommendations_cron_router)
 # use case out of band (yfinance -> DB), seeding + refreshing each stock's recent
 # headlines. See app/stocks/endpoints/cron_news_endpoints.py.
 app.include_router(news_cron_router)
+# The fundamentals refresh cron endpoint (POST /internal/fundamentals/sync); it drives the
+# SyncFundamentals use case out of band (yfinance .info -> stocks anchor), seeding + refreshing
+# each stock's trailing margins/ROE/liquidity/leverage/beta + the per-share P/B / P/S / dividend
+# inputs. See app/stocks/endpoints/cron_fundamentals_endpoints.py.
+app.include_router(fundamentals_cron_router)
+# The institutional-ownership refresh cron endpoint (POST /internal/institutional-ownership/sync); it
+# drives the SyncInstitutionalOwnership use case out of band (yfinance 13F holders -> DB), seeding +
+# refreshing each stock's top institutional/mutual-fund holders and the ownership breakdown. See
+# app/stocks/endpoints/cron_institutional_ownership_endpoints.py.
+app.include_router(institutional_ownership_cron_router)
 # The revenue-segments refresh cron endpoint (POST /internal/revenue-segments/sync); it drives
 # the SyncRevenueSegments use case out of band (SEC EDGAR 10-K -> DB), seeding + refreshing each
 # stock's revenue disaggregation. See app/stocks/endpoints/cron_revenue_segments_endpoints.py.
@@ -220,6 +265,12 @@ app.include_router(etf_cron_router)
 # anchor; the colours are best-effort live Alpaca quotes. See
 # app/stocks/endpoints/heatmap_endpoints.py.
 app.include_router(heatmap_router)
+# The SEO / server-rendered content pages (GET /stock/{ticker}): public, crawlable HTML
+# per stock, rendered server-side from DB-only anchor facts so search AND AI crawlers that
+# don't run JavaScript see real content (the React app can't give them that). A singular
+# /stock/ prefix keeps it clear of the /stocks/ (plural) JSON API. See
+# app/stocks/endpoints/seo_endpoints.py and app/stocks/seo/README.md.
+app.include_router(seo_router)
 
 
 @app.get("/healthz")

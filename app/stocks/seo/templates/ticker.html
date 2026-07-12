@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }}</title>
+    <meta name="description" content="{{ description }}" />
+    <link rel="canonical" href="{{ canonical }}" />
+    <meta name="robots" content="{{ robots }}" />
+
+    <!-- Open Graph / Twitter: how the page previews when shared or surfaced. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Nama Insights" />
+    <meta property="og:title" content="{{ title }}" />
+    <meta property="og:description" content="{{ description }}" />
+    <meta property="og:url" content="{{ canonical }}" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="{{ title }}" />
+    <meta name="twitter:description" content="{{ description }}" />
+
+    <!-- Structured data: the clean facts search + AI engines lift for rich results and citation. -->
+    <script type="application/ld+json">{{ jsonld | safe }}</script>
+
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f7f8fa; --card: #ffffff; --fg: #10131a; --muted: #5b6472;
+        --line: #e5e8ee; --accent: #2f63b4; --accent-fg: #ffffff; --chip: #eef2f9;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0a0a0f; --card: #14151c; --fg: #e8eaf0; --muted: #99a1b3;
+          --line: #262932; --accent: #6ea0e6; --accent-fg: #0a0a0f; --chip: #1c1f28;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; background: var(--bg); color: var(--fg);
+        font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      }
+      a { color: var(--accent); }
+      .wrap { max-width: 780px; margin: 0 auto; padding: 24px 20px 56px; }
+      header.site { display: flex; align-items: center; gap: 10px; padding: 8px 0 24px; }
+      header.site .brand { font-weight: 700; font-size: 1.1rem; color: var(--fg); text-decoration: none; }
+      nav.crumbs { font-size: 0.85rem; color: var(--muted); margin-bottom: 14px; }
+      nav.crumbs a { color: var(--muted); text-decoration: none; }
+      nav.crumbs a:hover { color: var(--accent); }
+      h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 4px; letter-spacing: -0.01em; }
+      h1 .ticker { color: var(--muted); font-weight: 600; }
+      .sub { color: var(--muted); margin: 0 0 18px; }
+      .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 22px; }
+      .chip {
+        background: var(--chip); border: 1px solid var(--line); border-radius: 999px;
+        padding: 3px 11px; font-size: 0.8rem; color: var(--muted);
+      }
+      .summary {
+        background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+        padding: 18px 20px; margin: 0 0 22px;
+      }
+      table.metrics {
+        width: 100%; border-collapse: collapse; background: var(--card);
+        border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+      }
+      table.metrics th, table.metrics td { text-align: left; padding: 12px 16px; font-size: 0.95rem; }
+      table.metrics th { color: var(--muted); font-weight: 500; width: 55%; }
+      table.metrics td { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+      table.metrics tr + tr { border-top: 1px solid var(--line); }
+      .cta { margin: 26px 0 0; }
+      .cta a {
+        display: inline-block; background: var(--accent); color: var(--accent-fg);
+        text-decoration: none; font-weight: 600; padding: 12px 20px; border-radius: 10px;
+      }
+      .related { margin: 16px 0 0; font-size: 0.95rem; }
+      footer.site { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.8rem; }
+      .disclaimer { margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="site">
+        <a class="brand" href="{{ site }}">Nama Insights</a>
+      </header>
+
+      <nav class="crumbs" aria-label="Breadcrumb">
+        <a href="{{ site }}">Home</a> ›
+        <a href="{{ site }}/search">Stocks</a> ›
+        <span>{{ name }} ({{ ticker }})</span>
+      </nav>
+
+      <h1>{{ name }} <span class="ticker">({{ ticker }})</span></h1>
+      {% if subtitle %}<p class="sub">{{ subtitle }}</p>{% endif %}
+
+      {% if chips %}
+      <div class="chips">
+        {% for chip in chips %}<span class="chip">{{ chip }}</span>{% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="summary">{{ summary }}</div>
+
+      <table class="metrics">
+        <tbody>
+          {% for row in metrics %}
+          <tr><th>{{ row.label }}</th><td>{{ row.value }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <div class="cta">
+        <a href="{{ app_url }}">Explore live {{ ticker }} data on Nama Insights →</a>
+      </div>
+
+      {% if sector_url %}
+      <p class="related">
+        See more: <a href="{{ sector_url }}">{{ sector_label }} stocks →</a>
+      </p>
+      {% endif %}
+
+      <footer class="site">
+        <div>© {{ year }} Nama Insights.</div>
+        <div class="disclaimer">
+          Figures are the most recently synced values and may lag the market. For
+          informational purposes only — not investment advice.
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

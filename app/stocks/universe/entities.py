@@ -78,6 +78,46 @@ class CompanyClassification:
         return cls(sector=slugify(sector), industry=slugify(industry))
 
 
+@dataclass(frozen=True)
+class AnchorMetrics:
+    """The fundamentals the app materializes on the ``stocks`` anchor, read in one query so the
+    AI analysis serves them DB-only rather than from a live vendor.
+
+    Three groups, all off the anchor:
+
+    - **Annual-earnings slice** — the newest reported year's trailing free cash flow per share
+      and the trailing year-over-year revenue/EPS growth (EPS on the analyst-consensus basis).
+    - **Fundamentals slice** (Yahoo ``.info``) — the trailing margins / ROE / liquidity /
+      leverage / beta, plus the per-share *inputs* the reader prices against the live quote
+      (``book_value_per_share`` → P/B, ``sales_per_share`` → P/S, ``dividend_per_share`` →
+      yield).
+    - **Anchor facts** — ``market_cap`` (the universe screen's figure) and the clean display
+      ``name``, which replace the live Finnhub fundamentals/profile calls the analysis used to
+      make.
+
+    Read DB-only so every figure is the canonical one the ticker card and universe search show,
+    or absent — never a divergent live-vendor number. Every field is nullable (unset until the
+    slice's sync reaches the stock). A read-model, the multi-column sibling of
+    ``industry_for_ticker`` / ``tier_for_ticker``.
+    """
+
+    fcf_per_share: float | None = None
+    revenue_growth_yoy: float | None = None
+    eps_growth_yoy: float | None = None
+    gross_margin: float | None = None
+    operating_margin: float | None = None
+    net_margin: float | None = None
+    return_on_equity: float | None = None
+    current_ratio: float | None = None
+    debt_to_equity: float | None = None
+    beta: float | None = None
+    book_value_per_share: float | None = None
+    sales_per_share: float | None = None
+    dividend_per_share: float | None = None
+    market_cap: float | None = None
+    name: str | None = None
+
+
 class StockSort(str, Enum):
     """The sortable columns of a universe search.
 

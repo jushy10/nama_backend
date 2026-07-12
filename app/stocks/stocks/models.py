@@ -94,6 +94,21 @@ class StockRecord(Base):
     unlike the card's live ``fcf_yield`` it keeps its sign (a cash-burner reads negative). All
     four nullable, all written by their sync (0027).
 
+    ``gross_margin`` / ``operating_margin`` / ``net_margin`` / ``return_on_equity`` (percent),
+    ``current_ratio``, ``debt_to_equity`` (a ratio) and ``beta`` are the stock's trailing
+    profitability / liquidity / leverage / volatility fundamentals, materialized here by the
+    fundamentals sync (Yahoo ``.info``) so the ticker card and AI analysis read them DB-only
+    rather than live from Finnhub. ``book_value_per_share`` / ``sales_per_share`` /
+    ``dividend_per_share`` are the per-share *inputs* the readers price against the live quote
+    (book value → P/B, sales → P/S, dividend → yield — the same "store the input, price it
+    live" split ``fcf_per_share`` and the quarterly TTM EPS use), all in the trading currency
+    (a foreign ADR's reporting-currency figures are normalized in the adapter). Like the growth
+    and cash-flow snapshots these are **overwritten** every refresh (each drops to ``None`` when
+    Yahoo doesn't carry it); all nullable, unset until the fundamentals sync reaches the stock.
+    ``fundamentals_synced_at`` is that sweep's freshness stamp — the cron orders its stale-first
+    batch by it (un-synced rows first, then the oldest) — the anchor-column analogue of the
+    earnings slices' per-row ``fetched_at`` (0031).
+
     ``in_sp500`` / ``in_nasdaq100`` are index-membership flags, reconciled by the
     index-membership sync (Finnhub → this anchor). Unlike the screen facts these are
     ``NOT NULL`` (default ``False``): membership is a known yes/no — absent from the
@@ -123,6 +138,19 @@ class StockRecord(Base):
     ocf_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
     fcf_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
     fcf_yield: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gross_margin: Mapped[float | None] = mapped_column(Float, nullable=True)
+    operating_margin: Mapped[float | None] = mapped_column(Float, nullable=True)
+    net_margin: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_on_equity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    current_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    debt_to_equity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    beta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    book_value_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sales_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dividend_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fundamentals_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     in_sp500: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=false(), default=False
     )
@@ -159,10 +187,12 @@ def anchor_facts(session: Session, ticker: str) -> Row | None:
 
     Returns a ``Row`` with named columns (``name``, ``exchange``, ``market_cap``,
     ``sector``, ``industry``, ``revenue_growth_yoy``, ``eps_growth_yoy``,
-    ``fcf_per_share``, ``ocf_per_share``, ``fcf_growth_yoy``); per-field ``None`` for
+    ``fcf_per_share``, ``ocf_per_share``, ``fcf_growth_yoy``, ``gross_margin``,
+    ``operating_margin``, ``net_margin``, ``dividend_per_share``); per-field ``None`` for
     whatever the row hasn't learned. Widened past name/exchange because the card also
-    serves the universe-screen facts and the annual slice's trailing growth + cash-flow
-    per share straight off the anchor — the caller maps it into ``StoredTickerFacts``."""
+    serves the universe-screen facts, the annual slice's trailing growth + cash-flow
+    per share, and the fundamentals slice's margins + dividend per share straight off the
+    anchor — the caller maps it into ``StoredTickerFacts``."""
     return session.execute(
         select(
             StockRecord.name,
@@ -175,6 +205,10 @@ def anchor_facts(session: Session, ticker: str) -> Row | None:
             StockRecord.fcf_per_share,
             StockRecord.ocf_per_share,
             StockRecord.fcf_growth_yoy,
+            StockRecord.gross_margin,
+            StockRecord.operating_margin,
+            StockRecord.net_margin,
+            StockRecord.dividend_per_share,
         ).where(StockRecord.ticker == ticker)
     ).one_or_none()
 

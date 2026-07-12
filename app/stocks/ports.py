@@ -1,14 +1,14 @@
-"""Application ports: the shared abstractions the stock use cases depend on.
+"""Application ports: the kernel abstractions many slices depend on.
 
-This is the Dependency Inversion that makes the slice clean: use cases depend
-on these interfaces, and the adapter layer provides the vendor-backed
-implementations. The core never imports a vendor; the vendor imports the core.
+This is the Dependency Inversion that makes the slice clean: a use case depends
+on these interfaces, and the adapter layer provides the concrete (Alpaca-backed,
+DB-backed, …) implementation. The core never imports a vendor; the vendor
+imports the core.
 
-These are the slice-wide *kernel* ports — the snapshot/enrichment capabilities
-(price feed, quotes, performance, fundamentals, profile, estimates) that many
-sub-slices consume. A port used by exactly one sub-slice lives in that slice's
-own ``ports.py`` (e.g. ``charts/ports.py`` for candles, ``analysis/ports.py``
-for the AI analysers).
+Only the *shared* snapshot-and-price capabilities live here — the ones several
+slices consume. A port used by exactly one sub-slice lives in that slice's own
+``ports.py`` (candles in ``charts``, the sector/index boards in ``market``, the
+logo read in ``logo``, and every AI-analysis port in ``analysis``).
 """
 
 from abc import ABC, abstractmethod
@@ -17,10 +17,8 @@ from collections.abc import Sequence
 from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
-    CompanyProfile,
     Quote,
     Stock,
-    StockFundamentals,
     StockPerformance,
 )
 
@@ -102,6 +100,35 @@ class StockPerformanceProvider(ABC):
         raise NotImplementedError
 
 
+class BulkPerformanceProvider(ABC):
+    """A gateway for many symbols' trailing performance in one batched read — the bulk
+    cousin of ``StockPerformanceProvider``.
+
+    Backs the heat map's timeframe windows: instead of colouring the board only by the
+    day's move, each tile also carries its trailing return over the standard windows
+    (1W…1Y, YTD), computed once for the whole index rather than N per-symbol calls.
+    **Best-effort per symbol** — a symbol the feed has no history for (e.g. not on the
+    historical feed, or too newly listed) is simply *absent* from the returned map, so
+    the caller leaves that tile's trailing windows blank; only a hard feed failure over
+    the whole batch is fatal.
+    """
+
+    @abstractmethod
+    def get_bulk_performance(
+        self, symbols: Sequence[str]
+    ) -> dict[str, StockPerformance]:
+        """Return trailing-window performance for each recognized symbol, keyed by symbol.
+
+        Symbols the feed has no history for are omitted (a partial map is normal, not an
+        error); order and duplicates in the input don't matter. Given an empty input,
+        returns an empty map without a call.
+
+        Raises:
+            StockDataUnavailable: the upstream feed failed for the whole request.
+        """
+        raise NotImplementedError
+
+
 class AllTimeHighProvider(ABC):
     """A gateway for a stock's all-time high over its available price history.
 
@@ -117,43 +144,6 @@ class AllTimeHighProvider(ABC):
 
         Raises:
             StockNotFound: the symbol has no price history.
-            StockDataUnavailable: the upstream source failed.
-        """
-        raise NotImplementedError
-
-
-class StockFundamentalsProvider(ABC):
-    """A gateway for company fundamentals (market cap, dividend).
-
-    These come from a fundamentals vendor, not the price feed — market data
-    APIs don't expose shares outstanding or dividends. Best-effort enrichment.
-    """
-
-    @abstractmethod
-    def get_fundamentals(self, symbol: str) -> StockFundamentals:
-        """Return fundamentals for the (already-normalized) symbol.
-
-        Raises:
-            StockNotFound: the symbol is not covered by the source.
-            StockDataUnavailable: the upstream source failed.
-        """
-        raise NotImplementedError
-
-
-class CompanyProfileProvider(ABC):
-    """A gateway for a company's clean display name.
-
-    Comes from a company-profile vendor, not the price feed — market data APIs
-    expose a ticker's full legal title but not the tidy display name. Best-effort
-    enrichment, like fundamentals: a failure here must not sink the price view.
-    """
-
-    @abstractmethod
-    def get_profile(self, symbol: str) -> CompanyProfile:
-        """Return the company profile for the (already-normalized) symbol.
-
-        Raises:
-            StockNotFound: the symbol is not covered by the source.
             StockDataUnavailable: the upstream source failed.
         """
         raise NotImplementedError

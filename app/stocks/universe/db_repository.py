@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.stocks.stocks.models import StockRecord, get_or_create_stock
 from app.stocks.universe.entities import (
+    AnchorMetrics,
     Classifications,
     CompanyClassification,
     MarketCapTier,
@@ -351,6 +352,51 @@ class SqlStockSearchRepository(StockSearchRepository):
         return self._session.execute(
             select(StockRecord.industry).where(StockRecord.ticker == ticker)
         ).scalar_one_or_none()
+
+    def anchor_metrics_for_ticker(self, ticker: str) -> AnchorMetrics:
+        # One row read of every anchor-materialized fundamental (annual slice's cash/growth +
+        # the fundamentals slice's margins/ratios/per-share inputs + the anchor's market cap and
+        # clean name), same null-collapsing as `industry_for_ticker`: no row -> an empty
+        # AnchorMetrics (all None), so the analysis's DB-first overlay simply leaves those fields
+        # empty until the syncs have reached the stock (no live-vendor fallback).
+        row = self._session.execute(
+            select(
+                StockRecord.fcf_per_share,
+                StockRecord.revenue_growth_yoy,
+                StockRecord.eps_growth_yoy,
+                StockRecord.gross_margin,
+                StockRecord.operating_margin,
+                StockRecord.net_margin,
+                StockRecord.return_on_equity,
+                StockRecord.current_ratio,
+                StockRecord.debt_to_equity,
+                StockRecord.beta,
+                StockRecord.book_value_per_share,
+                StockRecord.sales_per_share,
+                StockRecord.dividend_per_share,
+                StockRecord.market_cap,
+                StockRecord.name,
+            ).where(StockRecord.ticker == ticker)
+        ).one_or_none()
+        if row is None:
+            return AnchorMetrics()
+        return AnchorMetrics(
+            fcf_per_share=row.fcf_per_share,
+            revenue_growth_yoy=row.revenue_growth_yoy,
+            eps_growth_yoy=row.eps_growth_yoy,
+            gross_margin=row.gross_margin,
+            operating_margin=row.operating_margin,
+            net_margin=row.net_margin,
+            return_on_equity=row.return_on_equity,
+            current_ratio=row.current_ratio,
+            debt_to_equity=row.debt_to_equity,
+            beta=row.beta,
+            book_value_per_share=row.book_value_per_share,
+            sales_per_share=row.sales_per_share,
+            dividend_per_share=row.dividend_per_share,
+            market_cap=row.market_cap,
+            name=row.name,
+        )
 
     def tier_for_ticker(self, ticker: str) -> MarketCapTier | None:
         # The anchor's cap, bucketed to its tier. Same null-collapsing as

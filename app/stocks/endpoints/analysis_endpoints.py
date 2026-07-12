@@ -1,9 +1,10 @@
 """HTTP API for the AI-analysis reads.
 
-Every Claude-on-Bedrock endpoint: the per-stock buy/hold/sell analysis, the
-earnings story, the analyst-coverage review, the sector rotation read, and the
-market summary. Controller + presenter + wiring, the composition-root way,
-sitting in ``app/stocks/endpoints/`` beside the other read endpoints.
+Every Claude-on-Bedrock endpoint: the per-stock sectioned scorecard, the
+earnings story, the analyst-coverage review, the fundamentals read, the sector
+rotation read, and the market summary. Controller + presenter + wiring, the
+composition-root way, sitting in ``app/stocks/endpoints/`` beside the other read
+endpoints.
 
 Wiring: each analyser is a Bedrock adapter singleton (no secret to gate on —
 Bedrock authenticates through the process's AWS credentials, so the IAM policy
@@ -11,7 +12,8 @@ is what enables it; a missing 'bedrock' extra is a clean 503). Best-effort
 *context* is read **DB-only** (via the slices' repositories, not their
 read-through providers) so a cache miss never triggers a synchronous,
 rate-limited Yahoo fetch mid-request — keeping the caches current is the
-crons' job.
+crons' job. Each read is fronted by its kind's read-through result cache, served
+until it ages past that kind's TTL (``wiring.analysis_cache_ttl``).
 """
 
 import os
@@ -21,9 +23,12 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.bedrock.analysis_adapter import BedrockAnalysisProvider
+from app.stocks.adapters.bedrock.analysis_adapter import BedrockScorecardProvider
 from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
     BedrockEarningsAnalysisProvider,
+)
+from app.stocks.adapters.bedrock.fundamentals_analysis_adapter import (
+    BedrockFundamentalsAnalysisProvider,
 )
 from app.stocks.adapters.bedrock.market_summary_adapter import (
     BedrockMarketSummaryProvider,
@@ -40,37 +45,50 @@ from app.stocks.adapters.db_only_context_providers import (
     DbOnlyRatingChangesProvider,
     DbOnlyRecommendationsProvider,
 )
-from app.stocks.analysis.db_repository import SqlInvestmentAnalysisCache
+from app.stocks.analysis.ai_analysis_cache_repository import (
+    earnings_analysis_cache,
+    fundamentals_analysis_cache,
+    market_summary_cache,
+    ratings_analysis_cache,
+    sector_analysis_cache,
+)
 from app.stocks.analysis.entities import (
     EarningsAnalysis,
-    InvestmentAnalysis,
+    FundamentalsAnalysis,
+    MarketIndexReturn,
+    MarketPeriodHighlight,
     MarketSummary,
     RatingsAnalysis,
     SectorAnalysis,
     SectorHighlight,
-    MarketIndexReturn,
-    MarketPeriodHighlight,
+    StockScorecard,
 )
 from app.stocks.analysis.ports import (
     EarningsAnalysisProvider,
-    InvestmentAnalysisCache,
-    InvestmentAnalysisProvider,
+    FundamentalsAnalysisProvider,
     MarketSummaryProvider,
     RatingsAnalysisProvider,
     SectorAnalysisProvider,
+    StockScorecardCache,
+    StockScorecardProvider,
 )
+from app.stocks.analysis.scorecard_db_repository import SqlStockScorecardCache
 from app.stocks.analysis.schemas import (
     EarningsAnalysisResponse,
+    FundamentalsAnalysisResponse,
     InvestmentAnalysisResponse,
     MarketIndexReturnResponse,
     MarketPeriodResponse,
     MarketSummaryResponse,
     RatingsAnalysisResponse,
+    ScorecardSectionResponse,
+    SectionMetricResponse,
     SectorAnalysisResponse,
     SectorHighlightResponse,
 )
 from app.stocks.analysis.use_cases import (
     GetEarningsAnalysis,
+    GetFundamentalsAnalysis,
     GetMarketSummary,
     GetRatingsFindings,
     GetSectorAnalysis,
@@ -90,9 +108,7 @@ from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
 from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
-    CompanyProfileProvider,
     StockDataProvider,
-    StockFundamentalsProvider,
     StockPerformanceProvider,
 )
 from app.stocks.recommendations.db_repository import (
@@ -103,34 +119,30 @@ from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.wiring import (
     analysis_cache_ttl,
     get_estimates_provider,
-    get_fundamentals_provider,
-    get_profile_provider,
     get_provider,
 )
 
-router = APIRouter(tags=["analysis"])
+router = APIRouter(tags=["stocks"])
 
 
 def get_stock_info(
     provider: StockDataProvider = Depends(get_provider),
-    fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
-    profile: CompanyProfileProvider | None = Depends(get_profile_provider),
     estimates: AnalystEstimatesProvider | None = Depends(get_estimates_provider),
 ) -> GetStockInfo:
     # The enriched snapshot use case now serves only as the AI analysis context
     # (the standalone GET /stocks/{symbol} endpoint was removed). The Alpaca
     # provider supplies the snapshot, the performance windows, and the all-time
     # high — all derived from the same price feed, so one instance backs each
-    # capability via its respective port.
+    # capability via its respective port. The trailing fundamentals + clean name are
+    # no longer read from a live vendor here — the analysis use cases overlay them from
+    # the stocks anchor (materialized by the fundamentals/universe syncs).
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
     all_time_high = provider if isinstance(provider, AllTimeHighProvider) else None
-    return GetStockInfo(
-        provider, performance, fundamentals, profile, all_time_high, estimates
-    )
+    return GetStockInfo(provider, performance, all_time_high, estimates)
 
 
 @lru_cache(maxsize=1)
-def get_analysis_provider() -> InvestmentAnalysisProvider:
+def get_analysis_provider() -> StockScorecardProvider:
     # AI analysis is this endpoint's primary data, so it's required — but unlike
     # the API-key vendors there's no secret to gate on: Bedrock authenticates
     # through the process's AWS credentials (the ECS task role in production), so
@@ -141,8 +153,8 @@ def get_analysis_provider() -> InvestmentAnalysisProvider:
     model_id = os.environ.get("BEDROCK_ANALYSIS_MODEL_ID")
     try:
         if model_id:
-            return BedrockAnalysisProvider(model_id=model_id, region=region)
-        return BedrockAnalysisProvider(region=region)
+            return BedrockScorecardProvider(model_id=model_id, region=region)
+        return BedrockScorecardProvider(region=region)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -151,18 +163,18 @@ def get_analysis_provider() -> InvestmentAnalysisProvider:
 
 def get_analysis_cache(
     db: Session = Depends(get_db),
-) -> InvestmentAnalysisCache:
-    # The read-through result cache for the stock analysis (kind="stock", so it
+) -> StockScorecardCache:
+    # The read-through result cache for the stock scorecard (kind="stock", so it
     # never collides with a fund of the same ticker). One row per symbol, refreshed
     # whenever a served read ages past the use case's TTL — best-effort, so a DB
     # problem degrades to a regeneration, never an error.
-    return SqlInvestmentAnalysisCache(db, "stock")
+    return SqlStockScorecardCache(db, "stock")
 
 
 def get_stock_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
-    analyzer: InvestmentAnalysisProvider = Depends(get_analysis_provider),
-    cache: InvestmentAnalysisCache = Depends(get_analysis_cache),
+    analyzer: StockScorecardProvider = Depends(get_analysis_provider),
+    cache: StockScorecardCache = Depends(get_analysis_cache),
     # Best-effort *context* for the analysis: the quarterly and annual earnings
     # timelines and the analyst recommendation trends. Read **DB-only** here (via the
     # slices' repositories, not their read-through providers) — this path must never
@@ -183,7 +195,7 @@ def get_stock_analysis(
         DbOnlyRecommendationsProvider(SqlRecommendationsRepository(db)),
         SqlStockSearchRepository(db),
         cache=cache,
-        cache_ttl=analysis_cache_ttl(),
+        cache_ttl=analysis_cache_ttl("stock"),
     )
 
 
@@ -210,11 +222,19 @@ def get_sector_analysis_provider() -> SectorAnalysisProvider:
 
 def get_sector_analysis(
     # Reuses the sector-board wiring wholesale (the Alpaca-backed
-    # GetSectorPerformance), then hands the ranked board to the analyzer.
+    # GetSectorPerformance), then hands the ranked board to the analyzer — fronted by
+    # the read-through result cache (market-wide, so one stored read serves every viewer
+    # within the TTL and skips the gather + model call).
     sectors: GetSectorPerformance = Depends(get_sector_performance),
     analyzer: SectorAnalysisProvider = Depends(get_sector_analysis_provider),
+    db: Session = Depends(get_db),
 ) -> GetSectorAnalysis:
-    return GetSectorAnalysis(sectors, analyzer)
+    return GetSectorAnalysis(
+        sectors,
+        analyzer,
+        cache=sector_analysis_cache(db),
+        cache_ttl=analysis_cache_ttl("sector"),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -240,11 +260,19 @@ def get_market_summary_provider() -> MarketSummaryProvider:
 
 def get_market_summary(
     # Reuses the index-board wiring wholesale (the Alpaca-backed
-    # GetMarketOverview), then hands the board to the analyzer.
+    # GetMarketOverview), then hands the board to the analyzer — fronted by the
+    # read-through result cache (market-wide, so one stored read serves every viewer
+    # within the TTL and skips the gather + model call).
     overview: GetMarketOverview = Depends(get_market_overview),
     analyzer: MarketSummaryProvider = Depends(get_market_summary_provider),
+    db: Session = Depends(get_db),
 ) -> GetMarketSummary:
-    return GetMarketSummary(overview, analyzer)
+    return GetMarketSummary(
+        overview,
+        analyzer,
+        cache=market_summary_cache(db),
+        cache_ttl=analysis_cache_ttl("market"),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -281,6 +309,8 @@ def get_earnings_analysis(
         analyzer,
         DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
         DbOnlyAnnualEarningsProvider(SqlAnnualEarningsRepository(db)),
+        cache=earnings_analysis_cache(db),
+        cache_ttl=analysis_cache_ttl("earnings"),
     )
 
 
@@ -315,6 +345,51 @@ def get_ratings_findings(
         analyzer,
         DbOnlyRecommendationsProvider(SqlRecommendationsRepository(db)),
         DbOnlyRatingChangesProvider(SqlRatingChangesRepository(db)),
+        cache=ratings_analysis_cache(db),
+        cache_ttl=analysis_cache_ttl("ratings"),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_fundamentals_analysis_provider() -> FundamentalsAnalysisProvider:
+    # The fundamentals read is short, plain output (a few sentences + a few findings), so it
+    # runs on the fast Haiku tier — the provider's own default — with its own override,
+    # BEDROCK_FUNDAMENTALS_ANALYSIS_MODEL_ID, so the model can be swapped without a code change,
+    # exactly like the earnings and ratings reads. Bedrock authenticates through the process's
+    # AWS credentials, so there's no secret to gate on; a missing 'bedrock' extra is a 503.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_FUNDAMENTALS_ANALYSIS_MODEL_ID")
+    try:
+        if model_id:
+            return BedrockFundamentalsAnalysisProvider(model_id=model_id, region=region)
+        return BedrockFundamentalsAnalysisProvider(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI analysis is not configured (install the 'bedrock' extra)."
+        ) from exc
+
+
+def get_fundamentals_analysis(
+    stock_info: GetStockInfo = Depends(get_stock_info),
+    analyzer: FundamentalsAnalysisProvider = Depends(get_fundamentals_analysis_provider),
+    # The industry-P/E benchmark is a pure DB read off the shared anchor (the same screened
+    # universe the /stocks/industries/{industry}/pe endpoint groups on) — best-effort context
+    # for the fundamentals read, so a miss just omits it.
+    db: Session = Depends(get_db),
+) -> GetFundamentalsAnalysis:
+    # Reuses the stock snapshot wiring wholesale (price + forward estimates), then overlays the
+    # trailing fundamentals (margins, valuation, dividend, market cap) from the shared anchor —
+    # the DB-canonical figures the syncs materialize, replacing the retired live Finnhub call —
+    # before layering the analyzer, the industry benchmark, and the read-through result cache (a
+    # fresh stored read within the TTL skips the whole gather + model call). The quarterly
+    # provider is the same DB-only cache the per-stock scorecard uses, backing the consensus P/E.
+    return GetFundamentalsAnalysis(
+        stock_info,
+        analyzer,
+        SqlStockSearchRepository(db),
+        DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
+        cache=fundamentals_analysis_cache(db),
+        cache_ttl=analysis_cache_ttl("fundamentals"),
     )
 
 
@@ -325,21 +400,33 @@ _ANALYSIS_DISCLAIMER = (
 )
 
 
-def _present_analysis(analysis: InvestmentAnalysis) -> InvestmentAnalysisResponse:
-    """Presenter: investment-analysis entity -> HTTP response DTO.
+def _present_scorecard(scorecard: StockScorecard) -> InvestmentAnalysisResponse:
+    """Presenter: stock-scorecard entity -> HTTP response DTO.
 
     The disclaimer is attached here, at the edge — it's a property of the service,
     not something the model is trusted to author."""
     return InvestmentAnalysisResponse(
-        symbol=analysis.symbol,
-        recommendation=analysis.recommendation.value,
-        confidence=analysis.confidence.value,
-        thesis=analysis.thesis,
-        strengths=list(analysis.strengths),
-        risks=list(analysis.risks),
+        symbol=scorecard.symbol,
+        recommendation=scorecard.recommendation.value,
+        confidence=scorecard.confidence.value,
+        thesis=scorecard.thesis,
+        sections=[
+            ScorecardSectionResponse(
+                key=section.key,
+                title=section.title,
+                stance=section.stance.value,
+                label=section.label,
+                summary=section.summary,
+                metrics=[
+                    SectionMetricResponse(label=m.label, value=m.value)
+                    for m in section.metrics
+                ],
+            )
+            for section in scorecard.sections
+        ],
         disclaimer=_ANALYSIS_DISCLAIMER,
-        model=analysis.model,
-        generated_at=analysis.generated_at,
+        model=scorecard.model,
+        generated_at=scorecard.generated_at,
     )
 
 
@@ -380,6 +467,25 @@ def _present_ratings_analysis(
     )
 
 
+def _present_fundamentals_analysis(
+    analysis: FundamentalsAnalysis,
+) -> FundamentalsAnalysisResponse:
+    """Presenter: fundamentals-analysis entity -> HTTP response DTO.
+
+    The disclaimer is attached here, at the edge — it's a property of the service,
+    not something the model is trusted to author."""
+    return FundamentalsAnalysisResponse(
+        symbol=analysis.symbol,
+        verdict=analysis.verdict.value,
+        confidence=analysis.confidence.value,
+        summary=analysis.summary,
+        findings=list(analysis.findings),
+        disclaimer=_ANALYSIS_DISCLAIMER,
+        model=analysis.model,
+        generated_at=analysis.generated_at,
+    )
+
+
 def _present_sector_highlight(highlight: SectorHighlight) -> SectorHighlightResponse:
     """Presenter: one sector highlight entity -> HTTP response DTO."""
     return SectorHighlightResponse(
@@ -393,7 +499,7 @@ def _present_sector_highlight(highlight: SectorHighlight) -> SectorHighlightResp
 def _present_sector_analysis(analysis: SectorAnalysis) -> SectorAnalysisResponse:
     """Presenter: sector-analysis entity -> HTTP response DTO.
 
-    Same shape as ``_present_analysis`` — the disclaimer is attached here, at the
+    Same shape as ``_present_scorecard`` — the disclaimer is attached here, at the
     edge, since it's a property of the service, not something the model authors."""
     return SectorAnalysisResponse(
         summary=analysis.summary,
@@ -460,7 +566,7 @@ def get_stock_analysis_endpoint(
     # underlying figures do — cache briefly so a burst of viewers collapses onto
     # one generation rather than re-billing per request.
     response.headers["Cache-Control"] = "public, max-age=300"
-    return _present_analysis(analysis)
+    return _present_scorecard(analysis)
 
 
 @router.get(
@@ -508,6 +614,30 @@ def get_ratings_analysis_endpoint(
     # cache briefly so a burst of viewers collapses onto one generation rather than re-billing.
     response.headers["Cache-Control"] = "public, max-age=300"
     return _present_ratings_analysis(analysis)
+
+
+@router.get(
+    "/stocks/{symbol}/fundamentals/analysis",
+    response_model=FundamentalsAnalysisResponse,
+)
+def get_fundamentals_analysis_endpoint(
+    symbol: str,
+    response: Response,
+    use_case: GetFundamentalsAnalysis = Depends(get_fundamentals_analysis),
+) -> FundamentalsAnalysisResponse:
+    try:
+        analysis = use_case.execute(symbol)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    # The model call is slow and metered, and a fundamentals read only drifts as the reported
+    # figures do — cache briefly so a burst of viewers collapses onto one generation rather
+    # than re-billing per request.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return _present_fundamentals_analysis(analysis)
 
 
 @router.get("/sectors/analysis", response_model=SectorAnalysisResponse)

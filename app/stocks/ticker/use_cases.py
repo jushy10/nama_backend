@@ -1,33 +1,34 @@
 """Application use case for the ticker slice.
 
 One action, pure orchestration over existing ports so it runs offline in tests
-against hand-written fakes and knows nothing of Alpaca, Finnhub, the database, or
+against hand-written fakes and knows nothing of Alpaca, Yahoo, the database, or
 HTTP:
 
 - ``GetTickerCard`` — the read path. Normalizes the ticker and the requested
-  includes, takes the live quote through the ``StockQuoteProvider``, layers the
-  always-on enrichment — all served off **one anchor read**: the two DB-first
-  identity facts (the clean display name and the listing exchange, each lazily
-  filled **once** from its vendor into the ``stocks`` row) plus the read-only
-  screen facts (market cap, sector, industry) the universe sync writes there —
-  and fetches the *opt-in* blocks only when asked: ``dividend`` and
-  ``performance`` (the trailing windows), ``metrics`` (the trailing P/E off the
-  quarterly-earnings slice's stored TTM — consensus basis — the margins off the
-  fundamentals call, and the annual slice's stored trailing YoY growth off the
-  same anchor read), and ``options_metrics`` (the options-market
+  includes, takes the live quote through the ``StockQuoteProvider``, then serves
+  everything else off **one anchor read**: the clean display name and the listing
+  exchange (name served straight off the ``stocks`` row where the syncs write it;
+  exchange lazily filled once from the feed), the read-only screen facts (market
+  cap, sector, industry) the universe sync writes there, the annual slice's
+  trailing growth + per-share cash, and the fundamentals slice's margins +
+  dividend per share. The *opt-in* blocks are gated on the requested includes —
+  ``dividend`` (per share off the anchor, yield priced live on the quote),
+  ``performance`` (trailing windows, a live feed call), ``metrics`` (the trailing
+  P/E off the quarterly slice's stored TTM — consensus basis — plus the anchor's
+  margins and trailing YoY growth), and ``options_metrics`` (the options-market
   read: ATM implied volatility, the priced-in expected move, the cost of a
-  protective put, and the day's put/call lean). Pay-per-use: a block that isn't
-  requested costs no provider call — and market cap now riding the anchor, the
-  fundamentals call itself is opt-in (only ``dividend``/``metrics`` need it).
-  Returns the assembled ``TickerCard``.
+  protective put, and the day's put/call lean). No live *fundamentals* vendor is
+  called at all — the margins and dividend ride the same anchor read as everything
+  else, so a bare card and the metrics/dividend blocks alike cost zero fundamentals
+  calls. Returns the assembled ``TickerCard``.
 
 Unlike the earnings/recommendations slices there is no sync counterpart, and the
-only persistence is the pair of anchor-level facts (name + exchange on the
-``stocks`` row, through ``TickerRepository``): the card is built around the
-*live* quote, so nothing else slice-owned is worth persisting — the slow-moving
-half (the FY1/FY2 consensus) is already stored and refreshed by the
-annual-earnings slice, and the fast-moving half (the quote) must be fetched
-fresh anyway.
+only persistence is the exchange lazy fill on the ``stocks`` row (through
+``TickerRepository``): the card is built around the *live* quote, so nothing else
+slice-owned is worth persisting — the slow-moving half (the anchor facts: name,
+the FY1/FY2 consensus, the materialized fundamentals) is already stored and
+refreshed by the universe / earnings / fundamentals syncs, and the fast-moving
+half (the quote) must be fetched fresh anyway.
 """
 
 from __future__ import annotations
@@ -38,9 +39,7 @@ from typing import Callable, Sequence
 
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.entities import (
-    CompanyProfile,
     Quote,
-    StockFundamentals,
     StockPerformance,
     Timeframe,
 )
@@ -48,9 +47,7 @@ from app.stocks.etfs.repository import EtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.charts.ports import CandleProvider
 from app.stocks.ports import (
-    CompanyProfileProvider,
     StockDataProvider,
-    StockFundamentalsProvider,
     StockPerformanceProvider,
     StockQuoteProvider,
 )
@@ -163,21 +160,29 @@ class TickerCard:
     quote: Quote  # live price + the day's move
     include: frozenset[str]  # the opt-in blocks this card was asked to carry
     valuation: TickerValuation | None  # the trailing-P/E read; only with 'metrics'
-    fundamentals: StockFundamentals | None  # dividend + trailing metrics (best-effort; only with 'dividend'/'metrics')
     performance: StockPerformance | None  # trailing windows; only with 'performance'
     # Always served (never null): "etf" when the symbol is in the stored ETF universe, else
     # "equity" — a single indexed lookup off the etfs table, so the FE can branch the card.
     asset_type: str = ASSET_TYPE_EQUITY
-    name: str | None = None  # display name; DB-first, filled once from the profile
+    name: str | None = None  # display name; served off the anchor (filled by the syncs)
     exchange: str | None = None  # listing venue; DB-first, filled once from the feed
-    # The rest ride the same anchor read, served straight from the DB (never a
-    # provider call): the universe screen's facts and the annual slice's trailing snapshot.
+    # The rest ride the same anchor read, served straight from the DB (never a provider
+    # call): the universe screen's facts, the annual slice's trailing snapshot, and the
+    # fundamentals slice's margins + dividend per share.
     market_cap: float | None = None  # raw USD, from the universe screen
     sector: str | None = None  # classification slug, from the universe screen
     industry: str | None = None  # classification slug, from the universe screen
     revenue_growth_yoy: float | None = None  # percent, annual slice's latest trailing YoY
     eps_growth_yoy: float | None = None  # percent (consensus basis), annual slice's latest trailing YoY
     fcf_growth_yoy: float | None = None  # percent, annual slice's latest trailing FCF/share YoY
+    # The fundamentals slice's anchor writes (Yahoo .info): the margins (percent) and the
+    # dividend per share (trading currency; the presenter prices it live into a yield). Served
+    # off the same anchor read — no live vendor call — and only shown when 'metrics'/'dividend'
+    # is requested.
+    gross_margin: float | None = None
+    operating_margin: float | None = None
+    net_margin: float | None = None
+    dividend_per_share: float | None = None
     options_metrics: TickerOptionsMetrics | None = None  # only with 'options_metrics'
 
 
@@ -186,24 +191,22 @@ class GetTickerCard:
     opt-in blocks (dividend, performance, metrics).
 
     The quote is the only primary read — it failing propagates (the endpoint maps
-    it to HTTP). Everything else — the name, exchange, fundamentals, performance,
-    options metrics and the trailing TTM read — is best-effort enrichment,
-    mirroring the stock snapshot: unconfigured or failing providers just leave
-    their blocks ``None``. The options and TTM reads stay best-effort *even when
-    requested* — both can go live to Yahoo (the TTM on a cold cache miss), and
-    Yahoo intermittently blocks data-centre IPs; a colored insight going missing
-    must not take the quote down with it. Opt-in blocks that aren't requested
-    cost no provider call at all — and market cap now served off the anchor row
-    (with sector, industry, and the trailing growth), the fundamentals call is
-    itself opt-in: only 'dividend' and 'metrics' pull it.
+    it to HTTP). Everything else — the name, exchange, the margins/dividend/growth,
+    performance, options metrics and the trailing TTM read — is best-effort
+    enrichment: an anchor the syncs haven't reached yet, or an unconfigured/failing
+    live feed, just leaves its block ``None``. The options and TTM reads stay
+    best-effort *even when requested* — both can go live to Yahoo (the TTM on a cold
+    cache miss), and Yahoo intermittently blocks data-centre IPs; a colored insight
+    going missing must not take the quote down with it. The fundamentals (margins +
+    dividend per share) now ride the same anchor read as market cap / sector /
+    growth — no live fundamentals vendor is called — so the opt-in gating only
+    controls which blocks the response carries, not whether a call is made.
     """
 
     def __init__(
         self,
         quotes: StockQuoteProvider,
-        fundamentals: StockFundamentalsProvider | None = None,
         performance: StockPerformanceProvider | None = None,
-        profile: CompanyProfileProvider | None = None,
         stocks: StockDataProvider | None = None,
         repository: TickerRepository | None = None,
         options: OptionChainProvider | None = None,
@@ -212,9 +215,7 @@ class GetTickerCard:
         today: Callable[[], date] | None = None,
     ) -> None:
         self._quotes = quotes
-        self._fundamentals = fundamentals
         self._performance = performance
-        self._profile = profile
         self._stocks = stocks
         self._repository = repository
         self._options = options
@@ -239,16 +240,10 @@ class GetTickerCard:
             if self._repository is not None
             else StoredTickerFacts()
         )
-        # Fundamentals is opt-in now that market cap comes off the anchor: it's fetched
-        # only for the blocks that still need it (dividend, and the metrics' margins) —
-        # a bare card costs no fundamentals call. The FCF/OCF multiples no longer ride it
-        # (they price the annual slice's stored per-share cash off the anchor read), so a
-        # keyless/blocked Finnhub still serves them.
-        fundamentals = (
-            self._get_fundamentals(normalized)
-            if wanted & {"dividend", "metrics"}
-            else None
-        )
+        # The margins + dividend per share ride the same anchor read now (the fundamentals
+        # slice materializes them there), so a bare card makes no extra provider call and even
+        # the metrics/dividend blocks are served straight from the DB — the presenter just gates
+        # which the response carries on the requested includes.
         return TickerCard(
             quote=quote,
             include=wanted,
@@ -258,11 +253,10 @@ class GetTickerCard:
                 if "metrics" in wanted
                 else None
             ),
-            fundamentals=fundamentals,
             performance=(
                 self._get_performance(normalized) if "performance" in wanted else None
             ),
-            name=self._get_name(normalized, stored.name),
+            name=stored.name,
             exchange=self._get_exchange(normalized, stored.exchange),
             market_cap=stored.market_cap,
             sector=stored.sector,
@@ -270,6 +264,10 @@ class GetTickerCard:
             revenue_growth_yoy=stored.revenue_growth_yoy,
             eps_growth_yoy=stored.eps_growth_yoy,
             fcf_growth_yoy=stored.fcf_growth_yoy,
+            gross_margin=stored.gross_margin,
+            operating_margin=stored.operating_margin,
+            net_margin=stored.net_margin,
+            dividend_per_share=stored.dividend_per_share,
             options_metrics=(
                 self._get_options_metrics(normalized, quote)
                 if "options_metrics" in wanted
@@ -292,7 +290,7 @@ class GetTickerCard:
         # The trailing multiples at today's quote: the P/E off the quarterly slice's
         # consensus TTM (the timeline owns the TTM rule), and the FCF/OCF multiples off the
         # annual slice's stored per-share cash figures on the anchor (already read once, no
-        # extra call — deliberately not Finnhub, so they survive a keyless/blocked vendor).
+        # extra call — served straight off the anchor, so no live fundamentals vendor is hit).
         # Every leg best-effort — a symbol the annual/quarterly slices haven't reached yields
         # null multiples, never a failed card (the entity owns the positivity guards).
         return TickerValuation(
@@ -316,20 +314,6 @@ class GetTickerCard:
         except (StockNotFound, StockDataUnavailable):
             return None
 
-    def _get_name(self, symbol: str, stored: str | None) -> str | None:
-        # DB-first, filled once: the clean display name ("Micron Technology") is
-        # near-static — a rebrand is rare enough that whichever request first
-        # learns it (from the profile vendor) settles it for every later view.
-        # The slim quote carries no name at all, so without this the card has
-        # only the ticker to show. Best-effort like the other always-on enrichment.
-        if stored is not None:
-            return stored
-        profile = self._get_profile(symbol)
-        name = profile.name if profile else None
-        if name and self._repository is not None:
-            self._repository.save_name(symbol, name)
-        return name
-
     def _get_exchange(self, symbol: str, stored: str | None) -> str | None:
         # DB-first, filled once: a stock's listing exchange effectively never
         # changes, so the first view of a symbol pays one full-snapshot call to
@@ -345,22 +329,6 @@ class GetTickerCard:
         if exchange and self._repository is not None:
             self._repository.save_exchange(symbol, exchange)
         return exchange
-
-    def _get_profile(self, symbol: str) -> CompanyProfile | None:
-        if self._profile is None:
-            return None
-        try:
-            return self._profile.get_profile(symbol)
-        except (StockNotFound, StockDataUnavailable):
-            return None  # best-effort: never sink the card
-
-    def _get_fundamentals(self, symbol: str) -> StockFundamentals | None:
-        if self._fundamentals is None:
-            return None
-        try:
-            return self._fundamentals.get_fundamentals(symbol)
-        except (StockNotFound, StockDataUnavailable):
-            return None  # best-effort: never sink the card
 
     def _get_performance(self, symbol: str) -> StockPerformance | None:
         if self._performance is None:

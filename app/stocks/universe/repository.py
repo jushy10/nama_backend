@@ -21,6 +21,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.stocks.universe.entities import (
+    AnchorMetrics,
     Classifications,
     CompanyClassification,
     MarketCapTier,
@@ -196,6 +197,21 @@ class StockSearchRepository(ABC):
         whose P/E benchmark to build via :meth:`pe_ratios_for_industry` — resolving the
         ticker's own industry and summarizing its peers is the use case's job, so this stays a
         single-column read on the same taxonomy the search filters and the benchmark group on.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def anchor_metrics_for_ticker(self, ticker: str) -> AnchorMetrics:
+        """Return the anchor figures the annual-earnings slice materializes for ``ticker`` —
+        the trailing free-cash-flow per share and the trailing revenue/EPS growth — as an
+        :class:`AnchorMetrics`, all fields ``None`` when the anchor has no row or hasn't been
+        given them yet.
+
+        The AI analysis reads these from **here**, the same DB-materialized figures the ticker
+        card and universe search use, rather than the live fundamentals vendor — so the
+        scorecard's Cash Generation and Growth sections never diverge from the rest of the app
+        (the vendor's cash-flow/growth figures sit on a different basis). One multi-column
+        anchor read, the ticker-driven sibling of :meth:`industry_for_ticker`.
         """
         raise NotImplementedError
 

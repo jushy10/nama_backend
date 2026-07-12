@@ -63,18 +63,12 @@ from app.stocks.endpoints.quarterly_earnings_endpoints import (
 from app.stocks.entities import StockPerformance
 from app.stocks.etfs.db_repository import SqlEtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import (
-    CompanyProfileProvider,
-    StockFundamentalsProvider,
-    StockPerformanceProvider,
-)
+from app.stocks.ports import StockPerformanceProvider
 from app.stocks.adapters.bedrock.screener_query_adapter import (
     BedrockScreenerQueryTranslator,
 )
 from app.stocks.wiring import (
-    get_fundamentals_provider,
     get_options_provider,
-    get_profile_provider,
     get_provider,
 )
 from app.stocks.schemas import StockPerformanceResponse
@@ -128,26 +122,23 @@ router = APIRouter(tags=["ticker"])
 
 def get_ticker_card_use_case(
     provider=Depends(get_provider),
-    fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
-    profile: CompanyProfileProvider | None = Depends(get_profile_provider),
     options: OptionChainProvider = Depends(get_options_provider),
     earnings: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
     db: Session = Depends(get_db),
 ) -> GetTickerCard:
     # The Alpaca singleton backs the quote, the trailing performance windows, and the
     # one-time exchange lookup (the same instance every other price view uses). The
-    # profile provider supplies the display name (the slim quote carries none),
-    # TTL-cached like on the snapshot; the repository serves the stored exchange off
-    # the stocks row. The options chain is the keyless yfinance singleton — always
-    # wired, best-effort at read — and the quarterly-earnings provider is the same DB
-    # cache the earnings endpoint reads (lazy-filled on a miss, refreshed by its cron),
-    # so the trailing P/E's TTM sum rides rows the earnings view already keeps warm.
+    # repository serves the anchor read — the stored name, exchange, screen facts, and the
+    # annual/fundamentals slices' materialized figures (growth, cash, margins, dividend) —
+    # off the stocks row, so the card needs no live fundamentals/profile vendor. The options
+    # chain is the keyless yfinance singleton — always wired, best-effort at read — and the
+    # quarterly-earnings provider is the same DB cache the earnings endpoint reads (lazy-filled
+    # on a miss, refreshed by its cron), so the trailing P/E's TTM sum rides rows the earnings
+    # view already keeps warm.
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
     return GetTickerCard(
         provider,
-        fundamentals,
-        performance,
-        profile,
+        performance=performance,
         stocks=provider,
         repository=SqlTickerRepository(db),
         options=options,
@@ -161,6 +152,17 @@ def get_ticker_card_use_case(
 
 def _round2(value: float | None) -> float | None:
     return None if value is None else round(value, 2)
+
+
+def _dividend_yield(
+    dividend_per_share: float | None, price: float | None
+) -> float | None:
+    """Dividend yield (percent) priced on the live quote — the stored annual dividend per share
+    over the price. ``None`` without both, or a non-positive price (mirrors the analysis
+    overlay's rule so the card and the scorecard read the same yield)."""
+    if dividend_per_share is None or not price or price <= 0:
+        return None
+    return round(dividend_per_share / price * 100, 2)
 
 
 def _present_performance(
@@ -201,39 +203,36 @@ def _present(card: TickerCard) -> TickerCardResponse:
     The domain speaks in ``symbol``; renaming it ``ticker`` is a JSON-shape choice
     made here at the edge, like the DTOs' other shape concerns. Opt-in blocks are
     emitted only when the card was asked to carry them — ``card.include`` gates the
-    dividend block and the metrics' fundamentals-backed half (which is ``None`` when
-    neither was requested, since fundamentals is only fetched for those); performance
-    is already ``None`` when unrequested. Market cap, sector and industry ride the
-    anchor read, so they're always served (``null`` until the row carries them)."""
-    fundamentals = card.fundamentals
+    dividend block and the metrics block; performance is already ``None`` when
+    unrequested. Every block is now served off the one anchor read (no live vendor
+    call), so ``null`` fields just mean the syncs haven't reached the stock yet."""
     dividend = None
-    if "dividend" in card.include and fundamentals is not None:
-        # Rounded here at the edge: a dividend card shows cents / basis-point-ish
-        # precision, and the vendor's raw figures carry float noise. The shared
-        # entity stays unrounded — the snapshot serves the same fields raw.
+    if "dividend" in card.include:
+        # The dividend per share rides the anchor read (fundamentals slice); the yield is
+        # priced here on the live quote (annual dividend / price), the same "store the input,
+        # price it live" split the P/E and FCF yield use. Rounded here at the edge — a dividend
+        # card shows cents / basis-point-ish precision.
         dividend = DividendResponse(
-            yield_percentage=_round2(fundamentals.dividend_yield),
-            per_share=_round2(fundamentals.dividend_per_share),
+            yield_percentage=_dividend_yield(card.dividend_per_share, card.quote.price),
+            per_share=_round2(card.dividend_per_share),
         )
     metrics = None
     if "metrics" in card.include:
         # The trailing P/E rides the valuation (the quarterly slice's TTM sum on the
-        # adjusted EPS basis, deliberately NOT the vendor's GAAP-ish TTM read); the
-        # margins ride the fundamentals call.
-        trailing = fundamentals.metrics if fundamentals else None
+        # adjusted EPS basis, deliberately NOT a GAAP-ish TTM read); the margins and every
+        # other figure here ride the same anchor read — no live vendor call.
         metrics = TickerMetricsResponse(
             pe=card.valuation.trailing_pe if card.valuation else None,
             # The FCF/OCF reads ride the valuation too (live price / the annual slice's
             # stored per-share cash off the anchor), so they're on the same live quote as
-            # the P/E — and, unlike the margins, independent of the fundamentals call.
+            # the P/E.
             price_to_fcf=card.valuation.price_to_fcf if card.valuation else None,
             fcf_yield=card.valuation.fcf_yield if card.valuation else None,
             ocf_yield=card.valuation.ocf_yield if card.valuation else None,
-            gross_margin=trailing.gross_margin if trailing else None,
-            operating_margin=trailing.operating_margin if trailing else None,
-            net_margin=trailing.net_margin if trailing else None,
-            # The trailing YoY figures ride the anchor read (already rounded percent),
-            # not the fundamentals call — so they serve even when Finnhub is down.
+            gross_margin=_round2(card.gross_margin),
+            operating_margin=_round2(card.operating_margin),
+            net_margin=_round2(card.net_margin),
+            # The trailing YoY figures ride the anchor read (already rounded percent).
             revenue_growth_yoy=card.revenue_growth_yoy,
             eps_growth_yoy=card.eps_growth_yoy,
             fcf_growth_yoy=card.fcf_growth_yoy,
