@@ -32,6 +32,7 @@ from app.stocks.entities import (
     Timeframe,
 )
 from app.stocks.recommendations.entities import AnalystRecommendations, FirmRating
+from app.stocks.ticker.entities import PeHistoryStats
 from app.stocks.universe.entities import IndustryValuation
 
 
@@ -555,6 +556,7 @@ class FundamentalsAnalysisProvider(ABC):
         self,
         stock: Stock,
         industry_valuation: IndustryValuation | None = None,
+        pe_history: PeHistoryStats | None = None,
     ) -> FundamentalsAnalysis:
         """Return a fundamentals analysis built from the supplied snapshot.
 
@@ -563,6 +565,9 @@ class FundamentalsAnalysisProvider(ABC):
                 profitability / health / growth), ``analyst_estimates`` (forward consensus),
                 dividend and market cap. The symbol is read off it.
             industry_valuation: the stock's industry-P/E peer benchmark, else ``None``.
+            pe_history: where the current trailing P/E sits within the stock's own history
+                (percentile + cheap/fair/expensive signal), else ``None`` — the "cheap for
+                this stock?" anchor that complements the peer benchmark.
 
         Raises:
             StockDataUnavailable: the model call failed or returned no usable

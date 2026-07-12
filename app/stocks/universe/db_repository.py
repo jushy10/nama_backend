@@ -362,8 +362,10 @@ class SqlStockSearchRepository(StockSearchRepository):
         row = self._session.execute(
             select(
                 StockRecord.fcf_per_share,
+                StockRecord.ocf_per_share,
                 StockRecord.revenue_growth_yoy,
                 StockRecord.eps_growth_yoy,
+                StockRecord.fcf_growth_yoy,
                 StockRecord.gross_margin,
                 StockRecord.operating_margin,
                 StockRecord.net_margin,
@@ -382,8 +384,10 @@ class SqlStockSearchRepository(StockSearchRepository):
             return AnchorMetrics()
         return AnchorMetrics(
             fcf_per_share=row.fcf_per_share,
+            ocf_per_share=row.ocf_per_share,
             revenue_growth_yoy=row.revenue_growth_yoy,
             eps_growth_yoy=row.eps_growth_yoy,
+            fcf_growth_yoy=row.fcf_growth_yoy,
             gross_margin=row.gross_margin,
             operating_margin=row.operating_margin,
             net_margin=row.net_margin,

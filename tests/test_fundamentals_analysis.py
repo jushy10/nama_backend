@@ -11,6 +11,7 @@ Bedrock, no Finnhub, no database.
 """
 
 from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -31,6 +32,7 @@ from app.stocks.ports import (
     FundamentalsAnalysisProvider,
     StockDataProvider,
 )
+from app.stocks.ticker.entities import PeHistoryStats, ValuationSignal
 from app.stocks.universe.entities import AnchorMetrics, MarketCapTier
 from app.stocks.universe.repository import StockSearchRepository
 from app.stocks.use_cases import GetFundamentalsAnalysis, GetStockInfo
@@ -115,12 +117,30 @@ class _FakeAnalyzer(FundamentalsAnalysisProvider):
         self._result = result
         self._error = error
         self.received: list[tuple] = []
+        self.pe_history_seen: list = []
 
-    def analyze(self, stock, industry_valuation=None) -> FundamentalsAnalysis:
+    def analyze(
+        self, stock, industry_valuation=None, pe_history=None
+    ) -> FundamentalsAnalysis:
         self.received.append((stock, industry_valuation))
+        self.pe_history_seen.append(pe_history)
         if self._error is not None:
             raise self._error
         return self._result if self._result is not None else _an_analysis(stock.symbol)
+
+
+class _FakePeHistory:
+    """Stands in for GetStockPeHistory: returns an object exposing ``.stats`` (or raises the
+    way a Yahoo-blocked P/E-history read would)."""
+
+    def __init__(self, stats=None, *, error=None) -> None:
+        self._stats = stats
+        self._error = error
+
+    def execute(self, symbol: str):
+        if self._error is not None:
+            raise self._error
+        return SimpleNamespace(stats=self._stats)
 
 
 class _FakeSearchRepo(StockSearchRepository):
@@ -276,6 +296,44 @@ def test_no_industry_repository_omits_the_benchmark():
     GetFundamentalsAnalysis(_enriched_info(), analyzer).execute("AAPL")
     _, valuation = analyzer.received[0]
     assert valuation is None
+
+
+def _a_pe_stats() -> PeHistoryStats:
+    return PeHistoryStats(
+        current_pe=18.0, median_pe=24.0, p25_pe=20.0, p75_pe=30.0,
+        min_pe=12.0, max_pe=40.0, current_percentile=15.0,
+        discount_to_median_percent=-25.0, signal=ValuationSignal.CHEAP, sample_size=16,
+    )
+
+
+def test_pe_history_signal_is_gathered_and_passed():
+    # The "cheap for this stock?" anchor: the P/E-history stats are read best-effort and handed
+    # to the analyzer alongside the peer benchmark.
+    analyzer = _FakeAnalyzer()
+    stats = _a_pe_stats()
+    use_case = GetFundamentalsAnalysis(
+        _enriched_info(),
+        analyzer,
+        _FakeSearchRepo(anchor=_an_anchor()),
+        pe_history=_FakePeHistory(stats=stats),
+    )
+    use_case.execute("AAPL")
+    assert analyzer.pe_history_seen[0] is stats
+
+
+def test_pe_history_is_best_effort():
+    # A Yahoo-blocked P/E-history read (the one non-DB-only context leg) degrades to no signal;
+    # the analysis still proceeds.
+    analyzer = _FakeAnalyzer()
+    use_case = GetFundamentalsAnalysis(
+        _enriched_info(),
+        analyzer,
+        _FakeSearchRepo(anchor=_an_anchor()),
+        pe_history=_FakePeHistory(error=StockDataUnavailable("AAPL", "yahoo blocked")),
+    )
+    result = use_case.execute("AAPL")
+    assert result.verdict is FundamentalsVerdict.STRONG
+    assert analyzer.pe_history_seen[0] is None
 
 
 def test_model_failure_propagates():

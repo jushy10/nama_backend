@@ -23,6 +23,7 @@ from app.stocks.entities import (
     Stock,
 )
 from app.stocks.exceptions import StockDataUnavailable
+from app.stocks.ticker.entities import PeHistoryStats, ValuationSignal
 from app.stocks.universe.entities import IndustryValuation
 
 
@@ -90,10 +91,10 @@ def _a_stock(**overrides) -> Stock:
         as_of=datetime(2026, 6, 18, tzinfo=timezone.utc),
         market_cap=3_000_000_000_000.0, dividend_per_share=1.0, dividend_yield=0.42,
         metrics=KeyMetrics(
-            pe=28.5, pb=45.2, ps=7.1, eps=6.1, fcf_per_share=6.43,
+            pe=28.5, pb=45.2, ps=7.1, eps=6.1, fcf_per_share=6.43, ocf_per_share=8.0,
             gross_margin=44.0, operating_margin=30.0, net_margin=25.0, roe=147.4,
             current_ratio=0.9, debt_to_equity=1.5,
-            eps_growth_yoy=12.0, revenue_growth_yoy=8.0, beta=1.2,
+            eps_growth_yoy=12.0, revenue_growth_yoy=8.0, fcf_growth_yoy=15.0, beta=1.2,
         ),
         analyst_estimates=AnalystEstimates(
             fiscal_year=2026, period_end=date(2026, 9, 30),
@@ -150,10 +151,38 @@ def test_renders_fundamentals_into_the_prompt():
     assert "P/E (trailing): 28.50" in prompt
     assert "Net margin %: 25.00" in prompt
     assert "Forward P/E (consensus): 30.00" in prompt  # price 300 / FY1 eps 10
+    # The cash-flow yields are priced on the snapshot quote (the ticker card's reads).
+    assert "Price/FCF (trailing): 46.66" in prompt  # 300 / 6.43
+    assert "FCF yield %: 2.14" in prompt  # 6.43 / 300 * 100
+    assert "OCF yield % (pre-capex): 2.67" in prompt  # 8.0 / 300 * 100
+    assert "FCF/share growth YoY %: 15.00" in prompt
     # The industry benchmark rides along.
     assert "Industry valuation benchmark" in prompt
     assert "Industry: semiconductors" in prompt
     assert "Median P/E: 30.00" in prompt
+
+
+def test_renders_the_pe_history_signal_into_the_prompt():
+    client = _StubClient(_tool_message())
+    stats = PeHistoryStats(
+        current_pe=18.0, median_pe=24.0, p25_pe=20.0, p75_pe=30.0,
+        min_pe=12.0, max_pe=40.0, current_percentile=15.0,
+        discount_to_median_percent=-25.0, signal=ValuationSignal.CHEAP, sample_size=16,
+    )
+    BedrockFundamentalsAnalysisProvider(client=client).analyze(
+        _a_stock(), _a_benchmark(), stats
+    )
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "Valuation vs its own history" in prompt
+    assert "Current trailing P/E: 18.00" in prompt
+    assert "Typical (median) P/E: 24.00" in prompt
+    assert "Signal: cheap" in prompt
+
+
+def test_omits_the_pe_history_block_when_absent():
+    client = _StubClient(_tool_message())
+    BedrockFundamentalsAnalysisProvider(client=client).analyze(_a_stock(), _a_benchmark())
+    assert "Valuation vs its own history" not in client.calls[0]["messages"][0]["content"]
 
 
 def test_omits_absent_blocks_from_the_prompt():

@@ -102,8 +102,10 @@ class AnchorMetrics:
     """
 
     fcf_per_share: float | None = None
+    ocf_per_share: float | None = None
     revenue_growth_yoy: float | None = None
     eps_growth_yoy: float | None = None
+    fcf_growth_yoy: float | None = None
     gross_margin: float | None = None
     operating_margin: float | None = None
     net_margin: float | None = None

@@ -4,9 +4,10 @@ The fundamentals-focused sibling of ``earnings_analysis_adapter.py`` (the earnin
 read) and ``ratings_analysis_adapter.py`` (the analyst-coverage read). The only
 module — alongside its stock/ETF/earnings/ratings/sector/market cousins — that knows
 Bedrock (and the Anthropic SDK) exists. It takes the enriched stock snapshot the use
-case assembled — the trailing and forward valuation multiples, the profitability and
-balance-sheet metrics, the growth figures, the dividend and market cap — and the
-best-effort industry-P/E benchmark, renders them into a compact prompt, and asks Claude
+case assembled — the trailing and forward valuation multiples, the cash-flow yields, the
+profitability and balance-sheet metrics, the growth figures, the dividend and market cap —
+plus the best-effort industry-P/E benchmark and the stock's own P/E-history signal (where
+its current multiple sits versus its past), renders them into a compact prompt, and asks Claude
 for a plain-language read of the company's *fundamentals*: how profitable and sound the
 business is, whether it's growing, and whether the shares look reasonably priced against
 all that. Swap models or vendors and only this file changes.
@@ -36,6 +37,7 @@ from app.stocks.adapters.bedrock.cost import log_model_cost
 from app.stocks.entities import Confidence, FundamentalsAnalysis, FundamentalsVerdict, Stock
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.ports import FundamentalsAnalysisProvider
+from app.stocks.ticker.entities import PeHistoryStats
 from app.stocks.universe.entities import IndustryValuation
 
 # A single forced tool pins the model to structured output: Claude must call
@@ -106,15 +108,21 @@ _SYSTEM_PROMPT = (
     "You are a friendly investing assistant explaining a company's fundamentals to an "
     "everyday person with no finance background. You are given a snapshot of the stock: its "
     "valuation multiples (how its price compares with its earnings, book value and sales, "
-    "both on past results and on what analysts expect next), its profitability (margins and "
-    "return on equity), its financial health (debt and how easily it covers short-term "
-    "bills), how fast its revenue and earnings are growing, its dividend and size, and how "
-    "its price-to-earnings compares with other companies in the same industry. From only "
-    "those figures, give a clear, balanced read of how solid the business is and whether the "
-    "shares look reasonably priced.\n"
+    "both on past results and on what analysts expect next), its cash generation (how much "
+    "free and operating cash flow it produces per dollar of share price, and how fast that "
+    "cash is growing), its profitability (margins and return on equity), its financial health "
+    "(debt and how easily it covers short-term bills), how fast its revenue and earnings are "
+    "growing, its dividend and size, how its price-to-earnings compares with other companies "
+    "in the same industry, and where its price-to-earnings sits versus its own history. From "
+    "only those figures, give a clear, balanced read of how solid the business is and whether "
+    "the shares look reasonably priced.\n"
     "When an industry benchmark is provided, weigh the stock's own price-to-earnings against "
     "it — a much higher figure than its peers means it's priced richly (expensive) for its "
     "industry, a much lower one means cheaply — and explain that comparison in plain words. "
+    "When the stock's own P/E history is provided, also say whether it looks cheap or dear "
+    "versus how it has usually traded (a low percentile means rarely cheaper, a high one "
+    "rarely dearer); if that signal is 'not_meaningful' the earnings are at an unusual low, "
+    "so don't call it expensive on that basis. "
     "Fundamentals that clearly hold up (good margins and growth, a sound balance sheet, a "
     "fair price) are 'strong'; thin or falling margins, shrinking growth, heavy debt, or a "
     "price the business can't justify are 'weak'; an uneven or conflicting picture is "
@@ -175,8 +183,9 @@ class BedrockFundamentalsAnalysisProvider(FundamentalsAnalysisProvider):
         self,
         stock: Stock,
         industry_valuation: IndustryValuation | None = None,
+        pe_history: PeHistoryStats | None = None,
     ) -> FundamentalsAnalysis:
-        prompt = _render_prompt(stock, industry_valuation)
+        prompt = _render_prompt(stock, industry_valuation, pe_history)
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -267,16 +276,20 @@ def _num(value: object) -> str:
     return str(value)
 
 
-def _render_prompt(stock: Stock, industry_valuation: IndustryValuation | None) -> str:
+def _render_prompt(
+    stock: Stock,
+    industry_valuation: IndustryValuation | None,
+    pe_history: PeHistoryStats | None = None,
+) -> str:
     """Render the enriched snapshot's *fundamentals* into a compact, labelled block.
 
     Only fields that are present are included, so the model is never handed a ``None`` to
     reason about — thin coverage simply yields a shorter prompt. Deliberately narrower than
     the full stock-analysis prompt: this is the fundamentals read, so it carries the
     valuation / profitability / health / growth figures (the ticker card's metrics), the
-    forward consensus, the dividend and size, and the industry P/E benchmark — but not the
-    price-momentum, earnings-timeline or analyst-recommendation blocks, which have their own
-    dedicated analyses.
+    cash-flow yields, the forward consensus, the dividend and size, the industry P/E benchmark
+    and the stock's own P/E history — but not the price-momentum, earnings-timeline or
+    analyst-recommendation blocks, which have their own dedicated analyses.
     """
     metrics = stock.metrics
     fields: list[tuple[str, object]] = [
@@ -294,8 +307,15 @@ def _render_prompt(stock: Stock, industry_valuation: IndustryValuation | None) -
             ("P/S", metrics.ps),
             ("EPS (trailing)", metrics.eps),
             ("FCF/share (trailing)", metrics.fcf_per_share),
+            # Cash-flow yields the ticker card shows, priced here on the live quote so the
+            # model can read "how much cash am I buying per dollar" and the capex drag (the
+            # gap between the operating and free yields).
+            ("Price/FCF (trailing)", _price_to_fcf(metrics.fcf_per_share, stock.price)),
+            ("FCF yield %", _cash_yield(metrics.fcf_per_share, stock.price)),
+            ("OCF yield % (pre-capex)", _cash_yield(metrics.ocf_per_share, stock.price)),
             ("Revenue growth YoY %", metrics.revenue_growth_yoy),
             ("EPS growth YoY %", metrics.eps_growth_yoy),
+            ("FCF/share growth YoY %", metrics.fcf_growth_yoy),
             ("Gross margin %", metrics.gross_margin),
             ("Operating margin %", metrics.operating_margin),
             ("Net margin %", metrics.net_margin),
@@ -323,6 +343,57 @@ def _render_prompt(stock: Stock, industry_valuation: IndustryValuation | None) -
     if benchmark:
         lines.append("")
         lines.append(benchmark)
+    history = _render_pe_history(pe_history)
+    if history:
+        lines.append("")
+        lines.append(history)
+    return "\n".join(lines)
+
+
+def _price_to_fcf(fcf_per_share: object, price: float | None) -> float | None:
+    """Price-to-free-cash-flow at the snapshot price. ``None`` for a non-positive FCF (an
+    undefined multiple, like a trailing-loss P/E) or a missing price — mirrors the ticker
+    card's ``TickerValuation.price_to_fcf`` so the two surfaces read the same figure."""
+    if not isinstance(fcf_per_share, (int, float)) or isinstance(fcf_per_share, bool):
+        return None
+    if fcf_per_share <= 0 or not price or price <= 0:
+        return None
+    return round(price / fcf_per_share, 2)
+
+
+def _cash_yield(per_share: object, price: float | None) -> float | None:
+    """A cash-flow yield (percent) at the snapshot price — per-share cash over price. Keeps
+    its sign (a cash-burner reads negative, an informative reading), guarding only on a live
+    price; mirrors the card's ``fcf_yield`` / ``ocf_yield``."""
+    if not isinstance(per_share, (int, float)) or isinstance(per_share, bool):
+        return None
+    if not price or price <= 0:
+        return None
+    return round(per_share / price * 100, 2)
+
+
+def _render_pe_history(history: PeHistoryStats | None) -> str:
+    """Render where the stock's *current* trailing P/E sits within its own history — the
+    "cheap for this stock?" anchor that complements the peer benchmark ('cheap vs peers' vs
+    'cheap vs its own past'). '' when there's no read (a series too short to rank).
+
+    A ``NOT_MEANINGFUL`` signal (a cyclical earnings trough distorting the multiple) is passed
+    through verbatim so the model can caveat rather than call a trough "expensive"."""
+    if history is None:
+        return ""
+    lines = [
+        "Valuation vs its own history "
+        f"(trailing P/E across {history.sample_size} past earnings releases):",
+        f"- Current trailing P/E: {_num(history.current_pe)}",
+        f"- Typical (median) P/E: {_num(history.median_pe)}",
+        f"- Usual range (25th-75th percentile): "
+        f"{_num(history.p25_pe)} to {_num(history.p75_pe)}",
+        f"- Current percentile in that history: {_num(history.current_percentile)} "
+        "(0 = cheapest it's been, 100 = dearest)",
+        f"- Gap to its typical P/E %: {_num(history.discount_to_median_percent)} "
+        "(negative = cheaper than usual)",
+        f"- Signal: {history.signal.value}",
+    ]
     return "\n".join(lines)
 
 
