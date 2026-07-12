@@ -341,6 +341,7 @@ class FakeSearchRepo(StockSearchRepository):
         pe_ratios: tuple[float, ...] = (),
         peers: tuple[tuple[float, MarketCapTier], ...] | None = None,
         anchor_tier: MarketCapTier | None = MarketCapTier.MID,
+        fcf_per_share: float | None = None,
         raises: Exception | None = None,
     ):
         self._industry = industry
@@ -350,12 +351,18 @@ class FakeSearchRepo(StockSearchRepository):
             else tuple((pe, MarketCapTier.MID) for pe in pe_ratios)
         )
         self._anchor_tier = anchor_tier
+        self._fcf_per_share = fcf_per_share
         self._raises = raises
 
     def industry_for_ticker(self, ticker: str) -> str | None:
         if self._raises is not None:
             raise self._raises
         return self._industry
+
+    def fcf_per_share_for_ticker(self, ticker: str) -> float | None:
+        if self._raises is not None:
+            raise self._raises
+        return self._fcf_per_share
 
     def tier_for_ticker(self, ticker: str) -> MarketCapTier | None:
         if self._raises is not None:
@@ -396,6 +403,7 @@ class FakeAnalysisProvider(StockScorecardProvider):
         self._analysis = analysis
         self._raises = raises
         self.received: list[tuple[str, bool]] = []
+        self.last_stock = None
         self.last_quarterly = None
         self.last_annual = None
         self.last_recommendations = None
@@ -410,6 +418,7 @@ class FakeAnalysisProvider(StockScorecardProvider):
         industry_valuation=None,
     ) -> StockScorecard:
         self.received.append((stock.symbol, quarterly is not None))
+        self.last_stock = stock
         self.last_quarterly = quarterly
         self.last_annual = annual
         self.last_recommendations = recommendations
@@ -2004,6 +2013,41 @@ def test_analysis_use_case_industry_valuation_is_best_effort():
     analysis = use_case.execute("AAPL")
     assert analysis.recommendation is Recommendation.HOLD
     assert analyzer.last_industry_valuation is None
+
+
+def test_analysis_use_case_sources_fcf_from_the_anchor():
+    # FCF per share must come from the DB the annual slice materializes on the anchor,
+    # not the live fundamentals vendor — the snapshot's vendor figure is overwritten by
+    # the stored one so the scorecard's cash read matches the ticker card.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock()),
+        fundamentals_provider=FakeFundamentalsProvider(
+            a_fundamentals(metrics=a_key_metrics(fcf_per_share=6.43))
+        ),
+    )
+    use_case = GetStockAnalysis(
+        info, analyzer, industry_repository=FakeSearchRepo(fcf_per_share=9.99)
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_stock.metrics.fcf_per_share == 9.99  # anchor's, not the vendor's
+
+
+def test_analysis_use_case_fcf_is_none_when_anchor_unsynced():
+    # The DB is the only source: an unsynced anchor (no stored fcf) leaves the cash read
+    # empty rather than falling back to the vendor's figure.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(
+        FakeProvider(stock=a_stock()),
+        fundamentals_provider=FakeFundamentalsProvider(
+            a_fundamentals(metrics=a_key_metrics(fcf_per_share=6.43))
+        ),
+    )
+    use_case = GetStockAnalysis(
+        info, analyzer, industry_repository=FakeSearchRepo(fcf_per_share=None)
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_stock.metrics.fcf_per_share is None  # not the vendor's 6.43
 
 
 def test_analysis_use_case_propagates_stock_not_found():

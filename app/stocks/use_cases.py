@@ -23,6 +23,7 @@ from app.stocks.entities import (
     CompanyProfile,
     EarningsAnalysis,
     FundamentalsAnalysis,
+    KeyMetrics,
     Logo,
     MarketIndexPerformance,
     MarketSummary,
@@ -423,7 +424,7 @@ class GetStockAnalysis:
         # one (StockNotFound), or an upstream failure (StockDataUnavailable) all
         # propagate rather than yielding a scorecard of nothing. Everything else is
         # best-effort context assembled below.
-        stock = self._stock_info.execute(normalized)
+        stock = self._with_stored_fcf(self._stock_info.execute(normalized), normalized)
         scorecard = self._analyzer.analyze(
             stock,
             self._quarterly(normalized),
@@ -454,6 +455,28 @@ class GetStockAnalysis:
 
     def _is_fresh(self, scorecard: StockScorecard) -> bool:
         return _analysis_is_fresh(scorecard.generated_at, self._cache_ttl)
+
+    def _with_stored_fcf(self, stock: Stock, symbol: str) -> Stock:
+        # The scorecard's Cash Generation reads FCF per share; source it from the DB the
+        # annual-earnings slice materializes on the anchor (Yahoo cash-flow statement,
+        # currency-normalized) — the same figure the ticker card's cash reads use — rather
+        # than the live fundamentals vendor's number, so the two never diverge. Overwrites
+        # the snapshot's fcf_per_share (including to None): DB-only, no vendor fallback, so
+        # an unsynced stock just leaves the cash section empty. Best-effort — an unconfigured
+        # repository or a failed read leaves the snapshot untouched.
+        if self._industry_repository is None:
+            return stock
+        try:
+            fcf = self._industry_repository.fcf_per_share_for_ticker(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return stock
+        if stock.metrics is not None:
+            return replace(stock, metrics=replace(stock.metrics, fcf_per_share=fcf))
+        # No live fundamentals came back, but the anchor has the figure — carry it on a
+        # minimal metrics block so the cash read (and the prompt) still show it.
+        if fcf is not None:
+            return replace(stock, metrics=KeyMetrics(fcf_per_share=fcf))
+        return stock
 
     def _quarterly(self, symbol: str) -> QuarterlyEarningsTimeline | None:
         # Best-effort context: the beat history sharpens the analysis but isn't

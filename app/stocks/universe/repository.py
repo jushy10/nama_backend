@@ -200,6 +200,20 @@ class StockSearchRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def fcf_per_share_for_ticker(self, ticker: str) -> float | None:
+        """Return the stored trailing free-cash-flow per share for ``ticker`` — the newest
+        reported fiscal year's figure the annual-earnings slice materializes on the anchor
+        (from the cash-flow statement, currency-normalized) — or ``None`` when the anchor has
+        no row or hasn't been given one yet.
+
+        The AI analysis reads FCF per share from **here**, the same DB-materialized figure the
+        ticker card's cash reads use, rather than the live fundamentals vendor — so the
+        scorecard's Cash Generation section never diverges from the rest of the app. A single
+        anchor column read, the ticker-driven sibling of :meth:`industry_for_ticker`.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def tier_for_ticker(self, ticker: str) -> MarketCapTier | None:
         """Return the market-cap size tier of ``ticker``, or ``None`` when its cap is unknown.
 

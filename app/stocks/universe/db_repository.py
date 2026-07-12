@@ -352,6 +352,14 @@ class SqlStockSearchRepository(StockSearchRepository):
             select(StockRecord.industry).where(StockRecord.ticker == ticker)
         ).scalar_one_or_none()
 
+    def fcf_per_share_for_ticker(self, ticker: str) -> float | None:
+        # A single-column read on the anchor, same null-collapsing as `industry_for_ticker`:
+        # no row / null fcf_per_share -> None, so the analysis's cash read is simply empty
+        # until the annual slice has reached the stock (no live-vendor fallback).
+        return self._session.execute(
+            select(StockRecord.fcf_per_share).where(StockRecord.ticker == ticker)
+        ).scalar_one_or_none()
+
     def tier_for_ticker(self, ticker: str) -> MarketCapTier | None:
         # The anchor's cap, bucketed to its tier. Same null-collapsing as
         # `industry_for_ticker`: no row / null cap -> None, so the caller falls back to the
