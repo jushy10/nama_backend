@@ -292,6 +292,7 @@ module "frontend" {
     "/sector/*",
     "/screen/*",
     "/ai-stock-screener",
+    "/stock-screener",
     "/sitemap.xml",
     "/robots.txt",
     "/llms.txt",
