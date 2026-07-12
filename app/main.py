@@ -117,12 +117,22 @@ app = FastAPI(title="nama_backend", lifespan=lifespan)
 
 # Per-client (per-IP) rate limiting so one abusive caller can't exhaust the
 # service — a token bucket per client IP; over it, SlowAPI raises
-# RateLimitExceeded and the handler returns HTTP 429. The counter is in-process,
-# which is exactly right while we run a single task; if desired_count ever goes
-# above 1, point the Limiter at Redis via storage_uri so the count is shared.
-# These limits sit under API Gateway's global 50 req/s throttle: that caps total
-# load/cost, this stops any single IP from consuming it. Tune as traffic grows.
-limiter = Limiter(key_func=_client_ip, default_limits=["20/second", "600/minute"])
+# RateLimitExceeded and the handler returns HTTP 429. These limits sit under API
+# Gateway's global throttle: that caps total load/cost, this stops any single IP
+# from consuming it. Tune as traffic grows.
+#
+# The counter defaults to in-process ("memory://"), which is exact for a single
+# task. Under autoscaling the service can run several tasks, and an in-process
+# counter is then per-task — a single IP can reach up to (task count) * the limit,
+# with the API Gateway throttle as the hard global backstop. Set
+# RATE_LIMIT_STORAGE_URI to a shared store (e.g. redis://host:6379) to make the
+# count exact across tasks; it's a one-env-var flip, no code change.
+_rate_limit_storage = os.environ.get("RATE_LIMIT_STORAGE_URI", "memory://")
+limiter = Limiter(
+    key_func=_client_ip,
+    default_limits=["20/second", "600/minute"],
+    storage_uri=_rate_limit_storage,
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)

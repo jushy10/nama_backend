@@ -186,6 +186,26 @@ module "app" {
   app_security_group_id = module.database.app_security_group_id
   database_url_ssm_arn  = module.database.database_url_ssm_arn
 
+  # Capacity. The always-on API task runs 0.5 vCPU / 1 GiB (up from the module
+  # default 0.25/0.5) — one uvicorn worker fully uses 0.5 vCPU (GIL-bound), and
+  # 1 GiB gives headroom for the live pandas/yfinance + Bedrock request paths.
+  cpu    = 512
+  memory = 1024
+
+  # Target-tracking autoscaling: hold ~60% CPU by scaling 1→3 tasks. Min 1 keeps
+  # idle cost unchanged; scale-out only under real load. The gateway throttle is
+  # raised to match ~3 tasks' throughput so it isn't the new ceiling. NOTE: with
+  # >1 task the in-process per-IP limiter becomes per-task (looser by up to the
+  # task count) until RATE_LIMIT_STORAGE_URI is pointed at Redis — the gateway
+  # throttle below is the hard global backstop meanwhile.
+  enable_autoscaling       = true
+  autoscaling_min_capacity = 1
+  autoscaling_max_capacity = 3
+  autoscaling_cpu_target   = 60
+
+  apigw_throttle_rate_limit  = 100
+  apigw_throttle_burst_limit = 200
+
   # Injected as the env vars the app reads (app/stocks/router.py, plus the cron
   # guard in app/stocks/endpoints/cron_auth.py): the Alpaca keys (required), the
   # Logo.dev token (required for the logo endpoint), and the cron sync token (guards

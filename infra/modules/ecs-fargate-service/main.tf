@@ -333,10 +333,11 @@ resource "aws_apigatewayv2_stage" "default" {
   auto_deploy = true
 
   # API Gateway bills per request, so a runaway/hostile client is a bill as
-  # well as load. Generous for one small task; raise alongside desired_count.
+  # well as load. A global ceiling under which the app's per-IP limiter sits;
+  # raise alongside autoscaling_max_capacity (the module defaults stay modest).
   default_route_settings {
-    throttling_rate_limit  = 50
-    throttling_burst_limit = 100
+    throttling_rate_limit  = var.apigw_throttle_rate_limit
+    throttling_burst_limit = var.apigw_throttle_burst_limit
   }
 
   tags = var.tags
@@ -539,5 +540,63 @@ resource "aws_ecs_service" "this" {
     container_port = var.container_port
   }
 
+  # When autoscaling is attached it owns the running task count, so Terraform
+  # must not fight it by reconciling desired_count on every apply (that would
+  # yank the service back to var.desired_count and undo a scale-out). var.desired_count
+  # still sets the count at CREATE; autoscaling adjusts it within
+  # autoscaling_min/max_capacity from then on. Harmless when autoscaling is off —
+  # the count just isn't Terraform-managed after creation.
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
+
   tags = var.tags
+}
+
+# ---------------------------------------------------------------------------
+# Optional target-tracking autoscaling on the service's task count. Off by
+# default (enable_autoscaling); when on, ECS holds average CPU near
+# autoscaling_cpu_target by scaling between autoscaling_min/max_capacity.
+#
+# min_capacity = 1 keeps one always-on task (idle cost unchanged); scale-out
+# only happens under real CPU load. AWS provisions the
+# AWSServiceRoleForApplicationAutoScaling_ECSService service-linked role on
+# first use, so no extra IAM here.
+#
+# Rate-limiting note: the app's per-IP limiter (app/main.py) is in-process, so
+# across N running tasks a single IP can reach up to N * its per-task limit
+# until RATE_LIMIT_STORAGE_URI points the limiter at shared storage (Redis).
+# The API Gateway stage throttle above stays the hard global backstop.
+# ---------------------------------------------------------------------------
+resource "aws_appautoscaling_target" "ecs" {
+  count = var.enable_autoscaling ? 1 : 0
+
+  service_namespace  = "ecs"
+  resource_id        = "service/${aws_ecs_cluster.this.name}/${aws_ecs_service.this.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  min_capacity       = var.autoscaling_min_capacity
+  max_capacity       = var.autoscaling_max_capacity
+}
+
+resource "aws_appautoscaling_policy" "ecs_cpu" {
+  count = var.enable_autoscaling ? 1 : 0
+
+  name               = "${var.name}-cpu-target"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.ecs[0].service_namespace
+  resource_id        = aws_appautoscaling_target.ecs[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.ecs[0].scalable_dimension
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+
+    target_value = var.autoscaling_cpu_target
+
+    # Scale out promptly (a burst shouldn't wait), but scale in slowly so a
+    # brief lull doesn't drop a task that's needed again a minute later.
+    scale_out_cooldown = 60
+    scale_in_cooldown  = 300
+  }
 }
