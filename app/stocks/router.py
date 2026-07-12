@@ -326,28 +326,45 @@ def get_analysis_cache(
     return SqlStockScorecardCache(db, "stock")
 
 
-def analysis_cache_ttl() -> timedelta:
-    # How long a stored analysis is served before it's regenerated. Config with a
-    # sane default (30 min) — an analysis only drifts as its underlying figures do,
-    # and every served read carries its own `generated_at` so the age is visible.
-    minutes = os.environ.get("ANALYSIS_CACHE_TTL_MINUTES")
-    try:
-        return timedelta(minutes=float(minutes)) if minutes else timedelta(minutes=30)
-    except ValueError:
-        return timedelta(minutes=30)
+# Per-kind default TTLs (minutes) for the AI-analysis result cache. Each is chosen from
+# how often the *input the model is handed* actually changes — not a flat guess — with a
+# thumb on the scale for token cost (which scales with how many distinct rows a kind has):
+#   earnings/ratings — pure DB data a daily-or-slower cron updates (earnings is ~quarterly),
+#     and one row per ticker, so hours-not-minutes both saves real tokens and never re-bills
+#     over byte-identical input.
+#   stock/fundamentals/etf — slow substance (earnings/margins/profile) plus a live-price
+#     valuation slice, so a few hours: long enough to stop 30-min re-bills, short enough that
+#     a same-day move eventually reflects.
+#   sector/market — a live intraday board, but ONE shared row serves every viewer (~a couple
+#     Bedrock calls an hour for the whole user base regardless of traffic), so a long TTL
+#     saves ~nothing and only costs freshness on the one thing that's actually intraday.
+_ANALYSIS_TTL_DEFAULT_MINUTES = {
+    "earnings": 720,       # ~quarterly reports; DB refreshed by a daily cron
+    "ratings": 360,        # analyst actions; DB refreshed by a daily cron
+    "etf": 360,            # profile ~quarterly rebalance; only the quote is live
+    "stock": 240,          # slow inputs + a live-price valuation slice
+    "fundamentals": 240,   # same shape as the stock scorecard
+    "sector": 30,          # intraday leaders; ~zero token cost (one shared row)
+    "market": 60,          # trailing-window narrative; only the day-move is fast
+}
+_ANALYSIS_TTL_FALLBACK_MINUTES = 30  # any kind not in the map above
 
 
-def market_analysis_cache_ttl() -> timedelta:
-    # The market-wide reads (sector, market summary) get their own, longer TTL — a
-    # separate knob from the per-symbol analyses. They're the same for every viewer
-    # (one shared cached row, keyed on the market sentinel), so a longer window
-    # collapses far more traffic onto one Bedrock call; default 60 min. Config via
-    # MARKET_ANALYSIS_CACHE_TTL_MINUTES.
-    minutes = os.environ.get("MARKET_ANALYSIS_CACHE_TTL_MINUTES")
-    try:
-        return timedelta(minutes=float(minutes)) if minutes else timedelta(minutes=60)
-    except ValueError:
-        return timedelta(minutes=60)
+def analysis_cache_ttl(kind: str) -> timedelta:
+    # How long a stored `kind` analysis is served before it's regenerated. The default per
+    # kind reflects how often that analysis's input data changes (see the map above); a
+    # per-kind env override wins if set (`ANALYSIS_CACHE_TTL_MINUTES_<KIND>`, e.g.
+    # ANALYSIS_CACHE_TTL_MINUTES_EARNINGS), else a global ANALYSIS_CACHE_TTL_MINUTES pins
+    # every kind at once, else the map default. A malformed value is skipped, not raised.
+    default = _ANALYSIS_TTL_DEFAULT_MINUTES.get(kind, _ANALYSIS_TTL_FALLBACK_MINUTES)
+    for var in (f"ANALYSIS_CACHE_TTL_MINUTES_{kind.upper()}", "ANALYSIS_CACHE_TTL_MINUTES"):
+        raw = os.environ.get(var)
+        if raw:
+            try:
+                return timedelta(minutes=float(raw))
+            except ValueError:
+                continue
+    return timedelta(minutes=default)
 
 
 def get_stock_analysis(
@@ -374,7 +391,7 @@ def get_stock_analysis(
         DbOnlyRecommendationsProvider(SqlRecommendationsRepository(db)),
         SqlStockSearchRepository(db),
         cache=cache,
-        cache_ttl=analysis_cache_ttl(),
+        cache_ttl=analysis_cache_ttl("stock"),
     )
 
 
@@ -412,7 +429,7 @@ def get_sector_analysis(
         sectors,
         analyzer,
         cache=sector_analysis_cache(db),
-        cache_ttl=market_analysis_cache_ttl(),
+        cache_ttl=analysis_cache_ttl("sector"),
     )
 
 
@@ -458,7 +475,7 @@ def get_market_summary(
         overview,
         analyzer,
         cache=market_summary_cache(db),
-        cache_ttl=market_analysis_cache_ttl(),
+        cache_ttl=analysis_cache_ttl("market"),
     )
 
 
@@ -497,7 +514,7 @@ def get_earnings_analysis(
         DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
         DbOnlyAnnualEarningsProvider(SqlAnnualEarningsRepository(db)),
         cache=earnings_analysis_cache(db),
-        cache_ttl=analysis_cache_ttl(),
+        cache_ttl=analysis_cache_ttl("earnings"),
     )
 
 
@@ -533,7 +550,7 @@ def get_ratings_findings(
         DbOnlyRecommendationsProvider(SqlRecommendationsRepository(db)),
         DbOnlyRatingChangesProvider(SqlRatingChangesRepository(db)),
         cache=ratings_analysis_cache(db),
-        cache_ttl=analysis_cache_ttl(),
+        cache_ttl=analysis_cache_ttl("ratings"),
     )
 
 
@@ -573,7 +590,7 @@ def get_fundamentals_analysis(
         analyzer,
         SqlStockSearchRepository(db),
         cache=fundamentals_analysis_cache(db),
-        cache_ttl=analysis_cache_ttl(),
+        cache_ttl=analysis_cache_ttl("fundamentals"),
     )
 
 
