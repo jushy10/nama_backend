@@ -42,12 +42,13 @@ class TickerMetricsResponse(BaseModel):
     or when the trailing year is a loss). ``price_to_fcf`` / ``fcf_yield`` /
     ``ocf_yield`` are the cash-flow reads — live price over the annual-earnings slice's
     stored trailing free- (and operating-) cash-flow per share, taken off the ``stocks``
-    anchor rather than the fundamentals call, so they survive a keyless/blocked Finnhub.
-    ``price_to_fcf`` is ``null`` for a non-positive FCF (an undefined multiple, like ``pe``
-    on a loss), while ``fcf_yield`` / ``ocf_yield`` keep their sign (a negative yield is a
-    real "burning cash" reading). The gap between ``ocf_yield`` and ``fcf_yield`` is the
+    anchor. ``price_to_fcf`` is ``null`` for a non-positive FCF (an undefined multiple, like
+    ``pe`` on a loss), while ``fcf_yield`` / ``ocf_yield`` keep their sign (a negative yield is
+    a real "burning cash" reading). The gap between ``ocf_yield`` and ``fcf_yield`` is the
     capex drag — a heavy spender's OCF yield runs well above its FCF yield. The margins are
-    the trailing profitability ladder (percent), off the fundamentals call.
+    the trailing profitability ladder (percent), off the same anchor read (the fundamentals
+    slice's Yahoo ``.info`` write), so the whole block is served from the DB with no live
+    fundamentals vendor.
     ``revenue_growth_yoy`` / ``eps_growth_yoy`` / ``fcf_growth_yoy`` are the stock's *latest
     trailing* year-over-year growth (percent) — the newest reported fiscal year over the
     prior one, served straight off the ``stocks`` anchor where the annual-earnings slice

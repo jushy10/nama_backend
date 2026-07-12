@@ -103,28 +103,29 @@ self-contained **clean-architecture vertical slice** under
 `alpaca_provider.py` knows Alpaca exists — so the tests run fully offline with a
 fake provider.
 
-The card also carries best-effort enrichment: the company **name** and
-**exchange** (served DB-first from the `stocks` table once filled), **market
-cap** from [Finnhub](https://finnhub.io), and opt-in `dividend`, `performance`,
-and `metrics` blocks via `?include=` (the metrics block adds the trailing P/E on
-the consensus-EPS basis, the profit margins, and the latest trailing YoY
-growth). Enrichment never fails the request — if a source is down, unkeyed,
-or doesn't cover the symbol, that field comes back `null` and the quote still
-returns.
+The card also carries best-effort enrichment, all served **DB-first from the
+`stocks` anchor** (materialized by the out-of-band syncs): the company **name**
+and **exchange**, **market cap**, and opt-in `dividend`, `performance`, and
+`metrics` blocks via `?include=` (the metrics block adds the trailing P/E on the
+consensus-EPS basis, the profit margins, and the latest trailing YoY growth).
+The margins + dividend come from the fundamentals sync (Yahoo `.info`), not a
+live vendor. Enrichment never fails the request — if the syncs haven't reached
+the symbol yet, that field comes back `null` and the quote still returns.
 
 Credentials come from the environment (like `DATABASE_URL`):
 
 ```sh
 export APCA_API_KEY_ID=...
 export APCA_API_SECRET_KEY=...
-export FINNHUB_API_KEY=...        # optional: enables name, market cap + dividend
 export LOGODEV_TOKEN=...          # required for /logo: publishable key from logo.dev
 curl localhost:8080/stocks/ticker/AAPL
 ```
 
 Uses Alpaca's free **IEX** feed. Without the Alpaca keys the endpoint returns
-`503`; without `FINNHUB_API_KEY` it still serves the quote, just with the name,
-market cap and dividend omitted. The rest of the app runs regardless.
+`503`; the enrichment blocks come from the DB (no extra key), so until the syncs
+have populated a symbol the quote still serves with those fields omitted. The
+rest of the app runs regardless. (Fundamentals were sourced from Finnhub until
+they moved onto the anchor via the keyless yfinance `.info` sweep.)
 
 ### Candlestick chart data
 
@@ -183,9 +184,8 @@ curl localhost:8080/stocks/AAPL/logo --output aapl.png
 Store the keys the same way as `DATABASE_URL`: as **SSM SecureString**
 parameters (e.g. `/nama/dev/alpaca-api-key-id`, `/nama/dev/alpaca-api-secret-key`)
 via the [`ssm-parameter`](infra/modules/ssm-parameter) module, and inject them
-into the ECS task as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`. The optional
-`FINNHUB_API_KEY` and the `LOGODEV_TOKEN` follow the same pattern (e.g.
-`/nama/dev/finnhub-api-key`, `/nama/dev/logodev-token`). Never commit keys to the
+into the ECS task as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`. The `LOGODEV_TOKEN`
+follows the same pattern (e.g. `/nama/dev/logodev-token`). Never commit keys to the
 repo.
 
 ## Contributing

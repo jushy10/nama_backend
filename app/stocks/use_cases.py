@@ -20,7 +20,6 @@ from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
     CandleSeries,
-    CompanyProfile,
     EarningsAnalysis,
     FundamentalsAnalysis,
     KeyMetrics,
@@ -31,7 +30,6 @@ from app.stocks.entities import (
     SectorAnalysis,
     SectorPerformance,
     Stock,
-    StockFundamentals,
     StockPerformance,
     StockScorecard,
     Timeframe,
@@ -48,7 +46,6 @@ from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
     CandleProvider,
-    CompanyProfileProvider,
     EarningsAnalysisProvider,
     FundamentalsAnalysisProvider,
     LogoProvider,
@@ -58,7 +55,6 @@ from app.stocks.ports import (
     SectorAnalysisProvider,
     SectorPerformanceProvider,
     StockDataProvider,
-    StockFundamentalsProvider,
     StockPerformanceProvider,
     StockScorecardCache,
     StockScorecardProvider,
@@ -71,7 +67,7 @@ from app.stocks.recommendations.ports import (
     RatingChangeProvider,
     RecommendationProvider,
 )
-from app.stocks.universe.entities import IndustryValuation
+from app.stocks.universe.entities import AnchorMetrics, IndustryValuation
 from app.stocks.universe.repository import StockSearchRepository
 
 logger = logging.getLogger(__name__)
@@ -107,6 +103,77 @@ def _consensus_pe(price: float | None, ttm_eps: float | None) -> float | None:
     return round(price / ttm_eps, 2)
 
 
+def _price_multiple(price: float | None, per_share: float | None) -> float | None:
+    """A price-derived multiple — the live price over a stored per-share input (book value →
+    P/B, sales → P/S), the same "store the input, price it live" split the P/E and FCF yield
+    use. ``None`` on a non-positive/absent price or per-share figure (P/B off a negative book
+    value is meaningless, the same guard the consensus P/E uses on a loss)."""
+    if price is None or per_share is None or price <= 0 or per_share <= 0:
+        return None
+    return round(price / per_share, 2)
+
+
+def _dividend_yield(dividend_per_share: float | None, price: float | None) -> float | None:
+    """Dividend yield (percent) — the stored annual dividend per share over the live price.
+    ``None`` without both, or a non-positive price."""
+    if dividend_per_share is None or not price or price <= 0:
+        return None
+    return round(dividend_per_share / price * 100, 2)
+
+
+def _with_stored_fundamentals(
+    stock: Stock, anchor: "AnchorMetrics", ttm_eps: float | None
+) -> Stock:
+    """Overlay the anchor-materialized fundamentals onto the live snapshot, DB-only, so the
+    analysis reads the same canonical figures the ticker card and universe search show — never
+    a divergent live-vendor number. Replaces the retired live Finnhub fundamentals + profile
+    calls.
+
+    The trailing ratios (margins, ROE, current ratio, debt/equity, beta) and the annual slice's
+    cash/growth come straight off the anchor; the price-derived multiples are computed here on
+    the live quote — the consensus P/E from the quarterly TTM EPS (``ttm_eps``, ``None`` when no
+    quarterly context was gathered), and P/B / P/S from the stored per-share book value / sales.
+    ``eps`` is set to the same consensus TTM so the prompt's EPS sits on the P/E's basis. The
+    market cap, dividend (per share + a live-priced yield) and clean display name are filled off
+    the anchor too, falling back to the price feed's name when the anchor hasn't got one yet.
+
+    Overwrites each field (including to ``None``): an unsynced stock simply carries no
+    fundamentals — the thinner coverage reads as lower confidence — rather than a stale or
+    divergent figure. Leaves ``metrics`` ``None`` (not an empty block) when nothing resolved, so
+    the fundamentals-analysis no-data guard still fires."""
+    price = stock.price
+    overlay = {
+        "gross_margin": anchor.gross_margin,
+        "operating_margin": anchor.operating_margin,
+        "net_margin": anchor.net_margin,
+        "roe": anchor.return_on_equity,
+        "current_ratio": anchor.current_ratio,
+        "debt_to_equity": anchor.debt_to_equity,
+        "beta": anchor.beta,
+        "fcf_per_share": anchor.fcf_per_share,
+        "revenue_growth_yoy": anchor.revenue_growth_yoy,
+        "eps_growth_yoy": anchor.eps_growth_yoy,
+        "eps": ttm_eps,
+        "pe": _consensus_pe(price, ttm_eps),
+        "pb": _price_multiple(price, anchor.book_value_per_share),
+        "ps": _price_multiple(price, anchor.sales_per_share),
+    }
+    if stock.metrics is not None:
+        metrics = replace(stock.metrics, **overlay)
+    elif any(value is not None for value in overlay.values()):
+        metrics = KeyMetrics(**overlay)
+    else:
+        metrics = None  # nothing resolved — keep it a bare price, not an empty metrics block
+    return replace(
+        stock,
+        metrics=metrics,
+        market_cap=anchor.market_cap,
+        dividend_per_share=anchor.dividend_per_share,
+        dividend_yield=_dividend_yield(anchor.dividend_per_share, price),
+        name=anchor.name or stock.name,
+    )
+
+
 def _normalize_symbol(symbol: str) -> str:
     normalized = (symbol or "").strip().upper()
     if not normalized:
@@ -120,62 +187,50 @@ def _normalize_symbol(symbol: str) -> str:
 class GetStockInfo:
     """Use case: retrieve information about a single stock by its symbol.
 
-    The price snapshot is required; performance, fundamentals, the clean company
-    name and the forward analyst estimates are optional, best-effort enrichment.
-    If those sources fail or aren't configured, the stock is still returned with
-    those fields left unset.
+    The price snapshot is required; performance, the forward analyst estimates and
+    the all-time high are optional, best-effort enrichment. If those sources fail or
+    aren't configured, the stock is still returned with those fields left unset.
+
+    The trailing fundamentals (margins, valuation, dividend, market cap) and the
+    clean display name are **not** read here any more — they're materialized on the
+    ``stocks`` anchor by the fundamentals/universe syncs, and the callers (the AI
+    analyses, the only consumers of this use case) overlay them from that one anchor
+    read (:func:`_with_stored_fundamentals`). So the snapshot this returns carries
+    the live price + performance + forward estimates, and its fundamentals are filled
+    downstream from the DB rather than a live vendor.
     """
 
     def __init__(
         self,
         provider: StockDataProvider,
         performance_provider: StockPerformanceProvider | None = None,
-        fundamentals_provider: StockFundamentalsProvider | None = None,
-        profile_provider: CompanyProfileProvider | None = None,
         all_time_high_provider: AllTimeHighProvider | None = None,
         estimates_provider: AnalystEstimatesProvider | None = None,
     ) -> None:
         self._provider = provider
         self._performance_provider = performance_provider
-        self._fundamentals_provider = fundamentals_provider
-        self._profile_provider = profile_provider
         self._all_time_high_provider = all_time_high_provider
         self._estimates_provider = estimates_provider
 
     def execute(self, symbol: str) -> Stock:
         normalized = _normalize_symbol(symbol)
         stock = self._provider.get_stock(normalized)  # required; errors propagate
-        # The four enrichment sources below are independent network reads (Alpaca /
-        # Finnhub), with no ordering between them, so they run concurrently rather
-        # than in series: the gather latency the AI-analysis path pays before the
-        # model call collapses from their sum to their slowest. Each is already
-        # best-effort (returns None on its own failure), and the vendor SDKs' HTTP
-        # clients are safe to call concurrently for independent reads. Estimates is
-        # deliberately kept off the pool — it reads the shared request DB session,
-        # which must not be touched from a worker thread, and it's a fast local read
-        # rather than a network round-trip.
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            fundamentals_future = pool.submit(self._fundamentals, normalized)
-            profile_future = pool.submit(self._profile, normalized)
+        # The two enrichment reads below are independent Alpaca calls with no ordering
+        # between them, so they run concurrently rather than in series. Each is already
+        # best-effort (returns None on its own failure), and the SDK's HTTP client is
+        # safe to call concurrently for independent reads. Estimates is deliberately kept
+        # off the pool — it reads the shared request DB session, which must not be touched
+        # from a worker thread, and it's a fast local read rather than a network round-trip.
+        with ThreadPoolExecutor(max_workers=2) as pool:
             performance_future = pool.submit(self._performance, normalized)
             all_time_high_future = pool.submit(self._all_time_high, normalized, stock)
-            fundamentals = fundamentals_future.result()
-            profile = profile_future.result()
             performance = performance_future.result()
             all_time_high = all_time_high_future.result()
+        # Name stays the price feed's (the anchor's clean name is overlaid downstream);
+        # fundamentals/market-cap/dividend are left unset here and filled from the anchor.
         return replace(
             stock,
-            # Prefer the profile vendor's clean display name ("Apple Inc.") over
-            # the price feed's full legal title ("Apple Inc. Common Stock"); fall
-            # back to the feed's name when the profile is missing or unconfigured.
-            name=profile.name if profile and profile.name else stock.name,
             performance=performance,
-            market_cap=fundamentals.market_cap if fundamentals else None,
-            dividend_per_share=(
-                fundamentals.dividend_per_share if fundamentals else None
-            ),
-            dividend_yield=fundamentals.dividend_yield if fundamentals else None,
-            metrics=fundamentals.metrics if fundamentals else None,
             analyst_estimates=self._estimates(normalized),
             all_time_high=all_time_high,
         )
@@ -204,23 +259,6 @@ class GetStockInfo:
             as_of = stock.as_of.date() if stock.as_of else None
             return replace(high, price=stock.price, reached_on=as_of)
         return high
-
-    def _fundamentals(self, symbol: str) -> StockFundamentals | None:
-        if self._fundamentals_provider is None:
-            return None
-        try:
-            return self._fundamentals_provider.get_fundamentals(symbol)
-        except (StockNotFound, StockDataUnavailable):
-            return None  # best-effort
-
-    def _profile(self, symbol: str) -> CompanyProfile | None:
-        # Supplies the clean display name that overrides the price feed's title.
-        if self._profile_provider is None:
-            return None
-        try:
-            return self._profile_provider.get_profile(symbol)
-        except (StockNotFound, StockDataUnavailable):
-            return None  # best-effort: never sink the price response
 
     def _estimates(self, symbol: str) -> AnalystEstimates | None:
         # Forward analyst estimates back the snapshot's forward P/E; best-effort, so
@@ -479,20 +517,10 @@ class GetStockAnalysis:
     def _with_stored_metrics(
         self, stock: Stock, symbol: str, quarterly: QuarterlyEarningsTimeline | None
     ) -> Stock:
-        # Overlay the figures the app materializes/derives itself onto the live snapshot, so
-        # the scorecard's cash, growth, and valuation reads are the DB-canonical ones the
-        # ticker card and universe search show — never a divergent live-vendor figure.
-        #
-        # Three come straight off the `stocks` anchor (the annual-earnings slice's trailing
-        # FCF per share and its consensus-basis revenue/EPS growth); the trailing P/E is
-        # recomputed on the *consensus* basis — the live price over the quarterly slice's TTM
-        # EPS, exactly as `TickerValuation.trailing_pe` does — so it sits on the same basis as
-        # the industry-median P/E it's weighed against (rather than Finnhub's GAAP peTTM), and
-        # `KeyMetrics.peg` (P/E over EPS growth) inherits that consistent basis.
-        #
-        # All DB-sourced and DB-only: each overwrites the vendor's value (including to None),
-        # so a figure is always the canonical one or absent — an unsynced stock simply omits
-        # it (and the thinner coverage reads as lower confidence). Best-effort — an
+        # Overlay the whole trailing-fundamentals block onto the live snapshot from the one
+        # anchor read — the DB-canonical figures the ticker card and universe search show,
+        # never a divergent (or now retired) live-vendor number. See
+        # ``_with_stored_fundamentals`` for the field-by-field rules. Best-effort — an
         # unconfigured repository or a failed read leaves the snapshot untouched.
         if self._industry_repository is None:
             return stock
@@ -501,20 +529,7 @@ class GetStockAnalysis:
         except (StockNotFound, StockDataUnavailable):
             return stock
         ttm_eps = quarterly.ttm_eps if quarterly is not None else None
-        overlay = {
-            "fcf_per_share": anchor.fcf_per_share,
-            "revenue_growth_yoy": anchor.revenue_growth_yoy,
-            "eps_growth_yoy": anchor.eps_growth_yoy,
-            "pe": _consensus_pe(stock.price, ttm_eps),
-        }
-        if stock.metrics is not None:
-            return replace(stock, metrics=replace(stock.metrics, **overlay))
-        # No live fundamentals came back, but the DB has some of these — carry them on a
-        # minimal metrics block so the cash/growth/valuation reads (and the prompt) still show
-        # them.
-        if any(value is not None for value in overlay.values()):
-            return replace(stock, metrics=KeyMetrics(**overlay))
-        return stock
+        return _with_stored_fundamentals(stock, anchor, ttm_eps)
 
     def _quarterly(self, symbol: str) -> QuarterlyEarningsTimeline | None:
         # Best-effort context: the beat history sharpens the analysis but isn't
@@ -772,12 +787,14 @@ class GetFundamentalsAnalysis:
         stock_info: GetStockInfo,
         analyzer: FundamentalsAnalysisProvider,
         industry_repository: StockSearchRepository | None = None,
+        quarterly_provider: QuarterlyEarningsProvider | None = None,
         cache: AiAnalysisCache[FundamentalsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._stock_info = stock_info
         self._analyzer = analyzer
         self._industry_repository = industry_repository
+        self._quarterly_provider = quarterly_provider
         self._cache = cache
         self._cache_ttl = cache_ttl
 
@@ -789,8 +806,11 @@ class GetFundamentalsAnalysis:
             return cached
         # The enriched snapshot is primary: a bad symbol (ValueError), an unknown one
         # (StockNotFound), or an upstream price failure (StockDataUnavailable) all propagate
-        # rather than yielding an analysis of nothing.
-        stock = self._stock_info.execute(normalized)
+        # rather than yielding an analysis of nothing. The trailing fundamentals it carries are
+        # overlaid from the anchor (the DB-canonical figures, replacing the retired live vendor).
+        stock = self._with_stored_metrics(
+            self._stock_info.execute(normalized), normalized
+        )
         if not _has_fundamentals(stock):
             # Only a price came back — no valuation/health metrics, no forward estimates, no
             # dividend or market cap. Nothing fundamental to read, so fail rather than ask the
@@ -828,6 +848,32 @@ class GetFundamentalsAnalysis:
             return None
         valuation = IndustryValuation.for_stock_peers(industry, anchor_tier, peers)
         return valuation if valuation.is_representative else None
+
+    def _with_stored_metrics(self, stock: Stock, symbol: str) -> Stock:
+        # Same anchor overlay the per-stock scorecard uses (``GetStockAnalysis``): fill the
+        # trailing fundamentals from the one anchor read, DB-only. The consensus P/E needs the
+        # quarterly TTM EPS, so it's read here too (DB-only context, best-effort). Best-effort —
+        # an unconfigured repository or a failed read leaves the snapshot untouched.
+        if self._industry_repository is None:
+            return stock
+        try:
+            anchor = self._industry_repository.anchor_metrics_for_ticker(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return stock
+        quarterly = self._quarterly(symbol)
+        ttm_eps = quarterly.ttm_eps if quarterly is not None else None
+        return _with_stored_fundamentals(stock, anchor, ttm_eps)
+
+    def _quarterly(self, symbol: str) -> QuarterlyEarningsTimeline | None:
+        # DB-only context for the consensus P/E's TTM EPS; a missing provider or an uncovered
+        # symbol just leaves the P/E null.
+        if self._quarterly_provider is None:
+            return None
+        try:
+            timeline = self._quarterly_provider.get_quarterly_earnings(symbol)
+        except (StockNotFound, StockDataUnavailable):
+            return None
+        return None if timeline.is_empty else timeline
 
 
 def _has_fundamentals(stock: Stock) -> bool:

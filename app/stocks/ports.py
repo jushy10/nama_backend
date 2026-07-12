@@ -16,7 +16,6 @@ from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
     CandleSeries,
-    CompanyProfile,
     EarningsAnalysis,
     FundamentalsAnalysis,
     InvestmentAnalysis,
@@ -28,7 +27,6 @@ from app.stocks.entities import (
     SectorAnalysis,
     SectorPerformance,
     Stock,
-    StockFundamentals,
     StockPerformance,
     StockScorecard,
     Timeframe,
@@ -158,43 +156,6 @@ class AllTimeHighProvider(ABC):
 
         Raises:
             StockNotFound: the symbol has no price history.
-            StockDataUnavailable: the upstream source failed.
-        """
-        raise NotImplementedError
-
-
-class StockFundamentalsProvider(ABC):
-    """A gateway for company fundamentals (market cap, dividend).
-
-    These come from a fundamentals vendor, not the price feed — market data
-    APIs don't expose shares outstanding or dividends. Best-effort enrichment.
-    """
-
-    @abstractmethod
-    def get_fundamentals(self, symbol: str) -> StockFundamentals:
-        """Return fundamentals for the (already-normalized) symbol.
-
-        Raises:
-            StockNotFound: the symbol is not covered by the source.
-            StockDataUnavailable: the upstream source failed.
-        """
-        raise NotImplementedError
-
-
-class CompanyProfileProvider(ABC):
-    """A gateway for a company's clean display name.
-
-    Comes from a company-profile vendor, not the price feed — market data APIs
-    expose a ticker's full legal title but not the tidy display name. Best-effort
-    enrichment, like fundamentals: a failure here must not sink the price view.
-    """
-
-    @abstractmethod
-    def get_profile(self, symbol: str) -> CompanyProfile:
-        """Return the company profile for the (already-normalized) symbol.
-
-        Raises:
-            StockNotFound: the symbol is not covered by the source.
             StockDataUnavailable: the upstream source failed.
         """
         raise NotImplementedError
