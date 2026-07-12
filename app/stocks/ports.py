@@ -8,6 +8,7 @@ implementation. The core never imports Alpaca; Alpaca imports the core.
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from datetime import date, datetime
+from typing import Generic, TypeVar
 
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
@@ -414,6 +415,45 @@ class InvestmentAnalysisCache(ABC):
     def put(self, analysis: InvestmentAnalysis) -> None:
         """Store ``analysis`` as the latest for its symbol (upsert). A write
         failure is swallowed — caching must never sink the request."""
+        raise NotImplementedError
+
+
+T = TypeVar("T")
+
+
+class AiAnalysisCache(ABC, Generic[T]):
+    """A read-through result cache for one *kind* of AI analysis, keyed by a string.
+
+    The generic counterpart to ``StockScorecardCache`` / ``InvestmentAnalysisCache``:
+    those two are hand-written per shape, but the five remaining AI reads (earnings,
+    ratings, fundamentals, sector, market) share this one parameterized port so the
+    slice doesn't grow five near-identical ABCs. Each is expensive to produce (a
+    language-model call over a multi-source gather) yet only drifts as its underlying
+    figures do, so a fresh stored read lets a burst of viewers — and repeat views
+    within the window — collapse onto one generation.
+
+    The **freshness policy is the use case's** (it ages ``generated_at`` against a
+    TTL): this port only stores and returns the latest read for a ``key``. The ``key``
+    is the normalized symbol for a per-symbol read, or a fixed sentinel for a
+    market-wide one (which takes no symbol) — the concrete adapter is bound to a
+    *kind* so the two never collide, exactly like the existing two caches.
+
+    Being a cache, both operations are best-effort: a read failure (a DB hiccup, or a
+    stored enum this build no longer parses) is treated as a miss so the caller
+    regenerates, and a write failure is swallowed — the caller already holds a good
+    answer. Neither ever raises, so a cache problem can never sink an analysis request.
+    """
+
+    @abstractmethod
+    def get(self, key: str) -> T | None:
+        """Return the stored analysis for ``key`` (any age), or ``None`` on a miss or
+        a cache-read failure. The caller decides whether it's fresh."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def put(self, key: str, analysis: T) -> None:
+        """Store ``analysis`` as the latest for ``key`` (upsert). A write failure is
+        swallowed — caching must never sink the request."""
         raise NotImplementedError
 
 

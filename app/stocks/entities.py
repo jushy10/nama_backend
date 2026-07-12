@@ -674,6 +674,15 @@ class SectorAnalysis:
     model: str
     generated_at: datetime
 
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its substance — a headline ``summary`` and at
+        least one standout sector (a ``leader`` or a ``laggard``). The AI-analysis
+        use case refuses to cache an incomplete read, so a rare empty model result is
+        never frozen for the cache TTL; the next view regenerates (mirrors
+        ``InvestmentAnalysis.is_complete``)."""
+        return bool(self.summary and (self.leaders or self.laggards))
+
 
 @dataclass(frozen=True)
 class MarketIndexPerformance:
@@ -772,6 +781,14 @@ class MarketSummary:
     model: str
     generated_at: datetime
 
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its substance — a headline ``summary`` and at
+        least one ``period`` highlight. The AI-analysis use case refuses to cache an
+        incomplete read, so a rare empty model result is never frozen for the cache
+        TTL; the next view regenerates (mirrors ``InvestmentAnalysis.is_complete``)."""
+        return bool(self.summary and self.periods)
+
 
 class EarningsTrend(str, Enum):
     """Where a company's earnings story is heading.
@@ -809,6 +826,14 @@ class EarningsAnalysis:
     highlights: tuple[str, ...]
     model: str
     generated_at: datetime
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its substance — a headline ``summary`` and at
+        least one ``highlight``. The AI-analysis use case refuses to cache an
+        incomplete read, so a rare empty model result is never frozen for the cache
+        TTL; the next view regenerates (mirrors ``InvestmentAnalysis.is_complete``)."""
+        return bool(self.summary and self.highlights)
 
 
 class RatingsVerdict(str, Enum):
@@ -848,6 +873,14 @@ class RatingsAnalysis:
     findings: tuple[str, ...]
     model: str
     generated_at: datetime
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its substance — a headline ``summary`` and at
+        least one ``finding``. The AI-analysis use case refuses to cache an
+        incomplete read, so a rare empty model result is never frozen for the cache
+        TTL; the next view regenerates (mirrors ``InvestmentAnalysis.is_complete``)."""
+        return bool(self.summary and self.findings)
 
 
 class FundamentalsVerdict(str, Enum):
@@ -892,3 +925,11 @@ class FundamentalsAnalysis:
     findings: tuple[str, ...]
     model: str
     generated_at: datetime
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether the read carries its substance — a headline ``summary`` and at
+        least one ``finding``. The AI-analysis use case refuses to cache an
+        incomplete read, so a rare empty model result is never frozen for the cache
+        TTL; the next view regenerates (mirrors ``InvestmentAnalysis.is_complete``)."""
+        return bool(self.summary and self.findings)
