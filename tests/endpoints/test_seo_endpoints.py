@@ -193,6 +193,7 @@ def test_sitemap_lists_stock_and_sector_pages() -> None:
     # Homepage + the static AI-screener landing page are included.
     assert "<loc>https://www.namainsights.com/</loc>" in body
     assert "<loc>https://www.namainsights.com/ai-stock-screener</loc>" in body
+    assert "<loc>https://www.namainsights.com/stock-screener</loc>" in body
     # ETF, sector and screen pages are all listed.
     assert "<loc>https://www.namainsights.com/etf/VOO</loc>" in body
     assert "<loc>https://www.namainsights.com/sector/technology</loc>" in body
@@ -403,4 +404,26 @@ def test_ai_stock_screener_landing_page() -> None:
     # Example queries, a CTA into the app screener, and cross-links to the /screen pages.
     assert "Mega-cap technology stocks" in body
     assert 'href="https://www.namainsights.com/screener"' in body
+    assert 'href="https://www.namainsights.com/screen/high-fcf-yield"' in body
+
+
+def test_stock_screener_landing_page() -> None:
+    app = FastAPI()
+    app.include_router(endpoints.router)  # static page, no dependency to override
+    resp = TestClient(app).get("/stock-screener")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+
+    body = resp.text
+    assert "<h1>Free Stock Screener</h1>" in body
+    assert '<link rel="canonical" href="https://www.namainsights.com/stock-screener"' in body
+    assert '<meta name="robots" content="index,follow"' in body
+    assert '"@type": "WebApplication"' in body
+    assert '"@type": "FAQPage"' in body
+    # Distinct content: the filter dimensions (not the AI page's example queries).
+    assert "What you can screen by" in body
+    assert 'href="https://www.namainsights.com/screener"' in body
+    # Cross-links to the AI screener + a best-of screen.
+    assert 'href="https://www.namainsights.com/ai-stock-screener"' in body
     assert 'href="https://www.namainsights.com/screen/high-fcf-yield"' in body

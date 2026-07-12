@@ -718,6 +718,126 @@ def ai_stock_screener_page(request: Request) -> Response:
     return response
 
 
+# --- Stock screener landing page: /stock-screener ----------------------------------------
+#
+# The keyword page for "stock screener" / "free stock screener". Deliberately distinct from
+# the AI page: it leads on the *filter dimensions* (what you can screen by) rather than the
+# plain-English angle, so it's genuinely different content — not a doorway duplicate.
+
+_STOCK_SCREENER_FEATURES = [
+    ("Market cap", "Mega, large, mid or small cap — screen by company size."),
+    ("Sector & industry", "Technology, healthcare, energy, semiconductors and dozens more."),
+    ("Valuation", "Trailing P/E and free-cash-flow yield — cheap on earnings or on cash."),
+    ("Growth", "Revenue and EPS growth, trailing and forward (analyst consensus)."),
+    ("Index membership", "Filter to S&P 500 or Nasdaq-100 constituents."),
+    ("Plain-English AI", "Prefer words to filters? Describe what you want and AI builds the screen."),
+]
+
+_STOCK_SCREENER_FAQS = [
+    (
+        "Is the stock screener free?",
+        "Yes — Nama Insights is free to use, with no login and no paywall.",
+    ),
+    (
+        "What can I screen stocks by?",
+        "Market cap, sector and industry, valuation (trailing P/E and free-cash-flow yield), "
+        "revenue and EPS growth (trailing and forward), and index membership (S&P 500 / "
+        "Nasdaq-100).",
+    ),
+    (
+        "What stocks are included?",
+        "US-listed stocks with a market capitalization of $1 billion or more — around 2,700 "
+        "companies — with the data refreshed daily.",
+    ),
+    (
+        "Can I screen in plain English?",
+        "Yes. Describe what you want — “mega-cap tech with high free cash flow yield” — and the "
+        "AI stock screener builds the filters for you.",
+    ),
+    (
+        "What is free-cash-flow yield?",
+        "Free cash flow per share divided by the share price. It shows how much cash a company "
+        "generates relative to its market value — a cash-based complement to the P/E ratio, and "
+        "something most free screeners leave out.",
+    ),
+]
+
+
+def _stock_screener_jsonld(canonical: str, site: str) -> str:
+    """WebApplication + FAQPage + breadcrumb JSON-LD for the stock-screener page."""
+    web_app = {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Nama Insights Stock Screener",
+        "url": canonical,
+        "applicationCategory": "FinanceApplication",
+        "operatingSystem": "Web",
+        "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+        "description": (
+            "A free stock screener for US stocks: filter by market cap, sector, valuation, "
+            "free-cash-flow yield and growth."
+        ),
+    }
+    faq = {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+            {
+                "@type": "Question",
+                "name": question,
+                "acceptedAnswer": {"@type": "Answer", "text": answer},
+            }
+            for question, answer in _STOCK_SCREENER_FAQS
+        ],
+    }
+    breadcrumbs = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "Nama Insights", "item": site},
+            {"@type": "ListItem", "position": 2, "name": "Stock Screener", "item": canonical},
+        ],
+    }
+    return json.dumps([web_app, faq, breadcrumbs]).replace("<", "\\u003c")
+
+
+@router.get("/stock-screener")
+def stock_screener_page(request: Request) -> Response:
+    """The stock-screener landing page — targets "stock screener" / "free stock screener",
+    leading on the filter dimensions (distinct content from the AI-screener page)."""
+    site = _site_origin()
+    canonical = f"{site}/stock-screener"
+    popular = [
+        ("Highest free cash flow yield", f"{site}/screen/high-fcf-yield"),
+        ("Cheapest by P/E", f"{site}/screen/cheapest-pe"),
+        ("Highest revenue growth", f"{site}/screen/highest-revenue-growth"),
+        ("Largest by market cap", f"{site}/screen/largest-companies"),
+    ]
+    context = {
+        "title": "Free Stock Screener — Filter US Stocks by Valuation & Growth | Nama Insights",
+        "description": (
+            "A free stock screener for US stocks: filter by market cap, sector, valuation, "
+            "free-cash-flow yield and growth — or describe what you want in plain English. "
+            "No login, no paywall."
+        ),
+        "canonical": canonical,
+        "robots": "index,follow",
+        "site": site,
+        "app_url": f"{site}/screener",
+        "ai_url": f"{site}/ai-stock-screener",
+        "features": [{"title": title, "body": body} for title, body in _STOCK_SCREENER_FEATURES],
+        "faqs": [{"q": question, "a": answer} for question, answer in _STOCK_SCREENER_FAQS],
+        "popular": [{"label": label, "url": url} for label, url in popular],
+        "jsonld": _stock_screener_jsonld(canonical, site),
+        "year": datetime.now(timezone.utc).year,
+    }
+    response = _TEMPLATES.TemplateResponse(
+        request=request, name="stock_screener.html", context=context
+    )
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
 # --- Crawler files: robots.txt, llms.txt, sitemap.xml ------------------------------------
 #
 # These belong at the site root, so at the edge (CloudFront) they route to this origin
@@ -774,6 +894,10 @@ _LLMS_TXT = """\
 > AI-generated analysis. Includes a free AI stock screener that turns a plain-English
 > request into a live screen. Market data is refreshed daily.
 
+## Stock screener
+Filter US stocks by market cap, sector, valuation, free-cash-flow yield and growth —
+/stock-screener (the tool runs at /screener).
+
 ## AI stock screener
 Describe the stocks you want in plain English and the AI builds the screen —
 /ai-stock-screener (the tool runs at /screener).
@@ -823,6 +947,7 @@ def _sitemap_xml(data: SitemapData, site: str) -> str:
         f"  <url><loc>{escape(site + '/')}</loc></url>",
         # Static landing pages (marketing/keyword pages, not data-driven).
         f"  <url><loc>{escape(site + '/ai-stock-screener')}</loc></url>",
+        f"  <url><loc>{escape(site + '/stock-screener')}</loc></url>",
     ]
     def _entity_url(prefix: str, ref) -> str:
         loc = escape(f"{site}/{prefix}/{ref.ticker}")
