@@ -39,6 +39,10 @@ class SqlTickerRepository(TickerRepository):
             fcf_per_share=row.fcf_per_share,
             ocf_per_share=row.ocf_per_share,
             fcf_growth_yoy=row.fcf_growth_yoy,
+            gross_margin=row.gross_margin,
+            operating_margin=row.operating_margin,
+            net_margin=row.net_margin,
+            dividend_per_share=row.dividend_per_share,
         )
 
     def save_name(self, symbol: str, name: str) -> None:

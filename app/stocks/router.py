@@ -56,10 +56,7 @@ from app.stocks.entities import (
     StockScorecard,
     Timeframe,
 )
-from app.stocks.caching_company_profile_provider import CachingCompanyProfileProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.finnhub_company_profile_provider import FinnhubCompanyProfileProvider
-from app.stocks.finnhub_fundamentals_provider import FinnhubFundamentalsProvider
 from app.stocks.logodev_provider import LogoDevProvider
 from app.stocks.indicators import (
     EmaSeries,
@@ -90,7 +87,6 @@ from app.stocks.earnings.quarterly.db_repository import (
 from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
-    CompanyProfileProvider,
     EarningsAnalysisProvider,
     FundamentalsAnalysisProvider,
     LogoProvider,
@@ -98,7 +94,6 @@ from app.stocks.ports import (
     RatingsAnalysisProvider,
     SectorAnalysisProvider,
     StockDataProvider,
-    StockFundamentalsProvider,
     StockPerformanceProvider,
     StockScorecardCache,
     StockScorecardProvider,
@@ -164,27 +159,6 @@ def get_provider() -> AlpacaStockDataProvider:
 
 
 @lru_cache(maxsize=1)
-def get_fundamentals_provider() -> StockFundamentalsProvider | None:
-    # Best-effort enrichment: without a key we simply omit market cap + dividend
-    # (price + performance still serve). Free key from finnhub.io.
-    key = os.environ.get("FINNHUB_API_KEY")
-    return FinnhubFundamentalsProvider(key) if key else None
-
-
-@lru_cache(maxsize=1)
-def get_profile_provider() -> CompanyProfileProvider | None:
-    # The clean display name comes from Finnhub's free profile endpoint — best-effort
-    # enrichment, so without a key we simply omit the name override (the price feed's
-    # legal title still serves). Wrapped in a TTL cache (a singleton, so it persists
-    # across requests) to stay under Finnhub's per-minute rate limit; the name is
-    # near-static.
-    finnhub_key = os.environ.get("FINNHUB_API_KEY")
-    if not finnhub_key:
-        return None
-    return CachingCompanyProfileProvider(FinnhubCompanyProfileProvider(finnhub_key))
-
-
-@lru_cache(maxsize=1)
 def get_options_provider() -> YfinanceOptionChainProvider:
     # The ticker card's options read comes from Yahoo via yfinance — keyless,
     # like the earnings timelines' live source, so there's no key gate here at
@@ -207,20 +181,18 @@ def get_estimates_provider(
 
 def get_stock_info(
     provider: StockDataProvider = Depends(get_provider),
-    fundamentals: StockFundamentalsProvider | None = Depends(get_fundamentals_provider),
-    profile: CompanyProfileProvider | None = Depends(get_profile_provider),
     estimates: AnalystEstimatesProvider | None = Depends(get_estimates_provider),
 ) -> GetStockInfo:
     # The enriched snapshot use case now serves only as the AI analysis context
     # (the standalone GET /stocks/{symbol} endpoint was removed). The Alpaca
     # provider supplies the snapshot, the performance windows, and the all-time
     # high — all derived from the same price feed, so one instance backs each
-    # capability via its respective port.
+    # capability via its respective port. The trailing fundamentals + clean name are
+    # no longer read from a live vendor here — the analysis use cases overlay them from
+    # the stocks anchor (materialized by the fundamentals/universe syncs).
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
     all_time_high = provider if isinstance(provider, AllTimeHighProvider) else None
-    return GetStockInfo(
-        provider, performance, fundamentals, profile, all_time_high, estimates
-    )
+    return GetStockInfo(provider, performance, all_time_high, estimates)
 
 
 def get_stock_candles(
@@ -581,14 +553,17 @@ def get_fundamentals_analysis(
     # for the fundamentals read, so a miss just omits it.
     db: Session = Depends(get_db),
 ) -> GetFundamentalsAnalysis:
-    # Reuses the stock snapshot wiring wholesale (price + the trailing/forward valuation,
-    # profitability, health, growth and dividend enrichment), then layers the analyzer, the
-    # industry benchmark, and the read-through result cache (a fresh stored read within the
-    # TTL skips the whole gather + model call), matching the earnings and ratings reads.
+    # Reuses the stock snapshot wiring wholesale (price + forward estimates), then overlays the
+    # trailing fundamentals (margins, valuation, dividend, market cap) from the shared anchor —
+    # the DB-canonical figures the syncs materialize, replacing the retired live Finnhub call —
+    # before layering the analyzer, the industry benchmark, and the read-through result cache (a
+    # fresh stored read within the TTL skips the whole gather + model call). The quarterly
+    # provider is the same DB-only cache the per-stock scorecard uses, backing the consensus P/E.
     return GetFundamentalsAnalysis(
         stock_info,
         analyzer,
         SqlStockSearchRepository(db),
+        DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
         cache=fundamentals_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("fundamentals"),
     )

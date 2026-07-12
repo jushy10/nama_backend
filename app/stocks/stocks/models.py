@@ -187,10 +187,12 @@ def anchor_facts(session: Session, ticker: str) -> Row | None:
 
     Returns a ``Row`` with named columns (``name``, ``exchange``, ``market_cap``,
     ``sector``, ``industry``, ``revenue_growth_yoy``, ``eps_growth_yoy``,
-    ``fcf_per_share``, ``ocf_per_share``, ``fcf_growth_yoy``); per-field ``None`` for
+    ``fcf_per_share``, ``ocf_per_share``, ``fcf_growth_yoy``, ``gross_margin``,
+    ``operating_margin``, ``net_margin``, ``dividend_per_share``); per-field ``None`` for
     whatever the row hasn't learned. Widened past name/exchange because the card also
-    serves the universe-screen facts and the annual slice's trailing growth + cash-flow
-    per share straight off the anchor — the caller maps it into ``StoredTickerFacts``."""
+    serves the universe-screen facts, the annual slice's trailing growth + cash-flow
+    per share, and the fundamentals slice's margins + dividend per share straight off the
+    anchor — the caller maps it into ``StoredTickerFacts``."""
     return session.execute(
         select(
             StockRecord.name,
@@ -203,6 +205,10 @@ def anchor_facts(session: Session, ticker: str) -> Row | None:
             StockRecord.fcf_per_share,
             StockRecord.ocf_per_share,
             StockRecord.fcf_growth_yoy,
+            StockRecord.gross_margin,
+            StockRecord.operating_margin,
+            StockRecord.net_margin,
+            StockRecord.dividend_per_share,
         ).where(StockRecord.ticker == ticker)
     ).one_or_none()
 

@@ -1,12 +1,13 @@
 """Tests for the ticker use case: GetTickerCard.
 
-Offline: hand-written fakes for the quote, fundamentals, performance, profile and
-option-chain ports, so this exercises only the orchestration — symbol + include
+Offline: hand-written fakes for the quote, performance and option-chain ports plus an
+in-memory anchor repository, so this exercises only the orchestration — symbol + include
 normalization, assembling the card, the primary-vs-enrichment split (only the quote
 propagates; the rest never sinks the card), and the pay-per-use rule (an unrequested
 block costs no provider call) — plus the entity rules the response leans on (the
-trailing-P/E guard; the options-chain derivations), independent of Alpaca, Finnhub,
-Yahoo, or the DB.
+trailing-P/E guard; the options-chain derivations), independent of Alpaca, Yahoo, or
+the DB. The trailing fundamentals (margins + dividend) and the clean display name are
+now served off the ``stocks`` anchor (the ``_FakeRepo``), not a live vendor.
 """
 
 from datetime import date, datetime, timezone
@@ -19,18 +20,13 @@ from app.stocks.earnings.quarterly.entities import (
 )
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.entities import (
-    CompanyProfile,
-    KeyMetrics,
     Quote,
     Stock,
-    StockFundamentals,
     StockPerformance,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
-    CompanyProfileProvider,
     StockDataProvider,
-    StockFundamentalsProvider,
     StockPerformanceProvider,
     StockQuoteProvider,
 )
@@ -62,12 +58,6 @@ def _a_quote(symbol: str, price: float) -> Quote:
     )
 
 
-def _fundamentals() -> StockFundamentals:
-    return StockFundamentals(
-        market_cap=1_000_000_000.0, dividend_per_share=0.46, dividend_yield=0.05
-    )
-
-
 def _performance() -> StockPerformance:
     return StockPerformance(
         one_week=1.0, one_month=2.0, three_month=3.0, six_month=4.0, ytd=5.0, one_year=6.0
@@ -87,23 +77,6 @@ class _FakeQuotes(StockQuoteProvider):
         return _a_quote(symbol, self._price)
 
 
-class _FakeFundamentals(StockFundamentalsProvider):
-    def __init__(
-        self,
-        error: Exception | None = None,
-        fundamentals: StockFundamentals | None = None,
-    ) -> None:
-        self._error = error
-        self._fundamentals = fundamentals
-        self.calls: list[str] = []
-
-    def get_fundamentals(self, symbol: str) -> StockFundamentals:
-        self.calls.append(symbol)
-        if self._error is not None:
-            raise self._error
-        return self._fundamentals if self._fundamentals is not None else _fundamentals()
-
-
 class _FakePerformance(StockPerformanceProvider):
     def __init__(self, error: Exception | None = None) -> None:
         self._error = error
@@ -114,18 +87,6 @@ class _FakePerformance(StockPerformanceProvider):
         if self._error is not None:
             raise self._error
         return _performance()
-
-
-class _FakeProfile(CompanyProfileProvider):
-    def __init__(self, error: Exception | None = None) -> None:
-        self._error = error
-        self.calls: list[str] = []
-
-    def get_profile(self, symbol: str) -> CompanyProfile:
-        self.calls.append(symbol)
-        if self._error is not None:
-            raise self._error
-        return CompanyProfile(name="Micron Technology")
 
 
 class _FakeStocks(StockDataProvider):
@@ -175,6 +136,10 @@ class _FakeRepo(TickerRepository):
         fcf_per_share: float | None = None,
         ocf_per_share: float | None = None,
         fcf_growth_yoy: float | None = None,
+        gross_margin: float | None = None,
+        operating_margin: float | None = None,
+        net_margin: float | None = None,
+        dividend_per_share: float | None = None,
     ) -> None:
         self._name = name
         self._exchange = exchange
@@ -186,6 +151,10 @@ class _FakeRepo(TickerRepository):
         self._fcf_per_share = fcf_per_share
         self._ocf_per_share = ocf_per_share
         self._fcf_growth_yoy = fcf_growth_yoy
+        self._gross_margin = gross_margin
+        self._operating_margin = operating_margin
+        self._net_margin = net_margin
+        self._dividend_per_share = dividend_per_share
         self.name_saves: list[tuple[str, str]] = []
         self.exchange_saves: list[tuple[str, str]] = []
 
@@ -201,6 +170,10 @@ class _FakeRepo(TickerRepository):
             fcf_per_share=self._fcf_per_share,
             ocf_per_share=self._ocf_per_share,
             fcf_growth_yoy=self._fcf_growth_yoy,
+            gross_margin=self._gross_margin,
+            operating_margin=self._operating_margin,
+            net_margin=self._net_margin,
+            dividend_per_share=self._dividend_per_share,
         )
 
     def save_name(self, symbol: str, name: str) -> None:
@@ -439,65 +412,83 @@ def test_options_metrics_is_empty_at_a_non_positive_price():
 
 def test_assembles_the_full_card_when_everything_is_included():
     quotes = _FakeQuotes(price=100.0)
+    repo = _FakeRepo(
+        name="Micron Technology",
+        gross_margin=52.1,
+        operating_margin=38.9,
+        net_margin=33.5,
+        dividend_per_share=0.46,
+    )
 
     card = GetTickerCard(
-        quotes, _FakeFundamentals(), _FakePerformance(), _FakeProfile()
+        quotes, _FakePerformance(), repository=repo
     ).execute("MU", include=["dividend", "performance", "metrics"])
 
     assert card.quote.symbol == "MU"
     assert card.quote.price == 100.0
     assert card.include == {"dividend", "performance", "metrics"}
     assert card.valuation is not None  # the metrics block was requested
-    assert card.name == "Micron Technology"
-    assert card.fundamentals == _fundamentals()
+    assert card.name == "Micron Technology"  # served off the anchor
+    # The margins + dividend per share ride the same anchor read (no live vendor).
+    assert card.gross_margin == 52.1
+    assert card.operating_margin == 38.9
+    assert card.net_margin == 33.5
+    assert card.dividend_per_share == 0.46
     assert card.performance == _performance()
 
 
 def test_unrequested_blocks_cost_no_provider_call():
-    # Pay-per-use: without includes, neither the performance windows nor the
-    # fundamentals call is made — market cap rides the anchor now, so a bare card
-    # is just quote + name + the DB facts.
+    # Pay-per-use: without includes, the performance windows aren't fetched and no
+    # valuation is built — market cap, margins and dividend all ride the anchor now,
+    # so a bare card is just quote + name + the DB facts, no provider call.
     performance = _FakePerformance()
-    fundamentals = _FakeFundamentals()
+    repo = _FakeRepo(name="Micron Technology", dividend_per_share=0.46)
 
     card = GetTickerCard(
-        _FakeQuotes(), fundamentals, performance, _FakeProfile()
+        _FakeQuotes(), performance, repository=repo
     ).execute("MU")
 
     assert performance.calls == []  # never touched
-    assert fundamentals.calls == []  # market cap comes off the anchor now
     assert card.include == frozenset()
     assert card.valuation is None
     assert card.performance is None
-    assert card.fundamentals is None  # opt-in: only dividend/metrics pull it
-    # The always-on name still rides along (off the profile vendor).
+    # The always-on name + anchor facts still ride along (off the DB, no provider call).
     assert card.name == "Micron Technology"
+    assert card.dividend_per_share == 0.46
 
 
-def test_performance_only_include_costs_no_fundamentals_call():
-    # Only dividend/metrics pull the fundamentals call: a performance-only card
-    # leaves it untouched, since market cap no longer rides it.
-    fundamentals = _FakeFundamentals()
+def test_performance_only_include_builds_no_valuation():
+    # Pay-per-use per block: a performance-only card fetches the performance windows
+    # but builds no metrics valuation (that's a separate opt-in).
+    performance = _FakePerformance()
 
     card = GetTickerCard(
-        _FakeQuotes(), fundamentals, _FakePerformance()
+        _FakeQuotes(), performance
     ).execute("MU", include=["performance"])
 
-    assert fundamentals.calls == []
-    assert card.fundamentals is None
+    assert performance.calls == ["MU"]
     assert card.performance is not None
+    assert card.valuation is None
 
 
-def test_dividend_include_pulls_the_fundamentals_call():
-    # The other side of the gate: dividend alone is enough to fetch fundamentals.
-    fundamentals = _FakeFundamentals()
+def test_dividend_and_margins_ride_the_anchor():
+    # The dividend per share and margins are served off the anchor read — no live
+    # fundamentals vendor — available on the card for the presenter to gate/price.
+    repo = _FakeRepo(
+        dividend_per_share=0.46,
+        gross_margin=52.1,
+        operating_margin=38.9,
+        net_margin=33.5,
+    )
 
     card = GetTickerCard(
-        _FakeQuotes(), fundamentals
-    ).execute("MU", include=["dividend"])
+        _FakeQuotes(price=100.0), repository=repo
+    ).execute("MU", include=["dividend", "metrics"])
 
-    assert fundamentals.calls == ["MU"]
-    assert card.fundamentals == _fundamentals()
+    assert card.dividend_per_share == 0.46
+    assert card.gross_margin == 52.1
+    assert card.operating_margin == 38.9
+    assert card.net_margin == 33.5
 
 
 def test_stored_anchor_facts_flow_onto_the_card():
@@ -575,15 +566,13 @@ def test_asset_type_defaults_to_equity_without_an_etfs_lookup():
 
 
 def test_includes_accept_comma_separated_and_mixed_case_values():
-    fundamentals = _FakeFundamentals()
     performance = _FakePerformance()
 
     card = GetTickerCard(
-        _FakeQuotes(), fundamentals, performance
+        _FakeQuotes(), performance
     ).execute("MU", include=["Dividend, METRICS"])
 
     assert card.include == {"dividend", "metrics"}
-    assert fundamentals.calls == ["MU"]  # dividend/metrics requested -> fundamentals fetched
     assert performance.calls == []  # performance not requested
 
 
@@ -613,83 +602,78 @@ def test_rejects_bad_symbols_before_touching_a_port():
 
 
 def test_unwired_enrichment_leaves_the_blocks_none():
-    # No fundamentals/performance/profile provider (e.g. no FINNHUB_API_KEY): the
-    # card still serves, its enrichment blocks simply absent even when requested.
+    # No performance provider and no anchor repository (a bare use case): the card
+    # still serves, its enrichment blocks simply absent even when requested.
     card = GetTickerCard(_FakeQuotes()).execute(
         "MU", include=["dividend", "performance"]
     )
 
     assert card.name is None
-    assert card.fundamentals is None
+    assert card.dividend_per_share is None
     assert card.performance is None
 
 
 @pytest.mark.parametrize(
     "error",
-    [StockNotFound("MU"), StockDataUnavailable("MU", "finnhub down")],
+    [StockNotFound("MU"), StockDataUnavailable("MU", "alpaca down")],
 )
 def test_enrichment_failures_never_sink_the_card(error):
+    # The performance read is best-effort: its failure leaves the block null rather
+    # than sinking the card (the quote is the only primary read).
     card = GetTickerCard(
         _FakeQuotes(),
-        _FakeFundamentals(error=error),
         _FakePerformance(error=error),
-        _FakeProfile(error=error),
     ).execute("MU", include=["dividend", "performance"])
 
-    assert card.name is None  # swallowed, not raised
-    assert card.fundamentals is None
-    assert card.performance is None
+    assert card.performance is None  # swallowed, not raised
+    assert card.quote.symbol == "MU"  # the card still serves
 
 
-# ──────────────────────── the name + exchange lazy fills ────────────────────────
+# ──────────────────────── the exchange lazy fill + anchor name ────────────────────────
 
 
 def test_stored_facts_are_served_without_vendor_calls():
     stocks = _FakeStocks()
-    profile = _FakeProfile()
     repo = _FakeRepo(name="Micron Technology", exchange="NASDAQ")
 
     card = GetTickerCard(
-        _FakeQuotes(), profile=profile, stocks=stocks, repository=repo
+        _FakeQuotes(), stocks=stocks, repository=repo
     ).execute("MU")
 
-    assert card.name == "Micron Technology"
+    assert card.name == "Micron Technology"  # served off the anchor
     assert card.exchange == "NASDAQ"
-    assert profile.calls == []  # stored -> the profile vendor is never called
     assert stocks.calls == []  # stored -> the full snapshot is never fetched
-    assert repo.name_saves == []
     assert repo.exchange_saves == []
 
 
-def test_facts_miss_fetches_once_and_stores():
+def test_exchange_miss_fetches_once_and_stores():
+    # The exchange is the one fact the card still lazily fills: a first view pays one
+    # full-snapshot call to learn it, then it lives on the row. The name is anchor-only
+    # now (no profile cold-miss fill), so an empty row serves a null name.
     stocks = _FakeStocks(exchange="NASDAQ")
-    profile = _FakeProfile()
     repo = _FakeRepo()
 
     card = GetTickerCard(
-        _FakeQuotes(), profile=profile, stocks=stocks, repository=repo
+        _FakeQuotes(), stocks=stocks, repository=repo
     ).execute("MU")
 
-    assert card.name == "Micron Technology"
+    assert card.name is None  # no stored name, and no profile fallback anymore
     assert card.exchange == "NASDAQ"
-    assert profile.calls == ["MU"]  # one profile call to learn the name
     assert stocks.calls == ["MU"]  # one full-snapshot call to learn the exchange
-    assert repo.name_saves == [("MU", "Micron Technology")]
-    assert repo.exchange_saves == [("MU", "NASDAQ")]  # ...then both live on the row
+    assert repo.name_saves == []  # the card never fills the name now
+    assert repo.exchange_saves == [("MU", "NASDAQ")]  # ...then it lives on the row
 
 
-def test_fact_fetch_failures_never_sink_the_card():
+def test_exchange_fetch_failure_never_sinks_the_card():
     stocks = _FakeStocks(error=StockDataUnavailable("MU", "alpaca down"))
-    profile = _FakeProfile(error=StockDataUnavailable("MU", "finnhub down"))
     repo = _FakeRepo()
 
     card = GetTickerCard(
-        _FakeQuotes(), profile=profile, stocks=stocks, repository=repo
+        _FakeQuotes(), stocks=stocks, repository=repo
     ).execute("MU")
 
-    assert card.name is None  # swallowed, not raised
-    assert card.exchange is None
-    assert repo.name_saves == []
+    assert card.name is None  # no stored name
+    assert card.exchange is None  # swallowed, not raised
     assert repo.exchange_saves == []
 
 
@@ -701,16 +685,15 @@ def test_facts_unknown_at_the_vendors_are_not_stored():
         _FakeQuotes(), stocks=stocks, repository=repo
     ).execute("MU")
 
-    assert card.name is None  # no profile provider wired
+    assert card.name is None  # no stored name on the row
     assert card.exchange is None  # the feed didn't know it either
     assert repo.name_saves == []  # nothing learned -> nothing written
     assert repo.exchange_saves == []
 
 
 def test_facts_absent_without_wiring():
-    # No repository (or vendors): the card still serves, the facts simply null —
-    # except the name, which still falls through to the profile vendor per request
-    # when only the repository is missing.
+    # No repository (or vendors): the card still serves, the facts simply null — the
+    # name too, now that it's anchor-only (no profile fallback).
     card = GetTickerCard(_FakeQuotes()).execute("MU")
     assert card.name is None
     assert card.exchange is None
@@ -806,22 +789,20 @@ def test_metrics_carries_the_fcf_multiples_off_the_anchor():
     assert card.valuation.ocf_yield == pytest.approx(6.0)
 
 
-def test_fcf_multiples_survive_a_blocked_fundamentals_because_they_ride_the_anchor():
-    # The FCF leg no longer depends on Finnhub: a blocked fundamentals call leaves it
-    # intact (it's read off the anchor, the same read that serves the growth pair), so
-    # the FCF/OCF yields still serve and the trailing P/E rides the separate earnings read.
-    fundamentals = _FakeFundamentals(error=StockDataUnavailable("MU", "finnhub down"))
+def test_fcf_multiples_and_trailing_pe_ride_the_anchor_and_earnings():
+    # The FCF leg is read off the anchor (the same read that serves the growth pair), and
+    # the trailing P/E off the separate earnings read — neither depends on a live
+    # fundamentals vendor, so both serve together straight off the DB.
     repo = _FakeRepo(fcf_per_share=4.0, ocf_per_share=6.0)
     earnings = _FakeEarnings(_four_quarters(1.5, 2.0, 2.5, 3.0))
 
     card = GetTickerCard(
         _FakeQuotes(price=100.0),
-        fundamentals=fundamentals,
         repository=repo,
         earnings=earnings,
     ).execute("MU", include=["metrics"])
 
-    assert card.valuation.fcf_yield == pytest.approx(4.0)  # served despite Finnhub down
+    assert card.valuation.fcf_yield == pytest.approx(4.0)
     assert card.valuation.ocf_yield == pytest.approx(6.0)
     assert card.valuation.trailing_pe == pytest.approx(11.11)
 

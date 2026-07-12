@@ -50,7 +50,11 @@ class SqlFundamentalsRepository(FundamentalsRepository):
     def upsert(
         self, symbol: str, name: str | None, fundamentals: Fundamentals
     ) -> None:
-        stock = get_or_create_stock(self._session, symbol, name)
+        # Fill the anchor's clean display name from the fresh `.info` name (falling back to the
+        # name already carried through), fill-once — `get_or_create_stock` never clobbers a name
+        # already stored. This keeps the anchor's `name` column populated now that the live
+        # Finnhub profile call is retired.
+        stock = get_or_create_stock(self._session, symbol, fundamentals.name or name)
         # Overwrite every column (including to None) — a moving snapshot, like the growth/cash
         # pair the annual slice writes: a figure Yahoo has since dropped is cleared, not left
         # stale. The entity owns the figures; this layer just lands them on the row.

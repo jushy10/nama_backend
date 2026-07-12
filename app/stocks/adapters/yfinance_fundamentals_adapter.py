@@ -81,6 +81,7 @@ class YfinanceFundamentalsProvider(FundamentalsProvider):
             book_value_per_share=normalizer.to_trading(_number(info.get("bookValue"))),
             sales_per_share=normalizer.to_trading(_sales_per_share(info)),
             dividend_per_share=_dividend_per_share(info),
+            name=_clean(info.get("longName")) or _clean(info.get("shortName")),
         )
 
     def _read_info(self, symbol: str, ticker) -> dict:
@@ -147,3 +148,12 @@ def _number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+def _clean(value: object) -> str | None:
+    """Trim a vendor string to a non-empty value, or ``None`` (non-strings included) — the clean
+    display name off ``.info``, matching the ETF profile adapter's helper."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None

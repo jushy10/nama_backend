@@ -30,7 +30,6 @@ from app.stocks.entities import (
     AnalystEstimates,
     Candle,
     CandleSeries,
-    CompanyProfile,
     Confidence,
     EarningsAnalysis,
     EarningsTrend,
@@ -52,7 +51,6 @@ from app.stocks.entities import (
     SectorHighlight,
     SectorPerformance,
     Stock,
-    StockFundamentals,
     StockPerformance,
     StockScorecard,
     Timeframe,
@@ -73,7 +71,6 @@ from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
     CandleProvider,
-    CompanyProfileProvider,
     EarningsAnalysisProvider,
     LogoProvider,
     MarketOverviewProvider,
@@ -81,7 +78,6 @@ from app.stocks.ports import (
     SectorAnalysisProvider,
     SectorPerformanceProvider,
     StockDataProvider,
-    StockFundamentalsProvider,
     StockPerformanceProvider,
     StockScorecardCache,
     StockScorecardProvider,
@@ -185,38 +181,6 @@ class FakeAllTimeHighProvider(AllTimeHighProvider):
             raise self._raises
         assert self._all_time_high is not None
         return self._all_time_high
-
-
-class FakeFundamentalsProvider(StockFundamentalsProvider):
-    """Returns/raises whatever the test configured; records calls."""
-
-    def __init__(self, fundamentals=None, raises=None):
-        self._fundamentals = fundamentals
-        self._raises = raises
-        self.received: list[str] = []
-
-    def get_fundamentals(self, symbol: str) -> StockFundamentals:
-        self.received.append(symbol)
-        if self._raises is not None:
-            raise self._raises
-        assert self._fundamentals is not None
-        return self._fundamentals
-
-
-class FakeProfileProvider(CompanyProfileProvider):
-    """Returns/raises whatever the test configured; records calls."""
-
-    def __init__(self, profile=None, raises=None):
-        self._profile = profile
-        self._raises = raises
-        self.received: list[str] = []
-
-    def get_profile(self, symbol: str) -> CompanyProfile:
-        self.received.append(symbol)
-        if self._raises is not None:
-            raise self._raises
-        assert self._profile is not None
-        return self._profile
 
 
 class FakeEstimatesProvider(AnalystEstimatesProvider):
@@ -348,6 +312,18 @@ class FakeSearchRepo(StockSearchRepository):
         fcf_per_share: float | None = None,
         revenue_growth_yoy: float | None = None,
         eps_growth_yoy: float | None = None,
+        gross_margin: float | None = None,
+        operating_margin: float | None = None,
+        net_margin: float | None = None,
+        return_on_equity: float | None = None,
+        current_ratio: float | None = None,
+        debt_to_equity: float | None = None,
+        beta: float | None = None,
+        book_value_per_share: float | None = None,
+        sales_per_share: float | None = None,
+        dividend_per_share: float | None = None,
+        market_cap: float | None = None,
+        name: str | None = None,
         raises: Exception | None = None,
     ):
         self._industry = industry
@@ -361,6 +337,18 @@ class FakeSearchRepo(StockSearchRepository):
             fcf_per_share=fcf_per_share,
             revenue_growth_yoy=revenue_growth_yoy,
             eps_growth_yoy=eps_growth_yoy,
+            gross_margin=gross_margin,
+            operating_margin=operating_margin,
+            net_margin=net_margin,
+            return_on_equity=return_on_equity,
+            current_ratio=current_ratio,
+            debt_to_equity=debt_to_equity,
+            beta=beta,
+            book_value_per_share=book_value_per_share,
+            sales_per_share=sales_per_share,
+            dividend_per_share=dividend_per_share,
+            market_cap=market_cap,
+            name=name,
         )
         self._raises = raises
 
@@ -707,19 +695,6 @@ def a_key_metrics(**overrides) -> KeyMetrics:
     return KeyMetrics(**base)
 
 
-def a_fundamentals(**overrides) -> StockFundamentals:
-    base = dict(
-        market_cap=3_120_000_000_000.0, dividend_per_share=1.0, dividend_yield=0.42,
-        metrics=a_key_metrics(),
-    )
-    base.update(overrides)
-    return StockFundamentals(**base)
-
-
-def a_profile(name: str | None = None) -> CompanyProfile:
-    return CompanyProfile(name=name)
-
-
 def an_estimates(**overrides) -> AnalystEstimates:
     base = dict(
         fiscal_year=2026, period_end=date(2026, 9, 30),
@@ -1009,42 +984,27 @@ def test_use_case_propagates_not_found():
 
 
 def test_use_case_merges_enrichment():
+    # GetStockInfo layers on the best-effort enrichment it still owns — the trailing
+    # performance windows and the forward analyst estimates. The trailing fundamentals
+    # (market cap, dividend, metrics) are no longer read here; they're overlaid from the
+    # ``stocks`` anchor downstream, so this snapshot leaves them unset.
     info = GetStockInfo(
         FakeProvider(stock=a_stock()),
         FakePerformanceProvider(a_performance()),
-        FakeFundamentalsProvider(a_fundamentals()),
-        FakeProfileProvider(a_profile()),
+        estimates_provider=FakeEstimatesProvider(an_estimates()),
     )
     stock = info.execute("AAPL")
-    assert stock.market_cap == 3_120_000_000_000.0
-    assert stock.dividend_per_share == 1.0
-    assert stock.dividend_yield == 0.42
     assert stock.performance.one_year == 21.0
-    assert stock.metrics.pe == 28.5
-    assert stock.metrics.beta == 1.2
+    assert stock.analyst_estimates.eps_avg == 8.0
+    # Not read here anymore — filled from the anchor by the analysis overlay.
+    assert stock.market_cap is None
+    assert stock.dividend_per_share is None
+    assert stock.metrics is None
 
 
-def test_use_case_prefers_profile_name_over_feed_name():
-    # The price feed gives the full legal title; the profile vendor's clean name
-    # wins when present.
-    info = GetStockInfo(
-        FakeProvider(stock=a_stock(name="Apple Inc. Common Stock")),
-        profile_provider=FakeProfileProvider(a_profile(name="Apple Inc.")),
-    )
-    assert info.execute("AAPL").name == "Apple Inc."
-
-
-def test_use_case_keeps_feed_name_when_profile_name_absent():
-    # No clean name from the vendor -> fall back to the feed's name, unchanged.
-    info = GetStockInfo(
-        FakeProvider(stock=a_stock(name="Apple Inc. Common Stock")),
-        profile_provider=FakeProfileProvider(a_profile(name=None)),
-    )
-    assert info.execute("AAPL").name == "Apple Inc. Common Stock"
-
-
-def test_use_case_keeps_feed_name_when_profile_unconfigured():
-    # No profile provider at all -> the feed's name stands.
+def test_use_case_keeps_the_feed_name():
+    # GetStockInfo leaves the price-feed's name as-is; the clean display name is overlaid
+    # from the anchor downstream (the analysis path), not by this use case.
     stock = GetStockInfo(
         FakeProvider(stock=a_stock(name="Apple Inc. Common Stock"))
     ).execute("AAPL")
@@ -1099,16 +1059,16 @@ def test_use_case_enrichment_is_best_effort():
     info = GetStockInfo(
         FakeProvider(stock=a_stock()),
         FakePerformanceProvider(raises=StockDataUnavailable("AAPL", "boom")),
-        FakeFundamentalsProvider(raises=StockNotFound("AAPL")),
-        FakeProfileProvider(raises=StockDataUnavailable("AAPL", "boom")),
         FakeAllTimeHighProvider(raises=StockDataUnavailable("AAPL", "boom")),
+        FakeEstimatesProvider(raises=StockDataUnavailable("AAPL", "boom")),
     )
     stock = info.execute("AAPL")  # enrichment failures must not raise
     assert stock.price == 297.86
     assert stock.performance is None
-    assert stock.market_cap is None
+    assert stock.market_cap is None  # never read here now
     assert stock.all_time_high is None
     assert stock.drawdown_from_high is None
+    assert stock.analyst_estimates is None
 
 
 def test_use_case_attaches_all_time_high():
@@ -1348,8 +1308,6 @@ def make_client():
         logo_provider: LogoProvider | None = None,
         performance_provider: StockPerformanceProvider | None = None,
         ath_provider: AllTimeHighProvider | None = None,
-        fundamentals_provider: StockFundamentalsProvider | None = None,
-        profile_provider: CompanyProfileProvider | None = None,
         estimates_provider: AnalystEstimatesProvider | None = None,
         candle_provider: CandleProvider | None = None,
         ema_provider: CandleProvider | None = None,
@@ -1385,8 +1343,6 @@ def make_client():
                 GetStockInfo(
                     provider,
                     performance_provider,
-                    fundamentals_provider,
-                    profile_provider,
                     ath_provider,
                     estimates_provider,
                 ),
@@ -1778,29 +1734,23 @@ def test_analysis_ttl_global_override_pins_every_kind(monkeypatch):
 
 
 def test_stock_info_gathers_the_enrichment_calls_concurrently():
-    # Deterministic proof the four independent enrichment reads run in parallel, not
-    # in series: each waits on a 4-party barrier. If they truly overlap, all four
-    # arrive and the barrier releases; a regression to serial gather would leave the
-    # first one blocked until the barrier's timeout trips (BrokenBarrierError), failing
-    # this test loudly rather than merely running slower.
+    # Deterministic proof the two independent enrichment reads run in parallel, not in
+    # series: each waits on a 2-party barrier. If they truly overlap, both arrive and the
+    # barrier releases; a regression to serial gather would leave the first one blocked
+    # until the barrier's timeout trips (BrokenBarrierError), failing this test loudly
+    # rather than merely running slower. (The trailing fundamentals/profile are no longer
+    # gathered here — they're overlaid from the anchor — so the pool now fans out over the
+    # performance + all-time-high reads only; estimates stays on the calling thread.)
     import threading
 
-    barrier = threading.Barrier(4)
+    barrier = threading.Barrier(2)
 
     class _ConcurrentFake:
-        """One fake standing in for every enrichment port; the four pooled reads each
+        """One fake standing in for both enrichment ports; the two pooled reads each
         rendezvous at the barrier, the required get_stock does not."""
 
         def get_stock(self, symbol):
             return a_stock()
-
-        def get_fundamentals(self, symbol):
-            barrier.wait(timeout=5)
-            return None
-
-        def get_profile(self, symbol):
-            barrier.wait(timeout=5)
-            return None
 
         def get_performance(self, symbol):
             barrier.wait(timeout=5)
@@ -1811,9 +1761,9 @@ def test_stock_info_gathers_the_enrichment_calls_concurrently():
             raise StockNotFound(symbol)  # caught in the use case -> None
 
     fake = _ConcurrentFake()
-    info = GetStockInfo(fake, fake, fake, fake, fake)  # estimates left None (a DB read)
+    info = GetStockInfo(fake, fake, fake)  # provider + performance + all-time-high
 
-    stock = info.execute("AAPL")  # returns only if all four rendezvous -> concurrent
+    stock = info.execute("AAPL")  # returns only if both rendezvous -> concurrent
 
     assert stock.symbol == "AAPL"
 
@@ -2026,54 +1976,38 @@ def test_analysis_use_case_industry_valuation_is_best_effort():
 
 
 def test_analysis_use_case_sources_fcf_from_the_anchor():
-    # FCF per share must come from the DB the annual slice materializes on the anchor,
-    # not the live fundamentals vendor — the snapshot's vendor figure is overwritten by
-    # the stored one so the scorecard's cash read matches the ticker card.
+    # FCF per share must come from the DB the annual slice materializes on the anchor — the
+    # overlay builds the snapshot's metrics block from it, so the scorecard's cash read
+    # matches the ticker card.
     analyzer = FakeAnalysisProvider(an_analysis())
-    info = GetStockInfo(
-        FakeProvider(stock=a_stock()),
-        fundamentals_provider=FakeFundamentalsProvider(
-            a_fundamentals(metrics=a_key_metrics(fcf_per_share=6.43))
-        ),
-    )
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
     use_case = GetStockAnalysis(
         info, analyzer, industry_repository=FakeSearchRepo(fcf_per_share=9.99)
     )
     use_case.execute("AAPL")
-    assert analyzer.last_stock.metrics.fcf_per_share == 9.99  # anchor's, not the vendor's
+    assert analyzer.last_stock.metrics.fcf_per_share == 9.99  # from the anchor
 
 
 def test_analysis_use_case_fcf_is_none_when_anchor_unsynced():
-    # The DB is the only source: an unsynced anchor (no stored fcf) leaves the cash read
-    # empty rather than falling back to the vendor's figure.
+    # The DB is the only source: an unsynced anchor (no stored fcf) overwrites any snapshot
+    # value to None rather than leaving a stale figure.
     analyzer = FakeAnalysisProvider(an_analysis())
     info = GetStockInfo(
-        FakeProvider(stock=a_stock()),
-        fundamentals_provider=FakeFundamentalsProvider(
-            a_fundamentals(metrics=a_key_metrics(fcf_per_share=6.43))
-        ),
+        FakeProvider(stock=a_stock(metrics=a_key_metrics(fcf_per_share=6.43)))
     )
     use_case = GetStockAnalysis(
         info, analyzer, industry_repository=FakeSearchRepo(fcf_per_share=None)
     )
     use_case.execute("AAPL")
-    assert analyzer.last_stock.metrics.fcf_per_share is None  # not the vendor's 6.43
+    assert analyzer.last_stock.metrics.fcf_per_share is None  # overwritten, not 6.43
 
 
 def test_analysis_use_case_sources_growth_from_the_anchor():
     # Trailing revenue/EPS growth, like FCF, comes from the DB the annual slice
-    # materializes on the anchor (consensus basis) — not the live vendor — so the
-    # scorecard's Growth section matches the rest of the app rather than Finnhub's
-    # differently-based figures.
+    # materializes on the anchor (consensus basis), so the scorecard's Growth section
+    # matches the rest of the app.
     analyzer = FakeAnalysisProvider(an_analysis())
-    info = GetStockInfo(
-        FakeProvider(stock=a_stock()),
-        fundamentals_provider=FakeFundamentalsProvider(
-            a_fundamentals(
-                metrics=a_key_metrics(revenue_growth_yoy=8.0, eps_growth_yoy=12.0)
-            )
-        ),
-    )
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
     use_case = GetStockAnalysis(
         info,
         analyzer,
@@ -2083,41 +2017,35 @@ def test_analysis_use_case_sources_growth_from_the_anchor():
     )
     use_case.execute("AAPL")
     metrics = analyzer.last_stock.metrics
-    assert metrics.revenue_growth_yoy == 15.5  # anchor's, not the vendor's 8.0
-    assert metrics.eps_growth_yoy == 22.0  # anchor's, not the vendor's 12.0
+    assert metrics.revenue_growth_yoy == 15.5  # from the anchor
+    assert metrics.eps_growth_yoy == 22.0
 
 
 def test_analysis_use_case_growth_is_none_when_anchor_unsynced():
-    # DB-only, same as FCF: an unsynced anchor leaves the growth reads empty rather than
-    # falling back to the vendor's differently-based figures.
+    # DB-only, same as FCF: an unsynced anchor overwrites the growth reads to None rather
+    # than leaving stale snapshot values.
     analyzer = FakeAnalysisProvider(an_analysis())
     info = GetStockInfo(
-        FakeProvider(stock=a_stock()),
-        fundamentals_provider=FakeFundamentalsProvider(
-            a_fundamentals(
+        FakeProvider(
+            stock=a_stock(
                 metrics=a_key_metrics(revenue_growth_yoy=8.0, eps_growth_yoy=12.0)
             )
-        ),
+        )
     )
     use_case = GetStockAnalysis(info, analyzer, industry_repository=FakeSearchRepo())
     use_case.execute("AAPL")
     metrics = analyzer.last_stock.metrics
-    assert metrics.revenue_growth_yoy is None  # not the vendor's 8.0
-    assert metrics.eps_growth_yoy is None  # not the vendor's 12.0
+    assert metrics.revenue_growth_yoy is None  # overwritten, not 8.0
+    assert metrics.eps_growth_yoy is None  # overwritten, not 12.0
 
 
 def test_analysis_use_case_prices_pe_on_the_consensus_basis():
     # The trailing P/E handed to the analyzer is recomputed on the consensus basis — the
     # live price over the quarterly slice's TTM EPS (the ticker card's figure) — so it sits
-    # on the same basis as the industry-median P/E it's compared against, not Finnhub's GAAP
-    # peTTM. Four reported quarters of 2.0 -> TTM 8.0; price 200 -> P/E 25.0.
+    # on the same basis as the industry-median P/E it's compared against. Four reported
+    # quarters of 2.0 -> TTM 8.0; price 200 -> P/E 25.0.
     analyzer = FakeAnalysisProvider(an_analysis())
-    info = GetStockInfo(
-        FakeProvider(stock=a_stock(price=200.0)),
-        fundamentals_provider=FakeFundamentalsProvider(
-            a_fundamentals(metrics=a_key_metrics(pe=28.5))
-        ),
-    )
+    info = GetStockInfo(FakeProvider(stock=a_stock(price=200.0)))
     quarters = tuple(
         a_quarter(fiscal_year=2025, fiscal_quarter=q, eps_actual=2.0) for q in (1, 2, 3, 4)
     )
@@ -2128,18 +2056,15 @@ def test_analysis_use_case_prices_pe_on_the_consensus_basis():
         industry_repository=FakeSearchRepo(),
     )
     use_case.execute("AAPL")
-    assert analyzer.last_stock.metrics.pe == 25.0  # 200 / 8.0, not the vendor's 28.5
+    assert analyzer.last_stock.metrics.pe == 25.0  # 200 / 8.0
 
 
 def test_analysis_use_case_pe_is_none_without_four_cached_quarters():
-    # No consensus P/E is derivable without a full trailing year, so the vendor's GAAP peTTM
-    # is dropped rather than shown — the same DB-only stance as FCF/growth.
+    # No consensus P/E is derivable without a full trailing year, so any snapshot P/E is
+    # overwritten to None — the same DB-only stance as FCF/growth.
     analyzer = FakeAnalysisProvider(an_analysis())
     info = GetStockInfo(
-        FakeProvider(stock=a_stock(price=200.0)),
-        fundamentals_provider=FakeFundamentalsProvider(
-            a_fundamentals(metrics=a_key_metrics(pe=28.5))
-        ),
+        FakeProvider(stock=a_stock(price=200.0, metrics=a_key_metrics(pe=28.5)))
     )
     use_case = GetStockAnalysis(
         info,
@@ -2150,7 +2075,57 @@ def test_analysis_use_case_pe_is_none_without_four_cached_quarters():
         industry_repository=FakeSearchRepo(),
     )
     use_case.execute("AAPL")
-    assert analyzer.last_stock.metrics.pe is None  # not the vendor's 28.5
+    assert analyzer.last_stock.metrics.pe is None  # overwritten, not 28.5
+
+
+def test_analysis_use_case_sources_margins_from_the_anchor():
+    # The trailing margins fill off the anchor (the fundamentals slice's write), overlaid
+    # onto the snapshot's metrics block so the scorecard's Business-quality section reads
+    # the same figures the ticker card shows.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock()))
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        industry_repository=FakeSearchRepo(
+            gross_margin=44.0, operating_margin=30.0, net_margin=25.0
+        ),
+    )
+    use_case.execute("AAPL")
+    metrics = analyzer.last_stock.metrics
+    assert metrics.gross_margin == 44.0  # from the anchor
+    assert metrics.operating_margin == 30.0
+    assert metrics.net_margin == 25.0
+
+
+def test_analysis_use_case_sources_market_cap_and_dividend_from_the_anchor():
+    # Market cap and the dividend (per share + a live-priced yield) fill off the anchor —
+    # a $2 dividend at a $200 quote is a 1.0% yield.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock(price=200.0)))
+    use_case = GetStockAnalysis(
+        info,
+        analyzer,
+        industry_repository=FakeSearchRepo(
+            market_cap=2_500_000_000_000.0, dividend_per_share=2.0
+        ),
+    )
+    use_case.execute("AAPL")
+    stock = analyzer.last_stock
+    assert stock.market_cap == 2_500_000_000_000.0  # from the anchor
+    assert stock.dividend_per_share == 2.0
+    assert stock.dividend_yield == 1.0  # 2.0 / 200 * 100, priced on the live quote
+
+
+def test_analysis_use_case_sources_clean_name_from_the_anchor():
+    # The anchor's clean display name replaces the price feed's fuller legal title.
+    analyzer = FakeAnalysisProvider(an_analysis())
+    info = GetStockInfo(FakeProvider(stock=a_stock(name="Apple Inc. Common Stock")))
+    use_case = GetStockAnalysis(
+        info, analyzer, industry_repository=FakeSearchRepo(name="Apple Inc.")
+    )
+    use_case.execute("AAPL")
+    assert analyzer.last_stock.name == "Apple Inc."  # from the anchor
 
 
 def test_analysis_use_case_propagates_stock_not_found():

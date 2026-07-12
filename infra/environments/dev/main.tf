@@ -111,8 +111,6 @@ resource "aws_ec2_instance_state" "bastion" {
 #   aws ssm put-parameter --overwrite --type SecureString \
 #     --name /nama/dev/alpaca-api-secret-key --value <YOUR_SECRET>
 #   aws ssm put-parameter --overwrite --type SecureString \
-#     --name /nama/dev/finnhub-api-key       --value <YOUR_FINNHUB_KEY>
-#   aws ssm put-parameter --overwrite --type SecureString \
 #     --name /nama/dev/logodev-token         --value <YOUR_LOGODEV_PUBLISHABLE_KEY>
 #   aws ssm put-parameter --overwrite --type SecureString \
 #     --name /nama/dev/cron-sync-token       --value <A_LONG_RANDOM_STRING>
@@ -126,15 +124,6 @@ module "alpaca_api_secret_key" {
   source      = "../../modules/ssm-secret"
   name        = "/nama/dev/alpaca-api-secret-key"
   description = "Alpaca API secret key (stocks feature). Value set out of band."
-}
-
-# Finnhub powers market cap + dividend enrichment. Optional: until the real key
-# is set out of band the app simply returns those fields as null (best-effort),
-# so the placeholder is harmless.
-module "finnhub_api_key" {
-  source      = "../../modules/ssm-secret"
-  name        = "/nama/dev/finnhub-api-key"
-  description = "Finnhub API key (stocks market cap + dividend). Value set out of band."
 }
 
 # Logo.dev serves company logos for GET /stocks/{symbol}/logo. Required: without
@@ -199,14 +188,14 @@ module "app" {
 
   # Injected as the env vars the app reads (app/stocks/router.py, plus the cron
   # guard in app/stocks/endpoints/cron_auth.py): the Alpaca keys (required), the
-  # optional Finnhub key (market cap + dividend), the Logo.dev token (required for
-  # the logo endpoint), and the cron sync token (guards the /internal/*/sync
-  # endpoints). These ride onto BOTH task defs; the CLI sync task ignores the cron
-  # token (it calls the runners directly, not over HTTP), which is harmless.
+  # Logo.dev token (required for the logo endpoint), and the cron sync token (guards
+  # the /internal/*/sync endpoints). These ride onto BOTH task defs; the CLI sync
+  # task ignores the cron token (it calls the runners directly, not over HTTP), which
+  # is harmless. (Finnhub was retired — fundamentals now come from the yfinance
+  # `.info` sweep materialized on the stocks anchor, so there's no key to inject.)
   extra_secrets = {
     APCA_API_KEY_ID     = module.alpaca_api_key_id.arn
     APCA_API_SECRET_KEY = module.alpaca_api_secret_key.arn
-    FINNHUB_API_KEY     = module.finnhub_api_key.arn
     LOGODEV_TOKEN       = module.logodev_token.arn
     CRON_SYNC_TOKEN     = module.cron_sync_token.arn
   }
