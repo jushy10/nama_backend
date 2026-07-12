@@ -29,6 +29,7 @@ from app.stocks.entities import (
     CandleSeries,
     CompanyProfile,
     Confidence,
+    EarningsAnalysis,
     EarningsTrend,
     GrowthMetrics,
     KeyMetrics,
@@ -65,10 +66,12 @@ from app.stocks.earnings.quarterly.entities import (
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
+    AiAnalysisCache,
     AllTimeHighProvider,
     AnalystEstimatesProvider,
     CandleProvider,
     CompanyProfileProvider,
+    EarningsAnalysisProvider,
     LogoProvider,
     MarketOverviewProvider,
     MarketSummaryProvider,
@@ -98,6 +101,7 @@ from app.stocks.router import (
     get_stock_support_levels,
 )
 from app.stocks.use_cases import (
+    GetEarningsAnalysis,
     GetMarketOverview,
     GetMarketSummary,
     GetSectorAnalysis,
@@ -1588,6 +1592,147 @@ def test_analysis_incomplete_read_is_not_cached():
     result = GetStockAnalysis(info, analyzer, cache=cache).execute("AAPL")
     assert result is incomplete  # still returned to the caller
     assert cache.puts == []  # but not stored
+
+
+# --- result cache: the newer AI analyses (earnings / sector / market) --------------
+#
+# Ratings + fundamentals cache scenarios live in their own test modules; here are the
+# three that share this file's fakes. Each proves the generic AiAnalysisCache wiring: a
+# fresh stored read skips the gather + model call, a miss generates and stores, and an
+# incomplete read is returned but not frozen. The two market-wide reads take no symbol,
+# so they key on the "_MARKET_" sentinel.
+
+_MARKET_KEY = "_MARKET_"
+
+
+class FakeAiAnalysisCache(AiAnalysisCache):
+    """In-memory stand-in for the generic AI-analysis result cache; records puts."""
+
+    def __init__(self, stored=None, key=None):
+        self._store = {key: stored} if stored is not None else {}
+        self.puts: list[tuple] = []
+
+    def get(self, key):
+        return self._store.get(key)
+
+    def put(self, key, analysis):
+        self.puts.append((key, analysis))
+        self._store[key] = analysis
+
+
+class FakeEarningsAnalysisProvider(EarningsAnalysisProvider):
+    """Returns a canned earnings analysis (or raises); records the symbols it saw."""
+
+    def __init__(self, result=None, *, raises=None):
+        self._result = result
+        self._raises = raises
+        self.received: list[str] = []
+
+    def analyze(self, symbol, quarterly=None, annual=None) -> EarningsAnalysis:
+        self.received.append(symbol)
+        if self._raises is not None:
+            raise self._raises
+        return self._result
+
+
+def an_earnings_analysis(
+    symbol="AAPL", *, summary="Earnings are accelerating.", highlights=("Beat streak",),
+    when=None,
+) -> EarningsAnalysis:
+    return EarningsAnalysis(
+        symbol=symbol, summary=summary, trend=EarningsTrend.ACCELERATING,
+        highlights=highlights, model="m",
+        generated_at=when or datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+
+
+def _earnings_use_case(analyzer, cache):
+    return GetEarningsAnalysis(
+        analyzer,
+        FakeQuarterlyEarningsProvider(a_quarterly_timeline()),
+        FakeAnnualEarningsProvider(an_annual_timeline()),
+        cache=cache,
+    )
+
+
+def test_earnings_analysis_fresh_cache_skips_generation():
+    fresh = an_earnings_analysis(when=datetime.now(timezone.utc))
+    analyzer = FakeEarningsAnalysisProvider(raises=AssertionError("model must not run"))
+    result = _earnings_use_case(
+        analyzer, FakeAiAnalysisCache(stored=fresh, key="AAPL")
+    ).execute("aapl")  # normalizes to AAPL, matching the cached key
+    assert result is fresh
+    assert analyzer.received == []  # model never called
+
+
+def test_earnings_analysis_cache_miss_generates_and_stores():
+    generated = an_earnings_analysis()
+    cache = FakeAiAnalysisCache()
+    result = _earnings_use_case(
+        FakeEarningsAnalysisProvider(result=generated), cache
+    ).execute("AAPL")
+    assert result is generated
+    assert cache.puts == [("AAPL", generated)]
+
+
+def test_earnings_analysis_incomplete_read_is_not_cached():
+    incomplete = an_earnings_analysis(summary="", highlights=())  # not is_complete
+    cache = FakeAiAnalysisCache()
+    result = _earnings_use_case(
+        FakeEarningsAnalysisProvider(result=incomplete), cache
+    ).execute("AAPL")
+    assert result is incomplete  # still returned
+    assert cache.puts == []  # but not stored
+
+
+def test_sector_analysis_fresh_cache_skips_generation():
+    fresh = a_sector_analysis(generated_at=datetime.now(timezone.utc))
+    analyzer = FakeSectorAnalysisProvider(raises=AssertionError("model must not run"))
+    board = FakeSectorProvider([a_sector()])
+    cache = FakeAiAnalysisCache(stored=fresh, key=_MARKET_KEY)
+    result = GetSectorAnalysis(
+        GetSectorPerformance(board), analyzer, cache=cache
+    ).execute()
+    assert result is fresh
+    assert analyzer.received is None  # analyze never called
+    assert board.calls == 0  # the board gather is skipped too
+
+
+def test_sector_analysis_cache_miss_generates_and_stores():
+    generated = a_sector_analysis()
+    cache = FakeAiAnalysisCache()
+    result = GetSectorAnalysis(
+        GetSectorPerformance(FakeSectorProvider([a_sector()])),
+        FakeSectorAnalysisProvider(generated),
+        cache=cache,
+    ).execute()
+    assert result is generated
+    assert cache.puts == [(_MARKET_KEY, generated)]
+
+
+def test_market_summary_fresh_cache_skips_generation():
+    fresh = a_market_summary(generated_at=datetime.now(timezone.utc))
+    analyzer = FakeMarketSummaryProvider(raises=AssertionError("model must not run"))
+    board = FakeMarketOverviewProvider([a_market_index()])
+    cache = FakeAiAnalysisCache(stored=fresh, key=_MARKET_KEY)
+    result = GetMarketSummary(
+        GetMarketOverview(board), analyzer, cache=cache
+    ).execute()
+    assert result is fresh
+    assert analyzer.received is None  # analyze never called
+    assert board.calls == 0  # the board gather is skipped too
+
+
+def test_market_summary_cache_miss_generates_and_stores():
+    generated = a_market_summary()
+    cache = FakeAiAnalysisCache()
+    result = GetMarketSummary(
+        GetMarketOverview(FakeMarketOverviewProvider([a_market_index()])),
+        FakeMarketSummaryProvider(generated),
+        cache=cache,
+    ).execute()
+    assert result is generated
+    assert cache.puts == [(_MARKET_KEY, generated)]
 
 
 def test_stock_info_gathers_the_enrichment_calls_concurrently():

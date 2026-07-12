@@ -75,6 +75,13 @@ from app.stocks.adapters.db_only_context_providers import (
     DbOnlyRecommendationsProvider,
 )
 from app.stocks.adapters.yfinance_options_adapter import YfinanceOptionChainProvider
+from app.stocks.analysis.ai_analysis_cache_repository import (
+    earnings_analysis_cache,
+    fundamentals_analysis_cache,
+    market_summary_cache,
+    ratings_analysis_cache,
+    sector_analysis_cache,
+)
 from app.stocks.analysis.scorecard_db_repository import SqlStockScorecardCache
 from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
 from app.stocks.earnings.quarterly.db_repository import (
@@ -381,11 +388,19 @@ def get_sector_analysis_provider() -> SectorAnalysisProvider:
 
 def get_sector_analysis(
     # Reuses the sector-board wiring wholesale (the Alpaca-backed
-    # GetSectorPerformance), then hands the ranked board to the analyzer.
+    # GetSectorPerformance), then hands the ranked board to the analyzer — fronted by
+    # the read-through result cache (market-wide, so one stored read serves every viewer
+    # within the TTL and skips the gather + model call).
     sectors: GetSectorPerformance = Depends(get_sector_performance),
     analyzer: SectorAnalysisProvider = Depends(get_sector_analysis_provider),
+    db: Session = Depends(get_db),
 ) -> GetSectorAnalysis:
-    return GetSectorAnalysis(sectors, analyzer)
+    return GetSectorAnalysis(
+        sectors,
+        analyzer,
+        cache=sector_analysis_cache(db),
+        cache_ttl=analysis_cache_ttl(),
+    )
 
 
 def get_market_overview(
@@ -419,11 +434,19 @@ def get_market_summary_provider() -> MarketSummaryProvider:
 
 def get_market_summary(
     # Reuses the index-board wiring wholesale (the Alpaca-backed
-    # GetMarketOverview), then hands the board to the analyzer.
+    # GetMarketOverview), then hands the board to the analyzer — fronted by the
+    # read-through result cache (market-wide, so one stored read serves every viewer
+    # within the TTL and skips the gather + model call).
     overview: GetMarketOverview = Depends(get_market_overview),
     analyzer: MarketSummaryProvider = Depends(get_market_summary_provider),
+    db: Session = Depends(get_db),
 ) -> GetMarketSummary:
-    return GetMarketSummary(overview, analyzer)
+    return GetMarketSummary(
+        overview,
+        analyzer,
+        cache=market_summary_cache(db),
+        cache_ttl=analysis_cache_ttl(),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -460,6 +483,8 @@ def get_earnings_analysis(
         analyzer,
         DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
         DbOnlyAnnualEarningsProvider(SqlAnnualEarningsRepository(db)),
+        cache=earnings_analysis_cache(db),
+        cache_ttl=analysis_cache_ttl(),
     )
 
 
@@ -494,6 +519,8 @@ def get_ratings_findings(
         analyzer,
         DbOnlyRecommendationsProvider(SqlRecommendationsRepository(db)),
         DbOnlyRatingChangesProvider(SqlRatingChangesRepository(db)),
+        cache=ratings_analysis_cache(db),
+        cache_ttl=analysis_cache_ttl(),
     )
 
 
@@ -525,13 +552,15 @@ def get_fundamentals_analysis(
     db: Session = Depends(get_db),
 ) -> GetFundamentalsAnalysis:
     # Reuses the stock snapshot wiring wholesale (price + the trailing/forward valuation,
-    # profitability, health, growth and dividend enrichment), then layers the analyzer and the
-    # industry benchmark. No result cache — the endpoint leans on a short HTTP Cache-Control,
-    # matching the earnings and ratings reads.
+    # profitability, health, growth and dividend enrichment), then layers the analyzer, the
+    # industry benchmark, and the read-through result cache (a fresh stored read within the
+    # TTL skips the whole gather + model call), matching the earnings and ratings reads.
     return GetFundamentalsAnalysis(
         stock_info,
         analyzer,
         SqlStockSearchRepository(db),
+        cache=fundamentals_analysis_cache(db),
+        cache_ttl=analysis_cache_ttl(),
     )
 
 

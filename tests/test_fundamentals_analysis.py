@@ -10,7 +10,7 @@ primary-vs-best-effort failure handling. The endpoint tests inject a fake use ca
 Bedrock, no Finnhub, no database.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -28,6 +28,7 @@ from app.stocks.entities import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
+    AiAnalysisCache,
     AnalystEstimatesProvider,
     FundamentalsAnalysisProvider,
     StockDataProvider,
@@ -302,6 +303,80 @@ def test_rejects_invalid_symbols_before_touching_providers():
         with pytest.raises(ValueError):
             use_case.execute(bad)
     assert analyzer.received == []
+
+
+# --- result cache ------------------------------------------------------------------------------
+
+
+class _FakeCache(AiAnalysisCache):
+    """In-memory stand-in for the generic AI-analysis result cache; records puts."""
+
+    def __init__(self, stored=None, key: str = "AAPL") -> None:
+        self._store = {key: stored} if stored is not None else {}
+        self.puts: list[tuple] = []
+
+    def get(self, key):
+        return self._store.get(key)
+
+    def put(self, key, analysis):
+        self.puts.append((key, analysis))
+        self._store[key] = analysis
+
+
+def _analysis_at(when: datetime, *, summary="cached", findings=("f",)) -> FundamentalsAnalysis:
+    return FundamentalsAnalysis(
+        symbol="AAPL",
+        verdict=FundamentalsVerdict.STRONG,
+        confidence=Confidence.HIGH,
+        summary=summary,
+        findings=findings,
+        model="m",
+        generated_at=when,
+    )
+
+
+def test_fresh_cached_read_skips_generation():
+    # A fresh stored read is returned verbatim — no snapshot gather, no model call. The
+    # analyzer would raise if reached, proving the short-circuit.
+    fresh = _analysis_at(datetime.now(timezone.utc))
+    analyzer = _FakeAnalyzer(error=AssertionError("model must not be called"))
+    cache = _FakeCache(stored=fresh)
+    result = GetFundamentalsAnalysis(
+        _enriched_info(), analyzer, cache=cache
+    ).execute("aapl")  # normalizes to AAPL, matching the cached key
+    assert result is fresh
+    assert analyzer.received == []
+    assert cache.puts == []
+
+
+def test_cache_miss_generates_and_stores():
+    generated = _an_analysis()  # complete (summary + findings)
+    analyzer = _FakeAnalyzer(result=generated)
+    cache = _FakeCache()
+    result = GetFundamentalsAnalysis(_enriched_info(), analyzer, cache=cache).execute("AAPL")
+    assert result is generated
+    assert cache.puts == [("AAPL", generated)]
+
+
+def test_stale_cache_is_regenerated_and_stored():
+    stale = _analysis_at(datetime(2020, 1, 1, tzinfo=timezone.utc))
+    generated = _an_analysis()
+    analyzer = _FakeAnalyzer(result=generated)
+    cache = _FakeCache(stored=stale)
+    result = GetFundamentalsAnalysis(
+        _enriched_info(), analyzer, cache=cache, cache_ttl=timedelta(minutes=30)
+    ).execute("AAPL")
+    assert result is generated  # regenerated, not the stale read
+    assert cache.puts == [("AAPL", generated)]
+
+
+def test_incomplete_read_is_not_cached():
+    incomplete = _analysis_at(datetime.now(timezone.utc), summary="", findings=())
+    analyzer = _FakeAnalyzer(result=incomplete)
+    cache = _FakeCache()
+    result = GetFundamentalsAnalysis(_enriched_info(), analyzer, cache=cache).execute("AAPL")
+    assert result is incomplete  # still returned to the caller
+    assert cache.puts == []  # but not stored
 
 
 # --- endpoint ----------------------------------------------------------------------------------

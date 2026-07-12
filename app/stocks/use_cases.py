@@ -43,6 +43,7 @@ from app.stocks.indicators import (
     support_levels,
 )
 from app.stocks.ports import (
+    AiAnalysisCache,
     AllTimeHighProvider,
     AnalystEstimatesProvider,
     CandleProvider,
@@ -73,6 +74,21 @@ from app.stocks.universe.entities import IndustryValuation
 from app.stocks.universe.repository import StockSearchRepository
 
 logger = logging.getLogger(__name__)
+
+# The cache key for the market-wide AI reads (sector, market summary), which take no
+# symbol — a fixed sentinel so each gets one row in the shared, (kind, symbol)-keyed
+# cache. Not a real ticker (underscored), so it can never collide with one.
+_MARKET_CACHE_KEY = "_MARKET_"
+
+
+def _analysis_is_fresh(generated_at: datetime | None, ttl: timedelta) -> bool:
+    """Whether a stored AI read is still within its TTL, so a cache hit can be served
+    without regenerating. Shared by every cached analysis use case."""
+    if generated_at is None:
+        return False
+    if generated_at.tzinfo is None:  # a naive stamp (e.g. from SQLite) is UTC
+        generated_at = generated_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - generated_at <= ttl
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -437,12 +453,7 @@ class GetStockAnalysis:
         return stored
 
     def _is_fresh(self, scorecard: StockScorecard) -> bool:
-        generated = scorecard.generated_at
-        if generated is None:
-            return False
-        if generated.tzinfo is None:  # a naive stamp (e.g. from SQLite) is UTC
-            generated = generated.replace(tzinfo=timezone.utc)
-        return datetime.now(timezone.utc) - generated <= self._cache_ttl
+        return _analysis_is_fresh(scorecard.generated_at, self._cache_ttl)
 
     def _quarterly(self, symbol: str) -> QuarterlyEarningsTimeline | None:
         # Best-effort context: the beat history sharpens the analysis but isn't
@@ -516,9 +527,13 @@ class GetEarningsAnalysis:
     The analysis is the primary data, so a model failure propagates; a symbol with
     no earnings on file surfaces as ``StockDataUnavailable`` rather than an analysis
     of nothing. The analyzer reasons only over what it's handed; it fetches nothing
-    itself. Unlike the per-stock buy/hold/sell analysis this has no DB result cache
-    — the endpoint leans on a short HTTP ``Cache-Control`` instead, matching the
-    market read.
+    itself.
+
+    A read-through result cache fronts the whole thing (like the per-stock analysis): a
+    fresh stored read within ``cache_ttl`` is served without gathering or calling the
+    model at all, and a freshly-generated one is stored on the way out. The cache is
+    optional (``None`` disables it) and best-effort — a read failure is a miss and a
+    write failure is swallowed — so it only ever makes the endpoint faster.
     """
 
     def __init__(
@@ -526,20 +541,44 @@ class GetEarningsAnalysis:
         analyzer: EarningsAnalysisProvider,
         quarterly_provider: QuarterlyEarningsProvider | None = None,
         annual_provider: AnnualEarningsProvider | None = None,
+        cache: AiAnalysisCache[EarningsAnalysis] | None = None,
+        cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._analyzer = analyzer
         self._quarterly_provider = quarterly_provider
         self._annual_provider = annual_provider
+        self._cache = cache
+        self._cache_ttl = cache_ttl
 
     def execute(self, symbol: str) -> EarningsAnalysis:
         normalized = _normalize_symbol(symbol)
+        # A fresh cached read short-circuits the whole DB gather + model call — the
+        # read only drifts as the earnings figures do, so a repeat view within the TTL
+        # (and any burst of viewers) is served straight from the store.
+        cached = self._fresh_cached(normalized)
+        if cached is not None:
+            return cached
         quarterly = self._quarterly(normalized)
         annual = self._annual(normalized)
         # Nothing on file for either timeline — an uncovered/unknown symbol. Fail
         # rather than ask the model to reason over an empty slate.
         if quarterly is None and annual is None:
             raise StockDataUnavailable(normalized, "no earnings data to analyse")
-        return self._analyzer.analyze(normalized, quarterly, annual)
+        analysis = self._analyzer.analyze(normalized, quarterly, annual)
+        # Store for the next viewer — but only a complete read, so a rare empty model
+        # result is never frozen for the TTL. Best-effort (a write failure is swallowed
+        # in the adapter), so it never sinks the analysis.
+        if self._cache is not None and analysis.is_complete:
+            self._cache.put(normalized, analysis)
+        return analysis
+
+    def _fresh_cached(self, symbol: str) -> EarningsAnalysis | None:
+        if self._cache is None:
+            return None
+        stored = self._cache.get(symbol)
+        if stored is None or not _analysis_is_fresh(stored.generated_at, self._cache_ttl):
+            return None
+        return stored
 
     def _quarterly(self, symbol: str) -> QuarterlyEarningsTimeline | None:
         if self._quarterly_provider is None:
@@ -571,8 +610,9 @@ class GetRatingsFindings:
     to the injected analyzer. The analysis is the primary data, so a model failure propagates;
     a symbol with no coverage to render (no consensus trends and no credible covering firm)
     surfaces as ``StockDataUnavailable`` rather than an analysis of nothing. The analyzer
-    reasons only over what it's handed; it fetches nothing itself. Like the earnings read, no
-    DB result cache — the endpoint leans on a short HTTP ``Cache-Control`` instead.
+    reasons only over what it's handed; it fetches nothing itself. Like the earnings read, a
+    best-effort read-through result cache fronts it — a fresh stored read within ``cache_ttl``
+    skips the whole gather + model call.
     """
 
     # How many credible covering firms to surface for the model — matches the card's top-firms.
@@ -583,16 +623,24 @@ class GetRatingsFindings:
         analyzer: RatingsAnalysisProvider,
         recommendations_provider: RecommendationProvider | None = None,
         rating_change_provider: RatingChangeProvider | None = None,
+        cache: AiAnalysisCache[RatingsAnalysis] | None = None,
+        cache_ttl: timedelta = timedelta(minutes=30),
         *,
         now: datetime | None = None,
     ) -> None:
         self._analyzer = analyzer
         self._recommendations_provider = recommendations_provider
         self._rating_change_provider = rating_change_provider
+        self._cache = cache
+        self._cache_ttl = cache_ttl
         self._now = now  # injectable clock for tests; None → real now per call
 
     def execute(self, symbol: str) -> RatingsAnalysis:
         normalized = _normalize_symbol(symbol)
+        # A fresh cached read short-circuits the whole DB gather + model call.
+        cached = self._fresh_cached(normalized)
+        if cached is not None:
+            return cached
         recommendations = self._recommendations(normalized)
         rating_changes = self._rating_changes(normalized)
         # Only surface firms whose latest target is within the last year, matching the card.
@@ -603,7 +651,19 @@ class GetRatingsFindings:
         # events, so this also covers a symbol with only uncredited firms' actions.)
         if (recommendations is None or recommendations.is_empty) and not top_firms:
             raise StockDataUnavailable(normalized, "no analyst coverage to analyse")
-        return self._analyzer.analyze(normalized, recommendations, top_firms)
+        analysis = self._analyzer.analyze(normalized, recommendations, top_firms)
+        # Store for the next viewer — complete reads only, best-effort (see GetEarningsAnalysis).
+        if self._cache is not None and analysis.is_complete:
+            self._cache.put(normalized, analysis)
+        return analysis
+
+    def _fresh_cached(self, symbol: str) -> RatingsAnalysis | None:
+        if self._cache is None:
+            return None
+        stored = self._cache.get(symbol)
+        if stored is None or not _analysis_is_fresh(stored.generated_at, self._cache_ttl):
+            return None
+        return stored
 
     def _recommendations(self, symbol: str) -> AnalystRecommendations | None:
         # Best-effort context, DB-only: the sell-side consensus, or None on a miss/empty run.
@@ -640,10 +700,10 @@ class GetFundamentalsAnalysis:
     snapshot carrying *no* fundamentals at all (no metrics, no estimates, no dividend, no market
     cap: an uncovered symbol or an unconfigured fundamentals vendor) surfaces as
     ``StockDataUnavailable`` rather than asking the model to reason over a bare price. The industry
-    benchmark is best-effort, so a miss just omits it. Unlike the per-stock buy/hold/sell analysis
-    this has no DB result cache — the endpoint leans on a short HTTP ``Cache-Control`` instead,
-    matching the earnings and ratings reads. The analyzer reasons only over what it's handed; it
-    fetches nothing itself.
+    benchmark is best-effort, so a miss just omits it. Like the per-stock analysis, a best-effort
+    read-through result cache fronts it — a fresh stored read within ``cache_ttl`` skips the whole
+    snapshot gather + model call, matching the earnings and ratings reads. The analyzer reasons only
+    over what it's handed; it fetches nothing itself.
     """
 
     def __init__(
@@ -651,13 +711,21 @@ class GetFundamentalsAnalysis:
         stock_info: GetStockInfo,
         analyzer: FundamentalsAnalysisProvider,
         industry_repository: StockSearchRepository | None = None,
+        cache: AiAnalysisCache[FundamentalsAnalysis] | None = None,
+        cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._stock_info = stock_info
         self._analyzer = analyzer
         self._industry_repository = industry_repository
+        self._cache = cache
+        self._cache_ttl = cache_ttl
 
     def execute(self, symbol: str) -> FundamentalsAnalysis:
         normalized = _normalize_symbol(symbol)
+        # A fresh cached read short-circuits the whole snapshot gather + model call.
+        cached = self._fresh_cached(normalized)
+        if cached is not None:
+            return cached
         # The enriched snapshot is primary: a bad symbol (ValueError), an unknown one
         # (StockNotFound), or an upstream price failure (StockDataUnavailable) all propagate
         # rather than yielding an analysis of nothing.
@@ -667,7 +735,19 @@ class GetFundamentalsAnalysis:
             # dividend or market cap. Nothing fundamental to read, so fail rather than ask the
             # model to reason over a bare quote (mirrors the earnings/ratings no-data guards).
             raise StockDataUnavailable(normalized, "no fundamentals data to analyse")
-        return self._analyzer.analyze(stock, self._industry_valuation(normalized))
+        analysis = self._analyzer.analyze(stock, self._industry_valuation(normalized))
+        # Store for the next viewer — complete reads only, best-effort (see GetEarningsAnalysis).
+        if self._cache is not None and analysis.is_complete:
+            self._cache.put(normalized, analysis)
+        return analysis
+
+    def _fresh_cached(self, symbol: str) -> FundamentalsAnalysis | None:
+        if self._cache is None:
+            return None
+        stored = self._cache.get(symbol)
+        if stored is None or not _analysis_is_fresh(stored.generated_at, self._cache_ttl):
+            return None
+        return stored
 
     def _industry_valuation(self, symbol: str) -> IndustryValuation | None:
         # Best-effort context: the peer-valuation anchor that makes the stock's own P/E
@@ -737,12 +817,24 @@ class GetSectorAnalysis:
     """
 
     def __init__(
-        self, sectors: GetSectorPerformance, analyzer: SectorAnalysisProvider
+        self,
+        sectors: GetSectorPerformance,
+        analyzer: SectorAnalysisProvider,
+        cache: AiAnalysisCache[SectorAnalysis] | None = None,
+        cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._sectors = sectors
         self._analyzer = analyzer
+        self._cache = cache
+        self._cache_ttl = cache_ttl
 
     def execute(self) -> SectorAnalysis:
+        # A fresh cached read short-circuits the whole board gather + model call — this
+        # is market-wide, so one stored read serves every viewer within the TTL. Keyed
+        # on the market sentinel, since the read takes no symbol.
+        cached = self._fresh_cached()
+        if cached is not None:
+            return cached
         # Timed in two halves so the logs decompose the endpoint's latency into its
         # only two moving parts: the multi-source board gather (Alpaca) and the
         # model call (Bedrock). This is the ground truth for "where do the seconds
@@ -758,6 +850,10 @@ class GetSectorAnalysis:
         analysis: SectorAnalysis | None = None
         try:
             analysis = self._analyzer.analyze(board)
+            # Store for the next viewer — complete reads only, best-effort (a write
+            # failure is swallowed in the adapter), so it never sinks the analysis.
+            if self._cache is not None and analysis.is_complete:
+                self._cache.put(_MARKET_CACHE_KEY, analysis)
             return analysis
         finally:
             model_ms = (time.perf_counter() - model_start) * 1000
@@ -777,6 +873,14 @@ class GetSectorAnalysis:
                     gather_ms,
                     model_ms,
                 )
+
+    def _fresh_cached(self) -> SectorAnalysis | None:
+        if self._cache is None:
+            return None
+        stored = self._cache.get(_MARKET_CACHE_KEY)
+        if stored is None or not _analysis_is_fresh(stored.generated_at, self._cache_ttl):
+            return None
+        return stored
 
 
 class GetMarketOverview:
@@ -807,12 +911,24 @@ class GetMarketSummary:
     """
 
     def __init__(
-        self, overview: GetMarketOverview, analyzer: MarketSummaryProvider
+        self,
+        overview: GetMarketOverview,
+        analyzer: MarketSummaryProvider,
+        cache: AiAnalysisCache[MarketSummary] | None = None,
+        cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._overview = overview
         self._analyzer = analyzer
+        self._cache = cache
+        self._cache_ttl = cache_ttl
 
     def execute(self) -> MarketSummary:
+        # A fresh cached read short-circuits the whole board gather + model call — this
+        # is market-wide, so one stored read serves every viewer within the TTL. Keyed
+        # on the market sentinel, since the read takes no symbol.
+        cached = self._fresh_cached()
+        if cached is not None:
+            return cached
         # Timed in two halves so the logs decompose the endpoint's latency into its
         # only two moving parts: the index-board gather (Alpaca) and the model call
         # (Bedrock) — the same split the sector-analysis use case records.
@@ -825,6 +941,9 @@ class GetMarketSummary:
         summary: MarketSummary | None = None
         try:
             summary = self._analyzer.analyze(board)
+            # Store for the next viewer — complete reads only, best-effort (see above).
+            if self._cache is not None and summary.is_complete:
+                self._cache.put(_MARKET_CACHE_KEY, summary)
             return summary
         finally:
             model_ms = (time.perf_counter() - model_start) * 1000
@@ -844,3 +963,11 @@ class GetMarketSummary:
                     gather_ms,
                     model_ms,
                 )
+
+    def _fresh_cached(self) -> MarketSummary | None:
+        if self._cache is None:
+            return None
+        stored = self._cache.get(_MARKET_CACHE_KEY)
+        if stored is None or not _analysis_is_fresh(stored.generated_at, self._cache_ttl):
+            return None
+        return stored
