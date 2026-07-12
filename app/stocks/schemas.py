@@ -243,9 +243,11 @@ class InvestmentAnalysisResponse(BaseModel):
     """An AI-generated, **sectioned** buy/hold/sell scorecard for a stock.
 
     ``recommendation`` is the overall call on the five-point scale
-    ("strong_buy"/"buy"/"hold"/"sell"/"strong_sell") and ``confidence``
-    how firmly it's held ("low"/"medium"/"high"); ``thesis`` is a one-line headline.
-    ``sections`` grade the individual facets — business quality, valuation, earnings,
+    ("strong_buy"/"buy"/"hold"/"sell"/"strong_sell"); ``confidence``
+    ("low"/"medium"/"high") is how much of the read is backed by real data — a
+    service-computed measure of how many sections' figures resolved, not a model
+    guess. ``thesis`` is a one-line headline. ``sections`` grade the individual facets
+    — profitability, cash generation, growth, valuation, financial health, earnings,
     and the analyst view — each with its own stance, label, plain-language summary,
     and supporting figures. ``disclaimer`` is a fixed reminder that this is
     informational, not financial advice — authored by the service, not the model.

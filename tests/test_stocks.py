@@ -1478,8 +1478,9 @@ def _section_payload(**overrides) -> dict:
 
 def _tool_message(**input_overrides) -> _StubMessage:
     # A complete scorecard: the overall verdict plus a filled read for every registry
-    # section. `input_overrides` can replace the verdict or any section.
-    payload = dict(recommendation="hold", confidence="medium", thesis="Balanced.")
+    # section. `input_overrides` can replace the verdict or any section. (No confidence
+    # — the service computes it from coverage, not the model.)
+    payload = dict(recommendation="hold", thesis="Balanced.")
     payload.update({key: _section_payload() for key in _SCORECARD_SECTION_KEYS})
     payload.update(input_overrides)
     return _StubMessage([_StubBlock("tool_use", name="submit_scorecard", input=payload)])
@@ -2036,7 +2037,6 @@ def test_bedrock_adapter_parses_tool_call_into_entity():
     )
     assert scorecard.symbol == "AAPL"
     assert scorecard.recommendation is Recommendation.HOLD
-    assert scorecard.confidence is Confidence.MEDIUM
     # Every registry section comes back, in card order, each carrying the model's read.
     assert [s.key for s in scorecard.sections] == [s.key for s in _SCORECARD_SECTIONS]
     valuation = next(s for s in scorecard.sections if s.key == "valuation")
@@ -2163,6 +2163,28 @@ def test_bedrock_adapter_neutral_stance_when_section_stance_off_enum():
     scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
     valuation = next(s for s in scorecard.sections if s.key == "valuation")
     assert valuation.stance is SectionStance.NEUTRAL
+
+
+def test_bedrock_adapter_confidence_reflects_data_coverage():
+    # Confidence is the service's deterministic read of how many data sources resolved
+    # (sections with real chips), not the model's guess. A full multi-source snapshot
+    # reads HIGH, a fundamentals-only one MEDIUM, a bare quote LOW.
+    full = BedrockScorecardProvider(client=_StubClient(_tool_message())).analyze(
+        a_stock(metrics=a_key_metrics()),
+        a_quarterly_timeline(),
+        recommendations=an_analyst_recommendations(),
+    )
+    assert full.confidence is Confidence.HIGH
+
+    partial = BedrockScorecardProvider(client=_StubClient(_tool_message())).analyze(
+        a_stock(metrics=a_key_metrics())  # fundamentals only — no earnings/analyst
+    )
+    assert partial.confidence is Confidence.MEDIUM
+
+    bare = BedrockScorecardProvider(client=_StubClient(_tool_message())).analyze(
+        a_stock()  # a quote with no fundamentals, earnings, or analyst coverage
+    )
+    assert bare.confidence is Confidence.LOW
 
 
 def test_bedrock_adapter_recovers_blank_sections_with_targeted_retry():

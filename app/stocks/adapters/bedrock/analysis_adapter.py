@@ -310,11 +310,6 @@ def _scorecard_tool() -> dict:
                 "sell / strong sell), weighing every section on balance."
             ),
         },
-        "confidence": {
-            "type": "string",
-            "enum": [c.value for c in Confidence],
-            "description": "How sure you are, given how much clear data there is.",
-        },
         "thesis": {
             "type": "string",
             "description": (
@@ -324,6 +319,8 @@ def _scorecard_tool() -> dict:
             ),
         },
     }
+    # Note: the model does not author `confidence` — the service computes it from data
+    # coverage (see ``_confidence_for``), so it's not in the schema.
     props.update({s.key: _section_schema(s.hint) for s in _SECTIONS})
     return {
         "name": "submit_scorecard",
@@ -335,12 +332,7 @@ def _scorecard_tool() -> dict:
         "input_schema": {
             "type": "object",
             "properties": props,
-            "required": [
-                "recommendation",
-                "confidence",
-                "thesis",
-                *[s.key for s in _SECTIONS],
-            ],
+            "required": ["recommendation", "thesis", *[s.key for s in _SECTIONS]],
         },
     }
 
@@ -392,9 +384,9 @@ _SYSTEM_PROMPT = (
     "the reader knows finance terms. Ground every statement ONLY in the figures "
     "provided — do not use outside knowledge, recent news, or prices you may "
     "recall, and never invent numbers. If the data for a section is thin, say so "
-    "plainly and lower your overall confidence. Be honest in every section about "
-    "both the good and the bad. This is general information, not personal "
-    "financial advice. Respond by calling the submit_scorecard tool."
+    "plainly. Be honest in every section about both the good and the bad. This is "
+    "general information, not personal financial advice. Respond by calling the "
+    "submit_scorecard tool."
 )
 
 _SECTIONS_SYSTEM = (
@@ -626,15 +618,15 @@ def _build_scorecard(
     """Map the validated tool arguments onto the domain entity.
 
     The overall verdict comes from the model (with a defensive guard: an off-schema
-    recommendation/confidence surfaces as this port's documented
-    ``StockDataUnavailable`` rather than leaking out). Each section merges the model's
-    *words* (stance / label / summary) with metric chips computed here from the data
-    already gathered (via the section registry), so the numbers are always the
-    service's, never the model's.
+    recommendation surfaces as this port's documented ``StockDataUnavailable`` rather
+    than leaking out). Each section merges the model's *words* (stance / label /
+    summary) with metric chips computed here from the data already gathered (via the
+    section registry), so the numbers are always the service's, never the model's. The
+    ``confidence`` is likewise the service's — a deterministic read of data coverage
+    (see ``_confidence_for``), not a guess the model makes.
     """
     try:
         recommendation = Recommendation(payload["recommendation"])
-        confidence = Confidence(payload["confidence"])
         thesis = str(payload["thesis"]).strip()
     except (KeyError, ValueError) as exc:
         raise StockDataUnavailable(
@@ -648,12 +640,40 @@ def _build_scorecard(
     return StockScorecard(
         symbol=symbol,
         recommendation=recommendation,
-        confidence=confidence,
+        confidence=_confidence_for(sections),
         thesis=thesis,
         sections=sections,
         model=model_id,
         generated_at=datetime.now(timezone.utc),
     )
+
+
+# How much of the scorecard has to be backed by real figures for each confidence
+# band, as a fraction of the sections. Confidence here is a read of *data coverage* —
+# how many data sources resolved — not the model's conviction: a rich, multi-source
+# snapshot reads HIGH, a bare quote LOW. (With 7 sections: HIGH needs >=6 covered,
+# MEDIUM 3-5, LOW <=2 — i.e. HIGH wants the earnings/analyst context on top of the
+# fundamentals-fed sections, not fundamentals alone.)
+_HIGH_COVERAGE = 0.8
+_MEDIUM_COVERAGE = 0.4
+
+
+def _confidence_for(sections: tuple[ScorecardSection, ...]) -> Confidence:
+    """Confidence as a deterministic read of *data coverage* — the share of sections
+    that came back with real figures (i.e. how many data sources resolved). This is the
+    'service owns the numbers' split applied to confidence: how much data we had is a
+    fact about our gather, so we compute it rather than trust the model to guess it. A
+    section with no chips is one whose source (fundamentals / earnings / analyst /
+    industry) didn't resolve for this symbol."""
+    if not sections:
+        return Confidence.LOW
+    covered = sum(1 for s in sections if s.metrics)
+    ratio = covered / len(sections)
+    if ratio >= _HIGH_COVERAGE:
+        return Confidence.HIGH
+    if ratio >= _MEDIUM_COVERAGE:
+        return Confidence.MEDIUM
+    return Confidence.LOW
 
 
 def _section(
