@@ -32,6 +32,9 @@ from app.stocks.endpoints.cron_fundamentals_endpoints import run_fundamentals_sy
 from app.stocks.endpoints.cron_index_membership_endpoints import (
     run_index_membership_sync,
 )
+from app.stocks.endpoints.cron_institutional_ownership_endpoints import (
+    run_institutional_ownership_sync,
+)
 from app.stocks.endpoints.cron_news_endpoints import run_news_sync
 from app.stocks.endpoints.cron_quarterly_earnings_endpoints import (
     run_quarterly_earnings_sync,
@@ -55,6 +58,7 @@ RUNNERS: dict[str, Callable[[int | None], object]] = {
     "annual-earnings": run_annual_earnings_sync,
     "recommendations": run_recommendations_sync,
     "news": run_news_sync,
+    "institutional-ownership": run_institutional_ownership_sync,
     "fundamentals": run_fundamentals_sync,
     "revenue-segments": run_revenue_segments_sync,
     "universe": run_universe_sync,

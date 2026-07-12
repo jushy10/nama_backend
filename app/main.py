@@ -49,6 +49,12 @@ from app.stocks.endpoints.cron_revenue_segments_endpoints import (
 from app.stocks.endpoints.insider_transactions_endpoints import (
     router as insider_transactions_router,
 )
+from app.stocks.endpoints.institutional_ownership_endpoints import (
+    router as institutional_ownership_router,
+)
+from app.stocks.endpoints.cron_institutional_ownership_endpoints import (
+    router as institutional_ownership_cron_router,
+)
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.endpoints.heatmap_endpoints import router as heatmap_router
 from app.stocks.endpoints.seo_endpoints import router as seo_router
@@ -176,6 +182,12 @@ app.include_router(revenue_segments_router)
 # cache over SEC EDGAR (no cron — the TTL keeps it fresh on read). See
 # app/stocks/endpoints/insider_transactions_endpoints.py.
 app.include_router(insider_transactions_router)
+# The institutional-ownership read endpoint (GET /stocks/ticker/{ticker}/institutional-ownership): a
+# stock's top 13F holders (institutions + funds) with each one's quarter-over-quarter position change
+# (the "big money buys and sells"), the "institutions own X%" breakdown, and a net buy-vs-sell flow.
+# Served from the DB cache over yfinance. See
+# app/stocks/endpoints/institutional_ownership_endpoints.py.
+app.include_router(institutional_ownership_router)
 # The quarterly-earnings refresh cron endpoint (POST /internal/earnings/quarterly/sync);
 # it drives the SyncQuarterlyEarnings use case out of band. See
 # app/stocks/endpoints/cron_quarterly_earnings_endpoints.py.
@@ -206,6 +218,11 @@ app.include_router(news_cron_router)
 # each stock's trailing margins/ROE/liquidity/leverage/beta + the per-share P/B / P/S / dividend
 # inputs. See app/stocks/endpoints/cron_fundamentals_endpoints.py.
 app.include_router(fundamentals_cron_router)
+# The institutional-ownership refresh cron endpoint (POST /internal/institutional-ownership/sync); it
+# drives the SyncInstitutionalOwnership use case out of band (yfinance 13F holders -> DB), seeding +
+# refreshing each stock's top institutional/mutual-fund holders and the ownership breakdown. See
+# app/stocks/endpoints/cron_institutional_ownership_endpoints.py.
+app.include_router(institutional_ownership_cron_router)
 # The revenue-segments refresh cron endpoint (POST /internal/revenue-segments/sync); it drives
 # the SyncRevenueSegments use case out of band (SEC EDGAR 10-K -> DB), seeding + refreshing each
 # stock's revenue disaggregation. See app/stocks/endpoints/cron_revenue_segments_endpoints.py.
