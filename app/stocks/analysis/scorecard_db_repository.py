@@ -26,8 +26,7 @@ from datetime import timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.stocks.analysis.models import AnalysisCacheRecord
-from app.stocks.entities import (
+from app.stocks.analysis.entities import (
     Confidence,
     Recommendation,
     ScorecardSection,
@@ -35,7 +34,8 @@ from app.stocks.entities import (
     SectionStance,
     StockScorecard,
 )
-from app.stocks.ports import StockScorecardCache
+from app.stocks.analysis.models import AnalysisCacheRecord
+from app.stocks.analysis.ports import StockScorecardCache
 
 logger = logging.getLogger(__name__)
 

@@ -17,25 +17,20 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks import router as stocks_router
-from app.stocks.entities import (
-    AnalystEstimates,
+from app.stocks.analysis.entities import (
     Confidence,
     FundamentalsAnalysis,
     FundamentalsVerdict,
-    Stock,
 )
+from app.stocks.analysis.ports import AiAnalysisCache, FundamentalsAnalysisProvider
+from app.stocks.analysis.use_cases import GetFundamentalsAnalysis, GetStockInfo
+from app.stocks.endpoints import analysis_endpoints as stocks_router
+from app.stocks.entities import AnalystEstimates, Stock
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import (
-    AiAnalysisCache,
-    AnalystEstimatesProvider,
-    FundamentalsAnalysisProvider,
-    StockDataProvider,
-)
+from app.stocks.ports import AnalystEstimatesProvider, StockDataProvider
 from app.stocks.ticker.entities import PeHistoryStats, ValuationSignal
 from app.stocks.universe.entities import AnchorMetrics, MarketCapTier
 from app.stocks.universe.repository import StockSearchRepository
-from app.stocks.use_cases import GetFundamentalsAnalysis, GetStockInfo
 
 
 # --- fixtures ----------------------------------------------------------------------------------

@@ -18,7 +18,7 @@ terms, only the adapter knows a language model backs it.
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
-from app.stocks.entities import InvestmentAnalysis
+from app.stocks.analysis.entities import InvestmentAnalysis
 from app.stocks.etfs.entities import (
     EtfDetail,
     EtfProfile,

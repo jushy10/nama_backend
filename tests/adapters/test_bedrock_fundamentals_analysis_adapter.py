@@ -15,10 +15,9 @@ import pytest
 from app.stocks.adapters.bedrock.fundamentals_analysis_adapter import (
     BedrockFundamentalsAnalysisProvider,
 )
+from app.stocks.analysis.entities import Confidence, FundamentalsVerdict
 from app.stocks.entities import (
     AnalystEstimates,
-    Confidence,
-    FundamentalsVerdict,
     KeyMetrics,
     Stock,
 )

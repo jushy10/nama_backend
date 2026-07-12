@@ -12,7 +12,8 @@ import pytest
 from alpaca.common.exceptions import APIError
 from alpaca.data.enums import Adjustment, DataFeed
 
-from app.stocks.alpaca_provider import AlpacaStockDataProvider
+from app.stocks.adapters.alpaca_adapter import AlpacaStockDataProvider
+from app.stocks.charts.ports import CandleProvider
 from app.stocks.entities import (
     AllTimeHigh,
     Candle,
@@ -21,17 +22,15 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.market.ports import MarketOverviewProvider, SectorPerformanceProvider
 from app.stocks.ports import (
     AllTimeHighProvider,
     BulkQuoteProvider,
-    CandleProvider,
-    MarketOverviewProvider,
-    SectorPerformanceProvider,
     StockDataProvider,
     StockPerformanceProvider,
     StockQuoteProvider,
 )
+from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 
 
 def make_snapshot():

@@ -21,9 +21,9 @@ Two request params pin the behaviour:
 
 import httpx
 
-from app.stocks.entities import Logo
+from app.stocks.logo.entities import Logo
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import LogoProvider
+from app.stocks.logo.ports import LogoProvider
 
 
 class LogoDevProvider(LogoProvider):

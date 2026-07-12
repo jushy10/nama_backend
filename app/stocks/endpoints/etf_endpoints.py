@@ -50,7 +50,7 @@ from app.stocks.adapters.yfinance_etf_profile_adapter import (
     YfinanceEtfProfileProvider,
 )
 from app.stocks.analysis.db_repository import SqlInvestmentAnalysisCache
-from app.stocks.entities import InvestmentAnalysis
+from app.stocks.analysis.entities import InvestmentAnalysis
 from app.stocks.etfs.db_repository import (
     SqlEtfLookupRepository,
     SqlEtfSearchRepository,
@@ -86,16 +86,35 @@ from app.stocks.etfs.use_cases import (
     SearchEtfs,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.analysis.ports import InvestmentAnalysisCache
 from app.stocks.ports import (
-    InvestmentAnalysisCache,
     StockPerformanceProvider,
     StockQuoteProvider,
 )
-from app.stocks.router import (
-    analysis_cache_ttl,
-    get_etf_screener_translator,
-    get_provider,
+from app.stocks.adapters.bedrock.etf_screener_query_adapter import (
+    BedrockEtfScreenerQueryTranslator,
 )
+from app.stocks.wiring import analysis_cache_ttl, get_provider
+
+@lru_cache(maxsize=1)
+def get_etf_screener_translator() -> EtfScreenerQueryTranslator:
+    # The ETF sibling of the stock screener's translator: the AI ETF screener's translation is its
+    # primary data, so it's required, but there's no secret to gate on (Bedrock authenticates
+    # through the process's AWS credentials — the ECS task role in prod). It shares the stock
+    # screener's env so one config drives both: BEDROCK_REGION (default us-east-1) and the optional
+    # BEDROCK_SCREENER_MODEL_ID (a cross-region inference profile). A missing 'bedrock' extra
+    # surfaces as a clean 503 here rather than a 500.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_SCREENER_MODEL_ID")
+    try:
+        if model_id:
+            return BedrockEtfScreenerQueryTranslator(model_id=model_id, region=region)
+        return BedrockEtfScreenerQueryTranslator(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI ETF screening is not configured (install the 'bedrock' extra)."
+        ) from exc
+
 
 router = APIRouter(tags=["etfs"])
 

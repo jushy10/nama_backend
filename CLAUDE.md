@@ -17,8 +17,8 @@ the code wins — fix this file.
                  │
                  ▼
    ┌──────────────────────────────┐
-   │  endpoint  (router.py)       │  controller + presenter + DI wiring
-   └──────────────┬───────────────┘
+   │  endpoint (endpoints/*.py)   │  controller + presenter + DI wiring
+   └──────────────┬───────────────┘  (shared singletons live in wiring.py)
                   │ calls
                   ▼
    ┌──────────────────────────────┐
@@ -33,7 +33,8 @@ the code wins — fix this file.
                                 │ implemented by
                        ┌────────┴─────────┐
                        │  adapter         │  the ONLY code that knows a vendor
-                       │ *_provider.py    │  (Alpaca / Finnhub / Logo.dev / Yahoo / DB)
+                       │ adapters/        │  (Alpaca / Finnhub / Logo.dev / Yahoo /
+                       │   *_adapter.py   │   SEC EDGAR / Wikipedia / Bedrock / DB)
                        └──────────────────┘
 ```
 
@@ -44,27 +45,34 @@ calling an **adapter through a port**.
 
 | Layer | File(s) | May import | Must NOT import |
 |-------|---------|-----------|-----------------|
-| Entities | `entities.py`, `indicators.py` | stdlib only (`dataclasses`, `datetime`, `enum`) | anything else in `app/`, FastAPI, pydantic, any vendor SDK |
+| Entities | `entities.py`, `charts/indicators.py` | stdlib only (`dataclasses`, `datetime`, `enum`) — a slice's entities may also import the shared kernel's | outer layers, FastAPI, pydantic, any vendor SDK |
 | Ports | `ports.py` | entities, stdlib `abc` | use cases, adapters, framework, vendors |
-| Use cases | `use_cases.py` | entities, ports, exceptions, pure-domain helpers (`indicators.py`) | adapters (concrete providers), FastAPI, pydantic, any vendor SDK |
-| Adapters | `*_provider.py`, `adapters/*_adapter.py` | entities, ports, exceptions, **+ the vendor SDK / `httpx` / SQLAlchemy** | other adapters, use cases, FastAPI, pydantic |
+| Use cases | `use_cases.py` | entities, ports, exceptions, pure-domain helpers (`charts/indicators.py`) | adapters (concrete providers), FastAPI, pydantic, any vendor SDK |
+| Adapters | `adapters/*_adapter.py` | entities, ports, exceptions, **+ the vendor SDK / `httpx` / SQLAlchemy** | other adapters, use cases, FastAPI, pydantic |
 | DTOs | `schemas.py` | pydantic only | entities, use cases, adapters |
-| Router (composition root) | `router.py` | **everything** — use cases, ports, concrete adapters, schemas, exceptions, `db`, FastAPI | — |
+| Endpoints (composition root) | `endpoints/*.py`, `wiring.py` | **everything** — use cases, ports, concrete adapters, schemas, exceptions, `db`, FastAPI | — |
 
 > The use case depends on the **port** (an `ABC`), never the concrete adapter.
 > That inversion is the whole point: the core never imports a vendor — the
 > vendor imports the core. It's also what lets every test run offline against a
-> hand-written fake. Never shortcut it by importing a `*_provider` into a use
+> hand-written fake. Never shortcut it by importing a `*_adapter` into a use
 > case or an entity.
 
 ---
 
 ## The layers
 
-### 1. Entities — `app/stocks/entities.py`
+### 1. Entities — `app/stocks/entities.py` (shared kernel) + each slice's own `entities.py`
 *Enterprise Business Rules.* Pure domain objects: frozen `@dataclass`es and
-`Enum`s that model the concepts (`Stock`, `Quote`, `Candle`, `AnalystEstimates`,
-…). They import nothing from the rest of the app.
+`Enum`s that model the concepts. The **shared kernel** (`app/stocks/entities.py`)
+holds only the price-feed/snapshot primitives many slices consume — `Stock`,
+`Quote`, `Candle`/`CandleSeries`/`Timeframe`, `StockPerformance`, `KeyMetrics`,
+`AnalystEstimates`, `GrowthMetrics`, `CompanyProfile`, `StockFundamentals`,
+`AllTimeHigh`. Everything else lives in its slice's own `entities.py`
+(`market/entities.py` for the sector/index boards, `analysis/entities.py` for
+every AI result shape, `logo/entities.py`, the earnings slices' timelines, …).
+They import nothing from the rest of the app (a slice's entities may import the
+shared kernel's).
 
 Business logic that is **a fact about one entity** lives here, as a `@property`
 or `@classmethod` — computed on access, not stored:
@@ -77,19 +85,28 @@ Entities are vendor-agnostic on purpose: e.g. `Timeframe` defines business-level
 granularities; the adapter maps them onto whatever the vendor calls them.
 
 Pure cross-entity calculations with no I/O (e.g. the EMA / support-level math in
-`indicators.py`) are also domain code — they live next to the entities, import
-only entities, and never reach out for data.
+`charts/indicators.py`) are also domain code — they live next to the entities,
+import only entities, and never reach out for data.
 
-### 2. Ports — `app/stocks/ports.py`
+### 2. Ports — `app/stocks/ports.py` (shared kernel) + each slice's own `ports.py`
 The abstractions a use case depends on. Each is an `ABC` with `@abstractmethod`s
 phrased in domain terms (`get_stock`, `get_quotes`, `get_estimates`,
 `all`). They return **entities** and document which **domain exceptions** they
 raise. One port per capability — keep them small so an adapter can implement
 exactly the ones it covers (`AlpacaStockDataProvider` implements seven).
 
+The **shared kernel** (`app/stocks/ports.py`) holds only the snapshot/enrichment
+capabilities many slices consume (`StockDataProvider`, `StockQuoteProvider`,
+`BulkQuoteProvider`, `StockPerformanceProvider`, `AllTimeHighProvider`,
+`StockFundamentalsProvider`, `CompanyProfileProvider`,
+`AnalystEstimatesProvider`). A port used by one slice lives in that slice's own
+`ports.py` — `charts/ports.py` (`CandleProvider`), `market/ports.py` (the two
+board providers), `analysis/ports.py` (the five analyser ports + the result
+cache), `logo/ports.py`, and so on.
+
 Naming: a live feed is a `*Provider`; static reference data is a `*Repository`.
 
-### 3. Use cases — `app/stocks/use_cases.py`
+### 3. Use cases — each slice's `use_cases.py`
 *Application Business Rules.* One class per action, constructor-injected with the
 ports it needs, exposing a single `execute(...)`:
 
@@ -101,8 +118,11 @@ class GetStockInfo:
 
 A use case: validates/normalizes input (`_normalize_symbol`), calls ports,
 assembles entities, applies enrichment, and enforces multi-source orchestration
-(the earnings context in `GetStockAnalysis`). It depends
+(the earnings context in `analysis/use_cases.py`'s `GetStockAnalysis`). It depends
 only on entities + ports — never a framework, never a concrete provider.
+Use cases live in their slice: `charts/use_cases.py` (candles/EMA/support),
+`market/use_cases.py` (the boards), `analysis/use_cases.py` (`GetStockInfo` +
+every AI read), `logo/use_cases.py`, and each data slice's own.
 
 > **Latency orchestration (the AI-analysis path).** `GetStockAnalysis` /
 > `GetEtfAnalysis` are the slice's slowest calls — a multi-source gather feeding a
@@ -117,23 +137,21 @@ only on entities + ports — never a framework, never a concrete provider.
 > `concurrent.futures` for I/O fan-out is still just orchestration — no framework or
 > vendor leaks into the core.
 
-### 4. Adapters — `app/stocks/*_provider.py`, `app/stocks/adapters/*_adapter.py`
+### 4. Adapters — `app/stocks/adapters/*_adapter.py`
 *Interface Adapters.* Each implements a port and is **the only module that knows
 a given vendor exists**. It translates the vendor's SDK/HTTP/ORM models into our
 entities, and the vendor's failures into our domain exceptions. Swap vendors and
 only this one file changes.
 
-> Most adapters still sit flat in `app/stocks/` as `<vendor>_<concern>_provider.py`.
-> The earnings adapters live in `app/stocks/adapters/` and are named `*_adapter.py`
-> (the yfinance live sources, their DB-cache decorators, and the estimates projection);
-> the AI-analysis adapters are grouped in `app/stocks/adapters/bedrock/` (all five
-> Claude-on-Bedrock analysers — stock / ETF / earnings / sector / market); other
-> features' adapters can migrate there over time.
+> Every vendor adapter lives in `app/stocks/adapters/` as
+> `<vendor>_<concern>_adapter.py`; the AI-analysis adapters are grouped in
+> `app/stocks/adapters/bedrock/` (all six Claude-on-Bedrock analysers — stock /
+> ETF / earnings / ratings / sector / market — plus the screener translator),
+> where the vendor-specific subfolder drops the redundant vendor prefix.
 
-- `alpaca_provider.py` — Alpaca SDK → price/quote/candles/performance/sectors, plus the batched board feed (`BulkQuoteProvider.get_quotes` — many symbols' day-change in one chunked snapshot call, best-effort per symbol; backs the heat map)
+- `adapters/alpaca_adapter.py` — Alpaca SDK → price/quote/candles/performance/sectors, plus the batched board feed (`BulkQuoteProvider.get_quotes` — many symbols' day-change in one chunked snapshot call, best-effort per symbol; backs the heat map)
 - `adapters/yfinance_fundamentals_adapter.py` — **Yahoo `.info`** → the trailing fundamentals (margins / ROE / current ratio / debt-equity / beta + the per-share P/B / P/S / dividend inputs) **and** the clean company name, materialized onto the `stocks` anchor by the fundamentals slice (`app/stocks/fundamentals/`, table-less, weekly `sync-fundamentals` cron). **This replaced Finnhub** (`finnhub_fundamentals_provider.py` `/stock/metric` + `finnhub_company_profile_provider.py` `/stock/profile2` + the `CachingCompanyProfileProvider` decorator, all deleted along with the `StockFundamentalsProvider`/`CompanyProfileProvider` ports, the `StockFundamentals`/`CompanyProfile` entities, and the `FINNHUB_API_KEY` gate): the ticker card and AI analyses now read these figures **DB-only off the anchor** (the card via `anchor_facts`/`StoredTickerFacts`; the analyses via `GetStockAnalysis`/`GetFundamentalsAnalysis`'s `_with_stored_fundamentals` overlay), with the price-derived ratios (P/E, P/B, P/S, dividend yield) computed live from the stored per-share inputs × the quote. **Finnhub is fully retired** — the app now reads Yahoo (fundamentals/earnings/recs/news), Alpaca (price), SEC EDGAR (segments/insiders), Wikipedia (index membership), Logo.dev (logos), and the DB
-- `logodev_provider.py` — Logo.dev → logo image
-- `caching_company_profile_provider.py` — decorator adapter (wraps another adapter to add an in-process TTL cache; same port in, same port out)
+- `adapters/logodev_adapter.py` — Logo.dev → logo image
 - `adapters/yfinance_quarterly_earnings_adapter.py` — live source for the quarterly-earnings slice: **Yahoo via `yfinance`**, building the 4-recent + up-to-2-upcoming quarter timeline. **Past** quarters come from `earnings_dates` (reported EPS vs the estimate that preceded it; surprise computed here, not from Yahoo's `Surprise(%)`). **Upcoming** quarters come from the `0q`/`+1q` rows of `earnings_estimate` + `revenue_estimate` — the reliable source of *two* forward quarters (EPS + revenue), so a stock surfaces both even when `earnings_dates` lists only one scheduled future date; a scheduled date is attached when it lines up. **Reported revenue** (`revenue_actual`) is matched onto the past quarters from `quarterly_income_stmt` (Total Revenue, whose columns carry the *true* fiscal period-end dates: each quarter takes the column most recently preceding its announcement date — never the calendar-derived label, which for off-calendar filers like MU names a different fiscal quarter than the EPS) — best-effort enrichment, so a failure fetching it drops the actual without sinking the timeline. Fiscal labels are derived from the announcement date (calendar best-effort; the offset is cosmetic — a row's EPS and revenue always belong to the same fiscal quarter). **Currency (foreign ADRs):** a shared `adapters/yfinance_currency.py` normalizer maps a foreign issuer's figures onto its **trading** currency (USD) so one timeline doesn't splice currencies ~32× apart (TWD) — `quarterly_income_stmt` revenue is reliably reporting-currency (converted by the FX rate), while the *market* EPS surfaces (`earnings_dates` and `earnings_estimate`) are quoted per-ADR in a currency that **varies by issuer** (USD for TSM, the reporting currency CNY for BABA), so their currency is *detected once* from the `0y` estimate against the trading-currency `info['forwardEps']` and applied uniformly; identity (no-op) for a US issuer or when the FX rate is unavailable (best-effort, never-worse). `adapters/db_cached_quarterly_earnings_adapter.py` — a **read-through** DB cache in front of it: serves stored rows if present, else fetches from Yahoo **once on a miss** and stores. **No TTL/staleness or serve-stale**; a populated symbol is always served straight from the DB, and keeping rows current is entirely the cron's job
 - `adapters/yfinance_annual_earnings_adapter.py` — live source for the annual-earnings slice: **Yahoo via `yfinance`**, building the 4-recent + up-to-2-upcoming *fiscal-year* timeline (the yearly analogue of the quarterly adapter). **Past** years come from `income_stmt` (annual) — `Diluted EPS` (falling back to `Basic EPS`) as the actual, plus `Total Revenue` and `Net Income`. **Upcoming** years come from the `0y`/`+1y` rows of `earnings_estimate` + `revenue_estimate` (EPS + revenue) — Yahoo's forward ceiling (so ≤2). Forward years are labelled by `info['nextFiscalYearEnd']` (0y), falling back to one year past the latest reported year. **No annual surprise/beat** — Yahoo's estimate-vs-actual history is per-quarter, so a reported year carries an actual with no estimate. Reported years also carry `eps_actual_consensus` — the year's actual EPS on the **analyst-consensus (adjusted) basis**, i.e. the sum of its four quarterly "Reported EPS" values from a deeper `get_earnings_dates` fetch (quarters assigned to a fiscal year by their derived calendar quarter-end falling within the year ending at the true fiscal-year-end; summed only when all four slots are filled, else `None`). It exists because `eps_actual` (GAAP diluted) and the forward `eps_estimate` (adjusted consensus) are on different bases — a client anchoring a P/E walk needs both ends on one basis. Best-effort enrichment, like revenue. Key caveat: `income_stmt` is the **fundamentals endpoint Yahoo IP-gates hardest from data-centre IPs** (intermittently — prod has fetched it successfully), so it's fetched best-effort: a blocked fetch drops the reported years but leaves the forward ones, and the **merge-preserving sync** keeps the stored reported rows when that happens. **Currency (foreign ADRs):** the same shared `adapters/yfinance_currency.py` normalizer maps a foreign issuer onto its **trading** currency — `income_stmt` (EPS/revenue/net income) + `revenue_estimate` are reliably reporting-currency (converted by the FX rate), while the *market* EPS surfaces (`earnings_estimate` **and** the `earnings_dates`-summed `eps_actual_consensus`) ride the *detected* market rate (see the quarterly bullet); this is what stops a TWD-reporting ADR from serving an `eps_actual` of 331 next to a forward estimate of 16. `adapters/db_cached_annual_earnings_adapter.py` — the same **read-through** DB cache as quarterly (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `adapters/annual_earnings_estimates_adapter.py` — implements the `AnalystEstimatesProvider` port by **projecting the annual-earnings slice's stored forward years** into an `AnalystEstimates` block (first upcoming year → FY1, next → FY2); it feeds the enriched stock snapshot (`GetStockInfo`, now the AI analysis context — the standalone `GET /stocks/{symbol}` endpoint was removed). **DB-only, no live fall-through**: estimates are best-effort enrichment, so an uncached symbol just omits the forward metrics until the annual read path (lazy fill) or its cron populates the rows. This replaced the dedicated `stock_analyst_estimates` table + its own Yahoo fetch and cron — the annual slice stores the *same* `earnings_estimate`/`revenue_estimate` consensus, so the forward consensus has one source of truth (the FY1 low/high range and analyst counts were dropped with the table; the entities keep the full block, feeding `forward_pe`, the growth block, and the Bedrock analysis context)
@@ -143,7 +161,7 @@ only this one file changes.
 - `adapters/sec_edgar_revenue_segments_adapter.py` — live source for the revenue-segments slice: **SEC EDGAR** (`SecEdgarRevenueSegmentsProvider`), **keyless**, implementing `RevenueSegmentsProvider`. Walks ticker → CIK (`company_tickers.json`) → latest 10-K (`submissions`) → the filing's `_htm.xml` XBRL instance, and parses the dimensioned revenue facts into `RevenueSegment` entities on three axes (`StatementBusinessSegmentsAxis` → business, `ProductOrServiceAxis` → product, `StatementGeographicalAxis` → geography). Only *annual-duration* facts count (the quarterly facts a 10-K also carries are dropped by a ≥350-day period filter); the consolidated total (no member) is excluded. `_aggregate_axis` is the crux: it takes both **flat** single-axis facts (Apple's `iPhoneMember`) and **segment-nested** two-axis facts (Google's product members tagged under both `ProductOrServiceAxis` *and* the segment axis — summed across segments to the product total), which a naive single-axis filter would drop entirely. Prefers the most-specific revenue concept (`RevenueFromContractWithCustomerExcludingAssessedTax` > … > `Revenues`) on a duplicate. Sends a descriptive `User-Agent` (SEC asks) and **paces** its requests (`min_request_interval_seconds`, set by the wiring) under EDGAR's ~10 req/s ceiling — SEC welcomes data-centre IPs, so no IP-block retry machinery (unlike the Yahoo sources). `_parse_revenue_segments` is a pure function the tests drive on a canned instance; `_http` is the fake seam. `adapters/db_cached_revenue_segments_adapter.py` — the same **read-through** DB cache as the earnings/recommendations/news slices (DB-first, fetch-on-miss, no TTL/serve-stale)
 - `adapters/sec_edgar_insider_transactions_adapter.py` — live source for the insider-transactions slice: **SEC EDGAR** (`SecEdgarInsiderTransactionsProvider`), **keyless**, implementing `InsiderTransactionsProvider`. Walks ticker → CIK (`company_tickers.json`) → the filer's most recent **Form 4** filings (`submissions`, `form == "4"`, capped to `_MAX_FILINGS`=25) → each filing's raw ownership XML → parses its `nonDerivativeTable` transactions into `InsiderTransaction` entities. The Form 4 XML carries **no namespace** (plain `<ownershipDocument>`), so `_parse_form4` (the pure tested seam) uses literal paths; per transaction it reads the `transactionCode` (`P`=open-market buy / `S`=sell / `M`/`F`/`A`/`G` = the comp/mechanics noise), shares, price (**a footnote-only price with no `<value>` → `None`**, so the derived dollar value is best-effort), acquired/disposed (A/D), and the reporting owner's name + relationship flags (`isOfficer`/`isDirector`/`isTenPercentOwner`) + `officerTitle`. **Non-derivative only** — the derivative table (option grants/exercises) is compensation plumbing, not the buy/sell signal, so it's out of scope. Fetches one XML **per filing** (heavier than the revenue-segments 1-per-ticker walk), each **best-effort** — an unreadable filing is skipped, not fatal; the CIK-map + submissions reads are required (a failure there raises `StockDataUnavailable`). Sends a descriptive `User-Agent` and **paces** requests (`min_request_interval_seconds`) under EDGAR's ~10 req/s ceiling; `_http` is the fake seam. `adapters/db_cached_insider_transactions_adapter.py` — a **TTL** read-through DB cache (**unlike** the earnings/recs/news slices' no-TTL+cron caches): serves stored rows while their newest `fetched_at` is within the TTL (`INSIDER_CACHE_TTL_HOURS`, default 24), else re-fetches on read and stores — the freshness mechanism for a slice with **no cron**, mirroring the `SqlInvestmentAnalysisCache` TTL precedent. Serves **stale** rows when a re-fetch fails or comes back empty (a cold miss with a failing source still propagates → 502); doesn't cache an empty result
 - `adapters/db_only_context_providers.py` — DB-only (no live fall-through) views of the quarterly / annual / recommendations caches, used **only by the AI-analysis path**. Each wraps the slice's persistence repository and implements the slice's *provider* port, serving stored rows and returning an **empty** timeline on a miss (never a live fetch). The read endpoints keep the read-through `db_cached_*` adapters (a miss there *should* fetch); the analysis path swaps in these so best-effort context can't add a synchronous, rate-limited Yahoo round-trip to a user request. Keeping the caches current stays the crons' job
-- the tiny `analysis/` sub-slice holds the **read-through result cache** for *every* AI analysis, all over the one `investment_analysis_cache` table (migration 0022, extended by 0030), keyed `(kind, symbol)` so reads never collide — one *kind* per analyser. Three adapters share the table: `analysis/db_repository.py` (`SqlInvestmentAnalysisCache`, the **ETF** flat analysis), `analysis/scorecard_db_repository.py` (`SqlStockScorecardCache`, the sectioned **stock** scorecard, on the `sections` JSON column), and `analysis/ai_analysis_cache_repository.py` (`SqlAiAnalysisCache`, **one generic adapter** parameterized by a *kind* + a codec, backing the five newer reads — `earnings`/`ratings`/`fundamentals`/`sector`/`market`). Migration 0030 added three shared nullable columns the newer kinds ride — `verdict` (their headline enum: earnings `trend`, ratings/fundamentals `verdict`, sector/market `tone`), `findings` (the flat takeaway list), `details` (the market-wide nested structure) — and relaxed the stock/ETF-only `recommendation`/`confidence`/`strengths`/`risks` to nullable (ratings/fundamentals reuse `confidence`; `thesis` is the universal summary). The two market-wide kinds take no symbol, so they key on a `_MARKET_` sentinel. Each use case returns a stored read while it's within its kind's TTL of its `generated_at` (a **per-kind** default tuned to how often that analysis's input changes — see `router.analysis_cache_ttl`), else regenerates and upserts (only a *complete* read is cached, so a rare hollow model result is never frozen). Best-effort both ways (a read failure is a miss, a write failure is swallowed), so caching only ever makes the endpoint faster, never wrong. Deliberately **not** a `stocks` child — an analysis is served for any valid ticker, and forcing an anchor row per analysed symbol would leak arbitrary tickers into the screened universe (so it stands alone, like `etfs`)
+- the tiny `analysis/` sub-slice holds the **read-through result cache** for *every* AI analysis, all over the one `investment_analysis_cache` table (migration 0022, extended by 0030), keyed `(kind, symbol)` so reads never collide — one *kind* per analyser. Three adapters share the table: `analysis/db_repository.py` (`SqlInvestmentAnalysisCache`, the **ETF** flat analysis), `analysis/scorecard_db_repository.py` (`SqlStockScorecardCache`, the sectioned **stock** scorecard, on the `sections` JSON column), and `analysis/ai_analysis_cache_repository.py` (`SqlAiAnalysisCache`, **one generic adapter** parameterized by a *kind* + a codec, backing the five newer reads — `earnings`/`ratings`/`fundamentals`/`sector`/`market`). Migration 0030 added three shared nullable columns the newer kinds ride — `verdict` (their headline enum: earnings `trend`, ratings/fundamentals `verdict`, sector/market `tone`), `findings` (the flat takeaway list), `details` (the market-wide nested structure) — and relaxed the stock/ETF-only `recommendation`/`confidence`/`strengths`/`risks` to nullable (ratings/fundamentals reuse `confidence`; `thesis` is the universal summary). The two market-wide kinds take no symbol, so they key on a `_MARKET_` sentinel. Each use case returns a stored read while it's within its kind's TTL of its `generated_at` (a **per-kind** default tuned to how often that analysis's input changes — see `wiring.analysis_cache_ttl`), else regenerates and upserts (only a *complete* read is cached, so a rare hollow model result is never frozen). Best-effort both ways (a read failure is a miss, a write failure is swallowed), so caching only ever makes the endpoint faster, never wrong. Deliberately **not** a `stocks` child — an analysis is served for any valid ticker, and forcing an anchor row per analysed symbol would leak arbitrary tickers into the screened universe (so it stands alone, like `etfs`)
 - `adapters/yfinance_options_adapter.py` — live source for the ticker card's `options_metrics` block: **Yahoo via `yfinance`** (`Ticker.options` for the expiration list, `Ticker.option_chain(date)` for one expiry's calls/puts), keyless, implementing the ticker slice's `OptionChainProvider` port. Maps chain rows → `OptionContract` entities (strike, bid/ask/last, volume, open interest, IV); every *derived* figure (ATM IV, expected move, insurance cost, put/call) is entity logic, not adapter logic. **No DB cache or cron** — options prices decay by the hour, so the no-TTL read-through pattern doesn't fit; the read is live per request (the endpoint's 5-min Cache-Control is the only damping) and best-effort even when requested, since Yahoo intermittently blocks data-centre IPs
 - `adapters/wikipedia_index_membership_adapter.py` — live source for the index-membership slice: **Wikipedia** (`List_of_S&P_500_companies` + `Nasdaq-100`) via `httpx` + `pandas.read_html`, implementing `IndexMembershipSource`. **Keyless** — this replaced Finnhub's `/index/constituents`, which is a **paid** capability the deployed key `403`'d on; Wikipedia welcomes data-centre-IP reads (works from Fargate where Yahoo/Nasdaq/ETF-issuer endpoints block us), so the wiring is now always-constructable like the universe sweep (no `FINNHUB_API_KEY`, no 503 gate). Parses by **column signature** — reads every table and keeps the one whose flat `Symbol`/`Ticker` column yields the most tickers — so each page's *changes* log (S&P "Selected changes", Nasdaq "Component changes") is ignored, directly fixing the bug that sank the **earlier** Wikipedia attempt (it grabbed the Nasdaq-100 change-log table). Sends a descriptive `User-Agent` (Wikipedia asks). Fetches each page independently, normalizes tickers to the anchor's convention (`BRK.B` → `BRK-B`), and returns the two ticker sets; a single page's failure (transport / non-200 / unparseable body) degrades to empty (the other still syncs), both failing raises `StockDataUnavailable`. Same fake-`_http` seam the other adapters use for offline tests. (The earlier abandoned attempt is what the docstring's caution refers to; the issuer-ETF/Yahoo routes remain blocked from data-centre IPs — Wikipedia is the one that isn't.)
 - `adapters/yfinance_screener_adapter.py` — live source for the universe slice: **Yahoo via `yfinance`** (`yf.screen` + `EquityQuery`), the ≥$1B US screen (`ScreenedStock` per row) written onto the `stocks` anchor. Each screen quote also carries the `regularMarketPrice`, which the adapter keeps (positive only) on `ScreenedStock.price` — not persisted itself, but the price leg the sync's valuation pass pairs with the quarterly TTM to derive the stored `pe_ratio`
@@ -151,14 +169,14 @@ only this one file changes.
 - `adapters/yfinance_etf_profile_adapter.py` — the ETF slice's per-ticker **profile** enrichment, implementing `EtfProfileProvider`: **Yahoo via `yfinance`**, reading `Ticker.info` (category, `fundFamily`, `navPrice`, `yield`, the trailing-return ladder) + `Ticker.funds_data` (description, `top_holdings`, `sector_weightings`), keyless. The bulk screen carries none of this (Yahoo publishes it only per-ticker), so the sync fetches it a fund at a time and **persists** it — the scalars onto the `etfs` row, the two lists into the `etf_sector_weightings` / `etf_top_holdings` child tables — and the detail endpoint serves that stored profile from the DB. **One exception: the trailing-return ladder (ytd/3y/5y) is fetched but no longer persisted** (migration 0021 dropped those columns) — only the detail card's `performance` block surfaces the 3y/5y, so the read path fetches them **live** from this same adapter when that block is requested (best-effort, the sole live Yahoo call on the ETF read path), rather than storing a snapshot that drifts between syncs. One fetch per fund covers everything, so this **subsumed the old single-column category adapter** (`yfinance_etf_category_adapter`, removed) — category rides the same `.info` blob. Per-field unit normalization to human percent (Yahoo mixes fractions and already-percent numbers; verified against VOO), and the shared `yfinance_session` crumb-401 retry like the stock classifier. Contract: **raises `StockDataUnavailable` on a hard `.info` read** (a raised error or an empty-after-retry `.info` — the block signal, so the sync skips + retries the fund and leaves its stored profile intact), best-effort past that (a served-but-sparse fund, or a failed `funds_data`, yields a partial profile)
 - `stocks/models.py` — the shared `stocks` anchor as its own tiny slice (`app/stocks/stocks/`): owns the `StockRecord` model (the `stocks` table — `ticker` (unique lookup; the column was renamed from `symbol` by migration 0010 — the domain layers still say "symbol"), the fill-once identity facts `name` and `exchange`, and the mutable `revenue_growth_yoy` / `eps_growth_yoy` **latest trailing YoY snapshot** (migration 0011 — percent; EPS on the analyst-consensus/adjusted basis; **overwritten** every refresh by the annual-earnings slice as the newest reported year rolls forward, unlike the fill-once facts) and their **forward** counterparts `forward_revenue_growth_yoy` / `forward_eps_growth_yoy` (migration 0018 — the analyst-consensus FY1→FY2 change, feeding the universe search's forward-growth sorts and the AI analysis context; written the same way by the annual slice from its stored forward years, both legs on the consensus basis; more often null since they need *two* upcoming years), the universe screen facts `sector` / `industry` / `market_cap` / `screened_at` (migration 0012; `industry` added by 0013), the `in_sp500` / `in_nasdaq100` index-membership flags (migration 0014 — `NOT NULL`, default `False`; reconciled by the index-membership slice: current members marked, drop-outs cleared), and the `pe_ratio` trailing-P/E snapshot (migration 0017 — the consensus-basis figure the ticker card computes live, materialized for search sorting; **overwritten** every run by the universe sync's valuation pass, like `market_cap`, and null until four quarters are cached or on a trailing loss)) and its helpers `get_or_create_stock`, `anchor_facts`, `fill_exchange`. Owned by no single feature; per-feature tables hang off it and import it from here
 
-Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<concern>_adapter.py` for those under `app/stocks/adapters/` — and a vendor-specific subfolder drops the now-redundant vendor prefix (the Bedrock analysers are `app/stocks/adapters/bedrock/<concern>_adapter.py`, e.g. `analysis_adapter.py`). **"Provider" vs "adapter" is not a difference in kind** — both are Interface-Adapter-layer port implementations. The file *suffix* is only a folder convention; the *class* keeps the name of the **port** it implements — a live-feed port is a `*Provider`, static reference data a `*Repository` — so e.g. `BedrockAnalysisProvider` (in `analysis_adapter.py`) implements the `InvestmentAnalysisProvider` port.
+Naming: `<vendor>_<concern>_adapter.py` under `app/stocks/adapters/` — and a vendor-specific subfolder drops the now-redundant vendor prefix (the Bedrock analysers are `app/stocks/adapters/bedrock/<concern>_adapter.py`, e.g. `analysis_adapter.py`). The file *suffix* is only a folder convention; the *class* keeps the name of the **port** it implements — a live-feed port is a `*Provider`, static reference data a `*Repository` — so e.g. `BedrockAnalysisProvider` (in `analysis_adapter.py`) implements the `InvestmentAnalysisProvider` port.
 
 > **Analyst estimates (the forward consensus).** There is deliberately **no
 > estimates slice or table any more** (the `app/stocks/estimates/` sub-slice, its
 > `stock_analyst_estimates` table, and the `sync-estimates` workflow were removed by
 > migration 0006). The `AnalystEstimatesProvider` port lives in `app/stocks/ports.py`
 > beside the other snapshot-enrichment ports, and the wiring
-> (`get_estimates_provider` in `app/stocks/router.py`) builds
+> (`get_estimates_provider` in `app/stocks/wiring.py`) builds
 > `adapters/annual_earnings_estimates_adapter.py`, which projects the annual-earnings
 > slice's stored forward years into the `AnalystEstimates` entity. It backs the AI
 > analysis context (via `GetStockInfo`). Freshness
@@ -170,7 +188,7 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > shared `app/stocks/entities.py`): `QuarterlyEarnings` + `QuarterlyEarningsTimeline`, plus
 > `ports` / `repository` / `db_repository` / `models` / `use_cases` / `schemas` (both HTTP
 > endpoints live in `app/stocks/endpoints/`: the read `quarterly_earnings_endpoints.py` and
-> the `cron_quarterly_earnings_endpoints.py`, so the slice itself has no `router.py`).
+> the `cron_quarterly_earnings_endpoints.py`, so the slice itself carries no HTTP code).
 > It serves a stock's 4 most-recent reported quarters (reported EPS + a surprise *computed*
 > from actual vs. estimate) and up to **2** upcoming quarters — the `0q`/`+1q` forward EPS +
 > revenue estimates, which is as far out as Yahoo publishes structured forward data (so 2 is
@@ -200,7 +218,7 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > `entities.py`** (`AnnualEarnings` + `AnnualEarningsTimeline`), plus
 > `ports` / `repository` / `db_repository` / `models` / `use_cases` / `schemas` (both HTTP
 > endpoints live in `app/stocks/endpoints/`: the read `annual_earnings_endpoints.py` and the
-> `cron_annual_earnings_endpoints.py`, so the slice has no `router.py`). It serves a stock's
+> `cron_annual_earnings_endpoints.py`, so the slice carries no HTTP code). It serves a stock's
 > 4 most-recent reported fiscal years (reported diluted EPS + revenue + **net income**, plus
 > `eps_actual_consensus` — the year's actual on the analyst-consensus/adjusted basis, summed
 > from its four quarterly "Reported EPS" announcements so a client can anchor a P/E walk on
@@ -257,8 +275,9 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > (consensus + targets + top firms) and returns a `verdict`/`confidence`/`summary`/`findings` read: it
 > mirrors the earnings-analysis pattern (structured forced-tool output, a **read-through DB result
 > cache** via the shared `SqlAiAnalysisCache` [`kind="ratings"`], DB-only
-> context via `DbOnlyRecommendationsProvider` + `DbOnlyRatingChangesProvider`), lives in `router.py`
-> with the other Bedrock analyses (`GetRatingsFindings` + `adapters/bedrock/ratings_analysis_adapter.py`), and
+> context via `DbOnlyRecommendationsProvider` + `DbOnlyRatingChangesProvider`), lives in the
+> analysis slice with the other Bedrock analyses (`analysis/use_cases.py`'s `GetRatingsFindings` +
+> `adapters/bedrock/ratings_analysis_adapter.py`, endpoint in `endpoints/analysis_endpoints.py`), and
 > takes its own `BEDROCK_RATINGS_ANALYSIS_MODEL_ID` override. It replaced the two
 > separate reads (`GET /stocks/{symbol}/recommendations` + `GET /stocks/{symbol}/rating-changes`,
 > whose endpoint modules were removed); the path is grouped under the `/stocks/ticker/{ticker}`
@@ -473,7 +492,7 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > `StockFundamentalsProvider` + `CompanyProfileProvider` (Finnhub, `None` without a key),
 > and the `QuarterlyEarningsProvider` (the quarterly slice's DB cache, backing the trailing
 > P/E's TTM) — wired by reusing
-> the composition root's factories from `router.py`; the composite result (`TickerCard`)
+> the shared factories from `wiring.py`; the composite result (`TickerCard`)
 > is a dataclass beside the use case, not a slice entity, since it just bundles shared
 > entities around the slice's domain rules (it also carries the `include` set so the
 > presenter can tell "not requested" from "requested but unavailable"). The quote is the
@@ -483,23 +502,34 @@ Naming: `<vendor>_<concern>_provider.py` for the flat adapters; `<vendor>_<conce
 > two sampled expiries (not the whole board), so thin sessions read noisier than a
 > market-wide ratio.
 
-### 5. DTOs — `app/stocks/schemas.py`
+### 5. DTOs — each slice's `schemas.py`
 Pydantic `BaseModel`s for HTTP responses. Pydantic is a serialization detail, so
 DTOs live at the edge, deliberately **separate from entities** — that's what
 keeps the core framework-agnostic. JSON-shape concerns (field aliases like
-`1w`/`3m`) belong here, not on the entity.
+`1w`/`3m`) belong here, not on the entity. The shared `app/stocks/schemas.py`
+keeps only the DTOs several slices reuse (`StockPerformanceResponse`).
 
-### 6. Router — `app/stocks/router.py`
-The **composition root**. Three jobs:
+### 6. Endpoints — `app/stocks/endpoints/*.py` + `app/stocks/wiring.py`
+The **composition root**, one module per slice's HTTP surface. Each endpoint
+module has three jobs:
 - **Controller** — each `@router.get` endpoint unpacks the request, calls
   `use_case.execute(...)`, and maps domain exceptions → HTTP status.
 - **Presenter** — `_present_*` functions turn the returned entity into a DTO.
 - **Wiring** — `get_*` factory functions read env vars and build providers
   (`@lru_cache` for singletons), injected via FastAPI `Depends`.
 
+Slice-specific wiring lives in the slice's endpoint module (a Bedrock analyser
+factory in `analysis_endpoints.py`, the logo vendor in `logo_endpoints.py`).
+`app/stocks/wiring.py` holds only the factories shared **across** endpoint
+modules — the Alpaca price-feed singleton (`get_provider`, with its missing-keys
+503 gate), the Finnhub enrichment providers, the yfinance options chain, the
+DB-projected estimates, and `analysis_cache_ttl` — so no endpoint module ever
+imports another's router. `app/main.py` includes every endpoint module's
+`APIRouter`.
+
 ### 7. Exceptions — `app/stocks/exceptions.py`
 Domain errors in business terms, independent of HTTP and vendors:
-`StockNotFound`, `StockDataUnavailable`. Adapters raise them; the router
+`StockNotFound`, `StockDataUnavailable`. Adapters raise them; the endpoint
 translates them.
 
 ---
@@ -525,14 +555,15 @@ translates them.
 | `StockDataUnavailable` | 502 |
 | missing required API key (in a `get_*` factory) | 503 |
 
-**Config & secrets** come from environment variables, read only in the router's
-wiring functions (`APCA_API_KEY_ID`, `LOGODEV_TOKEN`,
+**Config & secrets** come from environment variables, read only in the
+composition root's wiring factories — `wiring.py` and the endpoint modules
+(`APCA_API_KEY_ID`, `LOGODEV_TOKEN`,
 `DATABASE_URL`, `CRON_SYNC_TOKEN`; `FINNHUB_API_KEY` is gone — Finnhub was retired,
 fundamentals now come keyless from the Yahoo `.info` sweep on the anchor; the Bedrock analysers add `BEDROCK_REGION` /
 `BEDROCK_ANALYSIS_MODEL_ID` — plus per-analyser model overrides like
 `BEDROCK_EARNINGS_ANALYSIS_MODEL_ID` / `BEDROCK_RATINGS_ANALYSIS_MODEL_ID`, and the AI screener's
 `BEDROCK_SCREENER_MODEL_ID` — and the analysis
-result cache uses a **per-kind TTL** (`router.analysis_cache_ttl(kind)`), each default tuned to how often that analysis's *input* changes — earnings 12h and ratings/etf 6h (slow DB/cron data, one row per ticker), stock/fundamentals 4h (slow substance + a live-price valuation slice), sector 30m and market 1h (a live intraday board, but one shared row so a long TTL saves ~nothing); override per kind via `ANALYSIS_CACHE_TTL_MINUTES_<KIND>` or pin all at once with the global `ANALYSIS_CACHE_TTL_MINUTES`; the insider-transactions read cache adds the optional `INSIDER_CACHE_TTL_HOURS`, default 24). The `/internal/*/sync` cron endpoints are guarded
+result cache uses a **per-kind TTL** (`wiring.analysis_cache_ttl(kind)`), each default tuned to how often that analysis's *input* changes — earnings 12h and ratings/etf 6h (slow DB/cron data, one row per ticker), stock/fundamentals 4h (slow substance + a live-price valuation slice), sector 30m and market 1h (a live intraday board, but one shared row so a long TTL saves ~nothing); override per kind via `ANALYSIS_CACHE_TTL_MINUTES_<KIND>` or pin all at once with the global `ANALYSIS_CACHE_TTL_MINUTES`; the insider-transactions read cache adds the optional `INSIDER_CACHE_TTL_HOURS`, default 24). The `/internal/*/sync` cron endpoints are guarded
 by a shared bearer token: each `@router.post` depends on `require_cron_token`
 (`app/stocks/endpoints/cron_auth.py`), which requires `Authorization: Bearer
 $CRON_SYNC_TOKEN` (constant-time compared) and is **fail-closed** — a `503` when the token is
@@ -551,31 +582,32 @@ secrets.
 
 | You're adding… | Put it in |
 |----------------|-----------|
-| A new concept / a calculation that's a fact about one object | an **entity** (`entities.py`), as a field or `@property` |
-| A pure calculation over a price series (no I/O) | a domain helper like `indicators.py` |
-| A new action/workflow (validate → fetch → assemble) | a **use case** class in `use_cases.py` |
-| A need for data the use case can't compute itself | a new **port** in `ports.py` |
-| A call to a third-party API or the database | an **adapter** implementing that port |
-| A new field/shape in the JSON response | a **DTO** in `schemas.py` + its `_present_*` mapper |
-| A new HTTP route | an **endpoint** + wiring in `router.py` |
+| A new concept / a calculation that's a fact about one object | an **entity** (the slice's `entities.py`; the shared kernel only if several slices need it), as a field or `@property` |
+| A pure calculation over a price series (no I/O) | a domain helper like `charts/indicators.py` |
+| A new action/workflow (validate → fetch → assemble) | a **use case** class in the slice's `use_cases.py` |
+| A need for data the use case can't compute itself | a new **port** in the slice's `ports.py` (shared kernel `ports.py` only if several slices need it) |
+| A call to a third-party API or the database | an **adapter** in `adapters/` implementing that port |
+| A new field/shape in the JSON response | a **DTO** in the slice's `schemas.py` + its `_present_*` mapper |
+| A new HTTP route | an **endpoint** module in `endpoints/` (+ `app/main.py` include); shared factories in `wiring.py` |
 | A reusable domain error | `exceptions.py` |
 
 ---
 
 ## Adding a feature — work inward to outward
 
-1. **Entity** — model the data and its intrinsic rules in `entities.py`.
-2. **Port** — declare the interface the use case needs in `ports.py` (returns
-   entities, raises domain exceptions).
-3. **Use case** — write the `execute()` orchestration in `use_cases.py`, depending
-   only on the entity + port.
-4. **Adapter** — implement the port against the real vendor/DB in a
-   `*_provider.py`; map vendor models → entities and vendor errors → domain
-   exceptions.
-5. **DTO + presenter** — add the response model in `schemas.py` and a `_present_*`
-   in `router.py`.
-6. **Endpoint + wiring** — add the route and the `Depends`/`@lru_cache` factory
-   in `router.py`; translate exceptions to HTTP.
+1. **Entity** — model the data and its intrinsic rules in the slice's `entities.py`.
+2. **Port** — declare the interface the use case needs in the slice's `ports.py`
+   (returns entities, raises domain exceptions).
+3. **Use case** — write the `execute()` orchestration in the slice's
+   `use_cases.py`, depending only on the entity + port.
+4. **Adapter** — implement the port against the real vendor/DB in an
+   `adapters/*_adapter.py`; map vendor models → entities and vendor errors →
+   domain exceptions.
+5. **DTO + presenter** — add the response model in the slice's `schemas.py` and a
+   `_present_*` in its endpoint module.
+6. **Endpoint + wiring** — add the route and the `Depends`/`@lru_cache` factory in
+   an `endpoints/<slice>_endpoints.py` module (reuse `wiring.py` for the shared
+   singletons), include its router in `app/main.py`, translate exceptions to HTTP.
 7. **Test** — drive the use case with a **fake** implementing the port; assert the
    endpoint via `TestClient` with the fake injected through `app.dependency_overrides`.
 
@@ -624,24 +656,50 @@ app/
 ├── main.py                 # FastAPI app: CORS, lifespan, /healthz, include_router
 ├── db.py                   # engine/session/Base/get_db (DATABASE_URL-driven)
 └── stocks/                 # the stocks vertical slice
-    ├── entities.py         # ── domain objects + intrinsic rules
-    ├── indicators.py       # ── pure domain calc (EMA, support levels)
-    ├── ports.py            # ── abstract interfaces (ABCs)
-    ├── use_cases.py        # ── orchestration (one class per action)
+    ├── entities.py         # ── SHARED KERNEL entities (Stock/Quote/Candle/Timeframe/KeyMetrics/AnalystEstimates/…)
+    ├── ports.py            # ── SHARED KERNEL ports (StockData/Quote/BulkQuote/Performance/AllTimeHigh/Fundamentals/Profile/Estimates)
+    ├── schemas.py          # ── shared DTOs (StockPerformanceResponse — reused by ticker/etfs/market)
+    ├── wiring.py           # ── shared DI factories (Alpaca singleton + 503 gate, Finnhub, options chain, estimates, analysis TTL)
     ├── exceptions.py       # ── domain errors
-    ├── *_provider.py       # ── vendor adapters (Alpaca/Finnhub/Logo.dev)
-    ├── adapters/           # ── vendor adapters as *_adapter.py (earnings: yfinance + caches; estimates projection;
+    ├── adapters/           # ── ALL vendor adapters as *_adapter.py (alpaca, finnhub×2, logodev, caching decorator;
+    │   │                   #    earnings: yfinance + caches; estimates projection;
     │   │                   #    universe screen + ETF screen/profile: yfinance; index membership: wikipedia;
     │   │                   #    revenue segments: SEC EDGAR + cache; db_only_context_providers: DB-only earnings/recs/rating-changes views for the analysis path;
     │   │                   #    yfinance_session: crumb-retry/pacing seam; yfinance_currency: foreign-ADR reporting→trading currency normalizer)
     │   └── bedrock/        #    the six Claude-on-Bedrock AI analysers as <concern>_adapter.py
     │                       #    (analysis / etf_analysis / earnings_analysis / ratings_analysis / sector_analysis / market_summary)
     │                       #    + screener_query_adapter (translates a plain-English screen request into ScreenIntent filters — the AI screener, not an analyser)
-    ├── analysis/           # ── AI-analysis result cache (read-through, shared by ALL seven analyses over one table, by kind):
+    ├── charts/             # ── charts sub-slice (candles + EMA + support levels; no table/cron):
+    │   ├── indicators.py        #    pure domain calc (EMA, support levels) — imports only kernel entities
+    │   ├── chart_window.py      #    edge helper: range preset → time window
+    │   ├── ports.py             #    CandleProvider (implemented by the Alpaca adapter)
+    │   ├── use_cases.py         #    GetStockCandles + GetStockEma (warmup+trim) + GetStockSupportLevels
+    │   └── schemas.py           #    Candle/EMA/SupportLevel DTOs (endpoints in endpoints/chart_endpoints.py)
+    ├── market/             # ── market-board sub-slice (the non-AI whole-market reads; no table/cron):
+    │   ├── entities.py          #    SectorPerformance + MarketIndexPerformance (proxy-ETF boards)
+    │   ├── ports.py             #    SectorPerformanceProvider + MarketOverviewProvider (Alpaca-implemented)
+    │   ├── use_cases.py         #    GetSectorPerformance (ranked board) + GetMarketOverview (index board)
+    │   └── schemas.py           #    sector-board DTOs (endpoint in endpoints/market_endpoints.py)
+    ├── analysis/           # ── AI-analysis sub-slice (every Bedrock read + the result caches, all over one table by kind):
+    │   ├── entities.py          #    all AI result shapes: StockScorecard (+Recommendation/Confidence/Section*),
+    │   │                        #    InvestmentAnalysis (the ETF flat analysis), EarningsAnalysis(+Trend),
+    │   │                        #    RatingsAnalysis(+Verdict), FundamentalsAnalysis(+Verdict), SectorAnalysis,
+    │   │                        #    MarketSummary (+MarketTone/SectorHighlight/MarketPeriod*)
+    │   ├── ports.py             #    the six analyser ports (StockScorecardProvider + Sector/Market/Earnings/
+    │   │                        #    Ratings/FundamentalsAnalysisProvider) + the caches (StockScorecardCache /
+    │   │                        #    InvestmentAnalysisCache / generic AiAnalysisCache)
+    │   ├── use_cases.py         #    GetStockInfo (the enriched snapshot = the analysis context) +
+    │   │                        #    GetStockAnalysis / GetEarningsAnalysis / GetRatingsFindings /
+    │   │                        #    GetFundamentalsAnalysis / GetSectorAnalysis / GetMarketSummary
+    │   ├── schemas.py           #    analysis DTOs (endpoints in endpoints/analysis_endpoints.py)
     │   ├── models.py                        #    AnalysisCacheRecord (`investment_analysis_cache`, keyed (kind, symbol); standalone)
     │   ├── db_repository.py                 #    SqlInvestmentAnalysisCache (the ETF flat analysis)
     │   ├── scorecard_db_repository.py       #    SqlStockScorecardCache (the sectioned stock scorecard, on the `sections` column)
     │   └── ai_analysis_cache_repository.py  #    SqlAiAnalysisCache — one GENERIC adapter (kind + codec) for earnings/ratings/fundamentals/sector/market
+    ├── logo/               # ── logo sub-slice (tiny: one vendor read, no table/cron):
+    │   ├── entities.py          #    Logo (bytes + MIME)
+    │   ├── ports.py             #    LogoProvider (Logo.dev-implemented)
+    │   └── use_cases.py         #    GetStockLogo (endpoint in endpoints/logo_endpoints.py)
     ├── stocks/             # ── shared `stocks` anchor slice:
     │   └── models.py            #    StockRecord (the `stocks` table: ticker/name/exchange + trailing YoY growth +
     │                            #    universe facts + in_sp500/in_nasdaq100 flags) + get_or_create_stock, anchor_facts, fill_exchange
@@ -733,7 +791,11 @@ app/
     │   ├── cron_annual_earnings_endpoints.py     #  POST /internal/earnings/annual/sync
     │   ├── annual_earnings_endpoints.py          #  GET /stocks/{symbol}/earnings/annual
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
-    │   ├── analyst_endpoints.py                  #  GET /stocks/ticker/{ticker}/analyst-info (trends + price targets + rating-change events + top credible firms, consolidated); the AI review GET .../analyst-info/analysis is wired in router.py
+    │   ├── analyst_endpoints.py                  #  GET /stocks/ticker/{ticker}/analyst-info (trends + price targets + rating-change events + top credible firms, consolidated); the AI review GET .../analyst-info/analysis lives in analysis_endpoints.py
+    │   ├── chart_endpoints.py                    #  GET /stocks/ticker/{ticker}/candles + .../ema + .../support-levels
+    │   ├── market_endpoints.py                   #  GET /sectors (the ranked sector board)
+    │   ├── analysis_endpoints.py                 #  the five AI reads: GET /stocks/{symbol}/analysis + /stocks/{symbol}/earnings/analysis + /stocks/ticker/{ticker}/analyst-info/analysis + /sectors/analysis + /market/summary
+    │   ├── logo_endpoints.py                     #  GET /stocks/{symbol}/logo (raw image bytes)
     │   ├── cron_news_endpoints.py                #  POST /internal/news/sync
     │   ├── news_endpoints.py                     #  GET /stocks/{symbol}/news
     │   ├── cron_revenue_segments_endpoints.py    #  POST /internal/revenue-segments/sync
@@ -746,10 +808,7 @@ app/
     │   ├── cron_universe_endpoints.py            #  POST /internal/universe/sync (fire-and-forget)
     │   ├── cron_index_membership_endpoints.py    #  POST /internal/index-membership/sync (fire-and-forget)
     │   └── background_sync.py                    #  shared fire-and-forget helper (202 + per-slice single-flight)
-    ├── chart_window.py     # ── edge helper: range preset → time window
-    ├── progress.py         # ── shared helper: iter_with_progress logs a cron sweep's % done (CloudWatch)
-    ├── schemas.py          # ── HTTP response DTOs (pydantic)
-    └── router.py           # ── endpoints + presenters + DI wiring (composition root)
+    └── progress.py         # ── shared helper: iter_with_progress logs a cron sweep's % done (CloudWatch)
 tests/                      # offline; fakes through the ports (mirrors app: tests/stocks, tests/earnings, tests/recommendations, tests/ticker, tests/adapters, tests/endpoints)
 alembic/                    # database migrations
 infra/                      # Terraform (modules + environments)

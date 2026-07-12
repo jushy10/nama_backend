@@ -49,9 +49,9 @@ from app.stocks.entities import (
 )
 from app.stocks.etfs.repository import EtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.charts.ports import CandleProvider
 from app.stocks.ports import (
     AnalystEstimatesProvider,
-    CandleProvider,
     StockDataProvider,
     StockPerformanceProvider,
     StockQuoteProvider,

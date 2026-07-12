@@ -35,14 +35,14 @@ Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
-from app.stocks.entities import (
+from app.stocks.analysis.entities import (
     MarketTone,
     SectorAnalysis,
     SectorHighlight,
-    SectorPerformance,
 )
+from app.stocks.analysis.ports import SectorAnalysisProvider
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ports import SectorAnalysisProvider
+from app.stocks.market.entities import SectorPerformance
 
 # The key the adapter reports failures under — there is no single symbol here, so
 # the board as a whole is named, the same convention the Alpaca sector adapter uses.

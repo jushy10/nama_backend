@@ -24,8 +24,7 @@ from app.stocks.analysis.ai_analysis_cache_repository import (
     ratings_analysis_cache,
     sector_analysis_cache,
 )
-from app.stocks.analysis.models import AnalysisCacheRecord
-from app.stocks.entities import (
+from app.stocks.analysis.entities import (
     Confidence,
     EarningsAnalysis,
     EarningsTrend,
@@ -41,6 +40,7 @@ from app.stocks.entities import (
     SectorAnalysis,
     SectorHighlight,
 )
+from app.stocks.analysis.models import AnalysisCacheRecord
 
 _NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 _MARKET = "_MARKET_"  # the sentinel key the market-wide reads use

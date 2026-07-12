@@ -30,8 +30,7 @@ from typing import Callable, Generic, TypeVar
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.stocks.analysis.models import AnalysisCacheRecord
-from app.stocks.entities import (
+from app.stocks.analysis.entities import (
     Confidence,
     EarningsAnalysis,
     EarningsTrend,
@@ -47,7 +46,8 @@ from app.stocks.entities import (
     SectorAnalysis,
     SectorHighlight,
 )
-from app.stocks.ports import AiAnalysisCache
+from app.stocks.analysis.models import AnalysisCacheRecord
+from app.stocks.analysis.ports import AiAnalysisCache
 
 logger = logging.getLogger(__name__)
 

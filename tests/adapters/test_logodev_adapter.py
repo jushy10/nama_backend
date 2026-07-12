@@ -11,9 +11,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.entities import Logo
+from app.stocks.logo.entities import Logo
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.logodev_provider import LogoDevProvider
+from app.stocks.adapters.logodev_adapter import LogoDevProvider
 
 
 class FakeHttpClient:

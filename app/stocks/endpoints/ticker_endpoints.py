@@ -48,6 +48,7 @@ request — freshness of the consensus legs is the annual-earnings slice's job
 (lazy fill + its sync cron).
 """
 
+import os
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -63,11 +64,13 @@ from app.stocks.entities import StockPerformance
 from app.stocks.etfs.db_repository import SqlEtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import AnalystEstimatesProvider, StockPerformanceProvider
-from app.stocks.router import (
+from app.stocks.adapters.bedrock.screener_query_adapter import (
+    BedrockScreenerQueryTranslator,
+)
+from app.stocks.wiring import (
     get_estimates_provider,
     get_options_provider,
     get_provider,
-    get_screener_translator,
 )
 from app.stocks.schemas import StockPerformanceResponse
 from app.stocks.ticker.db_repository import SqlTickerRepository
@@ -570,6 +573,27 @@ def search_stocks_endpoint(
     # query without going stale.
     response.headers["Cache-Control"] = "public, max-age=60"
     return _present_search(page)
+
+
+@lru_cache(maxsize=1)
+def get_screener_translator() -> ScreenerQueryTranslator:
+    # The AI screener's translation is its primary data (its reason to exist), so it's
+    # required — but like the analysis providers there's no secret to gate on: Bedrock
+    # authenticates through the process's AWS credentials (the ECS task role in
+    # production). Region + model id are config with sane defaults (the id may be a
+    # cross-region inference profile); BEDROCK_SCREENER_MODEL_ID overrides the model
+    # independently of the analysis providers. A missing 'bedrock' extra surfaces as a
+    # clean 503 here rather than a 500.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_SCREENER_MODEL_ID")
+    try:
+        if model_id:
+            return BedrockScreenerQueryTranslator(model_id=model_id, region=region)
+        return BedrockScreenerQueryTranslator(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI stock screening is not configured (install the 'bedrock' extra)."
+        ) from exc
 
 
 def get_ai_search_use_case(

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.stocks.entities import Candle, CandleSeries, Timeframe
-from app.stocks.indicators import (
+from app.stocks.charts.indicators import (
     SupportStrength,
     compute_ema,
     compute_support_levels,

@@ -16,9 +16,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.stocks.analysis.models import AnalysisCacheRecord
-from app.stocks.analysis.scorecard_db_repository import SqlStockScorecardCache
-from app.stocks.entities import (
+from app.stocks.analysis.entities import (
     Confidence,
     Recommendation,
     ScorecardSection,
@@ -26,6 +24,8 @@ from app.stocks.entities import (
     SectionStance,
     StockScorecard,
 )
+from app.stocks.analysis.models import AnalysisCacheRecord
+from app.stocks.analysis.scorecard_db_repository import SqlStockScorecardCache
 
 _NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 

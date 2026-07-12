@@ -15,13 +15,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import etf_endpoints as endpoints
-from app.stocks.entities import (
-    Confidence,
-    InvestmentAnalysis,
-    Quote,
-    Recommendation,
-    StockPerformance,
-)
+from app.stocks.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
+from app.stocks.entities import Quote, StockPerformance
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfDetail,

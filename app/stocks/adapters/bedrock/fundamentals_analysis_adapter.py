@@ -34,9 +34,14 @@ Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import log_model_cost
-from app.stocks.entities import Confidence, FundamentalsAnalysis, FundamentalsVerdict, Stock
+from app.stocks.analysis.entities import (
+    Confidence,
+    FundamentalsAnalysis,
+    FundamentalsVerdict,
+)
+from app.stocks.analysis.ports import FundamentalsAnalysisProvider
+from app.stocks.entities import Stock
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ports import FundamentalsAnalysisProvider
 from app.stocks.ticker.entities import PeHistoryStats
 from app.stocks.universe.entities import IndustryValuation
 

@@ -24,36 +24,44 @@ from app.stocks.adapters.bedrock.market_summary_adapter import (
 from app.stocks.adapters.bedrock.sector_analysis_adapter import (
     BedrockSectorAnalysisProvider,
 )
-from app.stocks.chart_window import ChartRange, resolve_window
-from app.stocks.entities import (
-    AllTimeHigh,
-    AnalystEstimates,
-    Candle,
-    CandleSeries,
+from app.stocks.charts.chart_window import ChartRange, resolve_window
+from app.stocks.analysis.entities import (
     Confidence,
     EarningsAnalysis,
     EarningsTrend,
-    GrowthMetrics,
-    KeyMetrics,
-    Logo,
-    MarketIndexPerformance,
     MarketIndexReturn,
     MarketPeriod,
     MarketPeriodHighlight,
     MarketSummary,
     MarketTone,
-    Quote,
     Recommendation,
     ScorecardSection,
     SectionMetric,
     SectionStance,
     SectorAnalysis,
     SectorHighlight,
-    SectorPerformance,
-    Stock,
-    StockPerformance,
     StockScorecard,
-    Timeframe,
+)
+from app.stocks.analysis.ports import (
+    AiAnalysisCache,
+    EarningsAnalysisProvider,
+    MarketSummaryProvider,
+    SectorAnalysisProvider,
+    StockScorecardCache,
+    StockScorecardProvider,
+)
+from app.stocks.analysis.use_cases import (
+    GetEarningsAnalysis,
+    GetMarketSummary,
+    GetSectorAnalysis,
+    GetStockAnalysis,
+    GetStockInfo,
+)
+from app.stocks.charts.ports import CandleProvider
+from app.stocks.charts.use_cases import (
+    GetStockCandles,
+    GetStockEma,
+    GetStockSupportLevels,
 )
 from app.stocks.earnings.annual.entities import (
     AnnualEarnings,
@@ -65,22 +73,42 @@ from app.stocks.earnings.quarterly.entities import (
     QuarterlyEarningsTimeline,
 )
 from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.endpoints.analysis_endpoints import (
+    get_market_summary,
+    get_sector_analysis,
+    get_stock_analysis,
+)
+from app.stocks.endpoints.chart_endpoints import (
+    get_stock_candles,
+    get_stock_ema,
+    get_stock_support_levels,
+)
+from app.stocks.endpoints.logo_endpoints import get_stock_logo
+from app.stocks.endpoints.market_endpoints import get_sector_performance
+from app.stocks.entities import (
+    AllTimeHigh,
+    AnalystEstimates,
+    Candle,
+    CandleSeries,
+    GrowthMetrics,
+    KeyMetrics,
+    Quote,
+    Stock,
+    StockPerformance,
+    Timeframe,
+)
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.stocks.logo.entities import Logo
+from app.stocks.logo.ports import LogoProvider
+from app.stocks.logo.use_cases import GetStockLogo
+from app.stocks.market.entities import MarketIndexPerformance, SectorPerformance
+from app.stocks.market.ports import MarketOverviewProvider, SectorPerformanceProvider
+from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
 from app.stocks.ports import (
-    AiAnalysisCache,
     AllTimeHighProvider,
     AnalystEstimatesProvider,
-    CandleProvider,
-    EarningsAnalysisProvider,
-    LogoProvider,
-    MarketOverviewProvider,
-    MarketSummaryProvider,
-    SectorAnalysisProvider,
-    SectorPerformanceProvider,
     StockDataProvider,
     StockPerformanceProvider,
-    StockScorecardCache,
-    StockScorecardProvider,
 )
 from app.stocks.recommendations.entities import (
     AnalystRecommendations,
@@ -93,30 +121,7 @@ from app.stocks.universe.entities import (
     MarketCapTier,
 )
 from app.stocks.universe.repository import StockSearchRepository
-from app.stocks.router import (
-    analysis_cache_ttl,
-    get_market_summary,
-    get_sector_analysis,
-    get_sector_performance,
-    get_stock_analysis,
-    get_stock_candles,
-    get_stock_ema,
-    get_stock_logo,
-    get_stock_support_levels,
-)
-from app.stocks.use_cases import (
-    GetEarningsAnalysis,
-    GetMarketOverview,
-    GetMarketSummary,
-    GetSectorAnalysis,
-    GetSectorPerformance,
-    GetStockAnalysis,
-    GetStockCandles,
-    GetStockEma,
-    GetStockInfo,
-    GetStockLogo,
-    GetStockSupportLevels,
-)
+from app.stocks.wiring import analysis_cache_ttl
 
 
 class FakeProvider(StockDataProvider):

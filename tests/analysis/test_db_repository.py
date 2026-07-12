@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.db import Base
 from app.stocks.analysis.db_repository import SqlInvestmentAnalysisCache
 from app.stocks.analysis.models import AnalysisCacheRecord
-from app.stocks.entities import Confidence, InvestmentAnalysis, Recommendation
+from app.stocks.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
 
 _NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 

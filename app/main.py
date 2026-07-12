@@ -57,8 +57,11 @@ from app.stocks.endpoints.cron_institutional_ownership_endpoints import (
 )
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.endpoints.heatmap_endpoints import router as heatmap_router
+from app.stocks.endpoints.analysis_endpoints import router as analysis_router
+from app.stocks.endpoints.chart_endpoints import router as chart_router
+from app.stocks.endpoints.logo_endpoints import router as logo_router
+from app.stocks.endpoints.market_endpoints import router as market_router
 from app.stocks.endpoints.seo_endpoints import router as seo_router
-from app.stocks.router import router as stocks_router
 
 # The web server (uvicorn/gunicorn) installs handlers only on its own `uvicorn*`
 # loggers and leaves the root logger at its default WARNING level, so an app-level
@@ -152,7 +155,14 @@ app.add_middleware(
     allow_methods=["*"],  # lets the OPTIONS preflight succeed instead of 405
     allow_headers=["*"],
 )
-app.include_router(stocks_router)
+# The gen-1 flat stocks router was dissolved into per-slice endpoint modules:
+# charts (candles/EMA/support levels), the market boards (/sectors), every
+# AI-analysis read (per-stock / earnings / ratings / sector / market summary),
+# and the logo image.
+app.include_router(chart_router)
+app.include_router(market_router)
+app.include_router(analysis_router)
+app.include_router(logo_router)
 # The per-quarter earnings read endpoint (GET /stocks/{symbol}/earnings/quarterly):
 # recent reported quarters + upcoming ones, served from the DB cache over yfinance. See
 # app/stocks/endpoints/quarterly_earnings_endpoints.py.

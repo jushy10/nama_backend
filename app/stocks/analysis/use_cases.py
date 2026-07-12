@@ -1,17 +1,37 @@
-"""Application Business Rules: the stock use cases.
+"""Application Business Rules: the AI-analysis use cases.
 
-Orchestrate the flow: validate/normalize the symbol, then ask the injected
-provider for the data. Depend only on the entity and the port — never on a
+Every AI-generated read the API serves — the enriched stock snapshot that backs
+the analyses (``GetStockInfo``), the sectioned stock scorecard, the earnings /
+ratings / fundamentals reads, and the market-wide sector + summary. Orchestrate
+the flow: validate/normalize the symbol, gather the context through ports, and
+hand it to the analyser. Depend only on the entities and the ports — never on a
 framework or a concrete provider.
 """
 
 import logging
 import time
-from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
+from app.stocks.analysis.entities import (
+    EarningsAnalysis,
+    FundamentalsAnalysis,
+    MarketSummary,
+    RatingsAnalysis,
+    SectorAnalysis,
+    StockScorecard,
+)
+from app.stocks.analysis.ports import (
+    AiAnalysisCache,
+    EarningsAnalysisProvider,
+    FundamentalsAnalysisProvider,
+    MarketSummaryProvider,
+    RatingsAnalysisProvider,
+    SectorAnalysisProvider,
+    StockScorecardCache,
+    StockScorecardProvider,
+)
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.annual.ports import AnnualEarningsProvider
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
@@ -19,45 +39,17 @@ from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
-    CandleSeries,
-    EarningsAnalysis,
-    FundamentalsAnalysis,
     KeyMetrics,
-    Logo,
-    MarketIndexPerformance,
-    MarketSummary,
-    RatingsAnalysis,
-    SectorAnalysis,
-    SectorPerformance,
     Stock,
     StockPerformance,
-    StockScorecard,
-    Timeframe,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.indicators import (
-    EmaSeries,
-    SupportLevelSeries,
-    ema_series,
-    support_levels,
-)
+from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
 from app.stocks.ports import (
-    AiAnalysisCache,
     AllTimeHighProvider,
     AnalystEstimatesProvider,
-    CandleProvider,
-    EarningsAnalysisProvider,
-    FundamentalsAnalysisProvider,
-    LogoProvider,
-    MarketOverviewProvider,
-    MarketSummaryProvider,
-    RatingsAnalysisProvider,
-    SectorAnalysisProvider,
-    SectorPerformanceProvider,
     StockDataProvider,
     StockPerformanceProvider,
-    StockScorecardCache,
-    StockScorecardProvider,
 )
 from app.stocks.recommendations.entities import (
     AnalystRatingChanges,
@@ -275,156 +267,6 @@ class GetStockInfo:
         except (StockNotFound, StockDataUnavailable):
             return None  # best-effort: never sink the price response
         return None if estimates.is_empty else estimates
-
-
-class GetStockLogo:
-    """Use case: retrieve the company logo image for a stock symbol."""
-
-    def __init__(self, provider: LogoProvider) -> None:
-        self._provider = provider
-
-    def execute(self, symbol: str) -> Logo:
-        return self._provider.get_logo(_normalize_symbol(symbol))
-
-
-class GetStockCandles:
-    """Use case: retrieve historical OHLC candles for charting."""
-
-    def __init__(self, provider: CandleProvider) -> None:
-        self._provider = provider
-
-    def execute(
-        self,
-        symbol: str,
-        timeframe: Timeframe,
-        *,
-        start: datetime | None = None,
-        end: datetime | None = None,
-    ) -> CandleSeries:
-        if start is not None and end is not None and start >= end:
-            raise ValueError("'start' must be earlier than 'end'.")
-        return self._provider.get_candles(
-            _normalize_symbol(symbol), timeframe, start=start, end=end
-        )
-
-
-# Approximate wall-clock span of one bar at each granularity. Used only to reach
-# far enough *before* the visible window to warm an EMA up (see GetStockEma). A
-# daily bar spans more than a calendar day once weekends/holidays are counted, so
-# the warmup applies a generous multiple rather than these raw spans.
-_BAR_SPAN: dict[Timeframe, timedelta] = {
-    Timeframe.MIN_1: timedelta(minutes=1),
-    Timeframe.MIN_5: timedelta(minutes=5),
-    Timeframe.MIN_15: timedelta(minutes=15),
-    Timeframe.MIN_30: timedelta(minutes=30),
-    Timeframe.HOUR_1: timedelta(hours=1),
-    Timeframe.HOUR_4: timedelta(hours=4),
-    Timeframe.DAY_1: timedelta(days=1),
-    Timeframe.WEEK_1: timedelta(weeks=1),
-    Timeframe.MONTH_1: timedelta(days=31),
-}
-
-# Reach back this many bar-spans per period of warmup. 3× comfortably covers the
-# weekend/holiday gaps that stretch a daily bar past one calendar day, so a
-# `period`-bar EMA is fully warm by the visible window's start.
-_EMA_WARMUP_FACTOR = 3
-
-
-def _ema_warmup_span(timeframe: Timeframe, max_period: int) -> timedelta:
-    """How far before the visible window to start fetching so an EMA of
-    ``max_period`` is already warm by that window's first bar."""
-    return _BAR_SPAN.get(timeframe, timedelta(days=1)) * max_period * _EMA_WARMUP_FACTOR
-
-
-class GetStockEma:
-    """Use case: compute EMA overlay line(s) for a symbol from its price history.
-
-    Reuses the CandleProvider port — EMA is derived from the same OHLC bars the
-    chart endpoint uses, so no extra data source is needed. The indicator math is
-    pure domain logic (``ema_series``); this use case only fetches the window and
-    delegates. One or more periods can be requested in a single call (e.g. the
-    9/21/50 overlay), each returned as its own line.
-
-    **Warmup.** An EMA's first value only lands ``period - 1`` bars in, so fetching
-    exactly the visible ``[start, end]`` would leave the chart's left edge bare
-    (and a deep period blank). So the fetch reaches an extra ``max(period)`` bars
-    *before* ``start``, computes over the longer series, then trims the result back
-    to the visible window — every on-screen candle then carries a value. A ``start``
-    of ``None`` (MAX) already pulls all available history, so there's nothing
-    earlier to warm from and nothing to trim.
-    """
-
-    def __init__(self, provider: CandleProvider) -> None:
-        self._provider = provider
-
-    def execute(
-        self,
-        symbol: str,
-        timeframe: Timeframe,
-        *,
-        periods: Sequence[int],
-        start: datetime | None = None,
-        end: datetime | None = None,
-    ) -> EmaSeries:
-        if start is not None and end is not None and start >= end:
-            raise ValueError("'start' must be earlier than 'end'.")
-        # Extend the fetch back by a warmup so the EMA is already warm at `start`.
-        fetch_start = start
-        if start is not None and periods:
-            fetch_start = start - _ema_warmup_span(timeframe, max(periods))
-        series = self._provider.get_candles(
-            _normalize_symbol(symbol), timeframe, start=fetch_start, end=end
-        )
-        ema = ema_series(series, periods)
-        if start is None:
-            return ema
-        # Trim the warmup bars back off, leaving only the visible window.
-        return replace(
-            ema,
-            lines=tuple(
-                replace(
-                    line,
-                    points=tuple(p for p in line.points if p.timestamp >= start),
-                )
-                for line in ema.lines
-            ),
-        )
-
-
-class GetStockSupportLevels:
-    """Use case: detect horizontal support levels for a symbol from its price
-    history.
-
-    Reuses the CandleProvider port — support is read from the same OHLC bars the
-    chart endpoint uses, so no extra data source is needed. The detection math is
-    pure domain logic (``support_levels``); this use case only fetches the window
-    and delegates. Too little history (or no swing low below the current price)
-    yields an empty series rather than an error: the symbol exists, there just
-    isn't a level to draw.
-    """
-
-    def __init__(self, provider: CandleProvider) -> None:
-        self._provider = provider
-
-    def execute(
-        self,
-        symbol: str,
-        timeframe: Timeframe,
-        *,
-        window: int = 5,
-        tolerance: float = 0.02,
-        max_levels: int = 5,
-        start: datetime | None = None,
-        end: datetime | None = None,
-    ) -> SupportLevelSeries:
-        if start is not None and end is not None and start >= end:
-            raise ValueError("'start' must be earlier than 'end'.")
-        series = self._provider.get_candles(
-            _normalize_symbol(symbol), timeframe, start=start, end=end
-        )
-        return support_levels(
-            series, window=window, tolerance=tolerance, max_levels=max_levels
-        )
 
 
 class GetStockAnalysis:
@@ -917,25 +759,6 @@ def _has_fundamentals(stock: Stock) -> bool:
     )
 
 
-class GetSectorPerformance:
-    """Use case: rank the market's sectors by their move on the day.
-
-    Takes no input — it reports on the whole market. Sectors come back best
-    performer first; any sector missing a quote (so no percent move) sorts last.
-    """
-
-    def __init__(self, provider: SectorPerformanceProvider) -> None:
-        self._provider = provider
-
-    def execute(self) -> list[SectorPerformance]:
-        sectors = self._provider.get_sector_performance()
-        # Best performer first; a None percent (no quote) sorts to the end.
-        return sorted(
-            sectors,
-            key=lambda s: (s.change_percent is None, -(s.change_percent or 0.0)),
-        )
-
-
 class GetSectorAnalysis:
     """Use case: an AI-generated read of which market sectors are leading today.
 
@@ -1013,21 +836,6 @@ class GetSectorAnalysis:
         if stored is None or not _analysis_is_fresh(stored.generated_at, self._cache_ttl):
             return None
         return stored
-
-
-class GetMarketOverview:
-    """Use case: the headline US indices' performance (the S&P 500 and Nasdaq).
-
-    Takes no input — it reports on the whole market. Returns the indices in the
-    provider's stable order (broad market first), each carrying its day move and
-    trailing-window returns.
-    """
-
-    def __init__(self, provider: MarketOverviewProvider) -> None:
-        self._provider = provider
-
-    def execute(self) -> list[MarketIndexPerformance]:
-        return self._provider.get_market_overview()
 
 
 class GetMarketSummary:
