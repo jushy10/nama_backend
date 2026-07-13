@@ -49,6 +49,9 @@ from app.stocks.endpoints.cron_revenue_segments_endpoints import (
 from app.stocks.endpoints.insider_transactions_endpoints import (
     router as insider_transactions_router,
 )
+from app.stocks.endpoints.cron_insider_transactions_endpoints import (
+    router as insider_transactions_cron_router,
+)
 from app.stocks.endpoints.institutional_ownership_endpoints import (
     router as institutional_ownership_router,
 )
@@ -188,8 +191,8 @@ app.include_router(news_router)
 app.include_router(revenue_segments_router)
 # The insider-transactions read endpoint (GET /stocks/ticker/{ticker}/insider-transactions): a stock's
 # recent SEC Form 4 buys and sells — open-market purchases/sales flagged apart from the
-# grant/exercise/tax noise, with a net buy-vs-sell summary. Served from a TTL read-through DB
-# cache over SEC EDGAR (no cron — the TTL keeps it fresh on read). See
+# grant/exercise/tax noise, with a net buy-vs-sell summary. Served from a read-through DB cache
+# over SEC EDGAR, kept warm by the weekly sync cron. See
 # app/stocks/endpoints/insider_transactions_endpoints.py.
 app.include_router(insider_transactions_router)
 # The institutional-ownership read endpoint (GET /stocks/ticker/{ticker}/institutional-ownership): a
@@ -237,6 +240,12 @@ app.include_router(institutional_ownership_cron_router)
 # the SyncRevenueSegments use case out of band (SEC EDGAR 10-K -> DB), seeding + refreshing each
 # stock's revenue disaggregation. See app/stocks/endpoints/cron_revenue_segments_endpoints.py.
 app.include_router(revenue_segments_cron_router)
+# The insider-transactions refresh cron endpoint (POST /internal/insider-transactions/sync); it
+# drives the SyncInsiderTransactions use case out of band (SEC EDGAR Form 4 -> DB), seeding +
+# refreshing each stock's recent insider buys/sells. Weekly; the read cache is plain read-through
+# (no TTL) so a synced stock is served from the DB and never walks the filings in a user request.
+# See app/stocks/endpoints/cron_insider_transactions_endpoints.py.
+app.include_router(insider_transactions_cron_router)
 # The universe refresh cron endpoint (POST /internal/universe/sync); it drives the
 # SyncUniverse use case out of band (yfinance screen -> stocks anchor, then per-ticker
 # sector/industry enrichment), populating the stocks table with the ≥$1B US universe.

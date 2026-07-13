@@ -32,6 +32,9 @@ from app.stocks.endpoints.cron_fundamentals_endpoints import run_fundamentals_sy
 from app.stocks.endpoints.cron_index_membership_endpoints import (
     run_index_membership_sync,
 )
+from app.stocks.endpoints.cron_insider_transactions_endpoints import (
+    run_insider_transactions_sync,
+)
 from app.stocks.endpoints.cron_institutional_ownership_endpoints import (
     run_institutional_ownership_sync,
 )
@@ -61,6 +64,7 @@ RUNNERS: dict[str, Callable[[int | None], object]] = {
     "institutional-ownership": run_institutional_ownership_sync,
     "fundamentals": run_fundamentals_sync,
     "revenue-segments": run_revenue_segments_sync,
+    "insider-transactions": run_insider_transactions_sync,
     "universe": run_universe_sync,
     "index-membership": run_index_membership_sync,
     "etfs": run_etf_sync,

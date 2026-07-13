@@ -14,7 +14,8 @@ transaction's ordinal within that filing. Like the rating-changes slice a refres
 *insert-only* (a filed transaction is a frozen fact), and like the news feed the accumulated
 history is **pruned** to the newest ``keep`` transactions per stock so it stays bounded.
 ``fetched_at`` is a cache-bookkeeping stamp — the as-of time of the last fetch that covered the
-stock, refreshed on every upsert so the TTL read-through cache knows whether to re-fetch.
+stock, refreshed on every upsert so the out-of-band sweep (``stalest_symbols``) can order stocks
+by how recently they were confirmed against the source.
 """
 
 from __future__ import annotations
@@ -129,14 +130,34 @@ def transactions_by_symbol(
     )
 
 
-def latest_fetched_at(session: Session, symbol: str) -> datetime | None:
-    """The newest ``fetched_at`` among ``symbol``'s stored rows, or ``None`` when nothing is
-    stored — the freshness the TTL cache checks."""
-    return session.execute(
-        select(func.max(StockInsiderTransactionRecord.fetched_at))
-        .join(StockRecord, StockInsiderTransactionRecord.stock_id == StockRecord.id)
-        .where(StockRecord.ticker == symbol)
-    ).scalar()
+def stalest_symbols(
+    session: Session, limit: int | None = None
+) -> list[tuple[str, str | None]]:
+    """``(symbol, name)`` pairs from the ``stocks`` anchor, most in need of a refresh first.
+
+    A **LEFT JOIN**, so every anchor stock is included — even one with no transaction rows yet —
+    and the sweep both *seeds* new coverage and renews stale rows. Cached stocks are ordered by
+    the *newest* fetch stamp among their rows: the insert-only merge refreshes every row's stamp
+    to the same as-of time on each upsert (``touch_fetched_at``), so the max is when the stock was
+    last actually confirmed against the source. Ordering is **un-cached first**: a never-fetched
+    stock has a NULL max stamp and sorts ahead of any cached stock. ``limit`` caps the batch;
+    ``None`` (the default) returns every stock, so one sweep can seed the whole anchor. Lazy fill
+    on first access still covers a symbol between sweeps.
+    """
+    max_fetched = func.max(StockInsiderTransactionRecord.fetched_at)
+    stmt = (
+        select(StockRecord.ticker, StockRecord.name)
+        .outerjoin(
+            StockInsiderTransactionRecord,
+            StockInsiderTransactionRecord.stock_id == StockRecord.id,
+        )
+        .group_by(StockRecord.id, StockRecord.ticker, StockRecord.name)
+        # un-cached (NULL stamp) first, then least-recently-refreshed — portable NULLs-first.
+        .order_by(max_fetched.is_(None).desc(), max_fetched.asc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return [(row.ticker, row.name) for row in session.execute(stmt).all()]
 
 
 def existing_keys_for_stock(
