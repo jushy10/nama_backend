@@ -27,6 +27,9 @@ from app.stocks.endpoints.cron_news_endpoints import router as news_cron_router
 from app.stocks.endpoints.cron_fundamentals_endpoints import (
     router as fundamentals_cron_router,
 )
+from app.stocks.endpoints.cron_performance_endpoints import (
+    router as stock_performance_cron_router,
+)
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     router as quarterly_earnings_router,
 )
@@ -231,6 +234,12 @@ app.include_router(news_cron_router)
 # each stock's trailing margins/ROE/liquidity/leverage/beta + the per-share P/B / P/S / dividend
 # inputs. See app/stocks/endpoints/cron_fundamentals_endpoints.py.
 app.include_router(fundamentals_cron_router)
+# The stock-performance refresh cron endpoint (POST /internal/performance/sync); it drives the
+# SyncStockPerformance use case out of band (Alpaca daily bars -> stocks anchor), materializing
+# each screened stock's trailing-window returns (1W..1Y, YTD) so the heat map reads them DB-only
+# instead of recomputing a year of bars per index on every request. See
+# app/stocks/endpoints/cron_performance_endpoints.py.
+app.include_router(stock_performance_cron_router)
 # The institutional-ownership refresh cron endpoint (POST /internal/institutional-ownership/sync); it
 # drives the SyncInstitutionalOwnership use case out of band (yfinance 13F holders -> DB), seeding +
 # refreshing each stock's top institutional/mutual-fund holders and the ownership breakdown. See

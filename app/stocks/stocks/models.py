@@ -10,9 +10,10 @@ analyst-estimates feature was the first to need the anchor); migration 0009 adde
 still say "symbol" — the rename is a table-vocabulary choice), 0011 added the trailing
 year-over-year growth columns, 0012 the three universe-screen columns, 0013 the
 ``industry`` column, 0014 the ``in_sp500`` / ``in_nasdaq100`` index-membership flags,
-0017 the ``pe_ratio`` column, 0018 the forward year-over-year growth columns, and 0027 the
+0017 the ``pe_ratio`` column, 0018 the forward year-over-year growth columns, 0027 the
 free-cash-flow columns (``fcf_per_share`` / ``ocf_per_share`` / ``fcf_growth_yoy`` /
-``fcf_yield``) — all below.
+``fcf_yield``), 0031 the trailing fundamentals columns, and 0033 the trailing-performance
+window columns (``perf_*`` / ``performance_synced_at``) — all below.
 """
 
 from __future__ import annotations
@@ -109,6 +110,17 @@ class StockRecord(Base):
     batch by it (un-synced rows first, then the oldest) — the anchor-column analogue of the
     earnings slices' per-row ``fetched_at`` (0031).
 
+    ``perf_one_week`` / ``perf_one_month`` / ``perf_three_month`` / ``perf_six_month`` /
+    ``perf_ytd`` / ``perf_one_year`` are the stock's trailing price-return over the standard
+    windows (percent) — the six fields of the shared ``StockPerformance`` value object,
+    materialized here by the performance sync (Alpaca daily bars) so the heat map reads them
+    DB-only instead of recomputing a year of bars for a whole index on every request (its
+    heaviest read). Like the growth/cash-flow snapshots these are **overwritten** every refresh
+    (each drops to ``None`` when there isn't enough history — a newly listed name). All nullable,
+    unset until the performance sync reaches the stock. ``performance_synced_at`` is that sweep's
+    freshness stamp, the sibling of ``fundamentals_synced_at`` — the cron orders its stale-first
+    batch by it (un-synced rows first, then the oldest) (0033).
+
     ``in_sp500`` / ``in_nasdaq100`` are index-membership flags, reconciled by the
     index-membership sync (Finnhub → this anchor). Unlike the screen facts these are
     ``NOT NULL`` (default ``False``): membership is a known yes/no — absent from the
@@ -149,6 +161,15 @@ class StockRecord(Base):
     sales_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
     dividend_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
     fundamentals_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    perf_one_week: Mapped[float | None] = mapped_column(Float, nullable=True)
+    perf_one_month: Mapped[float | None] = mapped_column(Float, nullable=True)
+    perf_three_month: Mapped[float | None] = mapped_column(Float, nullable=True)
+    perf_six_month: Mapped[float | None] = mapped_column(Float, nullable=True)
+    perf_ytd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    perf_one_year: Mapped[float | None] = mapped_column(Float, nullable=True)
+    performance_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     in_sp500: Mapped[bool] = mapped_column(

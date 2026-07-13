@@ -6,20 +6,19 @@ stock. Controller + presenter + wiring, the composition-root way, sitting in
 ``app/stocks/endpoints/`` beside the other read endpoints.
 
 Wiring reuses the shared factories from ``wiring.py``: the universe read is a pure
-request-scoped DB read over the shared ``stocks`` anchor (no key), and the batched quote feed is
-the same Alpaca singleton every other price view uses (so a missing key is the usual 503). The
-map's structure and tile sizes come from the DB; the colours are best-effort live quotes, so a
-transient feed hiccup yields an uncoloured-but-correct board rather than a 502.
+request-scoped DB read over the shared ``stocks`` anchor (no key) — it now carries the trailing
+windows too, materialized on the anchor by the ``sync-stock-performance`` cron, so the read
+path no longer recomputes a year of daily bars per index (the board's old heaviest leg). The
+batched quote feed is the same Alpaca singleton every other price view uses (so a missing key
+is the usual 503). The map's structure, tile sizes and timeframe colours come from the DB; the
+day-change colour is a best-effort live quote, so a transient feed hiccup yields an
+uncoloured-but-correct board rather than a 502.
 """
-
-import os
-from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.caching_bulk_performance_provider import CachingBulkPerformanceProvider
 from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.heatmap.entities import HeatMap, HeatMapScope
@@ -30,7 +29,6 @@ from app.stocks.heatmap.schemas import (
     HeatMapStockResponse,
 )
 from app.stocks.heatmap.use_cases import GetStockHeatMap
-from app.stocks.ports import BulkPerformanceProvider
 from app.stocks.schemas import StockPerformanceResponse
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.wiring import get_provider
@@ -38,33 +36,15 @@ from app.stocks.wiring import get_provider
 router = APIRouter(tags=["heatmap"])
 
 
-@lru_cache(maxsize=1)
-def get_heatmap_performance_provider() -> BulkPerformanceProvider:
-    # The trailing-window leg is the board's heaviest read (a year of daily bars for a whole
-    # index), so it's served through a TTL cache in front of the Alpaca singleton — a singleton
-    # itself, so the cache persists across requests and a burst of viewers collapses onto one
-    # fetch per window. The window is env-tunable (HEATMAP_PERFORMANCE_CACHE_TTL_SECONDS); the
-    # trailing figures are stable over hours, so the default is comfortably long. Wrapping the
-    # same get_provider() singleton keeps the missing-keys 503 gate.
-    ttl = float(
-        os.environ.get(
-            "HEATMAP_PERFORMANCE_CACHE_TTL_SECONDS",
-            CachingBulkPerformanceProvider._DEFAULT_TTL_SECONDS,
-        )
-    )
-    return CachingBulkPerformanceProvider(get_provider(), ttl_seconds=ttl)
-
-
 def get_heatmap_use_case(
     db: Session = Depends(get_db),
     provider=Depends(get_provider),
-    performance: BulkPerformanceProvider = Depends(get_heatmap_performance_provider),
 ) -> GetStockHeatMap:
-    # The universe read is a request-scoped DB read over the shared anchor (no vendor, no key).
-    # The Alpaca singleton supplies the live day-change board (BulkQuoteProvider); the batched
-    # trailing-window returns come through a TTL cache in front of that same singleton, so it
-    # inherits the missing-keys 503 gate while sparing the heavy bars fetch on repeat boards.
-    return GetStockHeatMap(SqlStockSearchRepository(db), provider, performance)
+    # The universe read is a request-scoped DB read over the shared anchor (no vendor, no key) —
+    # structure, tile sizes and the trailing-window colours all come off it in one query. The
+    # Alpaca singleton supplies only the live day-change board (BulkQuoteProvider), inheriting
+    # its missing-keys 503 gate.
+    return GetStockHeatMap(SqlStockSearchRepository(db), provider)
 
 
 def _present_performance(

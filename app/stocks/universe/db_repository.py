@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from sqlalchemy import and_, func, nulls_last, or_, select
 from sqlalchemy.orm import Session
 
+from app.stocks.entities import StockPerformance
 from app.stocks.stocks.models import StockRecord, get_or_create_stock
 from app.stocks.universe.entities import (
     AnchorMetrics,
@@ -240,6 +241,24 @@ def _escape_like(term: str) -> str:
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _performance(row: StockRecord) -> StockPerformance | None:
+    """The row's trailing-window returns as a ``StockPerformance``, or ``None`` when the
+    performance sync hasn't reached it — every window null means "not synced" (a blank tile),
+    which the heat map serializes as ``null`` rather than an all-null block. A partially-filled
+    row (some windows null for want of history) still yields a block, its blanks preserved."""
+    windows = (
+        row.perf_one_week,
+        row.perf_one_month,
+        row.perf_three_month,
+        row.perf_six_month,
+        row.perf_ytd,
+        row.perf_one_year,
+    )
+    if all(window is None for window in windows):
+        return None
+    return StockPerformance(*windows)
+
+
 def _to_result(row: StockRecord) -> StockSearchResult:
     """Map an anchor row onto the slice's read entity (no live price — DB facts only)."""
     return StockSearchResult(
@@ -257,6 +276,7 @@ def _to_result(row: StockRecord) -> StockSearchResult:
         forward_eps_growth_yoy=row.forward_eps_growth_yoy,
         in_sp500=row.in_sp500,
         in_nasdaq100=row.in_nasdaq100,
+        performance=_performance(row),
     )
 
 
