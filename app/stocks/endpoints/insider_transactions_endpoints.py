@@ -9,27 +9,21 @@ Grouped under the ``/stocks/ticker/{ticker}`` resource (like the ticker card and
 since it's a per-ticker card the FE renders. Controller + presenter + wiring, the
 composition-root way, sitting in ``app/stocks/endpoints/``.
 
-Wiring mirrors the revenue-segments read path: a plain **read-through** DB cache (DB-first,
-fetch-on-miss only — no TTL) over the live SEC provider, kept current out of band by the weekly
-``sync-insider-transactions`` cron. A populated symbol is therefore always served straight from
-the DB and never triggers the multi-request Form 4 walk inside a user request; only the first
-(cold) view of a symbol between sweeps fetches live. The process-singleton live SEC provider is
-memoized with ``@lru_cache`` while the DB cache is built per request (it needs the request
-session). EDGAR needs no credential, so the endpoint is always wired; a cold cache for a stock
-with no recent insider activity just yields an empty list (best-effort).
+The read is **DB-only**: it serves the stored feed straight from the database and never fetches
+live from SEC on a read. Keeping the store current is entirely the weekly
+``sync-insider-transactions`` cron's job. A symbol the cron hasn't seeded yet reads as an empty
+list — the same best-effort empty a stock with no recent insider activity yields — rather than
+paying the multi-request Form 4 walk inside a user request (that walk lives only in the cron now).
+This is the ``DbOnlyInsiderTransactionsProvider``, built per request over the request session; the
+live SEC provider backs only the cron. No credential is needed, so the endpoint is always wired.
 """
-
-from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db_cached_insider_transactions_adapter import (
-    DbCachedInsiderTransactionsProvider,
-)
-from app.stocks.adapters.sec_edgar_insider_transactions_adapter import (
-    SecEdgarInsiderTransactionsProvider,
+from app.stocks.adapters.db_only_insider_transactions_adapter import (
+    DbOnlyInsiderTransactionsProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.insider_transactions.db_repository import (
@@ -49,32 +43,13 @@ from app.stocks.insider_transactions.use_cases import GetInsiderTransactions
 
 router = APIRouter(tags=["insider-transactions"])
 
-# Production pacing for the live SEC provider: the read path only fetches on a cold miss (a
-# handful of sequential EDGAR document reads), so a small per-request spacing keeps even a burst
-# of misses under EDGAR's ~10 req/s fair-use ceiling.
-_SEC_MIN_REQUEST_INTERVAL = 0.15
-
-
-@lru_cache(maxsize=1)
-def _sec_insider_provider() -> InsiderTransactionsProvider:
-    # One process-singleton live provider (no key; it caches the ticker->CIK map across calls);
-    # the read-through DB cache that wraps it is built per request, since it needs the request
-    # session.
-    return SecEdgarInsiderTransactionsProvider(
-        min_request_interval_seconds=_SEC_MIN_REQUEST_INTERVAL
-    )
-
 
 def get_insider_transactions_provider(
     db: Session = Depends(get_db),
 ) -> InsiderTransactionsProvider:
-    # A read-through DB cache sits in front of EDGAR so the endpoint walks the filings only on a
-    # cold miss; the weekly cron keeps the stored rows warm. SEC needs no key, so this is always
-    # wired.
-    return DbCachedInsiderTransactionsProvider(
-        _sec_insider_provider(),
-        SqlInsiderTransactionsRepository(db),
-    )
+    # DB-only read: serve the stored feed, never fetch live from SEC on a read. The weekly cron is
+    # the sole populator, so the endpoint never walks the filings inside a user request.
+    return DbOnlyInsiderTransactionsProvider(SqlInsiderTransactionsRepository(db))
 
 
 def get_insider_transactions_use_case(
