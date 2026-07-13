@@ -21,7 +21,10 @@ from app.stocks.insider_transactions.entities import (
     InsiderTransaction,
 )
 from app.stocks.insider_transactions.models import StockInsiderTransactionRecord
-from app.stocks.insider_transactions.repository import InsiderTransactionsRepository
+from app.stocks.insider_transactions.repository import (
+    InsiderTransactionsRepository,
+    RefreshTarget,
+)
 
 # How many transactions to keep per stock. A Form 4 feed turns over faster than the annual
 # earnings/segments series, so this bounds the higher-volume history — pruned by row (like the
@@ -70,9 +73,6 @@ class SqlInsiderTransactionsRepository(InsiderTransactionsRepository):
             symbol=symbol, transactions=tuple(_to_entity(row) for row in rows)
         )
 
-    def latest_fetched_at(self, symbol: str) -> datetime | None:
-        return models.latest_fetched_at(self._session, symbol)
-
     def upsert(self, symbol: str, name: str | None, activity: InsiderActivity) -> None:
         stock = models.get_or_create_stock(self._session, symbol, name)
 
@@ -118,3 +118,11 @@ class SqlInsiderTransactionsRepository(InsiderTransactionsRepository):
         # transactions are in the running when the newest N are chosen.
         models.prune_to_newest(self._session, stock.id, _MAX_STORED_TRANSACTIONS)
         self._session.commit()
+
+    def refresh_targets(self, limit: int | None) -> list[RefreshTarget]:
+        # Delegates the query to models (un-cached first, then least-recently-refreshed); this
+        # layer just wraps each (symbol, name) pair in the domain-facing RefreshTarget.
+        return [
+            RefreshTarget(symbol, name)
+            for symbol, name in models.stalest_symbols(self._session, limit)
+        ]

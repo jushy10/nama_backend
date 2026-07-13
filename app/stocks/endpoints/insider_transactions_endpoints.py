@@ -9,17 +9,16 @@ Grouped under the ``/stocks/ticker/{ticker}`` resource (like the ticker card and
 since it's a per-ticker card the FE renders. Controller + presenter + wiring, the
 composition-root way, sitting in ``app/stocks/endpoints/``.
 
-Wiring mirrors the revenue-segments read path, with one divergence: the DB cache is **TTL-based**
-(``INSIDER_CACHE_TTL_HOURS``, default 24). This slice has no out-of-band cron, so the TTL is what
-keeps a stock's feed current — it self-refreshes on read once the stored rows age past the TTL,
-rather than being kept fresh by a background sweep. The process-singleton live SEC provider is
+Wiring mirrors the revenue-segments read path: a plain **read-through** DB cache (DB-first,
+fetch-on-miss only — no TTL) over the live SEC provider, kept current out of band by the weekly
+``sync-insider-transactions`` cron. A populated symbol is therefore always served straight from
+the DB and never triggers the multi-request Form 4 walk inside a user request; only the first
+(cold) view of a symbol between sweeps fetches live. The process-singleton live SEC provider is
 memoized with ``@lru_cache`` while the DB cache is built per request (it needs the request
 session). EDGAR needs no credential, so the endpoint is always wired; a cold cache for a stock
 with no recent insider activity just yields an empty list (best-effort).
 """
 
-import os
-from datetime import timedelta
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -50,46 +49,31 @@ from app.stocks.insider_transactions.use_cases import GetInsiderTransactions
 
 router = APIRouter(tags=["insider-transactions"])
 
-# Production pacing for the live SEC provider: the read path only fetches on a cold/stale miss
-# (a handful of sequential EDGAR document reads), so a small per-request spacing keeps even a
-# burst of misses under EDGAR's ~10 req/s fair-use ceiling.
+# Production pacing for the live SEC provider: the read path only fetches on a cold miss (a
+# handful of sequential EDGAR document reads), so a small per-request spacing keeps even a burst
+# of misses under EDGAR's ~10 req/s fair-use ceiling.
 _SEC_MIN_REQUEST_INTERVAL = 0.15
-
-# How long a stock's stored feed is served before the read path re-fetches it (this slice has no
-# cron, so the TTL is the freshness mechanism). Overridable via env; falls back on a bad value.
-_DEFAULT_CACHE_TTL_HOURS = 24.0
 
 
 @lru_cache(maxsize=1)
 def _sec_insider_provider() -> InsiderTransactionsProvider:
     # One process-singleton live provider (no key; it caches the ticker->CIK map across calls);
-    # the TTL DB cache that wraps it is built per request, since it needs the request session.
+    # the read-through DB cache that wraps it is built per request, since it needs the request
+    # session.
     return SecEdgarInsiderTransactionsProvider(
         min_request_interval_seconds=_SEC_MIN_REQUEST_INTERVAL
     )
 
 
-def _cache_ttl() -> timedelta:
-    raw = os.environ.get("INSIDER_CACHE_TTL_HOURS")
-    try:
-        hours = float(raw) if raw is not None else _DEFAULT_CACHE_TTL_HOURS
-    except ValueError:
-        hours = _DEFAULT_CACHE_TTL_HOURS
-    if hours <= 0:
-        hours = _DEFAULT_CACHE_TTL_HOURS
-    return timedelta(hours=hours)
-
-
 def get_insider_transactions_provider(
     db: Session = Depends(get_db),
 ) -> InsiderTransactionsProvider:
-    # A TTL read-through DB cache sits in front of EDGAR so the endpoint rarely walks the filings;
-    # past the TTL it re-fetches on read (no cron keeps it warm). SEC needs no key, so this is
-    # always wired.
+    # A read-through DB cache sits in front of EDGAR so the endpoint walks the filings only on a
+    # cold miss; the weekly cron keeps the stored rows warm. SEC needs no key, so this is always
+    # wired.
     return DbCachedInsiderTransactionsProvider(
         _sec_insider_provider(),
         SqlInsiderTransactionsRepository(db),
-        ttl=_cache_ttl(),
     )
 
 

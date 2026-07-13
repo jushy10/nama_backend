@@ -3,17 +3,19 @@
 Offline: an in-memory SQLite database stands in for the real table. Verifies the round-trip
 (entities -> rows -> entities), the insert-only merge (a refresh adds only new transactions and
 never rewrites a stored one), the prune to the newest N, the parent ``stocks`` row + name
-fill-but-don't-clobber, the ``latest_fetched_at`` freshness read (refreshed across the whole feed
-on each upsert), and a clean miss.
+fill-but-don't-clobber, the fetch stamp (refreshed across the whole feed on each upsert), the
+``refresh_targets`` staleness order the sweep walks (un-cached first, then least-recently
+refreshed), and a clean miss.
 """
 
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
+from app.stocks.insider_transactions import models
 from app.stocks.insider_transactions.db_repository import (
     SqlInsiderTransactionsRepository,
     _MAX_STORED_TRANSACTIONS,
@@ -40,6 +42,16 @@ def session():
 
 def repo(session, *, now=None) -> SqlInsiderTransactionsRepository:
     return SqlInsiderTransactionsRepository(session, now=now or (lambda: _NOW))
+
+
+def _max_stamp(session, symbol: str) -> datetime | None:
+    """The newest ``fetched_at`` stored for ``symbol`` — read directly off the table so the tests
+    check the stamp the sweep's staleness order relies on without a dedicated repo method."""
+    return session.execute(
+        select(func.max(StockInsiderTransactionRecord.fetched_at))
+        .join(StockRecord, StockInsiderTransactionRecord.stock_id == StockRecord.id)
+        .where(StockRecord.ticker == symbol)
+    ).scalar()
 
 
 def _txn(
@@ -76,7 +88,6 @@ def _activity(symbol, *txns) -> InsiderActivity:
 
 def test_get_on_empty_table_is_a_miss(session):
     assert repo(session).get("AAPL") is None
-    assert repo(session).latest_fetched_at("AAPL") is None
 
 
 def test_roundtrips_an_activity(session):
@@ -91,10 +102,9 @@ def test_roundtrips_an_activity(session):
     assert txn.is_open_market_buy
 
 
-def test_upsert_stamps_and_reads_back_latest_fetched_at(session):
+def test_upsert_stamps_the_fetch_time(session):
     repo(session).upsert("AAPL", None, _activity("AAPL", _txn()))
-    stamp = repo(session).latest_fetched_at("AAPL")
-    assert stamp.replace(tzinfo=timezone.utc) == _NOW
+    assert _max_stamp(session, "AAPL").replace(tzinfo=timezone.utc) == _NOW
 
 
 def test_merge_is_insert_only_and_keeps_existing_rows(session):
@@ -129,11 +139,12 @@ def test_merge_is_insert_only_and_keeps_existing_rows(session):
 def test_touch_refreshes_the_whole_feed_stamp_even_with_no_new_rows(session):
     older = repo(session, now=lambda: _NOW - timedelta(days=2))
     older.upsert("AAPL", "Apple", _activity("AAPL", _txn(accession="acc-1", line_index=0)))
-    # A later fetch that brings nothing new must still advance the freshness stamp so the TTL
-    # cache treats a quiet stock as fresh instead of re-fetching on every read.
+    # A later fetch that brings nothing new must still advance the fetch stamp so the sweep's
+    # staleness order sees a quiet stock (confirmed with no new activity) as freshly refreshed
+    # instead of leaving it stuck at the front of the stale queue.
     newer = repo(session, now=lambda: _NOW)
     newer.upsert("AAPL", "Apple", _activity("AAPL", _txn(accession="acc-1", line_index=0)))
-    assert newer.latest_fetched_at("AAPL").replace(tzinfo=timezone.utc) == _NOW
+    assert _max_stamp(session, "AAPL").replace(tzinfo=timezone.utc) == _NOW
 
 
 def test_prune_keeps_only_the_newest_transactions(session):
@@ -237,3 +248,29 @@ def test_upsert_leaves_other_stocks_untouched(session):
     r.upsert("MSFT", "Microsoft", _activity("MSFT", _txn(accession="b")))
     r.upsert("AAPL", "Apple", _activity("AAPL", _txn(accession="c")))
     assert len(r.get("MSFT").transactions) == 1  # MSFT survived AAPL's refresh
+
+
+def test_refresh_targets_uncached_first_then_stalest(session):
+    # A cached stock refreshed long ago, a cached stock refreshed recently, and an un-cached
+    # anchor row (a screened stock with no insider rows yet). The sweep walks them un-cached
+    # first (to seed), then least-recently-refreshed, each paired with its stored name.
+    repo(session, now=lambda: _NOW - timedelta(days=10)).upsert(
+        "AAPL", "Apple", _activity("AAPL", _txn(accession="a"))
+    )
+    repo(session, now=lambda: _NOW).upsert(
+        "MSFT", "Microsoft", _activity("MSFT", _txn(accession="b"))
+    )
+    models.get_or_create_stock(session, "TSLA", "Tesla")  # anchor only, never cached
+    session.commit()
+
+    targets = repo(session).refresh_targets(None)
+
+    assert [t.symbol for t in targets] == ["TSLA", "AAPL", "MSFT"]
+    assert dict(targets) == {"TSLA": "Tesla", "AAPL": "Apple", "MSFT": "Microsoft"}
+
+
+def test_refresh_targets_respects_the_limit(session):
+    for sym in ("AAPL", "MSFT", "TSLA"):
+        models.get_or_create_stock(session, sym, sym.title())
+    session.commit()
+    assert len(repo(session).refresh_targets(2)) == 2
