@@ -28,6 +28,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 
+from app.stocks.entities import StockPerformance
+
 
 @dataclass(frozen=True)
 class ScreenedStock:
@@ -198,6 +200,11 @@ class StockSearchResult:
     forward growth, or a ``pe_ratio`` until the enriching sync/annual slice reaches it (forward
     growth the most often, since it needs two upcoming years; ``pe_ratio`` stays null until the
     quarterly cache holds four reported quarters, and for a trailing-year loss).
+
+    ``performance`` is the stock's trailing-window returns (1W…1Y, YTD), materialized on the
+    anchor by the performance sync — ``None`` for a row it hasn't reached yet (or one with too
+    little history). It's what lets a page-driven consumer (the heat map) colour a whole board's
+    timeframe tiles from one DB read instead of a live year-of-bars computation per index.
     """
 
     ticker: str
@@ -214,6 +221,7 @@ class StockSearchResult:
     forward_eps_growth_yoy: float | None
     in_sp500: bool
     in_nasdaq100: bool
+    performance: StockPerformance | None = None
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,123 @@
+name: Sync stock performance
+run-name: Sync stock performance
+
+# Hourly on weekday market hours (and on-demand). A stock's trailing-window returns (1W / 1M /
+# 3M / 6M / YTD / 1Y) are derived from split-adjusted daily closes: they settle once a day (the
+# new daily bar) and drift only gently intraday with the forming session bar, so an hourly
+# refresh through the US session keeps the heat map's timeframe tiles current with margin to
+# spare. The sweep both keeps already-synced rows fresh and SEEDS screened stocks not yet synced
+# (the ≥$1B universe), un-synced first.
+#
+# It launches a one-off ECS Fargate task that runs `python -m app.sync performance [limit]` (the
+# SyncStockPerformance use case) to completion and exits. The sweep runs on its OWN 1 GB task
+# definition (nama-dev-sync), OFF the always-on API task, so it can't OOM the small service. The
+# task reaches the private RDS by borrowing the app service's own network config.
+#
+# The source is ALPACA (the app's price feed), not Yahoo — one batched daily-bars call for the
+# whole screened set (the adapter chunks it), so there is NO Yahoo-style IP gate and NO YF pacing
+# knob here (unlike the fundamentals / earnings sweeps). By default the sweep processes EVERY
+# screened stock; use the optional `limit` dispatch input to cap a single run.
+#
+# FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs in the
+# background on ECS and its result — "stock performance sync done: refreshed=… skipped=…" — lands
+# in the task's CloudWatch logs, not here. A green run means the task launched; check CloudWatch
+# for the outcome. A transient whole-feed outage leaves the anchor's last-good windows in place
+# (best-effort — the heat map's day-change tile is a separate live leg).
+#
+# Manual run: Actions → "Sync stock performance" → Run workflow (same trigger, off-schedule).
+#
+# Auth: the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var — the same identity
+# the deploy + migrate jobs already use to run one-off ECS tasks.
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Optional cap on screened stocks to refresh this run (un-synced first, then stalest). Leave blank to process every screened stock."
+        required: false
+        type: string
+        default: ""
+  # Every hour 13:00–22:00 UTC, Mon–Fri — covering the US session (~13:30–20:00 UTC) plus a
+  # post-close run so the settled daily bar is picked up. Trailing windows barely move hour to
+  # hour, so this is generous; dial it down (e.g. to a single post-close run) by editing this one
+  # line if the task launches ever feel excessive. Caveats: scheduled workflows run only from the
+  # default branch, and GitHub auto-disables the schedule after 60 days with no repo activity.
+  schedule:
+    - cron: "0 13-22 * * 1-5"
+
+concurrency:
+  group: sync-stock-performance
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # These match module "app" { name = "nama-dev" } in infra/environments/dev; the sync task
+  # def is that name + "-sync" (aws_ecs_task_definition.sync in the ecs-fargate-service module).
+  ECS_CLUSTER: nama-dev
+  ECS_SERVICE: nama-dev
+  SYNC_TASK_DEF: nama-dev-sync
+  SYNC_SLICE: performance
+
+jobs:
+  sync:
+    name: Sync stock performance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Launch the sync task
+        env:
+          # Optional per-dispatch cap; empty on scheduled runs (and by default), so the sweep
+          # processes every screened stock.
+          SYNC_LIMIT: ${{ github.event.inputs.limit }}
+        run: |
+          set -euo pipefail
+
+          # The sync task runs INSIDE the VPC (the private RDS is unreachable from the runner).
+          # Borrow the app service's own network config — subnets + security groups, including
+          # the DB SG — so there's nothing to hardcode. Same approach the migrate job uses.
+          status=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" != "ACTIVE" ]; then
+            echo "::error::ECS service '$ECS_SERVICE' is not ACTIVE (status: $status) — deploy the app first."
+            exit 1
+          fi
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' --output json)
+
+          # Container override: python -m app.sync <slice> [limit] (an empty limit — scheduled
+          # runs — omits the arg, so the sweep processes every screened stock). No YF pacing env:
+          # the source is Alpaca, not Yahoo.
+          overrides=$(jq -cn --arg slice "$SYNC_SLICE" --arg limit "${SYNC_LIMIT:-}" '
+            {containerOverrides: [{
+              name: "app",
+              command: (["python", "-m", "app.sync", $slice] + (if $limit == "" then [] else [$limit] end))
+            }]}')
+
+          echo "Launching one-off sync task: app.sync $SYNC_SLICE ${SYNC_LIMIT:-(no limit)}"
+          run=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$SYNC_TASK_DEF" \
+            --launch-type FARGATE \
+            --network-configuration "$netcfg" \
+            --started-by "gha-sync-${GITHUB_SHA::7}" \
+            --overrides "$overrides")
+
+          # run-task exits 0 even when it places no task (capacity/throttle land in .failures),
+          # so check explicitly — this is what makes a green run mean "the task launched".
+          task_arn=$(echo "$run" | jq -r '.tasks[0].taskArn // empty')
+          if [ -z "$task_arn" ]; then
+            echo "::error::run-task launched no task: $(echo "$run" | jq -c '.failures')"
+            exit 1
+          fi
+
+          echo "Launched $task_arn"
+          echo "Fire-and-forget: the sweep runs on ECS; its result —"
+          echo "\"$SYNC_SLICE sync done: refreshed=… skipped=…\" — lands in the task's CloudWatch logs."
