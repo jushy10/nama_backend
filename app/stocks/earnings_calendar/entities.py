@@ -15,22 +15,30 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+# The market-timing enum is owned by the quarterly slice (the source of these rows); the
+# calendar is a projection of that slice, so it consumes the same domain type rather than
+# re-defining a parallel one — the same direction the calendar's db_repository already
+# depends on the quarterly models.
+from app.stocks.earnings.quarterly.entities import EarningsSession
+
 
 @dataclass(frozen=True)
 class EarningsCalendarItem:
     """One company's upcoming earnings report on a scheduled date.
 
     ``report_date`` is when the company is expected to report — the scheduled announcement
-    date the quarterly slice stores for its not-yet-reported quarters. Our data is
-    date-granular (no intraday before-open / after-close session), so ``report_date`` is the
-    whole of the timing signal; the presenter surfaces it per item as ``when``. ``name`` and
-    ``sector`` come from the ``stocks`` anchor and may be ``None`` for a thinly-known symbol.
+    date the quarterly slice stores for its not-yet-reported quarters — and ``session`` is its
+    market timing (before open / after close / intraday / unknown), carried through from the
+    quarterly row. Together they're the timing signal; the presenter surfaces the date per item
+    as ``when`` and the session as ``session``. ``name`` and ``sector`` come from the ``stocks``
+    anchor and may be ``None`` for a thinly-known symbol.
     """
 
     ticker: str
     name: str | None
     sector: str | None
     report_date: date
+    session: EarningsSession = EarningsSession.UNKNOWN
 
 
 @dataclass(frozen=True)

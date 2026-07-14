@@ -16,6 +16,7 @@ import pytest
 from app.stocks.adapters.yfinance_quarterly_earnings_adapter import (
     YfinanceQuarterlyEarningsProvider,
 )
+from app.stocks.earnings.quarterly.entities import EarningsSession
 from app.stocks.exceptions import StockDataUnavailable
 
 _NAN = float("nan")
@@ -508,3 +509,72 @@ def test_domestic_issuer_makes_no_fx_call():
     by_quarter = {(q.fiscal_year, q.fiscal_quarter): q for q in tl.past}
     assert by_quarter[(2025, 4)].revenue_actual == 5.0e9  # unchanged
     assert tl.future[0].revenue_estimate == 100e9  # unchanged
+
+
+def _earnings_dates_at(rows: list[tuple[str, str, float, float]]) -> pd.DataFrame:
+    """Like ``_earnings_dates`` but each row carries a tz-aware announcement *time*:
+    ``(announce_date, "HH:MM", tz, EPS Estimate, Reported EPS)`` — the input the session
+    classifier reads. ``tz`` is applied so the frame mirrors yfinance's localized index."""
+    index = pd.DatetimeIndex(
+        [pd.Timestamp(f"{d} {t}", tz=tz) for d, t, tz, _, _ in rows]
+    )
+    return pd.DataFrame(
+        {
+            "EPS Estimate": [est for *_, est, _ in rows],
+            "Reported EPS": [rep for *_, rep in rows],
+        },
+        index=index,
+    )
+
+
+def test_classifies_the_announcement_session_from_the_index_time():
+    # A reported quarter announced 16:00 ET (after close) and an upcoming one scheduled
+    # 06:00 ET (before open); the session is read off each index timestamp's time-of-day.
+    dates = _earnings_dates_at(
+        [
+            ("2026-02-01", "16:00", "America/New_York", 3.0, 3.3),  # reported → AMC
+            ("2026-05-01", "06:00", "America/New_York", 3.1, _NAN),  # upcoming → BMO
+        ]
+    )
+    ticker = FakeTicker(
+        earnings_dates=dates,
+        eps_estimate=_estimate_frame({"0q": 3.1, "+1q": 3.3}),
+        revenue=_estimate_frame({"0q": 100e9, "+1q": 110e9}),
+    )
+    tl = provider_with(ticker).get_quarterly_earnings("AAPL")
+
+    reported = tl.past[-1]
+    assert (reported.fiscal_year, reported.fiscal_quarter) == (2025, 4)
+    assert reported.report_session is EarningsSession.AMC
+
+    q0 = tl.future[0]
+    assert q0.report_date == date(2026, 5, 1)
+    assert q0.report_session is EarningsSession.BMO
+    # The +1q quarter has no scheduled date, so no known session.
+    assert tl.future[1].report_session is EarningsSession.UNKNOWN
+
+
+def test_normalizes_a_utc_index_time_to_eastern_before_classifying():
+    # 21:00 UTC == 16:00 ET (winter) → after close, not the naive "21:00 = AMC anyway".
+    # 12:00 UTC == 07:00 ET → before open (a naive read of 12:00 would call it DURING).
+    dates = _earnings_dates_at(
+        [
+            ("2026-02-01", "21:00", "UTC", 3.0, 3.3),  # → 16:00 ET → AMC
+            ("2026-05-01", "12:00", "UTC", 3.1, _NAN),  # → 07:00 ET (EDT) → BMO
+        ]
+    )
+    ticker = FakeTicker(
+        earnings_dates=dates,
+        eps_estimate=_estimate_frame({"0q": 3.1, "+1q": 3.3}),
+        revenue=_estimate_frame({"0q": 100e9, "+1q": 110e9}),
+    )
+    tl = provider_with(ticker).get_quarterly_earnings("AAPL")
+    assert tl.past[-1].report_session is EarningsSession.AMC
+    assert tl.future[0].report_session is EarningsSession.BMO
+
+
+def test_session_is_unknown_when_the_index_carries_no_time():
+    # The plain date-at-midnight frame (Yahoo's "time not supplied") → UNKNOWN, not BMO.
+    ticker = _full_ticker()
+    tl = provider_with(ticker).get_quarterly_earnings("AAPL")
+    assert all(q.report_session is EarningsSession.UNKNOWN for q in tl.quarters)

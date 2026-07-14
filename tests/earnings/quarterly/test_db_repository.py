@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.db import Base
 from app.stocks.earnings.quarterly.db_repository import SqlQuarterlyEarningsRepository
 from app.stocks.earnings.quarterly.entities import (
+    EarningsSession,
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
@@ -110,6 +111,36 @@ def test_roundtrips_the_timeline(session):
     assert upcoming.eps_actual is None and upcoming.revenue_estimate == 100e9
     assert upcoming.revenue_actual is None
     assert upcoming.is_reported is False
+
+
+def test_roundtrips_the_report_session(session):
+    r = repo(session)
+    r.upsert(
+        "AAPL",
+        "Apple Inc.",
+        QuarterlyEarningsTimeline(
+            "AAPL",
+            (
+                QuarterlyEarnings(
+                    fiscal_year=2025,
+                    fiscal_quarter=4,
+                    period_end=date(2025, 12, 28),
+                    report_date=date(2026, 2, 1),
+                    eps_actual=3.0,
+                    eps_estimate=2.8,
+                    eps_surprise=0.2,
+                    eps_surprise_percent=7.14,
+                    revenue_estimate=None,
+                    report_session=EarningsSession.AMC,
+                ),
+                _upcoming(2026, 1, 3.1, 100e9),  # default UNKNOWN session
+            ),
+        ),
+    )
+    tl = r.get("AAPL")
+    reported = tl.past[0]
+    assert reported.report_session is EarningsSession.AMC  # persisted as "amc", read back
+    assert tl.future[0].report_session is EarningsSession.UNKNOWN  # default survives round-trip
 
 
 def test_upsert_stamps_the_fetch_time(session):

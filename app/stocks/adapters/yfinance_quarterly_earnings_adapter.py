@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
@@ -64,6 +65,7 @@ import yfinance as yf
 from app.stocks.adapters import yfinance_currency, yfinance_session
 from app.stocks.adapters.yfinance_currency import CurrencyNormalizer
 from app.stocks.earnings.quarterly.entities import (
+    EarningsSession,
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
@@ -80,6 +82,10 @@ _FORWARD_LABELS = ("0q", "+1q")
 # ≥ ~115 days before the announcement — so this cap separates "the quarter being announced"
 # from "the income statement hasn't published this quarter yet".
 _MAX_REPORT_LAG_DAYS = 90
+
+# Earnings times on the ``earnings_dates`` index are quoted against the US exchange session,
+# so the before-open / after-close split (EarningsSession) is read on Eastern wall-clock time.
+_EASTERN = ZoneInfo("America/New_York")
 
 
 class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
@@ -143,7 +149,10 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
             key=lambda r: r["report_date"],
             reverse=True,  # newest first
         )
-        future_dates = sorted(r["report_date"] for r in rows if r["eps_actual"] is None)
+        future_rows = sorted(
+            (r for r in rows if r["eps_actual"] is None),
+            key=lambda r: r["report_date"],
+        )
 
         seen: set[tuple[int, int]] = set()
         quarters: list[QuarterlyEarnings] = []
@@ -163,7 +172,7 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
         # Upcoming: the 0q/+1q forward estimates (at most two), so a stock with a single
         # scheduled future date still surfaces both quarters Yahoo estimates.
         for quarter in _upcoming_quarters(
-            reported, future_dates, eps_estimate, revenue_estimate, normalizer
+            reported, future_rows, eps_estimate, revenue_estimate, normalizer
         ):
             key = (quarter.fiscal_year, quarter.fiscal_quarter)
             if key in seen:
@@ -179,7 +188,7 @@ class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
 
 def _upcoming_quarters(
     reported: list[dict],
-    future_dates: list[date],
+    future_rows: list[dict],
     eps_estimate,
     revenue_estimate,
     normalizer: CurrencyNormalizer,
@@ -190,13 +199,14 @@ def _upcoming_quarters(
 
     ``0q`` is the quarter after the most recently reported one (yfinance's "current
     quarter"), which anchors the pair; if nothing has been reported yet, the nearest
-    scheduled date's quarter is used instead. A scheduled ``earnings_dates`` date is attached
-    as the report date when one lines up with the quarter's period. A quarter is emitted only
-    when Yahoo actually has an estimate (or a date) for it, so the result is at most two and
-    may be one or none.
+    scheduled date's quarter is used instead. A scheduled ``earnings_dates`` date (and its
+    before-open / after-close session) is attached when one lines up with the quarter's
+    period. A quarter is emitted only when Yahoo actually has an estimate (or a date) for it,
+    so the result is at most two and may be one or none.
 
     Currency: ``revenue_estimate`` is reliably reporting-currency (converted outright); the
     EPS estimate is a market-EPS figure on the detected market-EPS currency."""
+    future_dates = [r["report_date"] for r in future_rows]
     if reported:
         q0_end = _next_quarter_end(_period_end_before(reported[0]["report_date"]))
     elif future_dates:
@@ -204,10 +214,15 @@ def _upcoming_quarters(
     else:
         return []  # nothing to anchor the forward quarters on
 
-    # Match any scheduled future dates to a quarter by period end (not by order).
+    # Match any scheduled future rows to a quarter by period end (not by order), carrying
+    # the announcement's session alongside its date.
     date_by_period: dict[date, date] = {}
-    for announced in future_dates:
-        date_by_period.setdefault(_period_end_before(announced), announced)
+    session_by_period: dict[date, EarningsSession] = {}
+    for row in future_rows:
+        period = _period_end_before(row["report_date"])
+        if period not in date_by_period:
+            date_by_period[period] = row["report_date"]
+            session_by_period[period] = row["report_session"]
 
     plan = ((_FORWARD_LABELS[0], q0_end), (_FORWARD_LABELS[1], _next_quarter_end(q0_end)))
     out: list[QuarterlyEarnings] = []
@@ -219,7 +234,8 @@ def _upcoming_quarters(
             continue  # Yahoo has nothing for this quarter — don't invent it
         eps = normalizer.market_to_trading(eps)
         revenue = normalizer.to_trading(revenue)
-        out.append(_build_upcoming(period_end, report_date, eps, revenue))
+        session = session_by_period.get(period_end, EarningsSession.UNKNOWN)
+        out.append(_build_upcoming(period_end, report_date, eps, revenue, session))
     return out
 
 
@@ -262,14 +278,20 @@ def _build_reported(
         eps_surprise_percent=surprise_percent,
         revenue_estimate=None,
         revenue_actual=_revenue_for(report_date, revenue_by_period_end),
+        report_session=row["report_session"],
     )
 
 
 def _build_upcoming(
-    period_end: date, report_date: date | None, eps_estimate: float | None, revenue_estimate: float | None
+    period_end: date,
+    report_date: date | None,
+    eps_estimate: float | None,
+    revenue_estimate: float | None,
+    report_session: EarningsSession = EarningsSession.UNKNOWN,
 ) -> QuarterlyEarnings:
     """One upcoming quarter from the forward estimates: a consensus EPS and revenue, no
-    actual yet. ``report_date`` is set only when Yahoo has scheduled the announcement."""
+    actual yet. ``report_date`` (and ``report_session``) are set only when Yahoo has
+    scheduled the announcement; otherwise the session stays ``UNKNOWN``."""
     return QuarterlyEarnings(
         fiscal_year=period_end.year,
         fiscal_quarter=_quarter_of(period_end),
@@ -280,6 +302,7 @@ def _build_upcoming(
         eps_surprise=None,
         eps_surprise_percent=None,
         revenue_estimate=revenue_estimate,
+        report_session=report_session,
     )
 
 
@@ -358,10 +381,13 @@ def _revenue_for(report_date: date, revenue_by_period_end: dict[date, float]) ->
 
 
 def _parse_rows(frame) -> list[dict]:
-    """``earnings_dates`` → a list of ``{report_date, eps_estimate, eps_actual}`` dicts.
+    """``earnings_dates`` → a list of ``{report_date, report_session, eps_estimate,
+    eps_actual}`` dicts.
 
     Rows without a usable announcement date are dropped (there'd be no quarter to key on).
-    Keeps all pandas/NaN handling in the adapter."""
+    ``report_session`` is classified from the index timestamp's *time-of-day* (before the
+    date is collapsed away) — the whole point of reading the frame here rather than a bare
+    date. Keeps all pandas/NaN handling in the adapter."""
     if frame is None or getattr(frame, "empty", True):
         return []
     rows: list[dict] = []
@@ -376,6 +402,7 @@ def _parse_rows(frame) -> list[dict]:
         rows.append(
             {
                 "report_date": report_date,
+                "report_session": _to_session(index),
                 "eps_estimate": _num(_series_get(series, "EPS Estimate")),
                 "eps_actual": _num(_series_get(series, "Reported EPS")),
             }
@@ -418,6 +445,31 @@ def _num(value) -> float | None:
     except (TypeError, ValueError):
         return None
     return None if math.isnan(number) else number
+
+
+def _to_session(value) -> EarningsSession:
+    """The announcement session (BMO/AMC/…) from an ``earnings_dates`` index timestamp.
+
+    Normalizes a tz-aware stamp to US Eastern before reading its wall-clock time; a naive
+    stamp is taken as already Eastern (yfinance localizes the frame to the exchange tz).
+    Any pandas/tz quirk — or a missing time — degrades to ``UNKNOWN``, never an error."""
+    try:
+        if pd.isna(value):
+            return EarningsSession.UNKNOWN
+    except (TypeError, ValueError):
+        pass
+    try:
+        if getattr(value, "tzinfo", None) is not None:
+            # pandas Timestamp uses tz_convert; a plain datetime uses astimezone.
+            value = (
+                value.tz_convert(_EASTERN)
+                if hasattr(value, "tz_convert")
+                else value.astimezone(_EASTERN)
+            )
+        local_time = value.time()
+    except Exception:  # noqa: BLE001 — a frame quirk must not escape the adapter
+        return EarningsSession.UNKNOWN
+    return EarningsSession.from_local_time(local_time)
 
 
 def _to_date(value) -> date | None:

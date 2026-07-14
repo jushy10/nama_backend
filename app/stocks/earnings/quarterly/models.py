@@ -24,6 +24,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    String,
     UniqueConstraint,
     Uuid,
     delete,
@@ -68,6 +69,9 @@ class StockQuarterlyEarningsRecord(Base):
     fiscal_quarter: Mapped[int] = mapped_column(Integer, nullable=False)
     period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
     report_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Market timing of the announcement (EarningsSession value: bmo/amc/during/unknown);
+    # nullable for rows written before the column existed — the repo reads NULL as UNKNOWN.
+    report_session: Mapped[str | None] = mapped_column(String(16), nullable=True)
     eps_actual: Mapped[float | None] = mapped_column(Float, nullable=True)
     eps_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
     eps_surprise: Mapped[float | None] = mapped_column(Float, nullable=True)

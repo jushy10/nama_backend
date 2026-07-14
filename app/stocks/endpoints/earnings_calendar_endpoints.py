@@ -44,7 +44,8 @@ def get_earnings_calendar_use_case(
 
 
 def _present(calendar: EarningsCalendar) -> EarningsCalendarResponse:
-    """Presenter: calendar entity -> HTTP response DTO (each item's ``report_date`` -> ``when``)."""
+    """Presenter: calendar entity -> HTTP response DTO (each item's ``report_date`` -> ``when``,
+    ``session`` -> its string value)."""
     return EarningsCalendarResponse(
         from_=calendar.from_date,
         to=calendar.to_date,
@@ -59,6 +60,7 @@ def _present(calendar: EarningsCalendar) -> EarningsCalendarResponse:
                         name=item.name,
                         sector=item.sector,
                         when=item.report_date,
+                        session=item.session.value,
                     )
                     for item in day.items
                 ],

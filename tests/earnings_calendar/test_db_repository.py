@@ -14,6 +14,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base
+from app.stocks.earnings.quarterly.entities import EarningsSession
 from app.stocks.earnings.quarterly.models import StockQuarterlyEarningsRecord
 from app.stocks.earnings_calendar.db_repository import SqlEarningsCalendarRepository
 from app.stocks.stocks.models import get_or_create_stock
@@ -37,7 +38,15 @@ def _stock(session, ticker, name, sector):
 
 
 def _quarter(
-    session, stock, *, year, quarter, report_date, eps_actual=None, eps_estimate=1.0
+    session,
+    stock,
+    *,
+    year,
+    quarter,
+    report_date,
+    eps_actual=None,
+    eps_estimate=1.0,
+    report_session=None,
 ):
     session.add(
         StockQuarterlyEarningsRecord(
@@ -47,6 +56,7 @@ def _quarter(
             report_date=report_date,
             eps_actual=eps_actual,
             eps_estimate=eps_estimate,
+            report_session=report_session,
             fetched_at=_FETCHED,
         )
     )
@@ -57,8 +67,15 @@ def _seed(session):
     msft = _stock(session, "MSFT", "Microsoft", "technology")
     nvda = _stock(session, "NVDA", "NVIDIA", "technology")
     # In-window upcoming reports (eps_actual is None).
-    _quarter(session, msft, year=2026, quarter=3, report_date=date(2026, 7, 20))
-    _quarter(session, aapl, year=2026, quarter=3, report_date=date(2026, 7, 20))
+    _quarter(
+        session, msft, year=2026, quarter=3, report_date=date(2026, 7, 20),
+        report_session="bmo",
+    )
+    _quarter(
+        session, aapl, year=2026, quarter=3, report_date=date(2026, 7, 20),
+        report_session="amc",
+    )
+    # NVDA's session left NULL (a pre-column / no-time row) → reads back as UNKNOWN.
     _quarter(session, nvda, year=2026, quarter=3, report_date=date(2026, 7, 25))
     # Excluded: already reported (eps_actual set), even though the date is in-window.
     _quarter(
@@ -93,6 +110,15 @@ def test_joins_name_and_sector(session):
     aapl = next(i for i in items if i.ticker == "AAPL")
     assert aapl.name == "Apple"
     assert aapl.sector == "technology"
+
+
+def test_maps_the_report_session(session):
+    _seed(session)
+    items = repo(session).upcoming(date(2026, 7, 15), date(2026, 7, 31), 100)
+    by_ticker = {i.ticker: i.session for i in items}
+    assert by_ticker["AAPL"] is EarningsSession.AMC
+    assert by_ticker["MSFT"] is EarningsSession.BMO
+    assert by_ticker["NVDA"] is EarningsSession.UNKNOWN  # NULL column → UNKNOWN
 
 
 def test_window_bounds_are_inclusive(session):

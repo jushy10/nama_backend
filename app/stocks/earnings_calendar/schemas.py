@@ -1,9 +1,10 @@
 """HTTP response DTOs for the earnings-calendar endpoint.
 
 Pydantic models kept at the edge, separate from the ``entities`` so the domain stays
-framework-agnostic. ``when`` is the item's scheduled report date (our data is date-granular —
-no intraday session), surfaced per item so a client that flattens the day groups still knows
-each report's date. The envelope carries the (clamped) ``from``/``to`` window and a total
+framework-agnostic. ``when`` is the item's scheduled report date and ``session`` its market
+timing relative to the US session ("bmo" before open / "amc" after close / "during" intraday /
+"unknown"), both surfaced per item so a client that flattens the day groups still knows each
+report's date and timing. The envelope carries the (clamped) ``from``/``to`` window and a total
 ``count`` alongside the ``days``, plus a service-authored ``disclaimer`` (informational, not
 financial advice).
 """
@@ -14,12 +15,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class EarningsCalendarItemResponse(BaseModel):
-    """One scheduled report: the company and the date it's expected to report (``when``)."""
+    """One scheduled report: the company, the date it's expected to report (``when``), and its
+    market timing (``session``: bmo / amc / during / unknown)."""
 
     ticker: str
     name: str | None = None
     sector: str | None = None
     when: date
+    session: str
 
 
 class EarningsCalendarDayResponse(BaseModel):
