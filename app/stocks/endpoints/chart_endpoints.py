@@ -12,20 +12,28 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.stocks.charts.chart_window import ChartRange, resolve_window
-from app.stocks.charts.indicators import EmaSeries, SupportLevelSeries
+from app.stocks.charts.indicators import (
+    EmaSeries,
+    HorizonTrend,
+    SupportLevelSeries,
+    TrendAssessment,
+)
 from app.stocks.charts.schemas import (
     CandleResponse,
     CandleSeriesResponse,
     EmaLineResponse,
     EmaPointResponse,
     EmaResponse,
+    HorizonTrendResponse,
     SupportLevelResponse,
     SupportLevelsResponse,
+    TrendResponse,
 )
 from app.stocks.charts.use_cases import (
     GetStockCandles,
     GetStockEma,
     GetStockSupportLevels,
+    GetStockTrend,
 )
 from app.stocks.adapters.alpaca_adapter import AlpacaStockDataProvider
 from app.stocks.entities import CandleSeries, Timeframe
@@ -57,6 +65,14 @@ def get_stock_support_levels(
     provider: AlpacaStockDataProvider = Depends(get_provider),
 ) -> GetStockSupportLevels:
     return GetStockSupportLevels(provider)
+
+
+def get_stock_trend(
+    # Trend rides on the same CandleProvider as candles — it's read from the OHLC
+    # bars (EMA slopes), so the Alpaca instance backs this endpoint too.
+    provider: AlpacaStockDataProvider = Depends(get_provider),
+) -> GetStockTrend:
+    return GetStockTrend(provider)
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
@@ -130,6 +146,33 @@ def _present_support_levels(series: SupportLevelSeries) -> SupportLevelsResponse
             )
             for level in series.levels
         ],
+    )
+
+
+def _present_horizon(horizon: HorizonTrend | None) -> HorizonTrendResponse | None:
+    """Presenter: one horizon's trend entity -> DTO (None passes through)."""
+    if horizon is None:
+        return None
+    return HorizonTrendResponse(
+        period=horizon.period,
+        lookback=horizon.lookback,
+        direction=horizon.direction.value,
+        slope_percent=horizon.slope_percent,
+        change_percent=horizon.change_percent,
+        price_vs_ema_percent=horizon.price_vs_ema_percent,
+        ema=horizon.ema,
+    )
+
+
+def _present_trend(assessment: TrendAssessment) -> TrendResponse:
+    """Presenter: trend assessment entity -> HTTP response DTO."""
+    return TrendResponse(
+        symbol=assessment.symbol,
+        timeframe=assessment.timeframe.value,
+        reference_price=assessment.reference_price,
+        reading=assessment.reading.value,
+        short_term=_present_horizon(assessment.short_term),
+        long_term=_present_horizon(assessment.long_term),
     )
 
 
@@ -313,3 +356,82 @@ def get_stock_support_levels_endpoint(
     except StockDataUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
     return _present_support_levels(series)
+
+
+# Trend horizon bounds: a lookback of at least a couple of bars, up to the deepest
+# common moving average (the 200-EMA long-term read; headroom above it).
+_TREND_MIN_PERIOD = 2
+_TREND_MAX_PERIOD = 400
+
+
+@router.get("/stocks/ticker/{ticker}/trend", response_model=TrendResponse)
+def get_stock_trend_endpoint(
+    ticker: str,
+    timeframe: Timeframe = Query(
+        Timeframe.DAY_1, description="Granularity of the candles the trend is read from."
+    ),
+    range_: ChartRange = Query(
+        ChartRange.YEAR_1,
+        alias="range",
+        description=(
+            "How far back to read the trend from. Defaults to 1Y so the read stays "
+            "meaningful independently of the chart's zoom. Ignored when an explicit "
+            "`start`/`end` is given."
+        ),
+    ),
+    short_period: int = Query(
+        20,
+        ge=_TREND_MIN_PERIOD,
+        le=_TREND_MAX_PERIOD,
+        description="Short-horizon EMA lookback in candles (the near-term trend).",
+    ),
+    long_period: int = Query(
+        50,
+        ge=_TREND_MIN_PERIOD,
+        le=_TREND_MAX_PERIOD,
+        description=(
+            "Long-horizon EMA lookback in candles (the primary trend). Must exceed "
+            "`short_period`. Try 50 (short) / 200 (long) for the classic long-term read."
+        ),
+    ),
+    flat_threshold: float = Query(
+        0.05,
+        ge=0.0,
+        le=5.0,
+        description=(
+            "Per-bar EMA slope (percent) below which a horizon reads 'sideways' "
+            "rather than a weak up/down. Larger = more tolerant of drift."
+        ),
+    ),
+    start: datetime | None = Query(
+        None, description="Explicit window start (ISO 8601, UTC). Overrides `range`."
+    ),
+    end: datetime | None = Query(
+        None, description="Explicit window end (ISO 8601, UTC). Defaults to now."
+    ),
+    use_case: GetStockTrend = Depends(get_stock_trend),
+) -> TrendResponse:
+    start, end = _as_utc(start), _as_utc(end)
+    # Explicit start/end win; otherwise derive the window from the range preset.
+    if start is None and end is None:
+        start, end = resolve_window(range_, now=datetime.now(timezone.utc))
+    elif end is None:
+        end = datetime.now(timezone.utc)
+
+    try:
+        assessment = use_case.execute(
+            ticker,
+            timeframe,
+            short_period=short_period,
+            long_period=long_period,
+            deadband_percent=flat_threshold,
+            start=start,
+            end=end,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return _present_trend(assessment)

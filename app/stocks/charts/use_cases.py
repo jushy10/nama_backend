@@ -13,6 +13,9 @@ from datetime import datetime, timedelta
 from app.stocks.charts.indicators import (
     EmaSeries,
     SupportLevelSeries,
+    TrendAssessment,
+    _DEFAULT_FLAT_THRESHOLD_PERCENT,
+    assess_trend,
     ema_series,
     support_levels,
 )
@@ -170,4 +173,66 @@ class GetStockSupportLevels:
         )
         return support_levels(
             series, window=window, tolerance=tolerance, max_levels=max_levels
+        )
+
+
+# Trend read defaults: a short and a long horizon, in candles. 20/50 is the common
+# short-vs-intermediate pair on daily bars; pass 50/200 for the classic long-term
+# read. The long period sets how much warmup history to reach back for.
+_DEFAULT_SHORT_PERIOD = 20
+_DEFAULT_LONG_PERIOD = 50
+
+
+class GetStockTrend:
+    """Use case: classify a symbol's short- and long-term trend from its price
+    history.
+
+    Reuses the CandleProvider port — trend is read from the same OHLC bars the chart
+    endpoint uses, so no extra data source is needed. The classification is pure
+    domain logic (``assess_trend``: the slope of a short and a long EMA); this use
+    case validates the horizons, fetches enough history to warm the long EMA, and
+    delegates.
+
+    **Warmup.** The long EMA's slope is measured over ``long_period`` bars, so it
+    needs roughly ``2 × long_period`` closes to exist. Like ``GetStockEma`` the fetch
+    reaches an extra ``long_period`` bars *before* ``start`` so the read is
+    well-formed even when the requested window is short — the trend as of ``end``
+    shouldn't depend on the chart's zoom (the same reasoning support levels use).
+    A ``start`` of ``None`` (MAX) already pulls all history, so there's nothing to
+    reach back for. Unlike EMA there's no trim: trend is a single point-in-time read,
+    not a line drawn across the visible window.
+    """
+
+    def __init__(self, provider: CandleProvider) -> None:
+        self._provider = provider
+
+    def execute(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        short_period: int = _DEFAULT_SHORT_PERIOD,
+        long_period: int = _DEFAULT_LONG_PERIOD,
+        deadband_percent: float = _DEFAULT_FLAT_THRESHOLD_PERCENT,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> TrendAssessment:
+        if start is not None and end is not None and start >= end:
+            raise ValueError("'start' must be earlier than 'end'.")
+        if short_period < 2 or long_period < 2:
+            raise ValueError("trend periods must be at least 2.")
+        if short_period >= long_period:
+            raise ValueError("short_period must be less than long_period.")
+        # Reach back a warmup so the long EMA is warm by `start`.
+        fetch_start = start
+        if start is not None:
+            fetch_start = start - _ema_warmup_span(timeframe, long_period)
+        series = self._provider.get_candles(
+            _normalize_symbol(symbol), timeframe, start=fetch_start, end=end
+        )
+        return assess_trend(
+            series,
+            short_period=short_period,
+            long_period=long_period,
+            deadband_percent=deadband_percent,
         )

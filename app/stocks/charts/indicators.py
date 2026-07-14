@@ -359,3 +359,189 @@ def support_levels(
         reference_price=round(reference_price, 2),
         levels=tuple(levels),
     )
+
+
+# --------------------------- Trend (multi-horizon direction) ---------------------------
+
+# A near-flat EMA shouldn't read as a trend: anything drifting slower than this
+# many percent *per bar* is called SIDEWAYS rather than flip-flopping UP/DOWN on
+# noise. 0.05%/bar is ~1% over a 20-bar horizon (~12% annualized on daily bars) —
+# a gentle but real slope clears it; chop doesn't.
+_DEFAULT_FLAT_THRESHOLD_PERCENT = 0.05
+
+
+class TrendDirection(str, Enum):
+    """Which way one horizon is heading. String values double as the API's JSON
+    values."""
+
+    UP = "up"
+    DOWN = "down"
+    SIDEWAYS = "sideways"
+
+
+class TrendReading(str, Enum):
+    """The short- and long-term horizons combined into one plain reading — the
+    whole point of the endpoint (e.g. "long-term up but short-term down"). The long
+    horizon sets the primary trend; the short one qualifies it. String values
+    double as the API's JSON values."""
+
+    UPTREND = "uptrend"  # both up
+    UPTREND_PULLBACK = "uptrend_pullback"  # long up, short down
+    UPTREND_CONSOLIDATING = "uptrend_consolidating"  # long up, short flat
+    DOWNTREND = "downtrend"  # both down
+    DOWNTREND_BOUNCE = "downtrend_bounce"  # long down, short up
+    DOWNTREND_STALLING = "downtrend_stalling"  # long down, short flat
+    RANGE_BOUND = "range_bound"  # both flat
+    RANGE_TURNING_UP = "range_turning_up"  # long flat, short up
+    RANGE_TURNING_DOWN = "range_turning_down"  # long flat, short down
+    UNKNOWN = "unknown"  # not enough history on one or both horizons
+
+
+# The 3×3 map from (long direction, short direction) to the combined reading.
+_READINGS: dict[tuple[TrendDirection, TrendDirection], TrendReading] = {
+    (TrendDirection.UP, TrendDirection.UP): TrendReading.UPTREND,
+    (TrendDirection.UP, TrendDirection.DOWN): TrendReading.UPTREND_PULLBACK,
+    (TrendDirection.UP, TrendDirection.SIDEWAYS): TrendReading.UPTREND_CONSOLIDATING,
+    (TrendDirection.DOWN, TrendDirection.DOWN): TrendReading.DOWNTREND,
+    (TrendDirection.DOWN, TrendDirection.UP): TrendReading.DOWNTREND_BOUNCE,
+    (TrendDirection.DOWN, TrendDirection.SIDEWAYS): TrendReading.DOWNTREND_STALLING,
+    (TrendDirection.SIDEWAYS, TrendDirection.UP): TrendReading.RANGE_TURNING_UP,
+    (TrendDirection.SIDEWAYS, TrendDirection.DOWN): TrendReading.RANGE_TURNING_DOWN,
+    (TrendDirection.SIDEWAYS, TrendDirection.SIDEWAYS): TrendReading.RANGE_BOUND,
+}
+
+
+@dataclass(frozen=True)
+class HorizonTrend:
+    """One horizon's trend read, taken from the slope of its EMA.
+
+    The direction is read off the EMA's *slope* — the smoothed price line's heading
+    over its own timescale — not the raw closes, so a single noisy bar can't flip
+    it. ``slope_percent`` is that slope as an average percent change *per bar* (the
+    figure the SIDEWAYS deadband is applied to); ``change_percent`` is the same move
+    totalled across the ``lookback`` bars it was measured over (the human-readable
+    "the trend line is up X%"). ``price_vs_ema_percent`` says where the latest close
+    sits relative to the EMA — above (positive) or below — as context the direction
+    deliberately does *not* fold in.
+    """
+
+    period: int
+    lookback: int
+    direction: TrendDirection
+    slope_percent: float
+    change_percent: float
+    price_vs_ema_percent: float
+    ema: float
+
+
+@dataclass(frozen=True)
+class TrendAssessment:
+    """A stock's trend at two horizons plus their combined reading.
+
+    ``short_term`` / ``long_term`` are each ``None`` when there isn't enough history
+    to warm that horizon's EMA and measure its slope (a young listing, or a deep
+    ``long_period`` over a short window). ``reference_price`` is the latest close the
+    read was taken at.
+    """
+
+    symbol: str
+    timeframe: Timeframe
+    reference_price: float
+    short_term: HorizonTrend | None
+    long_term: HorizonTrend | None
+
+    @property
+    def reading(self) -> TrendReading:
+        """The two horizons combined into one plain reading (the headline). The long
+        horizon sets the primary trend; the short one qualifies it (aligned, pulling
+        back, bouncing, …). ``UNKNOWN`` when either horizon is missing."""
+        if self.long_term is None or self.short_term is None:
+            return TrendReading.UNKNOWN
+        return _READINGS[(self.long_term.direction, self.short_term.direction)]
+
+
+def _classify_direction(slope_percent_per_bar: float, deadband: float) -> TrendDirection:
+    """Map a per-bar EMA slope onto a direction, with a flat band around zero so a
+    barely-moving line reads SIDEWAYS rather than a weak UP/DOWN."""
+    if slope_percent_per_bar > deadband:
+        return TrendDirection.UP
+    if slope_percent_per_bar < -deadband:
+        return TrendDirection.DOWN
+    return TrendDirection.SIDEWAYS
+
+
+def horizon_trend(
+    closes: Sequence[float],
+    period: int,
+    *,
+    deadband_percent: float = _DEFAULT_FLAT_THRESHOLD_PERCENT,
+) -> HorizonTrend | None:
+    """Read one horizon's trend from a chronological (oldest-first) close series.
+
+    Smooths the closes into an EMA of ``period`` bars, then measures that line's
+    slope from ``lookback = min(period, len(ema) - 1)`` bars ago to its latest
+    value. The per-bar slope (percent) is classified UP / DOWN / SIDEWAYS against a
+    ``deadband_percent`` flat band, so a gently drifting or choppy market reads
+    SIDEWAYS rather than as a weak trend. Returns ``None`` when there isn't enough
+    history to form at least two EMA points — nothing to measure a slope from.
+
+    Raises:
+        ValueError: ``period < 2`` or ``deadband_percent < 0``.
+    """
+    if period < 2:
+        raise ValueError("trend period must be at least 2.")
+    if deadband_percent < 0:
+        raise ValueError("deadband_percent must be non-negative.")
+    ema = compute_ema(closes, period)
+    if len(ema) < 2:
+        return None
+    lookback = min(period, len(ema) - 1)
+    now = ema[-1]
+    prior = ema[-1 - lookback]
+    change_percent = (now - prior) / prior * 100 if prior else 0.0
+    slope_percent = change_percent / lookback
+    price = closes[-1]
+    price_vs_ema = (price - now) / now * 100 if now else 0.0
+    return HorizonTrend(
+        period=period,
+        lookback=lookback,
+        direction=_classify_direction(slope_percent, deadband_percent),
+        slope_percent=round(slope_percent, 4),
+        change_percent=round(change_percent, 2),
+        price_vs_ema_percent=round(price_vs_ema, 2),
+        ema=round(now, 2),
+    )
+
+
+def assess_trend(
+    series: CandleSeries,
+    *,
+    short_period: int = 20,
+    long_period: int = 50,
+    deadband_percent: float = _DEFAULT_FLAT_THRESHOLD_PERCENT,
+) -> TrendAssessment:
+    """Assess a candle series' trend at a short and a long horizon.
+
+    Both horizons are read from the same closes via ``horizon_trend`` (the slope of
+    a short and a long EMA); their directions combine into ``TrendAssessment.reading``
+    — the "long-term up but short-term down" headline. A horizon with too little
+    history to warm its EMA comes back ``None`` (and the reading is ``UNKNOWN``).
+    Pure: given the same series it always returns the same result.
+
+    Raises:
+        ValueError: ``short_period`` or ``long_period`` below 2,
+            ``short_period >= long_period``, or ``deadband_percent < 0``.
+    """
+    if short_period < 2 or long_period < 2:
+        raise ValueError("trend periods must be at least 2.")
+    if short_period >= long_period:
+        raise ValueError("short_period must be less than long_period.")
+    closes = [candle.close for candle in series.candles]
+    reference_price = closes[-1] if closes else 0.0
+    return TrendAssessment(
+        symbol=series.symbol,
+        timeframe=series.timeframe,
+        reference_price=round(reference_price, 2),
+        short_term=horizon_trend(closes, short_period, deadband_percent=deadband_percent),
+        long_term=horizon_trend(closes, long_period, deadband_percent=deadband_percent),
+    )

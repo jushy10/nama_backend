@@ -94,3 +94,38 @@ class SupportLevelsResponse(BaseModel):
     reference_price: float
     count: int
     levels: list[SupportLevelResponse]
+
+
+class HorizonTrendResponse(BaseModel):
+    """One horizon's trend read, from the slope of its EMA.
+
+    `direction` ("up"/"down"/"sideways") is read off the EMA's slope over its own
+    timescale. `slope_percent` is that slope averaged *per bar* (the figure the
+    sideways deadband is applied to); `change_percent` is the same move totalled
+    across the `lookback` bars it was measured over. `price_vs_ema_percent` is where
+    the latest close sits relative to the EMA (positive = above) — context the
+    direction does not fold in."""
+
+    period: int
+    lookback: int
+    direction: str  # "up" | "down" | "sideways"
+    slope_percent: float
+    change_percent: float
+    price_vs_ema_percent: float
+    ema: float
+
+
+class TrendResponse(BaseModel):
+    """A stock's trend at a short and a long horizon, plus their combined reading.
+
+    `reading` folds the two horizons into one headline (e.g. "uptrend_pullback" =
+    long-term up but short-term down); it's "unknown" when either horizon lacks the
+    history to warm its EMA. `short_term` / `long_term` are null in that same case.
+    `reference_price` is the latest close the read was taken at."""
+
+    symbol: str
+    timeframe: str
+    reference_price: float
+    reading: str
+    short_term: HorizonTrendResponse | None = None
+    long_term: HorizonTrendResponse | None = None
