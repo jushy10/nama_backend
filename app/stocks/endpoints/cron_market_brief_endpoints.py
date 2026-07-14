@@ -48,6 +48,7 @@ from app.stocks.endpoints.background_sync import (
 from app.stocks.endpoints.cron_auth import require_cron_token
 from app.stocks.heatmap.use_cases import GetStockHeatMap
 from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
+from app.stocks.news.db_repository import SqlNewsRepository
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.wiring import get_provider
 
@@ -84,6 +85,9 @@ def run_market_brief_sync(limit: int | None) -> MarketBriefSyncReport:
             GetStockHeatMap(SqlStockSearchRepository(db), provider),
             get_market_brief_provider(),
             SqlMarketBriefRepository(db),
+            # DB-only news reader (never a live fetch) — the daily news sync keeps it warm,
+            # so the movers' catalyst headlines cost the generation no extra vendor call.
+            news=SqlNewsRepository(db),
         )
         brief = use_case.execute()
         report = MarketBriefSyncReport(

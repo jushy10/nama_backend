@@ -35,6 +35,7 @@ from datetime import date, datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
 from app.stocks.brief.entities import (
+    BriefHeadline,
     BriefIndexMove,
     BriefMover,
     BriefSectorMove,
@@ -124,18 +125,24 @@ _SYSTEM_PROMPT = (
     "market is doing, for an everyday person with no finance background. You are given the "
     "day's figures: how the two headline US indices moved (the S&P 500, the broad market, and "
     "the Nasdaq, the growth-heavy, tech-leaning index, each read through the ETF that tracks "
-    "it), how each market sector moved, the day's biggest gaining and losing stocks, and how "
-    "many stocks rose versus fell.\n"
-    "From only those figures, write a clear, balanced brief: a 2-3 sentence summary of the "
-    "day, the mood it implies, and a few short narrative sections (an overview, how the "
-    "sectors rotated, the day's notable movers, and what an everyday reader might watch next).\n"
+    "it), how each market sector moved, the day's biggest gaining and losing stocks, how "
+    "many stocks rose versus fell, and — where available — recent news headlines about those "
+    "movers, each with the outlet that ran it.\n"
+    "From only those figures and headlines, write a clear, balanced brief: a 2-3 sentence "
+    "summary of the day, the mood it implies, and a few short narrative sections (an overview, "
+    "how the sectors rotated, the day's notable movers, and what an everyday reader might watch "
+    "next).\n"
+    "When a provided headline plausibly explains why a stock or the market moved, weave it in "
+    "as the reason ('shares of X rose after …'), and you may name the outlet. But only use the "
+    "headlines you are given — never invent news, quotes, or events, and if no headline "
+    "explains a move, simply describe the move without guessing a cause.\n"
     "When the market is broadly rising and the growth-heavy Nasdaq is leading, that usually "
     "signals an optimistic, risk-taking mood; when the market is falling, or defensive sectors "
     "lead, that usually signals a more cautious, defensive mood — say which it looks like in "
     "plain words.\n"
     "Write in plain, warm, everyday language — short sentences, no jargon. Refer to the indices "
     "by name (the S&P 500, the Nasdaq), never by their ETF ticker. Ground every statement ONLY "
-    "in the figures provided — do not use outside knowledge, recent news, or prices you may "
+    "in the figures and headlines provided — do not use outside knowledge or prices you may "
     "recall, and never invent numbers. Be honest that markets carry risk and past moves don't "
     "predict future ones. This is general information, not personal financial advice. Respond "
     "by calling the submit_market_brief tool."
@@ -318,6 +325,10 @@ def _render_prompt(context: MarketBriefContext) -> str:
         blocks.append("Biggest losers today:")
         blocks.extend(_mover_line(m) for m in context.losers)
 
+    if context.headlines:
+        blocks.append("Recent news headlines about today's movers:")
+        blocks.extend(_headline_line(h) for h in context.headlines)
+
     return "\n".join(blocks)
 
 
@@ -344,6 +355,11 @@ def _mover_line(mover: BriefMover) -> str:
     name = mover.name or mover.ticker
     sector = f", {mover.sector}" if mover.sector else ""
     return f"- {name} ({mover.ticker}{sector}): {_num(mover.change_percent)}%"
+
+
+def _headline_line(headline: BriefHeadline) -> str:
+    outlet = f"{headline.publisher}: " if headline.publisher else ""
+    return f"- {outlet}{headline.title} (about {headline.ticker})"
 
 
 def _num(value: object) -> str:

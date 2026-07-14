@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.stocks.brief.entities import (
+    BriefHeadline,
     BriefIndexMove,
     BriefMover,
     BriefSectorMove,
@@ -38,6 +39,7 @@ from app.stocks.heatmap.entities import HeatMap, HeatMapScope
 from app.stocks.heatmap.use_cases import GetStockHeatMap
 from app.stocks.market.entities import MarketIndexPerformance, SectorPerformance
 from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
+from app.stocks.news.repository import NewsRepository
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,11 @@ class GenerateDailyBrief:
     lists. A ``today`` clock keeps the dated row deterministic in tests.
     """
 
+    # Only headlines this recent count as a catalyst for "today's" moves — a stale
+    # top-of-feed article isn't why a stock moved on the day. Generous enough (a few days)
+    # to carry Friday/weekend news into a Monday brief.
+    _NEWS_MAX_AGE_DAYS = 3
+
     def __init__(
         self,
         overview: GetMarketOverview,
@@ -87,8 +94,10 @@ class GenerateDailyBrief:
         provider: MarketBriefProvider,
         repository: MarketBriefRepository,
         *,
+        news: NewsRepository | None = None,
         scope: HeatMapScope = HeatMapScope.SP500,
         movers: int = 5,
+        headlines: int = 8,
         today=None,
     ) -> None:
         self._overview = overview
@@ -96,8 +105,11 @@ class GenerateDailyBrief:
         self._heatmap = heatmap
         self._provider = provider
         self._repository = repository
+        # Best-effort news reader (DB-only). None → the brief carries no catalyst headlines.
+        self._news = news
         self._scope = scope
         self._movers = movers
+        self._headlines = headlines
         self._today = today or (lambda: datetime.now(timezone.utc).date())
 
     def execute(self, brief_date: date | None = None) -> MarketBrief | None:
@@ -137,6 +149,7 @@ class GenerateDailyBrief:
         gainers, losers, advancers, decliners, quoted = _movers_and_breadth(
             heatmap, self._movers
         )
+        headlines = self._headlines_for(gainers + losers)
         return MarketBriefContext(
             indexes=indexes,
             sectors=sectors,
@@ -145,7 +158,53 @@ class GenerateDailyBrief:
             advancers=advancers,
             decliners=decliners,
             quoted=quoted,
+            headlines=headlines,
         )
+
+    def _headlines_for(
+        self, movers: tuple[BriefMover, ...]
+    ) -> tuple[BriefHeadline, ...]:
+        """The day's movers' most recent catalyst headlines, read **DB-only** from the news
+        store — the "why" behind the moves the model can cite.
+
+        For each mover, reads its stored news (never a live fetch — the store is kept warm by
+        the daily news sync) and keeps the newest article *if it's recent enough* to be a
+        catalyst for today's move. Deduped across movers by headline (the same wire story is
+        often filed under several tickers), freshest first, capped. Best-effort throughout: no
+        news reader, or any per-ticker read hiccup, simply drops that catalyst — headlines are
+        enrichment and never sink the brief."""
+        if self._news is None or not movers:
+            return ()
+        cutoff = self._today() - timedelta(days=self._NEWS_MAX_AGE_DAYS)
+        collected: list[BriefHeadline] = []
+        seen: set[str] = set()
+        for mover in movers:
+            try:
+                stored = self._news.get(mover.ticker)
+            except Exception:  # a per-ticker read hiccup drops only that catalyst
+                continue
+            if stored is None or stored.is_empty:
+                continue
+            article = stored.articles[0]  # newest first
+            if article.published_at.date() < cutoff:
+                continue  # stale — not a catalyst for today's move
+            key = article.title.strip().casefold()
+            if not key or key in seen:
+                continue  # the same story filed under multiple movers
+            seen.add(key)
+            collected.append(
+                BriefHeadline(
+                    ticker=mover.ticker,
+                    title=article.title,
+                    publisher=article.publisher,
+                    published_at=article.published_at,
+                )
+            )
+        collected.sort(
+            key=lambda h: h.published_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        return tuple(collected[: self._headlines])
 
     @staticmethod
     def _read(call):
