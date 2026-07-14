@@ -17,7 +17,44 @@ be ``None`` when the source didn't cover it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, time
+from enum import Enum
+
+
+class EarningsSession(str, Enum):
+    """When in the US trading day a company announces earnings, relative to the session.
+
+    The market-timing signal a trader wants: a *before-market-open* report is priced in
+    at that morning's open, an *after-market-close* one at the next open. Derived from the
+    announcement's time-of-day (Yahoo carries it in Eastern time on the ``earnings_dates``
+    index), so it's a fact about the announcement, not the vendor — the boundaries live
+    here as domain, while the adapter handles the timezone normalization that feeds them.
+
+    ``UNKNOWN`` is the honest default when no usable time is published (Yahoo's placeholder
+    is midnight, not a real 00:00 announcement) — kept distinct from a real intraday
+    ``DURING`` so a client can tell "we don't know" from "mid-session".
+    """
+
+    BMO = "bmo"  # before market open (< 9:30 ET)
+    AMC = "amc"  # after market close (>= 16:00 ET)
+    DURING = "during"  # intraday, between the open and close (rare)
+    UNKNOWN = "unknown"  # no usable announcement time
+
+    @classmethod
+    def from_local_time(cls, when: time | None) -> "EarningsSession":
+        """Classify an Eastern-time announcement time into its session.
+
+        ``None`` or midnight (Yahoo's "time not supplied" placeholder — no company
+        announces at exactly 00:00 ET) yields ``UNKNOWN``; otherwise the regular-session
+        boundaries 9:30 / 16:00 ET split before-open / intraday / after-close.
+        """
+        if when is None or when == time(0, 0):
+            return cls.UNKNOWN
+        if when < time(9, 30):
+            return cls.BMO
+        if when >= time(16, 0):
+            return cls.AMC
+        return cls.DURING
 
 
 @dataclass(frozen=True)
@@ -43,6 +80,9 @@ class QuarterlyEarnings:
     eps_surprise_percent: float | None  # surprise as a percent of the estimate
     revenue_estimate: float | None  # forward consensus revenue (raw), nearest quarters only
     revenue_actual: float | None = None  # reported revenue (raw), reported quarters only
+    # Market timing of the announcement (before open / after close), from its time-of-day;
+    # UNKNOWN when Yahoo publishes no usable time. Applies to reported and upcoming alike.
+    report_session: EarningsSession = EarningsSession.UNKNOWN
 
     @property
     def is_reported(self) -> bool:
@@ -155,6 +195,14 @@ class QuarterlyEarningsTimeline:
         return QuarterlyEarningsTimeline(symbol=self.symbol, quarters=tuple(quarters))
 
 
+def _session_or(
+    fresh: EarningsSession, stored: EarningsSession
+) -> EarningsSession:
+    """Fresh session wins unless it's UNKNOWN, in which case carry the stored one forward
+    — a fetch that came back without a usable time must not wipe a known session."""
+    return fresh if fresh is not EarningsSession.UNKNOWN else stored
+
+
 def _merged_quarter(
     fresh: QuarterlyEarnings, stored: QuarterlyEarnings | None
 ) -> QuarterlyEarnings:
@@ -193,6 +241,7 @@ def _merged_quarter(
                 if fresh.revenue_actual is not None
                 else stored.revenue_actual
             ),
+            report_session=_session_or(fresh.report_session, stored.report_session),
         )
     # Both upcoming: fill the consensus holes.
     return QuarterlyEarnings(
@@ -214,4 +263,5 @@ def _merged_quarter(
             else stored.revenue_estimate
         ),
         revenue_actual=None,
+        report_session=_session_or(fresh.report_session, stored.report_session),
     )

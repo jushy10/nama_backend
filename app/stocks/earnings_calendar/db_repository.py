@@ -18,10 +18,22 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.stocks.earnings.quarterly.entities import EarningsSession
 from app.stocks.earnings_calendar.entities import EarningsCalendarItem
 from app.stocks.earnings_calendar.repository import EarningsCalendarRepository
 from app.stocks.earnings.quarterly.models import StockQuarterlyEarningsRecord
 from app.stocks.stocks.models import StockRecord
+
+
+def _session_from_str(value: str | None) -> EarningsSession:
+    """A stored ``report_session`` string → the enum; ``NULL`` (a pre-column row) or any
+    unrecognized value degrades to ``UNKNOWN`` rather than raising on a bad read."""
+    if value is None:
+        return EarningsSession.UNKNOWN
+    try:
+        return EarningsSession(value)
+    except ValueError:
+        return EarningsSession.UNKNOWN
 
 
 class SqlEarningsCalendarRepository(EarningsCalendarRepository):
@@ -39,6 +51,7 @@ class SqlEarningsCalendarRepository(EarningsCalendarRepository):
                 StockRecord.name,
                 StockRecord.sector,
                 StockQuarterlyEarningsRecord.report_date,
+                StockQuarterlyEarningsRecord.report_session,
             )
             .join(
                 StockRecord,
@@ -64,6 +77,7 @@ class SqlEarningsCalendarRepository(EarningsCalendarRepository):
                 name=name,
                 sector=sector,
                 report_date=report_date,
+                session=_session_from_str(report_session),
             )
-            for ticker, name, sector, report_date in rows
+            for ticker, name, sector, report_date, report_session in rows
         ]

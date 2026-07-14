@@ -24,6 +24,9 @@ class QuarterlyEarningsQuarterResponse(BaseModel):
     eps_surprise_percent: float | None
     revenue_estimate: float | None
     revenue_actual: float | None
+    # Market timing of the announcement: "bmo" (before open) / "amc" (after close) /
+    # "during" (intraday) / "unknown" (no usable time published).
+    report_session: str
     beat: bool | None
     is_reported: bool
 

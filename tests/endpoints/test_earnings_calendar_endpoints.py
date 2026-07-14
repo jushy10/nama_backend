@@ -12,6 +12,7 @@ from datetime import date
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.stocks.earnings.quarterly.entities import EarningsSession
 from app.stocks.earnings_calendar.entities import (
     EarningsCalendar,
     EarningsCalendarDay,
@@ -50,8 +51,14 @@ def _a_calendar() -> EarningsCalendar:
             EarningsCalendarDay(
                 date=date(2026, 7, 20),
                 items=(
-                    EarningsCalendarItem("AAPL", "Apple", "technology", date(2026, 7, 20)),
-                    EarningsCalendarItem("MSFT", "Microsoft", "technology", date(2026, 7, 20)),
+                    EarningsCalendarItem(
+                        "AAPL", "Apple", "technology", date(2026, 7, 20),
+                        EarningsSession.AMC,
+                    ),
+                    EarningsCalendarItem(
+                        "MSFT", "Microsoft", "technology", date(2026, 7, 20),
+                        EarningsSession.BMO,
+                    ),
                 ),
             ),
         ),
@@ -76,7 +83,9 @@ def test_returns_the_expected_shape():
             "name": "Apple",
             "sector": "technology",
             "when": "2026-07-20",  # the item's scheduled report date
+            "session": "amc",  # after market close
         }
+        assert day["items"][1]["session"] == "bmo"  # before market open
         assert "not financial advice" in body["disclaimer"]
         assert resp.headers["cache-control"] == "public, max-age=1800"
     finally:

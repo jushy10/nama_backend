@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.stocks.earnings.quarterly import models
 from app.stocks.earnings.quarterly.entities import (
+    EarningsSession,
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
@@ -30,6 +31,17 @@ def _quarter_key(quarter: QuarterlyEarnings) -> tuple[int, int]:
     return (quarter.fiscal_year, quarter.fiscal_quarter)
 
 
+def _session_from_str(value: str | None) -> EarningsSession:
+    """A stored ``report_session`` string → the enum; ``NULL`` (a pre-column row) or any
+    unrecognized value degrades to ``UNKNOWN`` rather than raising on a bad read."""
+    if value is None:
+        return EarningsSession.UNKNOWN
+    try:
+        return EarningsSession(value)
+    except ValueError:
+        return EarningsSession.UNKNOWN
+
+
 def _to_entity(row: StockQuarterlyEarningsRecord) -> QuarterlyEarnings:
     return QuarterlyEarnings(
         fiscal_year=row.fiscal_year,
@@ -42,6 +54,7 @@ def _to_entity(row: StockQuarterlyEarningsRecord) -> QuarterlyEarnings:
         eps_surprise_percent=row.eps_surprise_percent,
         revenue_estimate=row.revenue_estimate,
         revenue_actual=row.revenue_actual,
+        report_session=_session_from_str(row.report_session),
     )
 
 
@@ -98,6 +111,7 @@ class SqlQuarterlyEarningsRepository(QuarterlyEarningsRepository):
                     eps_surprise_percent=quarter.eps_surprise_percent,
                     revenue_estimate=quarter.revenue_estimate,
                     revenue_actual=quarter.revenue_actual,
+                    report_session=quarter.report_session.value,
                     fetched_at=now,
                 )
             )
