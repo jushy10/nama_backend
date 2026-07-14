@@ -71,6 +71,7 @@ from app.stocks.endpoints.analysis_endpoints import router as analysis_router
 from app.stocks.endpoints.chart_endpoints import router as chart_router
 from app.stocks.endpoints.logo_endpoints import router as logo_router
 from app.stocks.endpoints.market_endpoints import router as market_router
+from app.stocks.endpoints.yields_endpoints import router as yields_router
 from app.stocks.endpoints.market_brief_endpoints import router as market_brief_router
 from app.stocks.endpoints.cron_market_brief_endpoints import (
     router as market_brief_cron_router,
@@ -178,6 +179,11 @@ app.add_middleware(
 # and the logo image.
 app.include_router(chart_router)
 app.include_router(market_router)
+# The Treasury yield curve (GET /market/yield-curve): the par-yield snapshot
+# across maturities, plus GET /market/yield-history for the 2Y/10Y series.
+# Live-per-request, keyless (Treasury + FRED), no table/cron. See
+# app/stocks/endpoints/yields_endpoints.py.
+app.include_router(yields_router)
 app.include_router(analysis_router)
 app.include_router(logo_router)
 # The per-quarter earnings read endpoint (GET /stocks/{symbol}/earnings/quarterly):
