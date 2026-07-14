@@ -80,6 +80,28 @@ def test_upgrade_renames_trends_and_adds_analyst_coverage_tables(alembic):
     )
 
 
+def test_upgrade_creates_the_congress_trades_table(alembic):
+    # 0034 adds stock_congress_trades — the Congressional-trades cache off the stocks anchor.
+    config, url = alembic
+
+    command.upgrade(config, "head")
+    inspector = inspect(create_engine(url))
+    assert "stock_congress_trades" in inspector.get_table_names()
+    columns = {c["name"] for c in inspector.get_columns("stock_congress_trades")}
+    assert {
+        "member",
+        "chamber",
+        "party",
+        "tx_type",
+        "amount_range",
+        "transaction_date",
+        "disclosure_date",
+    } <= columns
+
+    command.downgrade(config, "base")
+    assert "stock_congress_trades" not in inspect(create_engine(url)).get_table_names()
+
+
 def test_upgrade_adds_the_etf_profile_columns_and_child_tables(alembic):
     # 0020 adds the profile scalars onto `etfs` and the two child tables the sync persists; 0021
     # then drops the trailing-return ladder (served live from Yahoo instead), so at head those

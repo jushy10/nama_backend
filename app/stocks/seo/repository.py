@@ -67,6 +67,26 @@ class SectorStock:
 
 
 @dataclass(frozen=True)
+class CongressPageTrade:
+    """One row on the Congressional-trades content surface (the /congress board, and the section a
+    stock page carries): who traded, which chamber, buy or sell, the disclosed band, and the dates.
+
+    A projection of ``stock_congress_trades`` joined to the anchor for the company name — the same
+    DB-only stance the rest of the SEO slice takes (a crawler hit is one indexed read, never a live
+    fetch). ``tx_type`` is the normalized action (``Purchase`` / ``Sale`` / ``Exchange`` /
+    ``Other``)."""
+
+    ticker: str
+    name: str | None
+    member: str
+    chamber: str
+    tx_type: str
+    amount_range: str | None
+    transaction_date: date | None
+    disclosure_date: date | None
+
+
+@dataclass(frozen=True)
 class EtfPageFacts:
     """The stored facts an ETF content page renders — all DB-only, off the ``etfs`` table.
 
@@ -143,4 +163,19 @@ class SeoReadRepository(ABC):
         """The most recent daily-brief dates, newest first, capped at ``limit`` — the set of
         ``/market/brief/{date}`` pages that exist, for the sitemap. Each dated brief is a fresh,
         durable URL (compounding SEO); empty until the first brief is generated."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_recent_congress_trades(self, limit: int) -> tuple[CongressPageTrade, ...]:
+        """The most recent Congressional trades market-wide (newest disclosure first), capped at
+        ``limit`` — the rows the /congress board page lists. Empty until the sync seeds the store."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_congress_trades_for_ticker(
+        self, ticker: str, limit: int
+    ) -> tuple[CongressPageTrade, ...]:
+        """One stock's most recent Congressional trades (newest first), capped at ``limit`` — the
+        section a stock content page carries. Empty when Congress hasn't traded it (or it isn't
+        seeded yet)."""
         raise NotImplementedError

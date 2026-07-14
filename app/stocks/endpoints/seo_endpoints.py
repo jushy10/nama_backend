@@ -31,9 +31,11 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.stocks.seo.db_repository import SqlSeoReadRepository
-from app.stocks.seo.repository import EtfPageFacts, TickerPageFacts
+from app.stocks.seo.repository import CongressPageTrade, EtfPageFacts, TickerPageFacts
 from app.stocks.seo.use_cases import (
+    CongressBoardPage,
     EtfPage,
+    GetCongressBoardPage,
     GetEtfPage,
     GetScreenPage,
     GetSectorPage,
@@ -108,6 +110,49 @@ def _join_and(parts: list[str]) -> str:
     if len(parts) == 1:
         return parts[0]
     return f"{', '.join(parts[:-1])} and {parts[-1]}"
+
+
+def _fmt_date(value) -> str:
+    """A stored date -> a short human label (``Jul 8, 2026``), or ``—`` when absent. Built without
+    ``strftime('%-d')`` (not portable to Windows) so it renders the same everywhere."""
+    if value is None:
+        return "—"
+    return f"{value:%b} {value.day}, {value.year}"
+
+
+# Normalized transaction action -> (display label, CSS direction class). ``Purchase`` reads as
+# "Buy", ``Sale`` as "Sell"; everything else is a neutral "Exchange"/"Other".
+_CONGRESS_DIR = {
+    "Purchase": ("Buy", "buy"),
+    "Sale": ("Sell", "sell"),
+    "Exchange": ("Exchange", "other"),
+    "Other": ("Other", "other"),
+}
+
+
+def _congress_rows(
+    trades: tuple[CongressPageTrade, ...], site: str
+) -> list[dict[str, str]]:
+    """Format Congressional trades into the template's rows — each linking its ticker to the
+    stock page. Shared by the /congress board and the per-stock section (the section ignores the
+    ``ticker``/``url`` keys)."""
+    rows: list[dict[str, str]] = []
+    for trade in trades:
+        label, css = _CONGRESS_DIR.get(trade.tx_type, ("Other", "other"))
+        rows.append(
+            {
+                "member": trade.member,
+                "chamber": trade.chamber,
+                "ticker": trade.ticker,
+                "url": f"{site}/stock/{trade.ticker}",
+                "dir_label": label,
+                "dir_class": css,
+                "amount": trade.amount_range or "—",
+                "traded": _fmt_date(trade.transaction_date),
+                "disclosed": _fmt_date(trade.disclosure_date),
+            }
+        )
+    return rows
 
 
 def _summary(name: str, ticker: str, facts: TickerPageFacts) -> str:
@@ -249,6 +294,10 @@ def _render(request: Request, page: TickerStockPage) -> Response:
             f"{site}/sector/{facts.sector.replace('_', '-')}" if facts.sector else None
         ),
         "sector_label": _humanize(facts.sector),
+        # The stock's recent Congressional trades (empty -> the section is hidden), plus the link
+        # to the market-wide board.
+        "congress": _congress_rows(page.congress, site),
+        "congress_url": f"{site}/congress",
         "year": datetime.now(timezone.utc).year,
     }
     response = _TEMPLATES.TemplateResponse(
@@ -838,6 +887,144 @@ def stock_screener_page(request: Request) -> Response:
     return response
 
 
+# --- Congress trades board: /congress ----------------------------------------------------
+#
+# The market-wide Congressional-trades board — a keyword/landing page for "congress stock
+# trades" that lists the most recently disclosed House/Senate trades and links each to its stock
+# page (the internal-linking hub back into the universe). DB-only, like every other content page.
+
+
+_CONGRESS_FAQS = [
+    (
+        "What are Congressional stock trades?",
+        "They're the stock purchases and sales that members of the US House and Senate (and their "
+        "spouses and dependents) make and disclose publicly. Because members can see policy and "
+        "briefings before the public does, many investors watch these trades closely.",
+    ),
+    (
+        "Do members of Congress have to report their trades?",
+        "Yes. The STOCK Act requires every Representative and Senator to publicly disclose each "
+        "stock trade within 45 days, including the asset, the type of trade, and a dollar range.",
+    ),
+    (
+        "Why is the amount shown as a range?",
+        "Congress discloses trades in bands (for example, “$1,001 - $15,000”) rather than an exact "
+        "figure — that's all the STOCK Act filings report, so an exact dollar amount isn't available.",
+    ),
+    (
+        "Is Nama's Congress trades tracker free?",
+        "Yes. Nama Insights is free to use — no login and no paywall.",
+    ),
+    (
+        "How often is the data updated?",
+        "The board is refreshed weekly from the official House and Senate disclosures. Trades can "
+        "appear up to 45 days after they were made, since that's the STOCK Act filing window.",
+    ),
+]
+
+
+def get_congress_board_page_use_case(
+    db: Session = Depends(get_db),
+) -> GetCongressBoardPage:
+    # Pure DB read over the congress table joined to the anchor — no vendor, no key.
+    return GetCongressBoardPage(SqlSeoReadRepository(db))
+
+
+def _congress_jsonld(canonical: str, site: str) -> str:
+    """schema.org JSON-LD for the board: the Dataset (entity clarity + citation), the FAQ (strong
+    for rich results and AI answers), and a breadcrumb. ``<`` escaped so nothing can break out of
+    the <script> block."""
+    dataset = {
+        "@context": "https://schema.org",
+        "@type": "Dataset",
+        "name": "US Congress Stock Trades",
+        "url": canonical,
+        "description": (
+            "Recent stock trades disclosed by members of the US House and Senate under the "
+            "STOCK Act — member, chamber, ticker, buy/sell, disclosed dollar range and dates."
+        ),
+        "isAccessibleForFree": True,
+        "creator": {"@type": "Organization", "name": "Nama Insights", "url": site},
+    }
+    faq = {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+            {
+                "@type": "Question",
+                "name": question,
+                "acceptedAnswer": {"@type": "Answer", "text": answer},
+            }
+            for question, answer in _CONGRESS_FAQS
+        ],
+    }
+    breadcrumbs = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "Nama Insights", "item": site},
+            {"@type": "ListItem", "position": 2, "name": "Congress Trades", "item": canonical},
+        ],
+    }
+    return json.dumps([dataset, faq, breadcrumbs]).replace("<", "\\u003c")
+
+
+def _congress_stats(page: CongressBoardPage) -> list[dict[str, str]]:
+    """The headline counters above the ledger: how many recent trades, and the buy/sell split."""
+    trades = page.trades
+    buys = sum(1 for t in trades if t.tx_type == "Purchase")
+    sells = sum(1 for t in trades if t.tx_type == "Sale")
+    return [
+        {"value": f"{len(trades)}", "label": "Recent trades"},
+        {"value": f"{buys}", "label": "Buys"},
+        {"value": f"{sells}", "label": "Sells"},
+    ]
+
+
+def _render_congress(request: Request, page: CongressBoardPage) -> Response:
+    site = _site_origin()
+    canonical = f"{site}/congress"
+    context = {
+        "title": "US Congress Stock Trades — Who's Buying & Selling | Nama Insights",
+        "description": (
+            "Track recent stock trades disclosed by members of the US House and Senate under the "
+            "STOCK Act — member, chamber, buy or sell, dollar range and dates. Free, updated weekly."
+        ),
+        "canonical": canonical,
+        "robots": "index,follow",
+        "site": site,
+        "app_url": f"{site}/search",
+        "heading": "US Congress Stock Trades",
+        "subtitle": (
+            "The most recent stock trades disclosed by members of the US House and Senate under "
+            "the STOCK Act — who traded, whether they bought or sold, and the disclosed dollar range."
+        ),
+        "stats": _congress_stats(page) if not page.is_empty else [],
+        "trades": _congress_rows(page.trades, site),
+        "cta_text": "Explore stocks on Nama Insights →",
+        "faqs": [{"q": question, "a": answer} for question, answer in _CONGRESS_FAQS],
+        "jsonld": _congress_jsonld(canonical, site),
+        "year": datetime.now(timezone.utc).year,
+    }
+    response = _TEMPLATES.TemplateResponse(
+        request=request, name="congress.html", context=context
+    )
+    # Slow-moving DB feed refreshed weekly by the cron — cache generously.
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
+@router.get("/congress")
+def congress_board_page(
+    request: Request,
+    use_case: GetCongressBoardPage = Depends(get_congress_board_page_use_case),
+):
+    """The Congressional-trades board — a server-rendered landing page listing the most recently
+    disclosed House/Senate trades. Always renders (a keyword page with substantial static content);
+    before the sync seeds the store it shows an empty-state note rather than 404-ing."""
+    return _render_congress(request, use_case.execute())
+
+
 # --- Crawler files: robots.txt, llms.txt, sitemap.xml ------------------------------------
 #
 # These belong at the site root, so at the edge (CloudFront) they route to this origin
@@ -915,6 +1102,11 @@ The largest stocks in each sector by market cap — e.g. /sector/technology,
 Ranked lists updated daily — /screen/high-fcf-yield, /screen/cheapest-pe,
 /screen/highest-revenue-growth, /screen/largest-companies.
 
+## Congress trades
+Recent stock trades disclosed by members of the US House and Senate under the STOCK Act
+(member, chamber, buy/sell, disclosed dollar range and dates) — /congress. Per-stock
+trades also appear on that stock's page (e.g. /stock/NVDA).
+
 ## ETF pages
 Per-fund pages with AUM, expense ratio, category, dividend yield and NAV —
 e.g. /etf/VOO, /etf/QQQ, /etf/SPY.
@@ -961,6 +1153,7 @@ def _sitemap_xml(data: SitemapData, site: str) -> str:
         # The daily brief hub + the earnings-calendar page (both live, data-driven views).
         f"  <url><loc>{escape(site + '/market/brief')}</loc></url>",
         f"  <url><loc>{escape(site + '/earnings-calendar')}</loc></url>",
+        f"  <url><loc>{escape(site + '/congress')}</loc></url>",
     ]
     def _entity_url(prefix: str, ref) -> str:
         loc = escape(f"{site}/{prefix}/{ref.ticker}")

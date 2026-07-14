@@ -14,8 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.stocks.brief.models import recent_brief_dates
+from app.stocks.congress.models import StockCongressTradeRecord, _order_newest_first
 from app.stocks.etfs.models import EtfRecord
 from app.stocks.seo.repository import (
+    CongressPageTrade,
     EtfPageFacts,
     SectorStock,
     SeoReadRepository,
@@ -178,3 +180,44 @@ class SqlSeoReadRepository(SeoReadRepository):
         # Reads the brief store directly (the slice owns no anchor column for this) —
         # newest-first, capped, so the sitemap lists the recent dated brief pages.
         return tuple(recent_brief_dates(self._session, limit))
+
+    def list_recent_congress_trades(self, limit: int) -> tuple[CongressPageTrade, ...]:
+        rows = self._session.execute(
+            select(StockCongressTradeRecord, StockRecord.ticker, StockRecord.name)
+            .join(StockRecord, StockCongressTradeRecord.stock_id == StockRecord.id)
+            .order_by(*_order_newest_first())
+            .limit(limit)
+        ).all()
+        return tuple(
+            _to_congress_page_trade(row[0], ticker=row.ticker, name=row.name)
+            for row in rows
+        )
+
+    def list_congress_trades_for_ticker(
+        self, ticker: str, limit: int
+    ) -> tuple[CongressPageTrade, ...]:
+        rows = self._session.execute(
+            select(StockCongressTradeRecord, StockRecord.name)
+            .join(StockRecord, StockCongressTradeRecord.stock_id == StockRecord.id)
+            .where(StockRecord.ticker == ticker)
+            .order_by(*_order_newest_first())
+            .limit(limit)
+        ).all()
+        return tuple(
+            _to_congress_page_trade(row[0], ticker=ticker, name=row.name) for row in rows
+        )
+
+
+def _to_congress_page_trade(
+    row: StockCongressTradeRecord, *, ticker: str, name: str | None
+) -> CongressPageTrade:
+    return CongressPageTrade(
+        ticker=ticker,
+        name=name,
+        member=row.member,
+        chamber=row.chamber,
+        tx_type=row.tx_type,
+        amount_range=row.amount_range,
+        transaction_date=row.transaction_date,
+        disclosure_date=row.disclosure_date,
+    )
