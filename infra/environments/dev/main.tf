@@ -232,6 +232,17 @@ module "app" {
     BEDROCK_REGION            = "us-east-1"
     BEDROCK_ANALYSIS_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
+    # AI-analysis result-cache TTL overrides (minutes), read by wiring.analysis_cache_ttl.
+    # A cached read served within its TTL costs zero Bedrock (Haiku) tokens; regenerating on
+    # expiry is one invocation. These lengthen the token-heavy per-symbol kinds beyond their
+    # code defaults to cut the Haiku bill — safe because their inputs (earnings, fundamentals,
+    # analyst data, ETF profile) change slowly, so a staler *summary* is the only cost. The
+    # cheap shared-row kinds (sector 30m / market 60m) are left on their code defaults.
+    ANALYSIS_CACHE_TTL_MINUTES_STOCK        = "720"  # 4h -> 12h
+    ANALYSIS_CACHE_TTL_MINUTES_FUNDAMENTALS = "720"  # 4h -> 12h
+    ANALYSIS_CACHE_TTL_MINUTES_ETF          = "1440" # 6h -> 24h
+    ANALYSIS_CACHE_TTL_MINUTES_RATINGS      = "720"  # 6h -> 12h
+
     # The public canonical origin the SEO content pages stamp into their canonical/OG
     # URLs and sitemap (app/stocks/endpoints/seo_endpoints.py). The *www* host, because
     # the frontend distribution 301-redirects the apex to www — a canonical/sitemap URL
