@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 
 from app.stocks.seo.repository import (
     EtfPageFacts,
@@ -308,12 +309,14 @@ class GetScreenPage:
 
 @dataclass(frozen=True)
 class SitemapData:
-    """Everything the sitemap lists: stock pages, ETF pages, sector pages, screen pages."""
+    """Everything the sitemap lists: stock pages, ETF pages, sector pages, screen pages, and
+    the dated market-brief pages (each a fresh, durable URL — compounding SEO)."""
 
     stock_pages: tuple[StockPageRef, ...]
     etf_pages: tuple[StockPageRef, ...]
     sector_slugs: tuple[str, ...]
     screen_slugs: tuple[str, ...]
+    brief_dates: tuple[date, ...]
 
 
 class GetSitemap:
@@ -328,6 +331,10 @@ class GetSitemap:
 
     # The sitemaps.org per-file ceiling. Kept comfortably below in practice.
     MAX_URLS = 50_000
+    # How far back the dated-brief pages are listed. A brief is written daily, so ~2 years of
+    # them is a bounded, still-large set of compounding-SEO URLs (the freshest first, so a
+    # future truncation drops only the oldest).
+    MAX_BRIEF_PAGES = 730
 
     def __init__(self, repository: SeoReadRepository) -> None:
         self._repository = repository
@@ -338,4 +345,5 @@ class GetSitemap:
             etf_pages=self._repository.list_etf_pages(self.MAX_URLS),
             sector_slugs=self._repository.list_sectors(),
             screen_slugs=tuple(SCREENS.keys()),
+            brief_dates=self._repository.list_brief_dates(self.MAX_BRIEF_PAGES),
         )

@@ -67,6 +67,13 @@ from app.stocks.endpoints.analysis_endpoints import router as analysis_router
 from app.stocks.endpoints.chart_endpoints import router as chart_router
 from app.stocks.endpoints.logo_endpoints import router as logo_router
 from app.stocks.endpoints.market_endpoints import router as market_router
+from app.stocks.endpoints.market_brief_endpoints import router as market_brief_router
+from app.stocks.endpoints.cron_market_brief_endpoints import (
+    router as market_brief_cron_router,
+)
+from app.stocks.endpoints.earnings_calendar_endpoints import (
+    router as earnings_calendar_router,
+)
 from app.stocks.endpoints.seo_endpoints import router as seo_router
 
 # The web server (uvicorn/gunicorn) installs handlers only on its own `uvicorn*`
@@ -283,6 +290,20 @@ app.include_router(etf_cron_router)
 # anchor; the colours are best-effort live Alpaca quotes. See
 # app/stocks/endpoints/heatmap_endpoints.py.
 app.include_router(heatmap_router)
+# The daily market brief (GET /market/brief + /market/brief/{date}): a once-a-day, AI-written
+# plain-language read of the whole US market (headline indices + sector rotation + the day's
+# movers), stored one row per date and served DB-only. Generated out of band by the
+# market-brief cron. See app/stocks/endpoints/market_brief_endpoints.py.
+app.include_router(market_brief_router)
+# The market-brief generation cron (POST /internal/market-brief/sync): gathers the day's
+# whole-market reads, asks the model for a brief, and upserts today's row. Fire-and-forget like
+# the other crons. See app/stocks/endpoints/cron_market_brief_endpoints.py.
+app.include_router(market_brief_cron_router)
+# The market-wide earnings calendar (GET /market/earnings-calendar?from=&to=): which companies
+# are scheduled to report on which upcoming days, aggregated across the universe from the
+# scheduled dates the quarterly-earnings sync stores, grouped by day. Table-less DB read. See
+# app/stocks/endpoints/earnings_calendar_endpoints.py.
+app.include_router(earnings_calendar_router)
 # The SEO / server-rendered content pages (GET /stock/{ticker}): public, crawlable HTML
 # per stock, rendered server-side from DB-only anchor facts so search AND AI crawlers that
 # don't run JavaScript see real content (the React app can't give them that). A singular

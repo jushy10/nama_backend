@@ -8,9 +8,12 @@ the whole point: a crawler hitting the page pays one DB round-trip, never a live
 
 from __future__ import annotations
 
+from datetime import date
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.stocks.brief.models import recent_brief_dates
 from app.stocks.etfs.models import EtfRecord
 from app.stocks.seo.repository import (
     EtfPageFacts,
@@ -170,3 +173,8 @@ class SqlSeoReadRepository(SeoReadRepository):
             )
             for ticker, screened_at in rows
         )
+
+    def list_brief_dates(self, limit: int) -> tuple[date, ...]:
+        # Reads the brief store directly (the slice owns no anchor column for this) —
+        # newest-first, capped, so the sitemap lists the recent dated brief pages.
+        return tuple(recent_brief_dates(self._session, limit))
