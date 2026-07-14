@@ -69,6 +69,13 @@ def test_revenue_segments_dispatches_too(monkeypatch):
     assert recorders["revenue-segments"].calls == [None]
 
 
+def test_market_brief_dispatches_too(monkeypatch):
+    # The brief is a single unit of work (ignores the cap), but the CLI still passes None.
+    recorders = _patch_runners(monkeypatch)
+    assert cli.main(["market-brief"]) == 0
+    assert recorders["market-brief"].calls == [None]
+
+
 def test_unknown_slice_is_a_usage_error_and_runs_nothing(monkeypatch):
     recorders = _patch_runners(monkeypatch)
     assert cli.main(["does-not-exist"]) == 2

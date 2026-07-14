@@ -919,6 +919,16 @@ Ranked lists updated daily — /screen/high-fcf-yield, /screen/cheapest-pe,
 Per-fund pages with AUM, expense ratio, category, dividend yield and NAV —
 e.g. /etf/VOO, /etf/QQQ, /etf/SPY.
 
+## Daily market brief
+A short, plain-language AI read of how the whole US market moved each day — the
+headline indices, sector rotation, and the day's biggest movers. The latest is at
+/market/brief, and each day is a dated page — e.g. /market/brief/2026-07-14. The full
+list of dated briefs is in /sitemap.xml.
+
+## Earnings calendar
+Which US companies are scheduled to report earnings on which upcoming days, grouped by
+day — /earnings-calendar.
+
 ## Tools
 - /search — search and filter the >=$1B US stock universe
 - /screener — stock screener
@@ -948,6 +958,9 @@ def _sitemap_xml(data: SitemapData, site: str) -> str:
         # Static landing pages (marketing/keyword pages, not data-driven).
         f"  <url><loc>{escape(site + '/ai-stock-screener')}</loc></url>",
         f"  <url><loc>{escape(site + '/stock-screener')}</loc></url>",
+        # The daily brief hub + the earnings-calendar page (both live, data-driven views).
+        f"  <url><loc>{escape(site + '/market/brief')}</loc></url>",
+        f"  <url><loc>{escape(site + '/earnings-calendar')}</loc></url>",
     ]
     def _entity_url(prefix: str, ref) -> str:
         loc = escape(f"{site}/{prefix}/{ref.ticker}")
@@ -968,6 +981,12 @@ def _sitemap_xml(data: SitemapData, site: str) -> str:
         parts.append(f"  <url><loc>{loc}</loc></url>")
     for slug in data.screen_slugs:
         parts.append(f"  <url><loc>{escape(f'{site}/screen/{slug}')}</loc></url>")
+    # Each day's brief is a fresh, durable URL — dated pages are compounding SEO. ``lastmod``
+    # is the brief's own date (it never changes once written).
+    for brief_date in data.brief_dates:
+        iso = brief_date.isoformat()
+        loc = escape(f"{site}/market/brief/{iso}")
+        parts.append(f"  <url><loc>{loc}</loc><lastmod>{iso}</lastmod></url>")
     parts.append("</urlset>")
     return "\n".join(parts)
 

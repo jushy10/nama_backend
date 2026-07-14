@@ -178,6 +178,7 @@ def test_sitemap_lists_stock_and_sector_pages() -> None:
         etf_pages=(StockPageRef(ticker="VOO", last_modified=date(2026, 7, 5)),),
         sector_slugs=("technology", "consumer_electronics"),
         screen_slugs=("high-fcf-yield", "cheapest-pe"),
+        brief_dates=(date(2026, 7, 14), date(2026, 7, 13)),
     )
     app.dependency_overrides[endpoints.get_sitemap_use_case] = lambda: _FakeSitemap(data)
     resp = TestClient(app).get("/sitemap.xml")
@@ -200,6 +201,13 @@ def test_sitemap_lists_stock_and_sector_pages() -> None:
     # Stored underscore slug hyphenated for the sector URL.
     assert "<loc>https://www.namainsights.com/sector/consumer-electronics</loc>" in body
     assert "<loc>https://www.namainsights.com/screen/high-fcf-yield</loc>" in body
+    # The brief hub, the earnings-calendar page, and each dated brief (with its own lastmod).
+    assert "<loc>https://www.namainsights.com/market/brief</loc>" in body
+    assert "<loc>https://www.namainsights.com/earnings-calendar</loc>" in body
+    assert (
+        "<loc>https://www.namainsights.com/market/brief/2026-07-14</loc>"
+        "<lastmod>2026-07-14</lastmod>" in body
+    )
 
 
 # --- Sector pages ------------------------------------------------------------------------

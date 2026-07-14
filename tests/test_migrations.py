@@ -106,3 +106,20 @@ def test_upgrade_adds_the_etf_profile_columns_and_child_tables(alembic):
     command.downgrade(config, "base")
     remaining = set(inspect(create_engine(url)).get_table_names())
     assert not ({"etf_sector_weightings", "etf_top_holdings"} & remaining)
+
+
+def test_upgrade_creates_the_market_brief_table(alembic):
+    # 0034 adds the standalone stock_market_brief table (date PK, no stocks anchor) backing
+    # the daily-market-brief slice.
+    config, url = alembic
+
+    command.upgrade(config, "head")
+    inspector = inspect(create_engine(url))
+    assert "stock_market_brief" in inspector.get_table_names()
+    columns = {c["name"] for c in inspector.get_columns("stock_market_brief")}
+    assert {"brief_date", "generated_at", "tone", "summary", "sections", "model"} <= columns
+    pk = inspector.get_pk_constraint("stock_market_brief")
+    assert pk["constrained_columns"] == ["brief_date"]
+
+    command.downgrade(config, "base")
+    assert "stock_market_brief" not in inspect(create_engine(url)).get_table_names()

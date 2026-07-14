@@ -1,0 +1,108 @@
+name: Sync market brief
+run-name: Sync market brief
+
+# Daily (and on-demand). Generates the day's market brief: gather the whole-market reads (the
+# Alpaca index + sector boards and the heat map's per-stock day moves), ask Claude on Bedrock
+# for a short plain-language read, and upsert one row for today into stock_market_brief. The
+# read endpoints serve that stored row DB-only, so a brief is only as fresh as this run.
+#
+# It launches a one-off ECS Fargate task that runs `python -m app.sync market-brief` (the
+# GenerateDailyBrief use case) to completion and exits. The task runs on the shared
+# nama-dev-sync task definition, which carries the same task role (with bedrock:InvokeModel),
+# environment and secrets as the API task — so it reaches the private RDS in-VPC, Alpaca (the
+# APCA_* keys), and Bedrock (the ECS task role) with nothing extra to configure. This is a
+# single unit of work (one brief), not a per-stock sweep, so there's no `limit` and no Yahoo
+# pacing (the brief makes no Yahoo calls).
+#
+# FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the generation then runs in the
+# background on ECS and its result — "market-brief sync done: generated=… date=…" — lands in the
+# task's CloudWatch logs, not here. A green run means the task launched; check CloudWatch for the
+# outcome. If the market data or the model is unavailable, no row is written (the previous day's
+# brief keeps serving) and the next run retries.
+#
+# Manual run: Actions → "Sync market brief" → Run workflow (same trigger, off-schedule).
+#
+# Auth: the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets + AWS_REGION var — the same
+# identity the deploy + migrate jobs already use to run one-off ECS tasks.
+
+on:
+  workflow_dispatch:
+  # Daily, 11:00 UTC — after the US market's prior close is settled and staggered off the other
+  # syncs (recommendations 07:30, news 08:30, weekly earnings Mon 08:00/09:00) so the app isn't
+  # hammering its upstreams from the same host at once. Exact timing doesn't matter. Caveats:
+  # scheduled workflows run only from the default branch, and GitHub auto-disables the schedule
+  # after 60 days with no repo activity.
+  schedule:
+    - cron: "0 11 * * *"
+
+concurrency:
+  group: sync-market-brief
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # These match module "app" { name = "nama-dev" } in infra/environments/dev; the sync task
+  # def is that name + "-sync" (aws_ecs_task_definition.sync in the ecs-fargate-service module).
+  ECS_CLUSTER: nama-dev
+  ECS_SERVICE: nama-dev
+  SYNC_TASK_DEF: nama-dev-sync
+  SYNC_SLICE: market-brief
+
+jobs:
+  sync:
+    name: Sync market brief
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Launch the sync task
+        run: |
+          set -euo pipefail
+
+          # The sync task runs INSIDE the VPC (the private RDS is unreachable from the runner).
+          # Borrow the app service's own network config — subnets + security groups, including
+          # the DB SG — so there's nothing to hardcode. Same approach the migrate job uses.
+          status=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$status" != "ACTIVE" ]; then
+            echo "::error::ECS service '$ECS_SERVICE' is not ACTIVE (status: $status) — deploy the app first."
+            exit 1
+          fi
+          netcfg=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' --output json)
+
+          # Container override: python -m app.sync market-brief (no limit — the brief is a single
+          # unit of work, not a per-stock sweep).
+          overrides=$(jq -cn --arg slice "$SYNC_SLICE" '
+            {containerOverrides: [{
+              name: "app",
+              command: ["python", "-m", "app.sync", $slice]
+            }]}')
+
+          echo "Launching one-off sync task: app.sync $SYNC_SLICE"
+          run=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$SYNC_TASK_DEF" \
+            --launch-type FARGATE \
+            --network-configuration "$netcfg" \
+            --started-by "gha-sync-${GITHUB_SHA::7}" \
+            --overrides "$overrides")
+
+          # run-task exits 0 even when it places no task (capacity/throttle land in .failures),
+          # so check explicitly — this is what makes a green run mean "the task launched".
+          task_arn=$(echo "$run" | jq -r '.tasks[0].taskArn // empty')
+          if [ -z "$task_arn" ]; then
+            echo "::error::run-task launched no task: $(echo "$run" | jq -c '.failures')"
+            exit 1
+          fi
+
+          echo "Launched $task_arn"
+          echo "Fire-and-forget: the generation runs on ECS; its result —"
+          echo "\"$SYNC_SLICE sync done: generated=… date=…\" — lands in the task's CloudWatch logs."

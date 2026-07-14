@@ -137,3 +137,10 @@ class SeoReadRepository(ABC):
         """Every index-worthy ETF page for the sitemap — funds with an AUM (the screened
         gate), largest first, capped at ``limit``."""
         raise NotImplementedError
+
+    @abstractmethod
+    def list_brief_dates(self, limit: int) -> tuple[date, ...]:
+        """The most recent daily-brief dates, newest first, capped at ``limit`` — the set of
+        ``/market/brief/{date}`` pages that exist, for the sitemap. Each dated brief is a fresh,
+        durable URL (compounding SEO); empty until the first brief is generated."""
+        raise NotImplementedError
