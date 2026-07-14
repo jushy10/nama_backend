@@ -57,11 +57,13 @@ from app.stocks.analysis.use_cases import (
     GetStockAnalysis,
     GetStockInfo,
 )
+from app.stocks.charts.indicators import TrendDirection, TrendReading
 from app.stocks.charts.ports import CandleProvider
 from app.stocks.charts.use_cases import (
     GetStockCandles,
     GetStockEma,
     GetStockSupportLevels,
+    GetStockTrend,
 )
 from app.stocks.earnings.annual.entities import (
     AnnualEarnings,
@@ -82,6 +84,7 @@ from app.stocks.endpoints.chart_endpoints import (
     get_stock_candles,
     get_stock_ema,
     get_stock_support_levels,
+    get_stock_trend,
 )
 from app.stocks.endpoints.logo_endpoints import get_stock_logo
 from app.stocks.endpoints.market_endpoints import get_sector_performance
@@ -1274,6 +1277,68 @@ def test_support_levels_use_case_detects_from_fetched_candles():
     assert result.levels[0].strength.value == "moderate"
 
 
+# --------------------------- trend use case ---------------------------
+
+def test_trend_use_case_normalizes_symbol_and_warms_up_before_the_window():
+    fake = FakeCandleProvider(series=a_rising_series(n=20))
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    GetStockTrend(fake).execute(
+        "  aapl ", Timeframe.HOUR_1, short_period=3, long_period=8, start=start, end=end
+    )
+    # Symbol normalized; the fetch reaches back a warmup before `start` (long
+    # period 8 × 1-hour bars × the 3× factor = 24h) so the long EMA is warm.
+    symbol, timeframe, fetch_start, fetch_end = fake.received[0]
+    assert symbol == "AAPL"
+    assert timeframe is Timeframe.HOUR_1
+    assert fetch_end == end
+    assert fetch_start == start - timedelta(hours=24)
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "123", "AA1", "AA.B", "TOOLONG"])
+def test_trend_use_case_rejects_invalid_symbols(bad):
+    fake = FakeCandleProvider(series=a_rising_series(n=20))
+    with pytest.raises(ValueError):
+        GetStockTrend(fake).execute(bad, Timeframe.DAY_1)
+    assert fake.received == []  # provider untouched on invalid input
+
+
+@pytest.mark.parametrize(
+    "periods", [{"short_period": 1}, {"short_period": 50, "long_period": 50},
+                {"short_period": 60, "long_period": 20}]
+)
+def test_trend_use_case_rejects_bad_periods(periods):
+    fake = FakeCandleProvider(series=a_rising_series(n=20))
+    with pytest.raises(ValueError):
+        GetStockTrend(fake).execute("AAPL", Timeframe.DAY_1, **periods)
+    assert fake.received == []  # validated before any fetch
+
+
+def test_trend_use_case_rejects_inverted_window():
+    fake = FakeCandleProvider(series=a_rising_series(n=20))
+    start = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with pytest.raises(ValueError):
+        GetStockTrend(fake).execute("AAPL", Timeframe.DAY_1, start=start, end=end)
+    assert fake.received == []
+
+
+def test_trend_use_case_propagates_not_found():
+    fake = FakeCandleProvider(raises=StockNotFound("ZZZZ"))
+    with pytest.raises(StockNotFound):
+        GetStockTrend(fake).execute("ZZZZ", Timeframe.DAY_1)
+
+
+def test_trend_use_case_classifies_from_fetched_candles():
+    # A strictly rising series -> both horizons up -> uptrend.
+    result = GetStockTrend(FakeCandleProvider(series=a_rising_series(n=20))).execute(
+        "AAPL", Timeframe.DAY_1, short_period=3, long_period=8
+    )
+    assert result.short_term.direction is TrendDirection.UP
+    assert result.long_term.direction is TrendDirection.UP
+    assert result.reading is TrendReading.UPTREND
+
+
 # --------------------------- sector use case ---------------------------
 
 def test_sector_entity_change_and_percent():
@@ -1317,6 +1382,7 @@ def make_client():
         candle_provider: CandleProvider | None = None,
         ema_provider: CandleProvider | None = None,
         support_levels_provider: CandleProvider | None = None,
+        trend_provider: CandleProvider | None = None,
         sector_provider: SectorPerformanceProvider | None = None,
         earnings_provider: QuarterlyEarningsProvider | None = None,
         annual_earnings_provider: AnnualEarningsProvider | None = None,
@@ -1338,6 +1404,10 @@ def make_client():
         if support_levels_provider is not None:
             app.dependency_overrides[get_stock_support_levels] = (
                 lambda: GetStockSupportLevels(support_levels_provider)
+            )
+        if trend_provider is not None:
+            app.dependency_overrides[get_stock_trend] = (
+                lambda: GetStockTrend(trend_provider)
             )
         if sector_provider is not None:
             app.dependency_overrides[get_sector_performance] = (
@@ -2783,6 +2853,119 @@ def test_get_support_levels_upstream_failure_502(make_client):
     fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
     client = make_client(support_levels_provider=fake)
     assert client.get("/stocks/ticker/AAPL/support-levels").status_code == 502
+
+
+# --------------------------- trend endpoint ---------------------------
+
+def test_get_trend_returns_200_with_both_horizons(make_client):
+    client = make_client(trend_provider=FakeCandleProvider(a_rising_series(n=20)))
+    r = client.get(
+        "/stocks/ticker/AAPL/trend",
+        params={"short_period": 3, "long_period": 8},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["symbol"] == "AAPL"
+    assert body["timeframe"] == "1Day"
+    assert body["reading"] == "uptrend"                 # rising series
+    assert body["short_term"]["direction"] == "up"
+    assert body["long_term"]["direction"] == "up"
+    assert set(body["short_term"]) == {
+        "period", "lookback", "direction", "slope_percent",
+        "change_percent", "price_vs_ema_percent", "ema",
+    }
+
+
+def test_get_trend_defaults_to_20_50_over_1y_daily(make_client):
+    fake = FakeCandleProvider(a_series())               # a single candle
+    client = make_client(trend_provider=fake)
+    r = client.get("/stocks/ticker/AAPL/trend")
+    assert r.status_code == 200, r.text
+    symbol, timeframe, start, end = fake.received[0]
+    assert symbol == "AAPL"
+    assert timeframe is Timeframe.DAY_1
+    # 1Y visible window (366d) plus the warmup reach-back before it.
+    assert (end - start).days > 366
+    body = r.json()
+    # One candle can't warm either horizon: graceful unknown, not an error.
+    assert body["reading"] == "unknown"
+    assert body["short_term"] is None and body["long_term"] is None
+
+
+def test_get_trend_honors_timeframe_and_range(make_client):
+    fake = FakeCandleProvider(a_rising_series(n=20, timeframe=Timeframe.HOUR_1))
+    client = make_client(trend_provider=fake)
+    r = client.get(
+        "/stocks/ticker/AAPL/trend",
+        params={"timeframe": "1Hour", "range": "7D", "short_period": 3, "long_period": 8},
+    )
+    assert r.status_code == 200, r.text
+    _, timeframe, start, end = fake.received[0]
+    assert timeframe is Timeframe.HOUR_1
+    # 7D window plus the long-EMA warmup reach-back before it.
+    assert (end - start) > timedelta(days=7)
+
+
+def test_get_trend_flat_threshold_widens_the_sideways_band(make_client):
+    # A gently drifting series: a tiny threshold reads up, a large one reads flat.
+    base = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    candles = tuple(
+        a_candle(close=100.0 + i * 0.02, timestamp=base + timedelta(days=i))
+        for i in range(20)
+    )
+    client = make_client(trend_provider=FakeCandleProvider(a_series(candles)))
+    tight = client.get(
+        "/stocks/ticker/AAPL/trend",
+        params={"short_period": 3, "long_period": 8, "flat_threshold": 0.0},
+    ).json()
+    assert tight["long_term"]["direction"] == "up"
+    loose = client.get(
+        "/stocks/ticker/AAPL/trend",
+        params={"short_period": 3, "long_period": 8, "flat_threshold": 5.0},
+    ).json()
+    assert loose["long_term"]["direction"] == "sideways"
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"short_period": 1},
+        {"short_period": 401},
+        {"long_period": 1},
+        {"long_period": 401},
+        {"flat_threshold": -0.1},
+        {"flat_threshold": 6},
+        {"timeframe": "1Year"},
+    ],
+)
+def test_get_trend_invalid_params_422(make_client, params):
+    client = make_client(trend_provider=FakeCandleProvider(a_rising_series(n=20)))
+    assert client.get("/stocks/ticker/AAPL/trend", params=params).status_code == 422
+
+
+def test_get_trend_short_not_less_than_long_400(make_client):
+    # Both in range but short >= long — a domain rule, so a 400 from the use case.
+    client = make_client(trend_provider=FakeCandleProvider(a_rising_series(n=20)))
+    r = client.get(
+        "/stocks/ticker/AAPL/trend", params={"short_period": 50, "long_period": 20}
+    )
+    assert r.status_code == 400
+
+
+def test_get_trend_invalid_symbol_400(make_client):
+    client = make_client(trend_provider=FakeCandleProvider(a_rising_series(n=20)))
+    assert client.get("/stocks/ticker/123/trend").status_code == 400
+
+
+def test_get_trend_unknown_symbol_404(make_client):
+    client = make_client(trend_provider=FakeCandleProvider(raises=StockNotFound("ZZZZ")))
+    assert client.get("/stocks/ticker/ZZZZ/trend").status_code == 404
+
+
+def test_get_trend_upstream_failure_502(make_client):
+    fake = FakeCandleProvider(raises=StockDataUnavailable("AAPL", "boom"))
+    client = make_client(trend_provider=fake)
+    assert client.get("/stocks/ticker/AAPL/trend").status_code == 502
 
 
 # --------------------------- sectors endpoint ---------------------------

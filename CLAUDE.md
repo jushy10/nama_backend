@@ -680,12 +680,12 @@ app/
     │   └── bedrock/        #    the six Claude-on-Bedrock AI analysers as <concern>_adapter.py
     │                       #    (analysis / etf_analysis / earnings_analysis / ratings_analysis / sector_analysis / market_summary)
     │                       #    + screener_query_adapter (translates a plain-English screen request into ScreenIntent filters — the AI screener, not an analyser)
-    ├── charts/             # ── charts sub-slice (candles + EMA + support levels; no table/cron):
-    │   ├── indicators.py        #    pure domain calc (EMA, support levels) — imports only kernel entities
+    ├── charts/             # ── charts sub-slice (candles + EMA + support levels + trend; no table/cron):
+    │   ├── indicators.py        #    pure domain calc (EMA, support levels, trend = short/long EMA-slope read) — imports only kernel entities
     │   ├── chart_window.py      #    edge helper: range preset → time window
     │   ├── ports.py             #    CandleProvider (implemented by the Alpaca adapter)
-    │   ├── use_cases.py         #    GetStockCandles + GetStockEma (warmup+trim) + GetStockSupportLevels
-    │   └── schemas.py           #    Candle/EMA/SupportLevel DTOs (endpoints in endpoints/chart_endpoints.py)
+    │   ├── use_cases.py         #    GetStockCandles + GetStockEma (warmup+trim) + GetStockSupportLevels + GetStockTrend (warmup, no trim)
+    │   └── schemas.py           #    Candle/EMA/SupportLevel/Trend DTOs (endpoints in endpoints/chart_endpoints.py)
     ├── market/             # ── market-board sub-slice (the non-AI whole-market reads; no table/cron):
     │   ├── entities.py          #    SectorPerformance + MarketIndexPerformance (proxy-ETF boards)
     │   ├── ports.py             #    SectorPerformanceProvider + MarketOverviewProvider (Alpaca-implemented)
@@ -807,7 +807,7 @@ app/
     │   ├── annual_earnings_endpoints.py          #  GET /stocks/{symbol}/earnings/annual
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
     │   ├── analyst_endpoints.py                  #  GET /stocks/ticker/{ticker}/analyst-info (trends + price targets + rating-change events + top credible firms, consolidated); the AI review GET .../analyst-info/analysis lives in analysis_endpoints.py
-    │   ├── chart_endpoints.py                    #  GET /stocks/ticker/{ticker}/candles + .../ema + .../support-levels
+    │   ├── chart_endpoints.py                    #  GET /stocks/ticker/{ticker}/candles + .../ema + .../support-levels + .../trend (short/long-horizon direction + combined reading)
     │   ├── market_endpoints.py                   #  GET /sectors (the ranked sector board)
     │   ├── analysis_endpoints.py                 #  the five AI reads: GET /stocks/{symbol}/analysis + /stocks/{symbol}/earnings/analysis + /stocks/ticker/{ticker}/analyst-info/analysis + /sectors/analysis + /market/summary
     │   ├── logo_endpoints.py                     #  GET /stocks/{symbol}/logo (raw image bytes)

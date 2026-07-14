@@ -13,10 +13,14 @@ import pytest
 from app.stocks.entities import Candle, CandleSeries, Timeframe
 from app.stocks.charts.indicators import (
     SupportStrength,
+    TrendDirection,
+    TrendReading,
+    assess_trend,
     compute_ema,
     compute_support_levels,
     ema_line,
     ema_series,
+    horizon_trend,
     support_levels,
 )
 
@@ -303,3 +307,130 @@ def test_support_levels_empty_series_is_graceful():
     )
     assert result.levels == ()
     assert result.reference_price == 0.0
+
+
+# --------------------------- horizon_trend (pure trend read) ---------------------------
+
+
+def test_horizon_trend_none_when_too_little_history():
+    # One EMA point (or none) can't form a slope.
+    assert horizon_trend([10.0, 11.0], period=2) is None  # exactly one EMA point
+    assert horizon_trend([10.0], period=2) is None
+    assert horizon_trend([], period=2) is None
+
+
+def test_horizon_trend_rising_series_is_up():
+    trend = horizon_trend([float(c) for c in range(10, 25)], period=3)
+    assert trend is not None
+    assert trend.direction is TrendDirection.UP
+    assert trend.slope_percent > 0
+    assert trend.change_percent > 0
+    # Price leads a rising EMA, so the latest close sits above it.
+    assert trend.price_vs_ema_percent > 0
+
+
+def test_horizon_trend_falling_series_is_down():
+    trend = horizon_trend([float(c) for c in range(25, 10, -1)], period=3)
+    assert trend is not None
+    assert trend.direction is TrendDirection.DOWN
+    assert trend.slope_percent < 0
+    assert trend.price_vs_ema_percent < 0
+
+
+def test_horizon_trend_flat_series_is_sideways():
+    trend = horizon_trend([50.0] * 12, period=3)
+    assert trend is not None
+    assert trend.direction is TrendDirection.SIDEWAYS
+    assert trend.slope_percent == 0.0
+    assert trend.change_percent == 0.0
+
+
+def test_horizon_trend_gentle_drift_reads_sideways_under_deadband():
+    # A slope well inside the deadband is flat; a tiny deadband lets it read up.
+    closes = [100.0 + i * 0.01 for i in range(12)]  # ~0.01/bar drift
+    assert horizon_trend(closes, period=3, deadband_percent=0.05).direction is (
+        TrendDirection.SIDEWAYS
+    )
+    assert horizon_trend(closes, period=3, deadband_percent=0.0).direction is (
+        TrendDirection.UP
+    )
+
+
+def test_horizon_trend_lookback_capped_to_available_history():
+    # 6 closes, period 3 -> 4 EMA points -> lookback = min(3, 3) = 3.
+    trend = horizon_trend([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], period=3)
+    assert trend.lookback == 3
+    # 4 closes, period 3 -> 2 EMA points -> lookback capped to 1.
+    short = horizon_trend([1.0, 2.0, 3.0, 4.0], period=3)
+    assert short.lookback == 1
+
+
+@pytest.mark.parametrize("kwargs", [{"period": 1}, {"deadband_percent": -0.1}])
+def test_horizon_trend_rejects_bad_parameters(kwargs):
+    with pytest.raises(ValueError):
+        horizon_trend([1.0, 2.0, 3.0, 4.0], **{"period": 3, **kwargs})
+
+
+# --------------------------- assess_trend (assembly over candles) ---------------------------
+
+
+def test_assess_trend_rising_series_reads_uptrend():
+    result = assess_trend(
+        _candles([float(c) for c in range(10, 40)]), short_period=3, long_period=8
+    )
+    assert result.symbol == "AAPL"
+    assert result.reference_price == 39.0
+    assert result.short_term.direction is TrendDirection.UP
+    assert result.long_term.direction is TrendDirection.UP
+    assert result.reading is TrendReading.UPTREND
+
+
+def test_assess_trend_falling_series_reads_downtrend():
+    result = assess_trend(
+        _candles([float(c) for c in range(40, 10, -1)]), short_period=3, long_period=8
+    )
+    assert result.reading is TrendReading.DOWNTREND
+
+
+def test_assess_trend_long_up_short_down_reads_pullback():
+    # A long steady climb, then a sharp recent drop: the long EMA is still rising
+    # while the short EMA has rolled over — the "uptrend, pulling back" case.
+    closes = [float(c) for c in range(10, 31)] + [28.0, 26.0, 24.0, 22.0]
+    result = assess_trend(_candles(closes), short_period=5, long_period=20)
+    assert result.long_term.direction is TrendDirection.UP
+    assert result.short_term.direction is TrendDirection.DOWN
+    assert result.reading is TrendReading.UPTREND_PULLBACK
+
+
+def test_assess_trend_unknown_when_a_horizon_lacks_history():
+    # 6 closes can warm the short (3) but not the long (50) EMA -> long is None.
+    result = assess_trend(
+        _candles([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), short_period=3, long_period=50
+    )
+    assert result.short_term is not None
+    assert result.long_term is None
+    assert result.reading is TrendReading.UNKNOWN
+
+
+def test_assess_trend_empty_series_is_graceful():
+    result = assess_trend(
+        CandleSeries(symbol="AAPL", timeframe=Timeframe.DAY_1, candles=()),
+        short_period=3,
+        long_period=8,
+    )
+    assert result.reference_price == 0.0
+    assert result.short_term is None and result.long_term is None
+    assert result.reading is TrendReading.UNKNOWN
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"short_period": 1, "long_period": 8},
+        {"short_period": 8, "long_period": 8},  # short must be < long
+        {"short_period": 20, "long_period": 5},  # short must be < long
+    ],
+)
+def test_assess_trend_rejects_bad_periods(kwargs):
+    with pytest.raises(ValueError):
+        assess_trend(_candles([1.0, 2.0, 3.0, 4.0, 5.0]), **kwargs)
