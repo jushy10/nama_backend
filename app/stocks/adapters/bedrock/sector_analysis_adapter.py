@@ -3,10 +3,12 @@
 The market-wide sibling of ``analysis_adapter.py`` (which reads one
 stock). The only module — alongside its stock/ETF cousins — that knows Bedrock
 (and the Anthropic SDK) exists. It takes the day's ranked sector board the use
-case already gathered (each sector's move on the day + its trailing-window
-returns, read through the SPDR sector ETFs), renders it into a compact prompt,
-and asks Claude for a plain-language read of which corners of the market are
-leading and lagging today. Swap models or vendors and only this file changes.
+case already gathered — each sector's move on the day + its trailing-window
+returns (read through the SPDR sector ETFs), now **enriched with the drivers
+behind the move**: the top constituent movers, the breadth of the move, and
+recent headlines from those movers — renders it into a compact prompt, and asks
+Claude for a plain-language read of which corners of the market are leading and
+lagging today *and why*. Swap models or vendors and only this file changes.
 
 The same two choices that keep the stock adapter robust apply here:
 
@@ -20,9 +22,11 @@ The same two choices that keep the stock adapter robust apply here:
 One sector-specific rule: the model never authors the numbers. It names the
 standout sectors (by the exact names in the prompt) and writes a note for each;
 the adapter joins those names back to the board to attach the *real*
-``change_percent`` a sector moved, dropping any name that doesn't match. So a
-highlight's percentage is always a true quote, never something the model recalled
-or invented.
+``change_percent`` a sector moved — **and the sector's real movers + headlines** —
+dropping any name that doesn't match. So a highlight's percentage, its driver
+chips, and its catalyst link are always true, service-supplied facts, never
+something the model recalled or invented; the model may *reference* the movers and
+headlines it was shown, but it authors only the prose note.
 
 The Anthropic SDK is imported lazily inside ``__init__`` so the app (and the
 offline test suite, which injects a stub client) imports cleanly without the
@@ -38,11 +42,11 @@ from app.stocks.adapters.bedrock.cost import CostAccumulator
 from app.stocks.analysis.entities import (
     MarketTone,
     SectorAnalysis,
+    SectorContext,
     SectorHighlight,
 )
 from app.stocks.analysis.ports import SectorAnalysisProvider
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.market.entities import SectorPerformance
 
 # The key the adapter reports failures under — there is no single symbol here, so
 # the board as a whole is named, the same convention the Alpaca sector adapter uses.
@@ -66,8 +70,13 @@ _HIGHLIGHT_SCHEMA = {
         "note": {
             "type": "string",
             "description": (
-                "One short, plain-language sentence on why this sector stands out "
-                "today — clear to someone with no finance background."
+                "One short, plain-language sentence on *why* this sector stands out "
+                "today — clear to someone with no finance background. Point to what's "
+                "driving it: name the specific big-name stocks moving the sector (from "
+                "the 'driven by' list shown for it) and, if a headline explains the "
+                "move, mention that reason. Refer to companies by name, not ticker. "
+                "Ground it only in the movers and headlines shown for this sector — "
+                "never invent a stock, a number, or a reason."
             ),
         },
     },
@@ -133,23 +142,31 @@ _SYSTEM_PROMPT = (
     "an everyday person with no finance background. You are given today's move for "
     "each of the major market sectors (technology, energy, financials, and so on), "
     "read through the exchange-traded fund that tracks each one, along with how "
-    "each sector has performed over recent weeks and months. From only those "
-    "figures, give a clear, balanced read on which sectors are doing well today, "
-    "which are struggling, and what the overall picture looks like.\n"
+    "each sector has performed over recent weeks and months. For each sector you are "
+    "ALSO given the specific big-name stocks driving its move today (with their own "
+    "day change), how broadly the sector moved (how many of its companies rose vs. "
+    "fell), and — where available — a recent headline about one of those movers. Use "
+    "all of it to give a clear, balanced read on which sectors are doing well today, "
+    "which are struggling, WHY, and what the overall picture looks like.\n"
+    "Explaining the 'why' is the point: when a sector stands out, say what's behind "
+    "it — the specific companies moving it (e.g. 'lifted by strong gains in Nvidia "
+    "and Broadcom'), whether the move was broad or driven by just a few names (use "
+    "the up-vs-down count), and any reason a headline gives. \n"
     "When growth-oriented, economically-sensitive sectors (like technology or "
     "consumer discretionary) lead, that usually signals an optimistic, "
     "risk-taking mood; when safe, defensive sectors (like utilities, consumer "
     "staples, or health care) lead, that usually signals a cautious, defensive "
     "mood — explain which it looks like in plain words.\n"
     "Write in plain, warm, everyday language — short sentences, no jargon. Refer "
-    "to sectors by name, never by their ETF ticker. When you name a leading or "
+    "to sectors and companies by name, never by ticker. When you name a leading or "
     "lagging sector, copy its name EXACTLY as written in the data. Ground every "
-    "statement ONLY in the figures provided — do not use outside knowledge, recent "
-    "news, or prices you may recall, and never invent numbers. Always name at "
-    "least two leading and two lagging sectors — never leave either list empty. "
-    "Be honest that a single day's move is a snapshot, not a trend. This is "
-    "general information, not personal financial advice. Respond by calling the "
-    "submit_sector_analysis tool."
+    "statement ONLY in the figures, movers, and headlines provided — do NOT use "
+    "outside knowledge or prices you may recall, do not invent a stock, a number, "
+    "or a reason, and if no headline explains a move, simply describe which stocks "
+    "moved it without guessing a cause. Always name at least two leading and two "
+    "lagging sectors — never leave either list empty. Be honest that a single day's "
+    "move is a snapshot, not a trend. This is general information, not personal "
+    "financial advice. Respond by calling the submit_sector_analysis tool."
 )
 
 
@@ -197,8 +214,8 @@ class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
 
         self._client = AnthropicBedrock(aws_region=region)
 
-    def analyze(self, sectors: list[SectorPerformance]) -> SectorAnalysis:
-        prompt = _render_prompt(sectors)
+    def analyze(self, contexts: list[SectorContext]) -> SectorAnalysis:
+        prompt = _render_prompt(contexts)
         # One cost line per endpoint call: the retry loop below may make several model
         # calls, so their token usage is summed and logged once (in a finally, so a
         # mid-retry failure still records what was spent).
@@ -218,7 +235,7 @@ class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
                 raise StockDataUnavailable(
                     _SECTORS_KEY, "analysis model returned no structured result"
                 )
-            return _to_entity(sectors, payload, self._model_id)
+            return _to_entity(contexts, payload, self._model_id)
         finally:
             costs.log(label="sector analysis", model_id=self._model_id)
 
@@ -269,15 +286,16 @@ def _missing_highlights(payload: dict | None) -> bool:
 
 
 def _to_entity(
-    sectors: list[SectorPerformance], payload: dict, model_id: str
+    contexts: list[SectorContext], payload: dict, model_id: str
 ) -> SectorAnalysis:
     """Map the validated tool arguments onto the domain entity.
 
     The forced-tool schema constrains the shape, but a defensive guard keeps an
     off-schema result (e.g. an unknown ``tone``) from leaking out as something
     other than this port's documented ``StockDataUnavailable``. The leader/laggard
-    notes are joined back to the board so each highlight carries the sector's real
-    day move, not a figure the model authored.
+    notes are joined back to the enriched board so each highlight carries the
+    sector's real day move — and its real movers + headlines — not figures the
+    model authored.
     """
     try:
         summary = str(payload["summary"]).strip()
@@ -286,7 +304,7 @@ def _to_entity(
         raise StockDataUnavailable(
             _SECTORS_KEY, f"analysis model returned an unexpected result: {exc}"
         ) from exc
-    by_name = {s.sector.casefold(): s for s in sectors}
+    by_name = {c.sector.casefold(): c for c in contexts}
     return SectorAnalysis(
         summary=summary,
         tone=tone,
@@ -298,13 +316,15 @@ def _to_entity(
 
 
 def _highlights(
-    value, by_name: dict[str, SectorPerformance]
+    value, by_name: dict[str, SectorContext]
 ) -> tuple[SectorHighlight, ...]:
-    """Coerce the model's highlight list into entities, joining each to the board.
+    """Coerce the model's highlight list into entities, joining each to its context.
 
     A highlight is kept only when its name matches a sector on the board (so the
-    ``change_percent`` is a real quote) and it carries a non-empty note; anything
-    the model named that isn't on the board — or named with no note — is dropped.
+    ``change_percent``, movers and headlines are all real, service-supplied facts)
+    and it carries a non-empty note; anything the model named that isn't on the board
+    — or named with no note — is dropped. The movers and headlines come from the
+    joined context, never the model, so the note's receipts can't be hallucinated.
     """
     if not isinstance(value, list):
         return ()
@@ -322,25 +342,29 @@ def _highlights(
                 symbol=match.symbol,
                 change_percent=match.change_percent,
                 note=note,
+                movers=match.movers,
+                headlines=match.headlines,
             )
         )
     return tuple(out)
 
 
-def _render_prompt(sectors: list[SectorPerformance]) -> str:
-    """Render the ranked board into a compact, labelled block for the model.
+def _render_prompt(contexts: list[SectorContext]) -> str:
+    """Render the enriched board into a compact, labelled block for the model.
 
-    One line per sector, best performer first (the order the use case ranks in),
-    each carrying its day move and whatever trailing windows are available — only
-    present figures are included, so a sector missing history simply renders a
-    shorter line.
+    One block per sector, best performer first (the order the use case ranks in). The
+    header line carries the sector's day move and whatever trailing windows are available
+    (only present figures are included); indented under it come the grounded drivers — the
+    top constituent movers with their own day change, the breadth of the move, and any
+    recent headlines from those movers. A sector missing attribution simply renders the
+    header line alone, so the model degrades to the old behaviour for it.
     """
     lines = ["Market sectors today (ranked best performer first):"]
-    for s in sectors:
-        parts = [f"{s.sector} ({s.symbol})"]
-        if s.change_percent is not None:
-            parts.append(f"day {_num(s.change_percent)}%")
-        perf = s.performance
+    for c in contexts:
+        parts = [f"{c.sector} ({c.symbol})"]
+        if c.change_percent is not None:
+            parts.append(f"day {_num(c.change_percent)}%")
+        perf = c.performance
         if perf is not None:
             for label, value in (
                 ("1w", perf.one_week),
@@ -353,7 +377,27 @@ def _render_prompt(sectors: list[SectorPerformance]) -> str:
                 if value is not None:
                     parts.append(f"{label} {_num(value)}%")
         lines.append("- " + ", ".join(parts))
+        if c.movers:
+            movers = "; ".join(
+                f"{m.name or m.ticker} {_signed(m.change_percent)}" for m in c.movers
+            )
+            lines.append(f"    driven by: {movers}")
+        if c.breadth is not None and c.breadth.total:
+            b = c.breadth
+            lines.append(
+                f"    breadth: {b.advancers} of {b.total} companies up, {b.decliners} down"
+            )
+        for h in c.headlines:
+            lines.append(f"    headline ({h.ticker}): {h.title}")
     return "\n".join(lines)
+
+
+def _signed(value: object) -> str:
+    """Format a percent move with an explicit sign (``+1.20%`` / ``-0.80%``), so the
+    model reads a mover's direction at a glance. A missing value renders as ``n/a``."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "n/a"
+    return f"{value:+,.2f}%"
 
 
 def _num(value: object) -> str:

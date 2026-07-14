@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+from app.stocks.entities import StockPerformance
+
 
 class Recommendation(str, Enum):
     """The headline call of an AI stock analysis, on the five-point sell-side scale.
@@ -177,6 +179,140 @@ class MarketTone(str, Enum):
 
 
 @dataclass(frozen=True)
+class SectorMover:
+    """One constituent stock that drove a sector's move today — the grounded 'why'.
+
+    A sector rises or falls because of the stocks inside it; this names one of them.
+    ``change_percent`` is the stock's real day move (joined from the live quote board,
+    never authored by the model), and ``market_cap`` its size — together they set
+    ``weighted_move``, the cap-weighted contribution the movers are ranked by, so a
+    mega-cap's 2% outranks a small-cap's 9% (the ETF the sector is read through is
+    cap-weighted, so that ranking mirrors what actually moved it). ``name`` is the
+    display name off the ``stocks`` anchor.
+    """
+
+    ticker: str
+    name: str | None
+    change_percent: float | None
+    market_cap: float | None
+
+    @property
+    def weighted_move(self) -> float | None:
+        """Approximate contribution to the sector's cap-weighted move — ``market_cap``
+        times the day's percent change. The ranking key (not a displayed figure): its
+        magnitude orders the movers, its sign splits gainers from losers. ``None`` when
+        either input is missing (an unquoted or uncapped member can't be ranked)."""
+        if self.change_percent is None or self.market_cap is None:
+            return None
+        return self.market_cap * self.change_percent
+
+
+@dataclass(frozen=True)
+class SectorBreadth:
+    """How broad a sector's move is: advancers vs. decliners among its constituents.
+
+    A single ETF percent hides whether a move was broad (most names participating) or
+    narrow (one mega-cap dragging the tape); this restores that. ``advancers`` /
+    ``decliners`` count the members that closed up / down on the day, and ``total`` the
+    members that had a usable quote — so a client (or the model) can read "23 of 30 up"
+    as a broad rally rather than a lopsided one.
+    """
+
+    advancers: int
+    decliners: int
+    total: int
+
+
+@dataclass(frozen=True)
+class SectorHeadline:
+    """A recent headline from one of a sector's movers — a candidate catalyst.
+
+    The deepest 'why': *why* the driving stock moved. Carried straight from the news
+    slice (DB-only, never a live fetch on the analysis path), so ``title`` /
+    ``published_at`` / ``publisher`` / ``link`` are the stored article's own facts —
+    the model may reference the headline as a reason but never authors it. ``ticker``
+    is the mover the headline belongs to.
+    """
+
+    ticker: str
+    title: str
+    published_at: datetime | None = None
+    publisher: str | None = None
+    link: str | None = None
+
+
+@dataclass(frozen=True)
+class SectorContext:
+    """One sector's day board row enriched with what's driving it — the analyzer's input.
+
+    Where the old sector analysis saw only each sector's ETF move, this bundles that row
+    (``sector`` / ``symbol`` / ``change_percent`` / trailing ``performance``, all carried
+    from the market board) with the grounded drivers behind it: the top ``movers`` in the
+    sector's own day-direction (its biggest gainers when it's up, biggest losers when
+    it's down), the ``breadth`` of the move, and recent ``headlines`` from those movers.
+    The model reasons over all of it but authors only words — every number and headline
+    here is service-supplied, so the 'why' it writes can be checked against the receipts.
+
+    ``performance`` is the shared-kernel trailing-window block (not the market slice's
+    ``SectorPerformance``), so this entity stays decoupled from the market slice — the use
+    case maps a board row onto these primitives.
+    """
+
+    sector: str
+    symbol: str  # the proxy ETF ticker, carried through from the board
+    change_percent: float | None
+    performance: StockPerformance | None = None
+    movers: tuple[SectorMover, ...] = ()
+    breadth: SectorBreadth | None = None
+    headlines: tuple[SectorHeadline, ...] = ()
+
+    @classmethod
+    def from_constituents(
+        cls,
+        *,
+        sector: str,
+        symbol: str,
+        change_percent: float | None,
+        performance: StockPerformance | None,
+        constituents: "tuple[SectorMover, ...]",
+        top_n: int = 3,
+    ) -> "SectorContext":
+        """Build the context from the sector's board row and its constituent movers.
+
+        Pure attribution: split ``constituents`` into gainers (day change > 0) and losers
+        (< 0), rank each by ``weighted_move`` magnitude, and keep the top ``top_n`` in the
+        sector's *own* day-direction — its gainers when the sector closed up, its losers
+        when it closed down (an unmoved sector defaults to gainers). Members with no usable
+        quote are ignored for the movers but still absent from breadth. ``headlines`` are
+        attached separately (they're an I/O read), so this stays a pure function of its
+        inputs.
+        """
+        advancers = tuple(m for m in constituents if (m.change_percent or 0) > 0)
+        decliners = tuple(m for m in constituents if (m.change_percent or 0) < 0)
+        quoted = tuple(m for m in constituents if m.change_percent is not None)
+        # Rank by cap-weighted contribution magnitude; a missing weight sorts last.
+        gainers = sorted(
+            advancers, key=lambda m: m.weighted_move or 0.0, reverse=True
+        )
+        losers = sorted(decliners, key=lambda m: m.weighted_move or 0.0)
+        leading = change_percent is None or change_percent >= 0
+        movers = tuple((gainers if leading else losers)[:top_n])
+        # No quoted members (attribution unavailable, or the sector had no readable
+        # constituents) -> no breadth, rather than a meaningless "0 of 0".
+        breadth = (
+            SectorBreadth(len(advancers), len(decliners), len(quoted)) if quoted else None
+        )
+        return cls(
+            sector=sector,
+            symbol=symbol,
+            change_percent=change_percent,
+            performance=performance,
+            movers=movers,
+            breadth=breadth,
+        )
+
+
+@dataclass(frozen=True)
 class SectorHighlight:
     """One sector called out in a market analysis, with the model's plain note.
 
@@ -184,12 +320,19 @@ class SectorHighlight:
     day's board (matched to the sector the model named) so the number on the card
     stays a real quote, never a figure the model invented. ``note`` is the model's
     one-line, plain-language read on why the sector is leading or lagging.
+
+    ``movers`` and ``headlines`` are the grounded receipts behind that note, joined
+    from the sector's :class:`SectorContext` (not authored either): the constituent
+    stocks that drove the move and the recent headlines from them, so a client can
+    render the driver chips and the catalyst link the note refers to.
     """
 
     sector: str
     symbol: str  # the proxy ETF ticker, carried through from the board
     change_percent: float | None
     note: str
+    movers: tuple[SectorMover, ...] = ()
+    headlines: tuple[SectorHeadline, ...] = ()
 
 
 @dataclass(frozen=True)

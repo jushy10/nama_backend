@@ -61,7 +61,9 @@ from app.stocks.analysis.entities import (
     MarketSummary,
     RatingsAnalysis,
     SectorAnalysis,
+    SectorHeadline,
     SectorHighlight,
+    SectorMover,
     StockScorecard,
 )
 from app.stocks.analysis.ports import (
@@ -85,7 +87,9 @@ from app.stocks.analysis.schemas import (
     ScorecardSectionResponse,
     SectionMetricResponse,
     SectorAnalysisResponse,
+    SectorHeadlineResponse,
     SectorHighlightResponse,
+    SectorMoverResponse,
 )
 from app.stocks.analysis.use_cases import (
     GetEarningsAnalysis,
@@ -107,6 +111,7 @@ from app.stocks.endpoints.market_endpoints import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
+from app.stocks.news.db_repository import SqlNewsRepository
 from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
@@ -224,11 +229,17 @@ def get_sector_analysis_provider() -> SectorAnalysisProvider:
 
 def get_sector_analysis(
     # Reuses the sector-board wiring wholesale (the Alpaca-backed
-    # GetSectorPerformance), then hands the ranked board to the analyzer — fronted by
-    # the read-through result cache (market-wide, so one stored read serves every viewer
-    # within the TTL and skips the gather + model call).
+    # GetSectorPerformance), then enriches each sector with the grounded drivers behind
+    # its move — the S&P 500 constituents' day-change (the same two legs the heat map
+    # uses: a DB read over the anchor + the Alpaca batched quote feed) and their recent
+    # headlines (DB-only, like the per-stock analysis context) — before handing the
+    # enriched board to the analyzer. All three attribution legs are best-effort (a
+    # failure degrades to the plain board), fronted by the read-through result cache
+    # (market-wide, so one stored read serves every viewer within the TTL and skips the
+    # gather + model call).
     sectors: GetSectorPerformance = Depends(get_sector_performance),
     analyzer: SectorAnalysisProvider = Depends(get_sector_analysis_provider),
+    provider: StockDataProvider = Depends(get_provider),
     db: Session = Depends(get_db),
 ) -> GetSectorAnalysis:
     return GetSectorAnalysis(
@@ -236,6 +247,9 @@ def get_sector_analysis(
         analyzer,
         cache=sector_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("sector"),
+        constituents=SqlStockSearchRepository(db),
+        quotes=provider,  # the Alpaca singleton also implements BulkQuoteProvider
+        news=SqlNewsRepository(db),
     )
 
 
@@ -504,13 +518,37 @@ def _present_fundamentals_analysis(
     )
 
 
+def _present_sector_mover(mover: SectorMover) -> SectorMoverResponse:
+    """Presenter: one sector mover entity -> HTTP response DTO."""
+    return SectorMoverResponse(
+        ticker=mover.ticker,
+        name=mover.name,
+        change_percent=mover.change_percent,
+        market_cap=mover.market_cap,
+    )
+
+
+def _present_sector_headline(headline: SectorHeadline) -> SectorHeadlineResponse:
+    """Presenter: one sector catalyst headline entity -> HTTP response DTO."""
+    return SectorHeadlineResponse(
+        ticker=headline.ticker,
+        title=headline.title,
+        published_at=headline.published_at,
+        publisher=headline.publisher,
+        link=headline.link,
+    )
+
+
 def _present_sector_highlight(highlight: SectorHighlight) -> SectorHighlightResponse:
-    """Presenter: one sector highlight entity -> HTTP response DTO."""
+    """Presenter: one sector highlight entity -> HTTP response DTO, with its grounded
+    driver chips (movers) and catalyst headlines."""
     return SectorHighlightResponse(
         sector=highlight.sector,
         symbol=highlight.symbol,
         change_percent=highlight.change_percent,
         note=highlight.note,
+        movers=[_present_sector_mover(m) for m in highlight.movers],
+        headlines=[_present_sector_headline(h) for h in highlight.headlines],
     )
 
 
