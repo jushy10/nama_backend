@@ -120,15 +120,32 @@ class BriefMover:
 
 
 @dataclass(frozen=True)
+class BriefHeadline:
+    """One recent news headline the brief can cite as a catalyst for the day's moves.
+
+    Carried straight from the news slice (DB-only, never a live fetch), so ``title`` /
+    ``publisher`` / ``published_at`` are the stored article's own facts — the model may
+    reference the headline as a reason but never authors it. ``ticker`` is the mover the
+    headline belongs to, and ``publisher`` the outlet that ran it.
+    """
+
+    ticker: str
+    title: str
+    publisher: str | None = None
+    published_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class MarketBriefContext:
     """The market snapshot the model writes the brief from — all true quotes, no prose.
 
     ``indexes`` and ``sectors`` are the headline boards; ``gainers`` / ``losers`` are the
     day's extremes (largest up / down moves) across the covered universe; ``advancers`` /
     ``decliners`` / ``quoted`` are the day's breadth (how many stocks rose vs fell of those
-    with a live quote). Every leg is best-effort on the way in, so any of them may be empty
-    — ``has_data`` is the "is there enough to write a brief at all?" gate the use case checks
-    before spending a model call.
+    with a live quote); ``headlines`` are recent news outlets' headlines about the day's
+    movers — the "why" behind the moves, read DB-only from the news store. Every leg is
+    best-effort on the way in, so any of them may be empty — ``has_data`` is the "is there
+    enough to write a brief at all?" gate the use case checks before spending a model call.
     """
 
     indexes: tuple[BriefIndexMove, ...] = ()
@@ -138,6 +155,7 @@ class MarketBriefContext:
     advancers: int = 0
     decliners: int = 0
     quoted: int = 0
+    headlines: tuple[BriefHeadline, ...] = ()
 
     @property
     def has_data(self) -> bool:

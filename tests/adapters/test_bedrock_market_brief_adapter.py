@@ -12,6 +12,7 @@ import pytest
 
 from app.stocks.adapters.bedrock.market_brief_adapter import BedrockMarketBriefProvider
 from app.stocks.brief.entities import (
+    BriefHeadline,
     BriefIndexMove,
     BriefMover,
     BriefSectorMove,
@@ -97,6 +98,9 @@ def _context() -> MarketBriefContext:
         advancers=340,
         decliners=150,
         quoted=500,
+        headlines=(
+            BriefHeadline("NVDA", "Nvidia unveils next-gen AI chip", publisher="Reuters"),
+        ),
     )
 
 
@@ -137,6 +141,8 @@ def test_renders_context_into_the_prompt():
     assert "340 stocks up vs 150 down" in prompt
     assert "NVIDIA (NVDA, technology): 6.20%" in prompt
     assert "Exxon (XOM, energy): -3.10%" in prompt
+    # The catalyst headline renders with its outlet and the ticker it's about.
+    assert "Reuters: Nvidia unveils next-gen AI chip (about NVDA)" in prompt
 
 
 def test_retries_when_sections_come_back_empty():

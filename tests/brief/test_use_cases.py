@@ -6,7 +6,7 @@ orchestration — best-effort gathering, mover/breadth derivation, the complete-
 the read path — runs with no vendor, model, or DB.
 """
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -23,8 +23,11 @@ from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.heatmap.entities import HeatMap, HeatMapRow, HeatMapScope
 from app.stocks.market.entities import MarketIndexPerformance, SectorPerformance
+from app.stocks.news.entities import NewsArticle, StockNews
+from app.stocks.news.repository import NewsRepository
 
 _TODAY = date(2026, 7, 14)
+_NOON = datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc)
 
 
 # --- Fakes -------------------------------------------------------------------------------------
@@ -114,10 +117,44 @@ def _complete_brief() -> MarketBrief:
     )
 
 
-def _generator(overview, sectors, heatmap, provider, repository, movers=5):
+class _FakeNews(NewsRepository):
+    """A DB-only news reader stand-in: returns canned stored news per ticker, or raises for a
+    ticker in ``errors`` (to exercise the per-ticker best-effort path)."""
+
+    def __init__(self, by_ticker=None, errors=()):
+        self._by_ticker = by_ticker or {}
+        self._errors = set(errors)
+
+    def get(self, symbol):
+        if symbol in self._errors:
+            raise RuntimeError("news read hiccup")
+        return self._by_ticker.get(symbol)
+
+    def upsert(self, symbol, name, news):  # pragma: no cover - unused by the brief
+        raise NotImplementedError
+
+    def refresh_targets(self, limit):  # pragma: no cover - unused by the brief
+        raise NotImplementedError
+
+
+def _news(ticker, title, *, published, publisher="Reuters") -> StockNews:
+    return StockNews(
+        symbol=ticker,
+        articles=(
+            NewsArticle(
+                id=f"{ticker}-1",
+                title=title,
+                published_at=published,
+                publisher=publisher,
+            ),
+        ),
+    )
+
+
+def _generator(overview, sectors, heatmap, provider, repository, movers=5, news=None):
     return GenerateDailyBrief(
         overview, sectors, heatmap, provider, repository,
-        movers=movers, today=lambda: _TODAY,
+        news=news, movers=movers, today=lambda: _TODAY,
     )
 
 
@@ -164,6 +201,97 @@ def test_derives_movers_and_breadth_from_the_heatmap():
     assert [m.ticker for m in ctx.losers] == ["XOM", "JPM"]
     # The index move is a true quote joined from the board, not authored by the model.
     assert ctx.indexes[0].change_percent == pytest.approx(1.01, abs=0.01)
+
+
+def _gen_with_news(provider, news):
+    """A generator wired with the standard board/heatmap fixtures + a news reader."""
+    return _generator(
+        _FakeExec(result=[_index("S&P 500", "SPY", 100, 99)]),
+        _FakeExec(result=[_sector("Technology", "XLK", 50, 49)]),
+        _FakeExec(result=_heatmap()),  # movers: NVDA, XOM, JPM
+        provider,
+        _FakeRepository(),
+        news=news,
+    )
+
+
+def test_attaches_recent_catalyst_headlines_from_the_movers_news():
+    provider = _FakeProvider(brief=_complete_brief())
+    news = _FakeNews(
+        {
+            "NVDA": _news("NVDA", "Nvidia unveils new chip", published=_NOON),
+            "XOM": _news(
+                "XOM", "Exxon slips on oil", published=_NOON - timedelta(days=1)
+            ),
+        }
+    )
+    _gen_with_news(provider, news).execute()
+
+    hs = provider.context.headlines
+    # Both movers' fresh headlines are attached, freshest first (NVDA @ noon before XOM @ -1d).
+    assert [(h.ticker, h.publisher) for h in hs] == [
+        ("NVDA", "Reuters"),
+        ("XOM", "Reuters"),
+    ]
+    assert hs[0].title == "Nvidia unveils new chip"
+
+
+def test_drops_a_stale_headline_that_isnt_a_catalyst_for_today():
+    provider = _FakeProvider(brief=_complete_brief())
+    news = _FakeNews(
+        {
+            # Older than the 3-day window → not a catalyst for today's move.
+            "NVDA": _news("NVDA", "Old news", published=_NOON - timedelta(days=5)),
+            "XOM": _news("XOM", "Exxon slips on oil", published=_NOON),
+        }
+    )
+    _gen_with_news(provider, news).execute()
+
+    hs = provider.context.headlines
+    assert [h.ticker for h in hs] == ["XOM"]  # the stale NVDA article was dropped
+
+
+def test_dedupes_the_same_wire_story_filed_under_multiple_movers():
+    provider = _FakeProvider(brief=_complete_brief())
+    # The same macro story attached to two different movers → one headline.
+    news = _FakeNews(
+        {
+            "NVDA": _news("NVDA", "Fed holds rates steady", published=_NOON),
+            "XOM": _news("XOM", "fed holds rates steady", published=_NOON),  # case-diff
+        }
+    )
+    _gen_with_news(provider, news).execute()
+
+    assert len(provider.context.headlines) == 1
+
+
+def test_no_news_reader_leaves_headlines_empty_but_still_generates():
+    provider = _FakeProvider(brief=_complete_brief())
+    repo = _FakeRepository()
+    gen = _generator(
+        _FakeExec(result=[_index("S&P 500", "SPY", 100, 99)]),
+        _FakeExec(result=[_sector("Technology", "XLK", 50, 49)]),
+        _FakeExec(result=_heatmap()),
+        provider,
+        repo,
+        news=None,
+    )
+
+    assert gen.execute() is not None
+    assert provider.context.headlines == ()
+    assert repo.upserts == 1
+
+
+def test_a_per_ticker_news_error_drops_only_that_catalyst():
+    provider = _FakeProvider(brief=_complete_brief())
+    news = _FakeNews(
+        {"XOM": _news("XOM", "Exxon slips on oil", published=_NOON)},
+        errors={"NVDA"},  # NVDA's read raises
+    )
+    _gen_with_news(provider, news).execute()
+
+    # NVDA's failure drops only its catalyst; XOM's headline still lands.
+    assert [h.ticker for h in provider.context.headlines] == ["XOM"]
 
 
 def test_skips_when_no_market_data_was_gathered():
