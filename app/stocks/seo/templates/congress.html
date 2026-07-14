@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }}</title>
+    <meta name="description" content="{{ description }}" />
+    <link rel="canonical" href="{{ canonical }}" />
+    <meta name="robots" content="{{ robots }}" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Nama Insights" />
+    <meta property="og:title" content="{{ title }}" />
+    <meta property="og:description" content="{{ description }}" />
+    <meta property="og:url" content="{{ canonical }}" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="{{ title }}" />
+    <meta name="twitter:description" content="{{ description }}" />
+
+    <script type="application/ld+json">{{ jsonld | safe }}</script>
+
+    <style>
+      /* A "public disclosure ledger": the Congressional Record's register aesthetic — a serif
+         masthead over a double rule, party-neutral navy accent, and buy/sell read as a muted
+         green/red ledger mark. Restrained: the signature is the ledger rule + the direction mark;
+         everything else stays quiet. Theme-aware (light/dark), self-contained, responsive. */
+      :root {
+        color-scheme: light dark;
+        --bg: #f5f4f0; --card: #ffffff; --fg: #14161c; --muted: #5c6472;
+        --line: #e2e0d8; --rule: #1d2a4d; --accent: #1d2a4d; --accent-fg: #ffffff;
+        --chip: #eceef4; --buy: #1a7a4c; --buy-bg: #e7f3ec; --sell: #b2432f; --sell-bg: #f6e9e5;
+        --serif: Georgia, "Times New Roman", "Iowan Old Style", serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0b0c10; --card: #14161d; --fg: #e9eaf0; --muted: #98a0b2;
+          --line: #252833; --rule: #8fa6d8; --accent: #8fa6d8; --accent-fg: #0b0c10;
+          --chip: #1b1e28; --buy: #56c98a; --buy-bg: #10261b; --sell: #e0836f; --sell-bg: #2a1712;
+        }
+      }
+      :root[data-theme="light"] {
+        --bg: #f5f4f0; --card: #ffffff; --fg: #14161c; --muted: #5c6472; --line: #e2e0d8;
+        --rule: #1d2a4d; --accent: #1d2a4d; --chip: #eceef4; --buy: #1a7a4c; --buy-bg: #e7f3ec;
+        --sell: #b2432f; --sell-bg: #f6e9e5;
+      }
+      :root[data-theme="dark"] {
+        --bg: #0b0c10; --card: #14161d; --fg: #e9eaf0; --muted: #98a0b2; --line: #252833;
+        --rule: #8fa6d8; --accent: #8fa6d8; --chip: #1b1e28; --buy: #56c98a; --buy-bg: #10261b;
+        --sell: #e0836f; --sell-bg: #2a1712;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; background: var(--bg); color: var(--fg);
+        font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      }
+      a { color: var(--accent); }
+      .wrap { max-width: 960px; margin: 0 auto; padding: 24px 20px 56px; }
+      header.site { display: flex; align-items: center; gap: 10px; padding: 8px 0 20px; }
+      header.site .brand { font-weight: 700; font-size: 1.1rem; color: var(--fg); text-decoration: none; }
+      nav.crumbs { font-size: 0.85rem; color: var(--muted); margin-bottom: 18px; }
+      nav.crumbs a { color: var(--muted); text-decoration: none; }
+      nav.crumbs a:hover { color: var(--accent); }
+
+      .masthead { border-top: 3px double var(--rule); border-bottom: 3px double var(--rule); padding: 20px 0; margin-bottom: 22px; }
+      .eyebrow { font-family: var(--serif); letter-spacing: 0.24em; text-transform: uppercase; font-size: 0.72rem; color: var(--muted); margin: 0 0 8px; }
+      h1 { font-family: var(--serif); font-weight: 700; font-size: 2.3rem; line-height: 1.12; margin: 0; letter-spacing: -0.01em; }
+      .sub { color: var(--muted); margin: 14px 0 0; max-width: 62ch; }
+
+      .stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 22px 0 8px; }
+      .stat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; min-width: 128px; }
+      .stat .n { font-family: var(--serif); font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+      .stat .l { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; }
+
+      .tablewrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 14px; margin-top: 18px; }
+      table.ledger { width: 100%; border-collapse: collapse; }
+      table.ledger th, table.ledger td { padding: 11px 14px; font-size: 0.92rem; white-space: nowrap; }
+      table.ledger thead th { text-align: left; color: var(--muted); font-weight: 500; border-bottom: 2px solid var(--line); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
+      table.ledger th.num, table.ledger td.num { text-align: right; font-variant-numeric: tabular-nums; }
+      table.ledger tbody tr { border-left: 3px solid transparent; }
+      table.ledger tbody tr.buy { border-left-color: var(--buy); }
+      table.ledger tbody tr.sell { border-left-color: var(--sell); }
+      table.ledger tbody tr + tr td { border-top: 1px solid var(--line); }
+      table.ledger td.member { font-weight: 600; }
+      table.ledger td.ticker a { font-weight: 700; text-decoration: none; }
+      table.ledger td.ticker a:hover { text-decoration: underline; }
+      .tag { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.74rem; font-weight: 600; background: var(--chip); color: var(--muted); }
+      .dir { display: inline-block; padding: 2px 9px; border-radius: 6px; font-size: 0.74rem; font-weight: 700; }
+      .dir.buy { color: var(--buy); background: var(--buy-bg); }
+      .dir.sell { color: var(--sell); background: var(--sell-bg); }
+      .dir.other { color: var(--muted); background: var(--chip); }
+
+      .empty { background: var(--card); border: 1px dashed var(--line); border-radius: 14px; padding: 28px; text-align: center; color: var(--muted); margin-top: 18px; }
+
+      .cta { margin: 26px 0 0; }
+      .cta a { display: inline-block; background: var(--accent); color: var(--accent-fg); text-decoration: none; font-weight: 600; padding: 12px 20px; border-radius: 10px; }
+
+      section.faq { margin-top: 44px; }
+      section.faq h2 { font-family: var(--serif); font-size: 1.35rem; margin: 0 0 14px; }
+      .faq details { border-top: 1px solid var(--line); padding: 14px 0; }
+      .faq details:last-child { border-bottom: 1px solid var(--line); }
+      .faq summary { cursor: pointer; font-weight: 600; }
+      .faq p { color: var(--muted); margin: 10px 0 0; }
+
+      footer.site { margin-top: 44px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.8rem; }
+      .disclaimer { margin-top: 8px; }
+      @media (max-width: 560px) { h1 { font-size: 1.85rem; } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="site">
+        <a class="brand" href="{{ site }}">Nama Insights</a>
+      </header>
+
+      <nav class="crumbs" aria-label="Breadcrumb">
+        <a href="{{ site }}">Home</a> ›
+        <span>Congress trades</span>
+      </nav>
+
+      <div class="masthead">
+        <p class="eyebrow">Public disclosure · STOCK Act</p>
+        <h1>{{ heading }}</h1>
+        <p class="sub">{{ subtitle }}</p>
+      </div>
+
+      {% if stats %}
+      <div class="stats">
+        {% for s in stats %}
+        <div class="stat"><div class="n">{{ s.value }}</div><div class="l">{{ s.label }}</div></div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if trades %}
+      <div class="tablewrap">
+        <table class="ledger">
+          <thead>
+            <tr>
+              <th>Member</th>
+              <th>Chamber</th>
+              <th>Ticker</th>
+              <th>Trade</th>
+              <th class="num">Amount</th>
+              <th class="num">Traded</th>
+              <th class="num">Disclosed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for t in trades %}
+            <tr class="{{ t.dir_class }}">
+              <td class="member">{{ t.member }}</td>
+              <td><span class="tag">{{ t.chamber }}</span></td>
+              <td class="ticker"><a href="{{ t.url }}">{{ t.ticker }}</a></td>
+              <td><span class="dir {{ t.dir_class }}">{{ t.dir_label }}</span></td>
+              <td class="num">{{ t.amount }}</td>
+              <td class="num">{{ t.traded }}</td>
+              <td class="num">{{ t.disclosed }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty">
+        No Congressional trades on record yet — this ledger is refreshed weekly from the official
+        House and Senate disclosures. Check back soon.
+      </div>
+      {% endif %}
+
+      <div class="cta">
+        <a href="{{ app_url }}">{{ cta_text }}</a>
+      </div>
+
+      <section class="faq">
+        <h2>About Congressional stock trades</h2>
+        {% for f in faqs %}
+        <details>
+          <summary>{{ f.q }}</summary>
+          <p>{{ f.a }}</p>
+        </details>
+        {% endfor %}
+      </section>
+
+      <footer class="site">
+        <div>© {{ year }} Nama Insights.</div>
+        <div class="disclaimer">
+          Figures come from members' public STOCK Act disclosures, which report a dollar
+          <em>range</em> rather than an exact amount, and may lag the trade by up to 45 days. For
+          informational purposes only — not investment advice.
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from app.stocks.seo.repository import (
+    CongressPageTrade,
     EtfPageFacts,
     SectorStock,
     SeoReadRepository,
@@ -45,11 +46,13 @@ def normalize_ticker(raw: str) -> str:
 
 @dataclass(frozen=True)
 class TickerStockPage:
-    """What the stock content page needs to render: the normalized ticker and its stored
-    facts (``None`` when the symbol is unknown to us)."""
+    """What the stock content page needs to render: the normalized ticker, its stored facts
+    (``None`` when the symbol is unknown to us), and its recent Congressional trades (empty when
+    Congress hasn't traded it, or it isn't seeded yet — the section is hidden in that case)."""
 
     ticker: str
     facts: TickerPageFacts | None
+    congress: tuple[CongressPageTrade, ...] = ()
 
     @property
     def has_data(self) -> bool:
@@ -76,7 +79,12 @@ class TickerStockPage:
 
 
 class GetTickerStockPage:
-    """Use case: assemble a stock's content-page view from DB-only facts."""
+    """Use case: assemble a stock's content-page view from DB-only facts, including its recent
+    Congressional trades (a best-effort section — hidden when there are none)."""
+
+    # A handful of recent trades — enough to make the section substantive without turning the page
+    # into a full ledger (the /congress board and the app carry the complete feed).
+    CONGRESS_LIMIT = 12
 
     def __init__(self, repository: SeoReadRepository) -> None:
         self._repository = repository
@@ -86,6 +94,9 @@ class GetTickerStockPage:
         return TickerStockPage(
             ticker=normalized,
             facts=self._repository.get_ticker_facts(normalized),
+            congress=self._repository.list_congress_trades_for_ticker(
+                normalized, self.CONGRESS_LIMIT
+            ),
         )
 
 
@@ -346,4 +357,34 @@ class GetSitemap:
             sector_slugs=self._repository.list_sectors(),
             screen_slugs=tuple(SCREENS.keys()),
             brief_dates=self._repository.list_brief_dates(self.MAX_BRIEF_PAGES),
+        )
+
+
+@dataclass(frozen=True)
+class CongressBoardPage:
+    """What the /congress market-board content page renders: the most recent Congressional trades
+    market-wide. Unlike a per-entity page this landing page always renders (it's a keyword page with
+    substantial static explanation), so there's no ``has_data`` 404 gate — ``is_empty`` just lets
+    the template show a "refreshed weekly" note before the sync has seeded the store."""
+
+    trades: tuple[CongressPageTrade, ...]
+
+    @property
+    def is_empty(self) -> bool:
+        return len(self.trades) == 0
+
+
+class GetCongressBoardPage:
+    """Use case: the /congress board's view — the most recent Congressional trades market-wide,
+    from DB-only facts (a crawler hit is one indexed read, never a live fetch)."""
+
+    # Enough to be a rich, link-dense page without an unbounded listing.
+    LIMIT = 100
+
+    def __init__(self, repository: SeoReadRepository) -> None:
+        self._repository = repository
+
+    def execute(self) -> CongressBoardPage:
+        return CongressBoardPage(
+            trades=self._repository.list_recent_congress_trades(self.LIMIT)
         )

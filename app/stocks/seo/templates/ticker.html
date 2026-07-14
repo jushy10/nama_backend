@@ -71,6 +71,21 @@
         text-decoration: none; font-weight: 600; padding: 12px 20px; border-radius: 10px;
       }
       .related { margin: 16px 0 0; font-size: 0.95rem; }
+      section.congress { margin: 30px 0 0; }
+      section.congress h2 { font-size: 1.15rem; margin: 0 0 4px; }
+      section.congress .lead { color: var(--muted); font-size: 0.9rem; margin: 0 0 12px; }
+      .congresswrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+      table.congress { width: 100%; border-collapse: collapse; }
+      table.congress th, table.congress td { padding: 10px 14px; font-size: 0.9rem; white-space: nowrap; text-align: left; }
+      table.congress thead th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.05em; }
+      table.congress th.num, table.congress td.num { text-align: right; font-variant-numeric: tabular-nums; }
+      table.congress td.member { font-weight: 600; }
+      table.congress tbody tr { border-left: 3px solid transparent; }
+      table.congress tbody tr.buy { border-left-color: #1a7a4c; }
+      table.congress tbody tr.sell { border-left-color: #b2432f; }
+      table.congress tbody tr + tr td { border-top: 1px solid var(--line); }
+      .dir { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 700; }
+      .dir.buy { color: #1a7a4c; } .dir.sell { color: #b2432f; } .dir.other { color: var(--muted); }
       footer.site { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.8rem; }
       .disclaimer { margin-top: 8px; }
     </style>
@@ -109,6 +124,40 @@
       <div class="cta">
         <a href="{{ app_url }}">Explore live {{ ticker }} data on Nama Insights →</a>
       </div>
+
+      {% if congress %}
+      <section class="congress">
+        <h2>Recent Congressional trades</h2>
+        <p class="lead">
+          {{ name }} trades disclosed by members of the US House and Senate under the STOCK Act.
+          <a href="{{ congress_url }}">See the full Congress trades board →</a>
+        </p>
+        <div class="congresswrap">
+          <table class="congress">
+            <thead>
+              <tr>
+                <th>Member</th>
+                <th>Chamber</th>
+                <th>Trade</th>
+                <th class="num">Amount</th>
+                <th class="num">Disclosed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for t in congress %}
+              <tr class="{{ t.dir_class }}">
+                <td class="member">{{ t.member }}</td>
+                <td>{{ t.chamber }}</td>
+                <td><span class="dir {{ t.dir_class }}">{{ t.dir_label }}</span></td>
+                <td class="num">{{ t.amount }}</td>
+                <td class="num">{{ t.disclosed }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      {% endif %}
 
       {% if sector_url %}
       <p class="related">

@@ -61,6 +61,10 @@ from app.stocks.endpoints.institutional_ownership_endpoints import (
 from app.stocks.endpoints.cron_institutional_ownership_endpoints import (
     router as institutional_ownership_cron_router,
 )
+from app.stocks.endpoints.congress_endpoints import router as congress_router
+from app.stocks.endpoints.cron_congress_endpoints import (
+    router as congress_cron_router,
+)
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
 from app.stocks.endpoints.heatmap_endpoints import router as heatmap_router
 from app.stocks.endpoints.analysis_endpoints import router as analysis_router
@@ -252,6 +256,12 @@ app.include_router(stock_performance_cron_router)
 # refreshing each stock's top institutional/mutual-fund holders and the ownership breakdown. See
 # app/stocks/endpoints/cron_institutional_ownership_endpoints.py.
 app.include_router(institutional_ownership_cron_router)
+# The Congressional-trades reads: GET /stocks/ticker/{ticker}/congress-trades (a stock's recent
+# House/Senate disclosures with a net buy-vs-sell summary) and GET /market/congress-activity (a
+# windowed market-wide board). DB-only, served from stock_congress_trades and kept warm by the
+# weekly sync-congress cron (keyless community stock-watcher feeds). See
+# app/stocks/endpoints/congress_endpoints.py.
+app.include_router(congress_router)
 # The revenue-segments refresh cron endpoint (POST /internal/revenue-segments/sync); it drives
 # the SyncRevenueSegments use case out of band (SEC EDGAR 10-K -> DB), seeding + refreshing each
 # stock's revenue disaggregation. See app/stocks/endpoints/cron_revenue_segments_endpoints.py.
@@ -262,6 +272,11 @@ app.include_router(revenue_segments_cron_router)
 # (no TTL) so a synced stock is served from the DB and never walks the filings in a user request.
 # See app/stocks/endpoints/cron_insider_transactions_endpoints.py.
 app.include_router(insider_transactions_cron_router)
+# The Congressional-trades refresh cron endpoint (POST /internal/congress/sync); it drives the
+# SyncCongressTrades use case out of band (keyless House/Senate stock-watcher feeds -> DB), fetching
+# the whole market-wide feed once and distributing it across the anchor, insert-only. Weekly. See
+# app/stocks/endpoints/cron_congress_endpoints.py.
+app.include_router(congress_cron_router)
 # The universe refresh cron endpoint (POST /internal/universe/sync); it drives the
 # SyncUniverse use case out of band (yfinance screen -> stocks anchor, then per-ticker
 # sector/industry enrichment), populating the stocks table with the ≥$1B US universe.
