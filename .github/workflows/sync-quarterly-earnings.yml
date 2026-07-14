@@ -13,7 +13,8 @@ run-name: Sync quarterly earnings
 #
 # By default the sweep processes EVERY stock in the anchor (un-cached first, then stalest);
 # use the optional `limit` dispatch input to cap a single run (e.g. to chunk the first seed and
-# stay gentle on Yahoo).
+# stay gentle on Yahoo), and the optional `pace_ms` input to speed a manual run by lowering the
+# Yahoo call spacing below the 750ms default (faster, but likelier to trip Yahoo's IP gate).
 #
 # FIRE-AND-FORGET: this workflow LAUNCHES the task and returns; the sweep then runs in the
 # background on ECS (it can take several minutes) and its result — "quarterly-earnings sync
@@ -35,6 +36,11 @@ on:
         required: false
         type: string
         default: ""
+      pace_ms:
+        description: "Min ms between Yahoo calls for this run. Lower = faster but more likely to trip Yahoo's IP gate (default 750, ~2.5h; ~400 ≈ ~1.3h). Only lower for a manual, watched run."
+        required: false
+        type: string
+        default: "750"
   # Mondays, 08:00 UTC. Weekly keeps report dates and freshly-reported quarters current; exact
   # timing doesn't matter, so GitHub delaying scheduled runs under load is fine. Caveats:
   # scheduled workflows run only from the default branch, and GitHub auto-disables the schedule
@@ -60,7 +66,11 @@ env:
   # on the ETF sync); pacing holds the rate under it. A full sweep is ~4 Yahoo reads per stock
   # across the ~$1B universe (~11k calls) → ~2.5h at 750ms, fine for a weekly fire-and-forget
   # task. Same knob as the other Yahoo syncs.
-  YF_PACE_MS: "750"
+  #
+  # Defaults to 750ms; a manual dispatch can lower it via the `pace_ms` input to speed a run
+  # (at a higher risk of tripping the IP gate). Scheduled runs send no input, so the `|| '750'`
+  # fallback keeps the weekly sweep on the safe value.
+  YF_PACE_MS: ${{ github.event.inputs.pace_ms || '750' }}
 
 jobs:
   sync:
