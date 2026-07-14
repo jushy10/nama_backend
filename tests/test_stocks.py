@@ -39,7 +39,10 @@ from app.stocks.analysis.entities import (
     SectionMetric,
     SectionStance,
     SectorAnalysis,
+    SectorContext,
+    SectorHeadline,
     SectorHighlight,
+    SectorMover,
     StockScorecard,
 )
 from app.stocks.analysis.ports import (
@@ -118,10 +121,17 @@ from app.stocks.recommendations.entities import (
     RecommendationTrend,
 )
 from app.stocks.recommendations.ports import RecommendationProvider
+from app.stocks.news.entities import NewsArticle, StockNews
+from app.stocks.news.repository import NewsRepository
 from app.stocks.universe.entities import (
     AnchorMetrics,
     IndustryValuation,
     MarketCapTier,
+    SortDirection,
+    StockSearchCriteria,
+    StockSearchPage,
+    StockSearchResult,
+    StockSort,
 )
 from app.stocks.universe.repository import StockSearchRepository
 from app.stocks.wiring import analysis_cache_ttl
@@ -506,8 +516,9 @@ class FakeAnalysisCache(StockScorecardCache):
 
 
 class FakeSectorAnalysisProvider(SectorAnalysisProvider):
-    """Returns/raises whatever the test configured; stashes the board it received
-    (so a test can assert the use case handed over a *ranked* board)."""
+    """Returns/raises whatever the test configured; stashes the enriched contexts it
+    received (so a test can assert the use case handed over a *ranked* board and the
+    attribution it built)."""
 
     def __init__(
         self,
@@ -516,10 +527,10 @@ class FakeSectorAnalysisProvider(SectorAnalysisProvider):
     ):
         self._analysis = analysis
         self._raises = raises
-        self.received: list[SectorPerformance] | None = None
+        self.received: list[SectorContext] | None = None
 
-    def analyze(self, sectors) -> SectorAnalysis:
-        self.received = list(sectors)
+    def analyze(self, contexts) -> SectorAnalysis:
+        self.received = list(contexts)
         if self._raises is not None:
             raise self._raises
         assert self._analysis is not None
@@ -3028,11 +3039,25 @@ def _sector_tool_message(**input_overrides) -> _StubMessage:
     )
 
 
-def _a_board() -> list[SectorPerformance]:
+def _ctx(
+    sector, symbol, change_percent, *, performance=None, movers=(), headlines=()
+) -> SectorContext:
+    """A SectorContext (the analyzer's input) — the board row plus best-effort attribution."""
+    return SectorContext(
+        sector=sector,
+        symbol=symbol,
+        change_percent=change_percent,
+        performance=performance,
+        movers=tuple(movers),
+        headlines=tuple(headlines),
+    )
+
+
+def _a_board() -> list[SectorContext]:
     # Two sectors with known day moves: Technology +10%, Energy -5%.
     return [
-        a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0),
-        a_sector(sector="Energy", symbol="XLE", price=95.0, previous_close=100.0),
+        _ctx("Technology", "XLK", 10.0),
+        _ctx("Energy", "XLE", -5.0),
     ]
 
 
@@ -3060,15 +3085,7 @@ def test_sector_analysis_parses_tool_call_into_entity():
 
 def test_sector_analysis_renders_board_into_prompt():
     client = _StubClient(_sector_tool_message())
-    board = [
-        a_sector(
-            sector="Technology",
-            symbol="XLK",
-            price=110.0,
-            previous_close=100.0,
-            performance=a_performance(),
-        )
-    ]
+    board = [_ctx("Technology", "XLK", 10.0, performance=a_performance())]
     BedrockSectorAnalysisProvider(client=client).analyze(board)
 
     prompt = client.calls[0]["messages"][0]["content"]
@@ -3076,6 +3093,50 @@ def test_sector_analysis_renders_board_into_prompt():
     assert "Technology (XLK)" in prompt
     assert "day 10.00%" in prompt
     assert "1y 21.00%" in prompt  # trailing windows render when present
+
+
+def test_sector_analysis_renders_movers_breadth_and_headlines_into_prompt():
+    # A sector's grounded drivers render as indented lines under it, so the model can
+    # cite the specific stocks + catalyst behind the move.
+    client = _StubClient(_sector_tool_message())
+    board = [
+        _ctx(
+            "Technology",
+            "XLK",
+            2.1,
+            movers=(
+                SectorMover("NVDA", "NVIDIA", 6.2, 3.2e12),
+                SectorMover("AVGO", "Broadcom", 4.1, 8.0e11),
+            ),
+            headlines=(
+                SectorHeadline("NVDA", "NVIDIA beats on data-center demand"),
+            ),
+        )
+    ]
+    BedrockSectorAnalysisProvider(client=client).analyze(board)
+
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "driven by: NVIDIA +6.20%; Broadcom +4.10%" in prompt
+    assert "headline (NVDA): NVIDIA beats on data-center demand" in prompt
+
+
+def test_sector_analysis_joins_movers_and_headlines_onto_the_highlight():
+    # The model authors only the note; the movers + headlines on the highlight come from
+    # the context (real, service-supplied), never the model.
+    client = _StubClient(_sector_tool_message())
+    movers = (SectorMover("NVDA", "NVIDIA", 6.2, 3.2e12),)
+    headlines = (SectorHeadline("NVDA", "NVIDIA beats"),)
+    board = [
+        _ctx("Technology", "XLK", 2.1, movers=movers, headlines=headlines),
+        _ctx("Energy", "XLE", -5.0),
+    ]
+
+    analysis = BedrockSectorAnalysisProvider(client=client).analyze(board)
+
+    leader = analysis.leaders[0]
+    assert [m.ticker for m in leader.movers] == ["NVDA"]
+    assert leader.movers[0].name == "NVIDIA"
+    assert [h.title for h in leader.headlines] == ["NVIDIA beats"]
 
 
 def test_sector_analysis_joins_real_percent_and_drops_unknown_sector():
@@ -3144,6 +3205,283 @@ def test_sector_analysis_use_case_hands_over_a_ranked_board():
     assert [s.sector for s in analyzer.received] == ["Technology", "Energy"]
 
 
+# --- sector attribution: the movers / breadth / headlines behind a move ("why") -----------
+
+
+class _FakeConstituentsRepo(StockSearchRepository):
+    """Serves a fixed page of screened constituents for ``search`` (records the criteria);
+    the rest of the read port isn't on the attribution path."""
+
+    def __init__(self, results=(), *, raises=None):
+        self._results = tuple(results)
+        self.criteria: StockSearchCriteria | None = None
+        self._raises = raises
+
+    def search(self, criteria):
+        self.criteria = criteria
+        if self._raises is not None:
+            raise self._raises
+        return StockSearchPage(
+            results=self._results,
+            total=len(self._results),
+            limit=criteria.limit,
+            offset=criteria.offset,
+        )
+
+    def classifications(self):  # pragma: no cover - unused by attribution
+        raise NotImplementedError
+
+    def pe_ratios_for_industry(self, industry):  # pragma: no cover - unused
+        raise NotImplementedError
+
+    def industry_for_ticker(self, ticker):  # pragma: no cover - unused
+        raise NotImplementedError
+
+    def anchor_metrics_for_ticker(self, ticker):  # pragma: no cover - unused
+        raise NotImplementedError
+
+    def tier_for_ticker(self, ticker):  # pragma: no cover - unused
+        raise NotImplementedError
+
+    def industry_peers(self, industry):  # pragma: no cover - unused
+        raise NotImplementedError
+
+
+class _FakeBulkQuotes:
+    """A ``BulkQuoteProvider`` fake: turns a {ticker: day-percent} map into Quotes; can raise
+    a whole-batch failure. Records the symbols it was asked for."""
+
+    def __init__(self, change_by_ticker=None, *, raises=None):
+        self._changes = change_by_ticker or {}
+        self._raises = raises
+        self.requested: tuple[str, ...] | None = None
+
+    def get_quotes(self, symbols):
+        self.requested = tuple(symbols)
+        if self._raises is not None:
+            raise self._raises
+        out = {}
+        for s in symbols:
+            pct = self._changes.get(s)
+            if pct is None:  # feed carries no quote -> absent (best-effort per symbol)
+                continue
+            prev = 100.0
+            out[s] = Quote(
+                symbol=s,
+                price=prev * (1 + pct / 100),
+                previous_close=prev,
+                bid=None,
+                ask=None,
+                as_of=datetime(2026, 7, 9, tzinfo=timezone.utc),
+            )
+        return out
+
+
+class _FakeNewsRepo(NewsRepository):
+    """A DB-only ``NewsRepository`` fake: ``get`` returns configured stored news and never
+    fetches live. Records the symbols read."""
+
+    def __init__(self, news_by_symbol=None):
+        self._news = news_by_symbol or {}
+        self.requested: list[str] = []
+
+    def get(self, symbol):
+        self.requested.append(symbol)
+        return self._news.get(symbol)
+
+    def upsert(self, symbol, name, news):  # pragma: no cover - unused by the read path
+        raise NotImplementedError
+
+    def refresh_targets(self, limit):  # pragma: no cover - unused by the read path
+        raise NotImplementedError
+
+
+def _screened(ticker, sector, market_cap, *, name=None) -> StockSearchResult:
+    """A screened-universe row (only the fields attribution reads carry meaning)."""
+    return StockSearchResult(
+        ticker=ticker,
+        name=name or f"{ticker} Inc.",
+        sector=sector,  # the stored Yahoo slug, e.g. "technology" / "financial_services"
+        industry=None,
+        market_cap=market_cap,
+        pe_ratio=None,
+        fcf_yield=None,
+        revenue_growth_yoy=None,
+        eps_growth_yoy=None,
+        fcf_growth_yoy=None,
+        forward_revenue_growth_yoy=None,
+        forward_eps_growth_yoy=None,
+        in_sp500=True,
+        in_nasdaq100=False,
+        performance=None,
+    )
+
+
+def test_sector_analysis_attributes_cap_weighted_gainers_for_an_up_sector():
+    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
+    constituents = _FakeConstituentsRepo(
+        [
+            _screened("NVDA", "technology", 3.2e12, name="NVIDIA"),
+            _screened("SMALL", "technology", 1.0e10, name="SmallCo"),
+            _screened("AAPL", "technology", 3.0e12, name="Apple"),
+        ]
+    )
+    quotes = _FakeBulkQuotes({"NVDA": 6.0, "SMALL": 20.0, "AAPL": 1.0})
+    GetSectorAnalysis(
+        GetSectorPerformance(FakeSectorProvider([tech])),
+        analyzer,
+        constituents=constituents,
+        quotes=quotes,
+    ).execute()
+
+    (ctx,) = analyzer.received
+    # Up sector -> gainers, ranked by cap x change: NVDA (1.92e13) > AAPL (3.0e12) > SMALL (2e11).
+    assert [m.ticker for m in ctx.movers] == ["NVDA", "AAPL", "SMALL"]
+    assert ctx.movers[0].name == "NVIDIA"
+    assert ctx.movers[0].change_percent == 6.0
+    assert (ctx.breadth.advancers, ctx.breadth.decliners, ctx.breadth.total) == (3, 0, 3)
+    # The constituents are read from the S&P 500 members (the sector ETFs' own universe).
+    assert constituents.criteria.in_sp500 is True
+
+
+def test_sector_analysis_attributes_losers_for_a_down_sector():
+    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    energy = a_sector(sector="Energy", symbol="XLE", price=95.0, previous_close=100.0)
+    constituents = _FakeConstituentsRepo(
+        [
+            _screened("XOM", "energy", 5.0e11, name="Exxon"),
+            _screened("CVX", "energy", 3.0e11, name="Chevron"),
+            _screened("UP", "energy", 1.0e11, name="UpCo"),
+        ]
+    )
+    quotes = _FakeBulkQuotes({"XOM": -3.0, "CVX": -2.0, "UP": 1.0})
+    GetSectorAnalysis(
+        GetSectorPerformance(FakeSectorProvider([energy])),
+        analyzer,
+        constituents=constituents,
+        quotes=quotes,
+    ).execute()
+
+    (ctx,) = analyzer.received
+    # Down sector -> losers, most-negative contribution first; the lone gainer is excluded.
+    assert [m.ticker for m in ctx.movers] == ["XOM", "CVX"]
+    assert (ctx.breadth.advancers, ctx.breadth.decliners, ctx.breadth.total) == (1, 2, 3)
+
+
+def test_sector_analysis_maps_gics_board_name_to_the_yahoo_sector_slug():
+    # The board says "Financials"; the universe stores "financial_services". The join must
+    # still find the constituents (the bug this mapping exists to prevent).
+    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    fins = a_sector(sector="Financials", symbol="XLF", price=101.0, previous_close=100.0)
+    constituents = _FakeConstituentsRepo(
+        [_screened("JPM", "financial_services", 6.0e11, name="JPMorgan")]
+    )
+    quotes = _FakeBulkQuotes({"JPM": 2.0})
+    GetSectorAnalysis(
+        GetSectorPerformance(FakeSectorProvider([fins])),
+        analyzer,
+        constituents=constituents,
+        quotes=quotes,
+    ).execute()
+
+    (ctx,) = analyzer.received
+    assert [m.ticker for m in ctx.movers] == ["JPM"]
+
+
+def test_sector_analysis_attaches_catalyst_headlines_db_only():
+    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
+    constituents = _FakeConstituentsRepo(
+        [_screened("NVDA", "technology", 3.2e12, name="NVIDIA")]
+    )
+    quotes = _FakeBulkQuotes({"NVDA": 6.0})
+    news = _FakeNewsRepo(
+        {
+            "NVDA": StockNews(
+                "NVDA",
+                (
+                    NewsArticle(
+                        id="1",
+                        title="NVIDIA beats on data-center demand",
+                        published_at=datetime(2026, 7, 9, tzinfo=timezone.utc),
+                        publisher="Reuters",
+                        link="http://example/nvda",
+                    ),
+                ),
+            )
+        }
+    )
+    GetSectorAnalysis(
+        GetSectorPerformance(FakeSectorProvider([tech])),
+        analyzer,
+        constituents=constituents,
+        quotes=quotes,
+        news=news,
+    ).execute()
+
+    (ctx,) = analyzer.received
+    assert [h.title for h in ctx.headlines] == ["NVIDIA beats on data-center demand"]
+    assert ctx.headlines[0].ticker == "NVDA"
+    assert news.requested == ["NVDA"]  # read DB-only for the surfaced mover
+
+
+def test_sector_analysis_degrades_to_plain_board_without_attribution():
+    # No attribution collaborators wired -> contexts carry the board row and nothing else,
+    # so the analysis still runs (its prior behaviour) rather than failing.
+    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
+    GetSectorAnalysis(
+        GetSectorPerformance(FakeSectorProvider([tech])), analyzer
+    ).execute()
+
+    (ctx,) = analyzer.received
+    assert ctx.sector == "Technology"
+    assert ctx.movers == ()
+    assert ctx.breadth is None
+    assert ctx.headlines == ()
+
+
+def test_sector_analysis_survives_a_quote_feed_failure():
+    # A hard quote-feed failure is swallowed: the movers just carry no change (and drop from
+    # the ranking), never sinking the analysis.
+    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
+    constituents = _FakeConstituentsRepo(
+        [_screened("NVDA", "technology", 3.2e12, name="NVIDIA")]
+    )
+    quotes = _FakeBulkQuotes(raises=StockDataUnavailable("quotes", "feed down"))
+    result = GetSectorAnalysis(
+        GetSectorPerformance(FakeSectorProvider([tech])),
+        analyzer,
+        constituents=constituents,
+        quotes=quotes,
+    ).execute()
+
+    assert result is not None  # did not raise
+    (ctx,) = analyzer.received
+    assert ctx.movers == ()
+    assert ctx.breadth is None
+
+
+def test_sector_analysis_survives_a_constituent_read_failure():
+    # A DB hiccup on the constituent read degrades to the plain board, never sinks the run.
+    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
+    constituents = _FakeConstituentsRepo(raises=RuntimeError("db down"))
+    quotes = _FakeBulkQuotes({"NVDA": 6.0})
+    result = GetSectorAnalysis(
+        GetSectorPerformance(FakeSectorProvider([tech])),
+        analyzer,
+        constituents=constituents,
+        quotes=quotes,
+    ).execute()
+
+    assert result is not None
+    (ctx,) = analyzer.received
+    assert ctx.movers == ()
+
+
 def test_sector_analysis_use_case_propagates_a_board_failure():
     analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
     use_case = GetSectorAnalysis(
@@ -3170,6 +3508,41 @@ def test_get_sector_analysis_returns_200(make_client):
     assert body["laggards"][0]["sector"] == "Utilities"
     assert "not financial advice" in body["disclaimer"].lower()
     assert body["model"] == "claude-opus-4-8"
+
+
+def test_get_sector_analysis_serializes_movers_and_headlines(make_client):
+    # The grounded receipts behind a note serialize onto the highlight (driver chips + catalyst).
+    analysis = a_sector_analysis(
+        leaders=(
+            SectorHighlight(
+                "Technology",
+                "XLK",
+                2.1,
+                "Led by chipmakers after a strong earnings beat.",
+                movers=(SectorMover("NVDA", "NVIDIA", 6.2, 3.2e12),),
+                headlines=(
+                    SectorHeadline(
+                        "NVDA", "NVIDIA beats", None, "Reuters", "http://example/nvda"
+                    ),
+                ),
+            ),
+        )
+    )
+    client = make_client(
+        sector_analysis_provider=FakeSectorAnalysisProvider(analysis)
+    )
+    r = client.get("/sectors/analysis")
+    assert r.status_code == 200, r.text
+    lead = r.json()["leaders"][0]
+    assert lead["movers"][0] == {
+        "ticker": "NVDA",
+        "name": "NVIDIA",
+        "change_percent": 6.2,
+        "market_cap": 3.2e12,
+    }
+    assert lead["headlines"][0]["ticker"] == "NVDA"
+    assert lead["headlines"][0]["title"] == "NVIDIA beats"
+    assert lead["headlines"][0]["link"] == "http://example/nvda"
 
 
 def test_get_sector_analysis_502_when_model_fails(make_client):

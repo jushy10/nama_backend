@@ -122,17 +122,52 @@ class FundamentalsAnalysisResponse(BaseModel):
     generated_at: datetime
 
 
+class SectorMoverResponse(BaseModel):
+    """One constituent stock that drove a sector's move today.
+
+    The grounded 'why' behind the note: `ticker`/`name` identify the company,
+    `change_percent` is its real day move and `market_cap` its size — both
+    service-supplied (a live quote + the anchor figure), never authored by the model.
+    A client renders these as the driver chips under a sector, each linkable to the
+    stock's own card."""
+
+    ticker: str
+    name: str | None = None
+    change_percent: float | None = None
+    market_cap: float | None = None
+
+
+class SectorHeadlineResponse(BaseModel):
+    """A recent headline from one of a sector's movers — the candidate catalyst.
+
+    Carried straight from the news store (never authored by the model): `ticker` is the
+    mover it belongs to, `title` the headline, and `published_at` / `publisher` / `link`
+    the article's own facts, so a client can render the catalyst with a link to verify
+    it."""
+
+    ticker: str
+    title: str
+    published_at: datetime | None = None
+    publisher: str | None = None
+    link: str | None = None
+
+
 class SectorHighlightResponse(BaseModel):
     """One standout sector in a market analysis, with the AI's plain note.
 
     `symbol` is the proxy ETF the sector is read through; `change_percent` is that
     proxy's real move on the day (joined from the board, not authored by the model),
-    and `note` is the model's one-line read on why it stands out."""
+    and `note` is the model's one-line read on why it stands out. `movers` and
+    `headlines` are the grounded receipts behind that note — the constituent stocks
+    that drove the move and recent headlines from them — joined from the board, not
+    authored, so the note's specifics can be checked against real facts."""
 
     sector: str
     symbol: str
     change_percent: float | None = None
     note: str
+    movers: list[SectorMoverResponse] = []
+    headlines: list[SectorHeadlineResponse] = []
 
 
 class SectorAnalysisResponse(BaseModel):

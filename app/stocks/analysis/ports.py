@@ -18,12 +18,13 @@ from app.stocks.analysis.entities import (
     MarketSummary,
     RatingsAnalysis,
     SectorAnalysis,
+    SectorContext,
     StockScorecard,
 )
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.entities import Stock
-from app.stocks.market.entities import MarketIndexPerformance, SectorPerformance
+from app.stocks.market.entities import MarketIndexPerformance
 from app.stocks.recommendations.entities import AnalystRecommendations, FirmRating
 from app.stocks.ticker.entities import PeHistoryStats
 from app.stocks.universe.entities import IndustryValuation
@@ -182,23 +183,27 @@ class AiAnalysisCache(ABC, Generic[T]):
 
 class SectorAnalysisProvider(ABC):
     """A gateway that turns the day's ranked sector board into a short,
-    AI-generated read of which market sectors are leading and lagging.
+    AI-generated read of which market sectors are leading and lagging — and *why*.
 
     The market-wide sibling of ``StockScorecardProvider``: like it, this port
-    isn't handed a lookup key — the use case has already assembled the board (each
-    sector's daily move + trailing returns). The adapter reasons only over what
-    it's given and fetches nothing. This backs a dedicated endpoint (its own reason
-    to exist, not best-effort enrichment), so a failure surfaces as an error rather
+    isn't handed a lookup key — the use case has already assembled each sector's
+    :class:`SectorContext` (its daily move + trailing returns, plus the grounded
+    drivers behind it: the top constituent movers, the breadth of the move, and
+    recent headlines from those movers). The adapter reasons only over what it's
+    given and fetches nothing. This backs a dedicated endpoint (its own reason to
+    exist, not best-effort enrichment), so a failure surfaces as an error rather
     than being swallowed.
     """
 
     @abstractmethod
-    def analyze(self, sectors: list[SectorPerformance]) -> SectorAnalysis:
-        """Return a market-sector analysis built from the ranked board.
+    def analyze(self, contexts: list[SectorContext]) -> SectorAnalysis:
+        """Return a market-sector analysis built from the enriched board.
 
         Args:
-            sectors: the day's sectors, already ranked best performer first, each
-                carrying its daily move and best-effort trailing-window returns.
+            contexts: the day's sectors, already ranked best performer first, each
+                carrying its daily move, best-effort trailing-window returns, and the
+                best-effort attribution (top movers / breadth / headlines) that lets
+                the model explain the move rather than only describe it.
 
         Raises:
             StockDataUnavailable: the model call failed or returned no usable

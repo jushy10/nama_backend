@@ -20,6 +20,9 @@ from app.stocks.analysis.entities import (
     MarketSummary,
     RatingsAnalysis,
     SectorAnalysis,
+    SectorContext,
+    SectorHeadline,
+    SectorMover,
     StockScorecard,
 )
 from app.stocks.analysis.ports import (
@@ -45,9 +48,12 @@ from app.stocks.entities import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
+from app.stocks.news.entities import NewsArticle
+from app.stocks.news.repository import NewsRepository
 from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
+    BulkQuoteProvider,
     StockDataProvider,
     StockPerformanceProvider,
 )
@@ -61,7 +67,13 @@ from app.stocks.recommendations.ports import (
 )
 from app.stocks.ticker.entities import PeHistoryStats
 from app.stocks.ticker.use_cases import GetStockPeHistory
-from app.stocks.universe.entities import AnchorMetrics, IndustryValuation
+from app.stocks.universe.entities import (
+    AnchorMetrics,
+    IndustryValuation,
+    SortDirection,
+    StockSearchCriteria,
+    StockSort,
+)
 from app.stocks.universe.repository import StockSearchRepository
 
 logger = logging.getLogger(__name__)
@@ -759,17 +771,61 @@ def _has_fundamentals(stock: Stock) -> bool:
     )
 
 
-class GetSectorAnalysis:
-    """Use case: an AI-generated read of which market sectors are leading today.
+# The sector board reads through the SPDR Select Sector ETFs, whose names follow the GICS
+# vocabulary ("Health Care", "Financials", "Consumer Discretionary"); the screened universe
+# stores Yahoo's own sector taxonomy, slugified ("healthcare", "financial_services",
+# "consumer_cyclical"). This bridges the two so a board sector can be joined to its
+# constituents. A board name absent here — or a slug with no screened members — simply
+# yields no movers, since attribution is best-effort and degrades to the plain board.
+_SECTOR_NAME_TO_SLUG: dict[str, str] = {
+    "Technology": "technology",
+    "Health Care": "healthcare",
+    "Financials": "financial_services",
+    "Consumer Discretionary": "consumer_cyclical",
+    "Consumer Staples": "consumer_defensive",
+    "Energy": "energy",
+    "Industrials": "industrials",
+    "Materials": "basic_materials",
+    "Utilities": "utilities",
+    "Real Estate": "real_estate",
+    "Communication Services": "communication_services",
+}
 
-    The market-wide sibling of ``GetStockAnalysis``. Reuses
-    ``GetSectorPerformance`` to assemble the day's ranked board, then hands it to
-    the injected analyzer. Both the board and the analysis are primary data — an
-    upstream board failure (``StockNotFound``/``StockDataUnavailable``) or a model
-    failure propagates rather than yielding an analysis of nothing. The analyzer
-    reasons only over the board it's handed; it fetches nothing itself. Takes no
-    input — it reports on the whole market.
+
+class GetSectorAnalysis:
+    """Use case: an AI-generated read of which market sectors are leading today — and *why*.
+
+    The market-wide sibling of ``GetStockAnalysis``. Reuses ``GetSectorPerformance`` to
+    assemble the day's ranked board, then **enriches each sector with the grounded drivers
+    behind its move** — the top constituent movers, the breadth of the move, and recent
+    headlines from those movers — before handing the enriched contexts to the analyzer, so
+    the model can explain a move rather than only describe it.
+
+    Two data stances, the slice's usual split:
+
+    * The **board and the analysis are primary** — an upstream board failure
+      (``StockNotFound``/``StockDataUnavailable``) or a model failure propagates rather
+      than yielding an analysis of nothing.
+    * The **attribution is best-effort context**, gathered exactly like the heat map (one
+      universe DB read over the S&P 500 members + one batched day-change quote call),
+      with headlines read **DB-only** (like the per-stock analysis context) so the read
+      path never triggers a synchronous, rate-limited fetch. Any of the three collaborators
+      being absent — or any of their reads failing — degrades to the plain board (no
+      movers), never sinking the analysis. Keeping the universe / quote / news data current
+      is the crons' job.
+
+    The analyzer reasons only over the contexts it's handed; it fetches nothing itself.
+    Takes no input — it reports on the whole market.
     """
+
+    # The S&P 500 is the SPDR Select Sector ETFs' own universe (they *are* the GICS sectors
+    # of that index), so its members grouped by sector are the faithful constituent set. The
+    # ceiling sits above the index's ~500 names so the whole thing lands in one DB read.
+    _MAX_CONSTITUENTS = 600
+    # Top movers surfaced per sector (cap-weighted) and headlines attached per sector — kept
+    # small so the prompt stays a focused "here's what drove it", not a constituent dump.
+    _MOVERS_PER_SECTOR = 3
+    _HEADLINES_PER_SECTOR = 2
 
     def __init__(
         self,
@@ -777,11 +833,20 @@ class GetSectorAnalysis:
         analyzer: SectorAnalysisProvider,
         cache: AiAnalysisCache[SectorAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
+        *,
+        constituents: StockSearchRepository | None = None,
+        quotes: BulkQuoteProvider | None = None,
+        news: NewsRepository | None = None,
     ) -> None:
         self._sectors = sectors
         self._analyzer = analyzer
         self._cache = cache
         self._cache_ttl = cache_ttl
+        # Best-effort attribution legs. Any of them None (or failing at read time) leaves the
+        # contexts with no movers — the analysis still runs on the plain board.
+        self._constituents = constituents
+        self._quotes = quotes
+        self._news = news
 
     def execute(self) -> SectorAnalysis:
         # A fresh cached read short-circuits the whole board gather + model call — this
@@ -791,11 +856,12 @@ class GetSectorAnalysis:
         if cached is not None:
             return cached
         # Timed in two halves so the logs decompose the endpoint's latency into its
-        # only two moving parts: the multi-source board gather (Alpaca) and the
-        # model call (Bedrock). This is the ground truth for "where do the seconds
-        # go", rather than guessing which leg dominates.
+        # only two moving parts: the multi-source board+attribution gather (Alpaca + DB)
+        # and the model call (Bedrock). This is the ground truth for "where do the
+        # seconds go", rather than guessing which leg dominates.
         gather_start = time.perf_counter()
         board = self._sectors.execute()
+        contexts = self._build_contexts(board)
         gather_ms = (time.perf_counter() - gather_start) * 1000
 
         # Log in a `finally` so a failing/slow model call (e.g. a 502 from an
@@ -804,7 +870,7 @@ class GetSectorAnalysis:
         model_start = time.perf_counter()
         analysis: SectorAnalysis | None = None
         try:
-            analysis = self._analyzer.analyze(board)
+            analysis = self._analyzer.analyze(contexts)
             # Store for the next viewer — complete reads only, best-effort (a write
             # failure is swallowed in the adapter), so it never sinks the analysis.
             if self._cache is not None and analysis.is_complete:
@@ -828,6 +894,132 @@ class GetSectorAnalysis:
                     gather_ms,
                     model_ms,
                 )
+
+    def _build_contexts(self, board: list) -> list[SectorContext]:
+        """Enrich each ranked board row with its movers, breadth and catalyst headlines.
+
+        Best-effort: without the constituents repo (or on any read failure) the movers map
+        is empty and every context is the plain board row, so the analysis degrades to its
+        prior behaviour rather than failing.
+        """
+        movers_by_slug = self._movers_by_slug()
+        contexts = [
+            SectorContext.from_constituents(
+                sector=s.sector,
+                symbol=s.symbol,
+                change_percent=s.change_percent,
+                performance=s.performance,
+                constituents=tuple(movers_by_slug.get(_SECTOR_NAME_TO_SLUG.get(s.sector), ())),
+                top_n=self._MOVERS_PER_SECTOR,
+            )
+            for s in board
+        ]
+        self._attach_headlines(contexts)
+        return contexts
+
+    def _movers_by_slug(self) -> dict[str, list[SectorMover]]:
+        """Read the S&P 500 constituents and their live day-change, grouped by sector slug.
+
+        One universe DB read + one batched quote call (the heat map's two legs). Best-effort:
+        a missing repo or a read failure yields an empty map (no attribution); a quote-feed
+        failure leaves the movers with a ``None`` change (so they carry no weight and drop
+        out of the ranking). Only screened rows with a sector slug and a market cap are kept
+        — the two the ranking needs."""
+        if self._constituents is None:
+            return {}
+        try:
+            page = self._constituents.search(self._criteria())
+        except Exception:  # best-effort context: a DB hiccup must never sink the analysis
+            logger.warning(
+                "sector analysis: constituent read failed; no attribution", exc_info=True
+            )
+            return {}
+        rows = [
+            r for r in page.results if r.sector and r.market_cap is not None
+        ]
+        changes = self._changes(tuple(r.ticker for r in rows))
+        by_slug: dict[str, list[SectorMover]] = {}
+        for r in rows:
+            by_slug.setdefault(r.sector, []).append(
+                SectorMover(
+                    ticker=r.ticker,
+                    name=r.name,
+                    change_percent=changes.get(r.ticker),
+                    market_cap=r.market_cap,
+                )
+            )
+        return by_slug
+
+    def _changes(self, tickers: tuple[str, ...]) -> dict[str, float | None]:
+        """Each constituent's day-change percent, keyed by ticker — best-effort.
+
+        One batched quote call. A hard feed failure (or a missing provider) is swallowed to
+        an empty map, so the movers simply carry no change and drop from the ranking rather
+        than sinking the analysis — the same stance the heat map takes on its day colour."""
+        if self._quotes is None or not tickers:
+            return {}
+        try:
+            quotes = self._quotes.get_quotes(tickers)
+        except StockDataUnavailable:
+            logger.warning("sector analysis: live quotes unavailable; movers unranked")
+            return {}
+        return {symbol: quote.change_percent for symbol, quote in quotes.items()}
+
+    def _attach_headlines(self, contexts: list[SectorContext]) -> None:
+        """Attach each sector's catalyst headlines from its movers' recent news, DB-only.
+
+        Reads the news store (never a live fetch — this is a user-facing request path) for
+        the bounded set of movers that will appear, one headline per mover, capped per
+        sector. Best-effort: no news provider, or any per-ticker read failure, simply leaves
+        a sector without headlines. Mutates ``contexts`` in place."""
+        if self._news is None:
+            return
+        tickers = {m.ticker for c in contexts for m in c.movers}
+        if not tickers:
+            return
+        latest_by_ticker: dict[str, NewsArticle] = {}
+        for ticker in tickers:
+            try:
+                stored = self._news.get(ticker)
+            except Exception:  # a per-ticker read hiccup drops only that catalyst
+                continue
+            if stored is not None and not stored.is_empty:
+                latest_by_ticker[ticker] = stored.articles[0]  # newest first
+        for i, c in enumerate(contexts):
+            headlines: list[SectorHeadline] = []
+            for m in c.movers:
+                art = latest_by_ticker.get(m.ticker)
+                if art is not None:
+                    headlines.append(
+                        SectorHeadline(
+                            ticker=m.ticker,
+                            title=art.title,
+                            published_at=art.published_at,
+                            publisher=art.publisher,
+                            link=art.link,
+                        )
+                    )
+            if headlines:
+                contexts[i] = replace(
+                    c, headlines=tuple(headlines[: self._HEADLINES_PER_SECTOR])
+                )
+
+    def _criteria(self) -> StockSearchCriteria:
+        """The whole S&P 500, biggest cap first — the sector ETFs' own constituent universe.
+        Filters on the one index flag; every other axis is left open (the grouping by sector
+        happens in memory, one read for all sectors)."""
+        return StockSearchCriteria(
+            query=None,
+            sectors=(),
+            industries=(),
+            in_sp500=True,
+            in_nasdaq100=None,
+            market_cap_tiers=(),
+            sort=StockSort.MARKET_CAP,
+            direction=SortDirection.DESC,
+            limit=self._MAX_CONSTITUENTS,
+            offset=0,
+        )
 
     def _fresh_cached(self) -> SectorAnalysis | None:
         if self._cache is None:
