@@ -72,6 +72,7 @@ from app.stocks.endpoints.chart_endpoints import router as chart_router
 from app.stocks.endpoints.logo_endpoints import router as logo_router
 from app.stocks.endpoints.market_endpoints import router as market_router
 from app.stocks.endpoints.yields_endpoints import router as yields_router
+from app.stocks.endpoints.sentiment_endpoints import router as sentiment_router
 from app.stocks.endpoints.market_brief_endpoints import router as market_brief_router
 from app.stocks.endpoints.cron_market_brief_endpoints import (
     router as market_brief_cron_router,
@@ -184,6 +185,11 @@ app.include_router(market_router)
 # Live-per-request, keyless (Treasury + FRED), no table/cron. See
 # app/stocks/endpoints/yields_endpoints.py.
 app.include_router(yields_router)
+# The combined market-sentiment read (GET /market/sentiment): the VIX (FRED) and
+# the CNN Fear & Greed score (CNN), one payload for the home page. Each leg is
+# best-effort; live-per-request, keyless, no table/cron. See
+# app/stocks/endpoints/sentiment_endpoints.py.
+app.include_router(sentiment_router)
 app.include_router(analysis_router)
 app.include_router(logo_router)
 # The per-quarter earnings read endpoint (GET /stocks/{symbol}/earnings/quarterly):
