@@ -887,8 +887,8 @@ def test_industry_for_ticker_none_when_unknown_or_unclassified(session):
 
 def test_anchor_metrics_for_ticker_returns_the_stored_figures(session):
     # The analysis reads every anchor-materialized fundamental off the row in one go — the
-    # annual slice's cash/growth, the fundamentals slice's margins/ratios/per-share inputs,
-    # plus the screen's market cap and the clean display name.
+    # annual slice's cash/growth, the fundamentals slice's margins/ratios/per-share inputs and
+    # enterprise-value inputs, plus the screen's market cap and the clean display name.
     _seed(
         session,
         "NVDA",
@@ -898,11 +898,22 @@ def test_anchor_metrics_for_ticker_returns_the_stored_figures(session):
         revenue_growth_yoy=15.5,
         eps_growth_yoy=22.0,
     )
+    # The EV inputs aren't _seed params; set them on the row like the peers test does.
+    nvda = _row(session, "NVDA")
+    nvda.ebitda, nvda.total_debt, nvda.cash_and_equivalents, nvda.shares_outstanding = (
+        6e11, 1e11, 4e10, 2.4e10,
+    )
+    session.commit()
+
     metrics = SqlStockSearchRepository(session).anchor_metrics_for_ticker("NVDA")
     assert metrics == AnchorMetrics(
         fcf_per_share=9.99,
         revenue_growth_yoy=15.5,
         eps_growth_yoy=22.0,
+        ebitda=6e11,
+        total_debt=1e11,
+        cash_and_equivalents=4e10,
+        shares_outstanding=2.4e10,
         market_cap=3e12,
         name="Nvidia",
     )

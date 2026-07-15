@@ -222,6 +222,41 @@ def test_gathers_fundamentals_and_industry_benchmark():
     assert valuation.median_pe == 30.0  # median of the five peers
 
 
+def test_ev_ebitda_is_computed_from_the_anchor_inputs_and_the_live_price():
+    # EV/EBITDA is priced live off the quote from the anchor's stored enterprise-value inputs
+    # (shares/debt/cash/EBITDA), the same rule the ticker card uses:
+    # (300 x 15e9 + 100e9 - 100e9) / 300e9 = 4.5e12 / 300e9 = 15.0.
+    analyzer = _FakeAnalyzer()
+    use_case = GetFundamentalsAnalysis(
+        _enriched_info(price=300.0),
+        analyzer,
+        _FakeSearchRepo(
+            anchor=_an_anchor(
+                shares_outstanding=15_000_000_000.0,
+                total_debt=100_000_000_000.0,
+                cash_and_equivalents=100_000_000_000.0,
+                ebitda=300_000_000_000.0,
+            ),
+        ),
+    )
+    use_case.execute("AAPL")
+    stock, _ = analyzer.received[0]
+    assert stock.metrics.ev_to_ebitda == 15.0  # overlaid, priced on the live quote
+
+
+def test_ev_ebitda_is_none_when_the_anchor_lacks_the_inputs():
+    # An anchor the fundamentals sync hasn't reached (no EV inputs) leaves EV/EBITDA null — the
+    # rest of the overlay still fills, so the analysis proceeds on thinner coverage.
+    analyzer = _FakeAnalyzer()
+    use_case = GetFundamentalsAnalysis(
+        _enriched_info(price=300.0), analyzer, _FakeSearchRepo(anchor=_an_anchor())
+    )
+    use_case.execute("AAPL")
+    stock, _ = analyzer.received[0]
+    assert stock.metrics is not None
+    assert stock.metrics.ev_to_ebitda is None
+
+
 def test_no_fundamentals_raises_before_the_model():
     # A bare snapshot (Alpaca price only, no estimates) over an EMPTY anchor carries nothing
     # fundamental — the overlay fills nothing, so fail rather than ask the model to reason

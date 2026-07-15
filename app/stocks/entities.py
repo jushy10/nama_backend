@@ -66,6 +66,7 @@ class KeyMetrics:
     pe: float | None = None  # price / trailing EPS
     pb: float | None = None  # price / book value
     ps: float | None = None  # price / sales
+    ev_to_ebitda: float | None = None  # enterprise value / trailing EBITDA (capital-structure-neutral)
     eps: float | None = None  # trailing earnings per share
     fcf_per_share: float | None = None  # trailing free cash flow per share
     ocf_per_share: float | None = None  # trailing operating cash flow per share (pre-capex)

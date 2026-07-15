@@ -437,6 +437,10 @@ class SqlStockSearchRepository(StockSearchRepository):
                 StockRecord.book_value_per_share,
                 StockRecord.sales_per_share,
                 StockRecord.dividend_per_share,
+                StockRecord.ebitda,
+                StockRecord.total_debt,
+                StockRecord.cash_and_equivalents,
+                StockRecord.shares_outstanding,
                 StockRecord.market_cap,
                 StockRecord.name,
             ).where(StockRecord.ticker == ticker)
@@ -459,6 +463,10 @@ class SqlStockSearchRepository(StockSearchRepository):
             book_value_per_share=row.book_value_per_share,
             sales_per_share=row.sales_per_share,
             dividend_per_share=row.dividend_per_share,
+            ebitda=row.ebitda,
+            total_debt=row.total_debt,
+            cash_and_equivalents=row.cash_and_equivalents,
+            shares_outstanding=row.shares_outstanding,
             market_cap=row.market_cap,
             name=row.name,
         )
