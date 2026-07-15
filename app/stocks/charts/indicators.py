@@ -5,10 +5,13 @@ indicator is a fact about a price series, so it lives in the domain next to the
 Candle it's computed from. Outer layers fetch the candles (through a port) and
 hand them here; nothing in this module reaches out for data.
 
-Currently: EMA (exponential moving average — e.g. the 9/21/50 chart overlay)
-and swing-low support levels.
+Currently: EMA (exponential moving average — e.g. the 9/21/50 chart overlay),
+swing-low support levels, a multi-horizon trend read, and the technical-indicator
+bundle (RSI / MACD / Bollinger / ATR / Stochastic / ADX / OBV / VWAP / Williams %R
+/ CCI / ROC / MFI / SMA / EMA) that the ``/indicators`` endpoint serves.
 """
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -544,4 +547,700 @@ def assess_trend(
         reference_price=round(reference_price, 2),
         short_term=horizon_trend(closes, short_period, deadband_percent=deadband_percent),
         long_term=horizon_trend(closes, long_period, deadband_percent=deadband_percent),
+    )
+
+
+# =============================== Technical-indicator bundle ===============================
+#
+# The catalogue the ``/indicators`` endpoint serves: any subset can be requested in
+# one call, each computed from the same OHLCV bars the chart already fetches (no new
+# port, no new data source). Every indicator here is a *pure function of a candle
+# series* — same spirit as EMA and support levels above.
+#
+# Two shapes come out the other side:
+#   • an **overlay** (drawn on the candle chart's price axis — SMA/EMA/Bollinger/VWAP),
+#   • or a **separate pane** (its own scale — RSI/MACD/ATR/Stochastic/ADX/OBV/…).
+#
+# Each indicator is one or more named *lines* (e.g. MACD → macd/signal/histogram,
+# Bollinger → upper/middle/lower). Every compute function returns values that are
+# **tail-aligned**: the result covers the *last* ``len(values)`` bars of the input, so
+# a caller aligns them to ``candles[-len(values):]`` — exactly how ``ema_line`` above
+# aligns ``compute_ema``. A series too short to define an indicator yields ``[]`` (an
+# empty line), never an error — "couldn't compute it yet" is not a failure.
+
+
+@dataclass(frozen=True)
+class IndicatorPoint:
+    """One indicator reading at the bar it was computed for."""
+
+    timestamp: datetime
+    value: float
+
+
+@dataclass(frozen=True)
+class IndicatorLine:
+    """One named series within an indicator (e.g. MACD's ``signal`` line).
+
+    ``points`` is empty when there wasn't enough history to compute the line.
+    """
+
+    key: str
+    points: tuple[IndicatorPoint, ...]
+
+    @property
+    def latest(self) -> IndicatorPoint | None:
+        """The most recent reading, or None when the line couldn't be computed."""
+        return self.points[-1] if self.points else None
+
+
+@dataclass(frozen=True)
+class Indicator:
+    """One computed indicator: its identity, how it renders, and its line(s).
+
+    ``overlay`` is True for a price-axis overlay (drawn on the candles) and False
+    for a separate-pane oscillator (its own scale). ``label`` is a display string
+    that carries the resolved parameters (e.g. ``"RSI (14)"``).
+    """
+
+    name: str
+    label: str
+    overlay: bool
+    lines: tuple[IndicatorLine, ...]
+
+
+@dataclass(frozen=True)
+class IndicatorSet:
+    """The indicators computed for one symbol at one timeframe, in request order."""
+
+    symbol: str
+    timeframe: Timeframe
+    indicators: tuple[Indicator, ...]
+
+
+@dataclass(frozen=True)
+class IndicatorSpec:
+    """A request for one indicator: its name and an optional primary-period override.
+
+    ``period`` overrides the indicator's main lookback (e.g. ``rsi:21``); ``None``
+    means "use the standard default". Indicators without a single primary period
+    (MACD, OBV, VWAP) reject a period override.
+    """
+
+    name: str
+    period: int | None = None
+
+
+# --------------------------- catalogue & parameters ---------------------------
+
+# The standard primary lookback for each single-period indicator (the value a
+# `name:period` token overrides). MACD/OBV/VWAP don't have one and are handled apart.
+_DEFAULT_PERIODS: dict[str, int] = {
+    "rsi": 14,
+    "atr": 14,
+    "mfi": 14,
+    "willr": 14,
+    "cci": 20,
+    "roc": 12,
+    "sma": 50,
+    "ema": 21,
+    "bbands": 20,
+    "stoch": 14,
+    "adx": 14,
+}
+
+# Indicators with no single primary period — a period override is a 400.
+_NO_PERIOD: frozenset[str] = frozenset({"macd", "obv", "vwap"})
+
+# Price-axis overlays (drawn on the candles); everything else is a separate pane.
+_OVERLAY: frozenset[str] = frozenset({"sma", "ema", "bbands", "vwap"})
+
+# The full set of accepted indicator names.
+INDICATOR_NAMES: frozenset[str] = _NO_PERIOD | frozenset(_DEFAULT_PERIODS)
+
+# MACD's fixed sub-parameters (only the standard triple is offered — no per-line tuning).
+_MACD_FAST, _MACD_SLOW, _MACD_SIGNAL = 12, 26, 9
+# Bollinger band width, in standard deviations.
+_BBANDS_STDDEV = 2.0
+# Stochastic smoothing (%K SMA) and signal (%D SMA) lengths.
+_STOCH_SMOOTH, _STOCH_SIGNAL = 3, 3
+
+
+def _resolve_period(name: str, override: int | None) -> int:
+    """Resolve an indicator's primary lookback from its default and an optional
+    override, validating both.
+
+    Raises:
+        ValueError: an unknown name, a period on a no-period indicator, or a
+            period below 2.
+    """
+    if name not in INDICATOR_NAMES:
+        raise ValueError(f"Unknown indicator '{name}'.")
+    if name in _NO_PERIOD:
+        if override is not None:
+            raise ValueError(f"Indicator '{name}' does not take a period.")
+        return 0
+    period = override if override is not None else _DEFAULT_PERIODS[name]
+    if period < 2:
+        raise ValueError("Indicator period must be at least 2.")
+    return period
+
+
+def indicator_warmup_bars(name: str, period: int | None = None) -> int:
+    """How many bars *before* the visible window an indicator needs so it's already
+    computed by that window's first bar — the deepest of these across a request
+    sizes the warmup fetch (see ``GetStockIndicators``).
+
+    Cumulative indicators (OBV/VWAP) define a value from the first bar, so they need
+    none; the recursive Wilder ADX consumes ~2×period before its first reading; MACD
+    consumes slow+signal; everything else consumes its primary period.
+    """
+    if name in ("obv", "vwap"):
+        return 0
+    if name == "macd":
+        return _MACD_SLOW + _MACD_SIGNAL
+    base = period if period is not None else _DEFAULT_PERIODS[name]
+    if name == "adx":
+        return 2 * base
+    if name == "stoch":
+        return base + _STOCH_SMOOTH + _STOCH_SIGNAL
+    return base
+
+
+# --------------------------- pure math (tail-aligned value lists) ---------------------------
+
+
+def _sma(values: Sequence[float], period: int) -> list[float]:
+    """Rolling simple moving average (full precision), tail-aligned. ``[]`` when
+    there are fewer than ``period`` values."""
+    if period < 1:
+        raise ValueError("SMA period must be at least 1.")
+    n = len(values)
+    if n < period:
+        return []
+    running = sum(values[:period])
+    out = [running / period]
+    for i in range(period, n):
+        running += values[i] - values[i - period]
+        out.append(running / period)
+    return out
+
+
+def compute_sma(closes: Sequence[float], period: int) -> list[float]:
+    """Simple moving average over closes — the arithmetic-mean cousin of ``compute_ema``."""
+    return [round(v, 4) for v in _sma(closes, period)]
+
+
+def _rsi_value(avg_gain: float, avg_loss: float) -> float:
+    """RSI from average gain/loss, guarding the flat and no-loss edges."""
+    if avg_loss == 0:
+        return 100.0 if avg_gain > 0 else 50.0  # all up → 100; dead flat → neutral 50
+    rs = avg_gain / avg_loss
+    return 100.0 - 100.0 / (1.0 + rs)
+
+
+def compute_rsi(closes: Sequence[float], period: int = 14) -> list[float]:
+    """Relative Strength Index (Wilder), 0–100, tail-aligned.
+
+    Seeds the first average gain/loss over the first ``period`` close-to-close
+    changes, then smooths them Wilder-style. Needs ``period + 1`` closes for the
+    first value; returns ``[]`` below that.
+    """
+    if period < 1:
+        raise ValueError("RSI period must be at least 1.")
+    n = len(closes)
+    if n <= period:
+        return []
+    gains = 0.0
+    losses = 0.0
+    for i in range(1, period + 1):
+        change = closes[i] - closes[i - 1]
+        if change >= 0:
+            gains += change
+        else:
+            losses -= change
+    avg_gain, avg_loss = gains / period, losses / period
+    out = [_rsi_value(avg_gain, avg_loss)]
+    for i in range(period + 1, n):
+        change = closes[i] - closes[i - 1]
+        gain = change if change > 0 else 0.0
+        loss = -change if change < 0 else 0.0
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
+        out.append(_rsi_value(avg_gain, avg_loss))
+    return out
+
+
+def compute_macd(
+    closes: Sequence[float],
+    fast: int = _MACD_FAST,
+    slow: int = _MACD_SLOW,
+    signal: int = _MACD_SIGNAL,
+) -> tuple[list[float], list[float], list[float]]:
+    """MACD line, signal line and histogram — three tail-aligned lists (each aligned
+    to its own tail of the candles).
+
+    MACD = EMA(fast) − EMA(slow); signal = EMA(MACD, signal); histogram = MACD − signal
+    over the overlap. Reuses ``compute_ema``. Empty lists when history is too short.
+
+    Raises:
+        ValueError: a period < 1 or ``fast >= slow``.
+    """
+    if fast < 1 or slow < 1 or signal < 1:
+        raise ValueError("MACD periods must be at least 1.")
+    if fast >= slow:
+        raise ValueError("MACD fast period must be shorter than the slow period.")
+    ema_fast = compute_ema(closes, fast)
+    ema_slow = compute_ema(closes, slow)
+    if not ema_slow:
+        return [], [], []
+    fast_tail = ema_fast[-len(ema_slow):]  # align both to where the slow EMA exists
+    macd_line = [f - s for f, s in zip(fast_tail, ema_slow)]
+    signal_line = compute_ema(macd_line, signal)
+    if not signal_line:
+        return macd_line, [], []
+    hist_tail = macd_line[-len(signal_line):]
+    histogram = [m - s for m, s in zip(hist_tail, signal_line)]
+    return macd_line, signal_line, histogram
+
+
+def compute_bollinger(
+    closes: Sequence[float], period: int = 20, num_std: float = _BBANDS_STDDEV
+) -> tuple[list[float], list[float], list[float]]:
+    """Bollinger Bands: (upper, middle, lower), tail-aligned. Middle is the SMA;
+    the bands sit ``num_std`` population standard deviations either side.
+
+    Raises:
+        ValueError: ``period < 1`` or ``num_std < 0``.
+    """
+    if period < 1:
+        raise ValueError("Bollinger period must be at least 1.")
+    if num_std < 0:
+        raise ValueError("Bollinger num_std must be non-negative.")
+    n = len(closes)
+    if n < period:
+        return [], [], []
+    upper: list[float] = []
+    middle: list[float] = []
+    lower: list[float] = []
+    for i in range(period - 1, n):
+        window = closes[i - period + 1 : i + 1]
+        mean = sum(window) / period
+        variance = sum((x - mean) ** 2 for x in window) / period
+        sd = math.sqrt(variance)
+        middle.append(mean)
+        upper.append(mean + num_std * sd)
+        lower.append(mean - num_std * sd)
+    return upper, middle, lower
+
+
+def _true_ranges(
+    highs: Sequence[float], lows: Sequence[float], closes: Sequence[float]
+) -> list[float]:
+    """True range per bar from index 1 on (each needs the prior close) — the shared
+    input to ATR and ADX. ``_true_ranges[i-1]`` is the true range of candle ``i``."""
+    return [
+        max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        for i in range(1, len(closes))
+    ]
+
+
+def compute_atr(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    period: int = 14,
+) -> list[float]:
+    """Average True Range (Wilder), tail-aligned. Seeds on the first ``period`` true
+    ranges, then Wilder-smooths. ``[]`` when there are ≤ ``period`` bars.
+
+    Raises:
+        ValueError: ``period < 1`` or mismatched input lengths.
+    """
+    if period < 1:
+        raise ValueError("ATR period must be at least 1.")
+    if not len(highs) == len(lows) == len(closes):
+        raise ValueError("highs, lows and closes must be the same length.")
+    n = len(closes)
+    if n <= period:
+        return []
+    trs = _true_ranges(highs, lows, closes)
+    atr = sum(trs[:period]) / period
+    out = [atr]
+    for j in range(period, len(trs)):
+        atr = (atr * (period - 1) + trs[j]) / period
+        out.append(atr)
+    return out
+
+
+def compute_stochastic(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    k_period: int = 14,
+    smooth: int = _STOCH_SMOOTH,
+    d_period: int = _STOCH_SIGNAL,
+) -> tuple[list[float], list[float]]:
+    """Stochastic oscillator: (%K, %D), tail-aligned, 0–100.
+
+    Raw %K is where the close sits in the ``k_period`` high-low range; %K is that
+    smoothed over ``smooth`` bars, and %D is the ``d_period`` SMA of %K. A flat range
+    (high == low) reads a neutral 50.
+
+    Raises:
+        ValueError: any period < 1 or mismatched input lengths.
+    """
+    if k_period < 1 or smooth < 1 or d_period < 1:
+        raise ValueError("Stochastic periods must be at least 1.")
+    if not len(highs) == len(lows) == len(closes):
+        raise ValueError("highs, lows and closes must be the same length.")
+    n = len(closes)
+    if n < k_period:
+        return [], []
+    raw: list[float] = []
+    for i in range(k_period - 1, n):
+        hh = max(highs[i - k_period + 1 : i + 1])
+        ll = min(lows[i - k_period + 1 : i + 1])
+        raw.append(50.0 if hh == ll else 100.0 * (closes[i] - ll) / (hh - ll))
+    k_line = _sma(raw, smooth)
+    d_line = _sma(k_line, d_period)
+    return k_line, d_line
+
+
+def _dx(plus_di: float, minus_di: float) -> float:
+    """Directional index: the normalized gap between the two directional indicators."""
+    total = plus_di + minus_di
+    return 100.0 * abs(plus_di - minus_di) / total if total else 0.0
+
+
+def compute_adx(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    period: int = 14,
+) -> tuple[list[float], list[float], list[float]]:
+    """Average Directional Index with the two directional indicators: (ADX, +DI, −DI),
+    each tail-aligned (Wilder).
+
+    +DI/−DI come from the Wilder-smoothed directional movement over the true range;
+    ADX is the Wilder-smoothed directional index. ADX lags +DI/−DI by another
+    ``period`` bars (it smooths their spread), so its line is shorter — each line
+    aligns to its own tail and they share the latest bar.
+
+    Raises:
+        ValueError: ``period < 1`` or mismatched input lengths.
+    """
+    if period < 1:
+        raise ValueError("ADX period must be at least 1.")
+    if not len(highs) == len(lows) == len(closes):
+        raise ValueError("highs, lows and closes must be the same length.")
+    n = len(closes)
+    if n <= period:
+        return [], [], []
+    trs = _true_ranges(highs, lows, closes)
+    plus_dm: list[float] = []
+    minus_dm: list[float] = []
+    for i in range(1, n):
+        up = highs[i] - highs[i - 1]
+        down = lows[i - 1] - lows[i]
+        plus_dm.append(up if up > down and up > 0 else 0.0)
+        minus_dm.append(down if down > up and down > 0 else 0.0)
+    if len(trs) < period:
+        return [], [], []
+    sm_tr = sum(trs[:period])
+    sm_pdm = sum(plus_dm[:period])
+    sm_mdm = sum(minus_dm[:period])
+
+    def _di(sp: float, sm: float, st: float) -> tuple[float, float]:
+        return (100.0 * sp / st if st else 0.0, 100.0 * sm / st if st else 0.0)
+
+    p, m = _di(sm_pdm, sm_mdm, sm_tr)
+    plus_di, minus_di, dx = [p], [m], [_dx(p, m)]
+    for j in range(period, len(trs)):
+        sm_tr = sm_tr - sm_tr / period + trs[j]
+        sm_pdm = sm_pdm - sm_pdm / period + plus_dm[j]
+        sm_mdm = sm_mdm - sm_mdm / period + minus_dm[j]
+        p, m = _di(sm_pdm, sm_mdm, sm_tr)
+        plus_di.append(p)
+        minus_di.append(m)
+        dx.append(_dx(p, m))
+    if len(dx) < period:
+        return [], plus_di, minus_di
+    adx_val = sum(dx[:period]) / period
+    adx = [adx_val]
+    for j in range(period, len(dx)):
+        adx_val = (adx_val * (period - 1) + dx[j]) / period
+        adx.append(adx_val)
+    return adx, plus_di, minus_di
+
+
+def compute_obv(closes: Sequence[float], volumes: Sequence[int | None]) -> list[float]:
+    """On-Balance Volume, tail-aligned to every bar. A running total that adds the
+    bar's volume on an up-close and subtracts it on a down-close (unchanged when
+    flat). The baseline is arbitrary (starts at 0) — OBV is read for its slope, not
+    its level. Missing volume counts as 0."""
+    n = len(closes)
+    if n == 0:
+        return []
+    obv = 0.0
+    out = [obv]
+    for i in range(1, n):
+        vol = volumes[i] or 0
+        if closes[i] > closes[i - 1]:
+            obv += vol
+        elif closes[i] < closes[i - 1]:
+            obv -= vol
+        out.append(obv)
+    return out
+
+
+def compute_vwap(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    volumes: Sequence[int | None],
+) -> list[float]:
+    """Volume-Weighted Average Price, anchored at the first bar of the series and
+    accumulated forward (tail-aligned to every bar). Each point is the running
+    typical-price×volume over running volume. Missing volume counts as 0; a
+    zero-volume run falls back to the typical price."""
+    n = len(closes)
+    if n == 0:
+        return []
+    cum_pv = 0.0
+    cum_vol = 0.0
+    out: list[float] = []
+    for i in range(n):
+        typical = (highs[i] + lows[i] + closes[i]) / 3.0
+        vol = volumes[i] or 0
+        cum_pv += typical * vol
+        cum_vol += vol
+        out.append(cum_pv / cum_vol if cum_vol else typical)
+    return out
+
+
+def compute_williams_r(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    period: int = 14,
+) -> list[float]:
+    """Williams %R, tail-aligned, −100..0 (where the close sits in the ``period``
+    high-low range, inverted). A flat range reads a neutral −50.
+
+    Raises:
+        ValueError: ``period < 1`` or mismatched input lengths.
+    """
+    if period < 1:
+        raise ValueError("Williams %R period must be at least 1.")
+    if not len(highs) == len(lows) == len(closes):
+        raise ValueError("highs, lows and closes must be the same length.")
+    n = len(closes)
+    if n < period:
+        return []
+    out: list[float] = []
+    for i in range(period - 1, n):
+        hh = max(highs[i - period + 1 : i + 1])
+        ll = min(lows[i - period + 1 : i + 1])
+        out.append(-50.0 if hh == ll else -100.0 * (hh - closes[i]) / (hh - ll))
+    return out
+
+
+def compute_cci(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    period: int = 20,
+) -> list[float]:
+    """Commodity Channel Index, tail-aligned. The typical price's deviation from its
+    SMA, scaled by mean absolute deviation (×0.015). A zero-deviation window reads 0.
+
+    Raises:
+        ValueError: ``period < 1`` or mismatched input lengths.
+    """
+    if period < 1:
+        raise ValueError("CCI period must be at least 1.")
+    if not len(highs) == len(lows) == len(closes):
+        raise ValueError("highs, lows and closes must be the same length.")
+    n = len(closes)
+    if n < period:
+        return []
+    typical = [(highs[i] + lows[i] + closes[i]) / 3.0 for i in range(n)]
+    out: list[float] = []
+    for i in range(period - 1, n):
+        window = typical[i - period + 1 : i + 1]
+        mean = sum(window) / period
+        mad = sum(abs(x - mean) for x in window) / period
+        out.append(0.0 if mad == 0 else (typical[i] - mean) / (0.015 * mad))
+    return out
+
+
+def compute_roc(closes: Sequence[float], period: int = 12) -> list[float]:
+    """Rate of Change (percent), tail-aligned: the percent change of the close versus
+    ``period`` bars ago. ``[]`` when there are ≤ ``period`` closes.
+
+    Raises:
+        ValueError: ``period < 1``.
+    """
+    if period < 1:
+        raise ValueError("ROC period must be at least 1.")
+    n = len(closes)
+    if n <= period:
+        return []
+    out: list[float] = []
+    for i in range(period, n):
+        prior = closes[i - period]
+        out.append(100.0 * (closes[i] - prior) / prior if prior else 0.0)
+    return out
+
+
+def compute_mfi(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    volumes: Sequence[int | None],
+    period: int = 14,
+) -> list[float]:
+    """Money Flow Index (volume-weighted RSI), tail-aligned, 0–100. Positive money
+    flow (typical price up) versus negative over the last ``period`` bars. A window
+    with no negative flow reads 100. Missing volume counts as 0.
+
+    Raises:
+        ValueError: ``period < 1`` or mismatched input lengths.
+    """
+    if period < 1:
+        raise ValueError("MFI period must be at least 1.")
+    if not len(highs) == len(lows) == len(closes) == len(volumes):
+        raise ValueError("highs, lows, closes and volumes must be the same length.")
+    n = len(closes)
+    if n <= period:
+        return []
+    typical = [(highs[i] + lows[i] + closes[i]) / 3.0 for i in range(n)]
+    raw_flow = [typical[i] * (volumes[i] or 0) for i in range(n)]
+    out: list[float] = []
+    for i in range(period, n):
+        positive = 0.0
+        negative = 0.0
+        for j in range(i - period + 1, i + 1):
+            if typical[j] > typical[j - 1]:
+                positive += raw_flow[j]
+            elif typical[j] < typical[j - 1]:
+                negative += raw_flow[j]
+        if negative == 0:
+            out.append(100.0 if positive > 0 else 50.0)
+        else:
+            out.append(100.0 - 100.0 / (1.0 + positive / negative))
+    return out
+
+
+# --------------------------- builders (candles → Indicator) ---------------------------
+
+
+def _line(key: str, candles: tuple, values: Sequence[float]) -> IndicatorLine:
+    """Assemble one line, tail-aligning ``values`` to the final ``len(values)``
+    candles and rounding to the price/indicator scale."""
+    tail = candles[len(candles) - len(values):]
+    points = tuple(
+        IndicatorPoint(timestamp=candle.timestamp, value=round(value, 4))
+        for candle, value in zip(tail, values)
+    )
+    return IndicatorLine(key=key, points=points)
+
+
+def build_indicator(series: CandleSeries, spec: IndicatorSpec) -> Indicator:
+    """Compute one indicator over a candle series.
+
+    Resolves the spec's period (default or override), dispatches to the pure math,
+    and assembles the named line(s). An indicator with too little history comes back
+    with empty lines (never an error).
+
+    Raises:
+        ValueError: an unknown name or an invalid/period-on-a-no-period-indicator spec.
+    """
+    name = spec.name
+    period = _resolve_period(name, spec.period)  # validates name + period
+    candles = series.candles
+    overlay = name in _OVERLAY
+    highs = [c.high for c in candles]
+    lows = [c.low for c in candles]
+    closes = [c.close for c in candles]
+    volumes = [c.volume for c in candles]
+
+    def done(label: str, lines: list[IndicatorLine]) -> Indicator:
+        return Indicator(name=name, label=label, overlay=overlay, lines=tuple(lines))
+
+    if name == "sma":
+        return done(f"SMA ({period})", [_line("sma", candles, compute_sma(closes, period))])
+    if name == "ema":
+        return done(f"EMA ({period})", [_line("ema", candles, compute_ema(closes, period))])
+    if name == "rsi":
+        return done(f"RSI ({period})", [_line("rsi", candles, compute_rsi(closes, period))])
+    if name == "macd":
+        macd_line, signal_line, histogram = compute_macd(closes)
+        return done(
+            f"MACD ({_MACD_FAST}/{_MACD_SLOW}/{_MACD_SIGNAL})",
+            [
+                _line("macd", candles, macd_line),
+                _line("signal", candles, signal_line),
+                _line("histogram", candles, histogram),
+            ],
+        )
+    if name == "bbands":
+        upper, middle, lower = compute_bollinger(closes, period)
+        return done(
+            f"Bollinger Bands ({period}, {_BBANDS_STDDEV:g}σ)",
+            [
+                _line("upper", candles, upper),
+                _line("middle", candles, middle),
+                _line("lower", candles, lower),
+            ],
+        )
+    if name == "atr":
+        return done(f"ATR ({period})", [_line("atr", candles, compute_atr(highs, lows, closes, period))])
+    if name == "stoch":
+        k_line, d_line = compute_stochastic(highs, lows, closes, period)
+        return done(
+            f"Stochastic ({period}/{_STOCH_SMOOTH}/{_STOCH_SIGNAL})",
+            [_line("k", candles, k_line), _line("d", candles, d_line)],
+        )
+    if name == "adx":
+        adx, plus_di, minus_di = compute_adx(highs, lows, closes, period)
+        return done(
+            f"ADX ({period})",
+            [
+                _line("adx", candles, adx),
+                _line("plus_di", candles, plus_di),
+                _line("minus_di", candles, minus_di),
+            ],
+        )
+    if name == "obv":
+        return done("OBV", [_line("obv", candles, compute_obv(closes, volumes))])
+    if name == "vwap":
+        return done("VWAP", [_line("vwap", candles, compute_vwap(highs, lows, closes, volumes))])
+    if name == "willr":
+        return done(
+            f"Williams %R ({period})",
+            [_line("willr", candles, compute_williams_r(highs, lows, closes, period))],
+        )
+    if name == "cci":
+        return done(f"CCI ({period})", [_line("cci", candles, compute_cci(highs, lows, closes, period))])
+    if name == "roc":
+        return done(f"ROC ({period})", [_line("roc", candles, compute_roc(closes, period))])
+    if name == "mfi":
+        return done(f"MFI ({period})", [_line("mfi", candles, compute_mfi(highs, lows, closes, volumes, period))])
+    # Unreachable: _resolve_period already rejected any unknown name.
+    raise ValueError(f"Unknown indicator '{name}'.")
+
+
+def build_indicators(
+    series: CandleSeries, specs: Sequence[IndicatorSpec]
+) -> IndicatorSet:
+    """Compute an ordered set of indicators over one candle series (request order)."""
+    return IndicatorSet(
+        symbol=series.symbol,
+        timeframe=series.timeframe,
+        indicators=tuple(build_indicator(series, spec) for spec in specs),
     )
