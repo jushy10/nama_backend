@@ -70,6 +70,17 @@ class CongressTradesRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def market_trades_in_window(self, *, since: date | None) -> list[CongressTrade]:
+        """Every stored market-wide trade in the window (newest first), each carrying its ``ticker``
+        and ``company_name`` — the unpaged set the attention leaderboard folds by ticker.
+
+        ``since`` (inclusive) windows on the activity date (disclosure date falling back to the
+        transaction date); ``None`` means all history. Unlike ``recent_market_activity`` this is not
+        paged: the leaderboard aggregates the whole window, not a slice of it.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def refresh_targets(self, limit: int | None) -> list[RefreshTarget]:
         """Return the stocks most in need of a refresh, un-cached first then least-recently
         refreshed, each paired with the name on its ``stocks`` row.
