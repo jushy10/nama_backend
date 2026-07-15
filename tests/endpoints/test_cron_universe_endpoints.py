@@ -101,6 +101,53 @@ def test_rejects_an_out_of_range_limit():
     cron._sync_lock.release()
 
 
+def _pass(*, screened, added, updated, skipped, enriched=0, enrich_failed=0, valued=0):
+    return UniverseSyncReport(
+        screened=screened, added=added, updated=updated, skipped=skipped,
+        enriched=enriched, enrich_failed=enrich_failed, valued=valued,
+    )
+
+
+def test_merge_reports_sums_counts_across_market_passes():
+    # US pass + CA pass -> one report: counts summed, and NOT skipped because at least one
+    # market was written.
+    merged = cron._merge_reports(
+        [
+            _pass(screened=2800, added=10, updated=2790, skipped=False, enriched=5, valued=4),
+            _pass(screened=250, added=250, updated=0, skipped=False, enriched=3, valued=2),
+        ]
+    )
+    assert (merged.screened, merged.added, merged.updated) == (3050, 260, 2790)
+    assert (merged.enriched, merged.valued) == (8, 6)
+    assert merged.skipped is False
+
+
+def test_merge_reports_is_skipped_only_when_every_pass_skipped():
+    # A mixed run (US written, CA skipped) is not a skip; both skipped is.
+    mixed = cron._merge_reports(
+        [
+            _pass(screened=2800, added=10, updated=2790, skipped=False),
+            _pass(screened=5, added=0, updated=0, skipped=True),
+        ]
+    )
+    assert mixed.skipped is False
+
+    both = cron._merge_reports(
+        [
+            _pass(screened=5, added=0, updated=0, skipped=True),
+            _pass(screened=3, added=0, updated=0, skipped=True),
+        ]
+    )
+    assert both.skipped is True
+
+
+def test_merge_reports_of_no_passes_is_a_skip():
+    # Every pass raised (nothing ran) -> a skip, all-zero counts.
+    empty = cron._merge_reports([])
+    assert empty.skipped is True
+    assert (empty.screened, empty.added, empty.updated, empty.valued) == (0, 0, 0, 0)
+
+
 def test_runner_is_wired_without_any_api_key():
     # yfinance needs no credential, so the DI returns the real unit of work with no key set.
     assert cron.get_sync_runner() is cron.run_universe_sync

@@ -71,11 +71,16 @@ class SqlUniverseRepository(UniverseRepository):
             else:
                 updated += 1
             # Fill identity facts when missing; never clobber a settled value (the same
-            # rule get_or_create_stock applies to the name).
+            # rule get_or_create_stock applies to the name). country/currency are the row's
+            # market — settled once, like the exchange (a listing doesn't change markets).
             if stock.exchange and not anchor.exchange:
                 anchor.exchange = stock.exchange
             if stock.sector and not anchor.sector:
                 anchor.sector = stock.sector
+            if stock.country and not anchor.country:
+                anchor.country = stock.country
+            if stock.currency and not anchor.currency:
+                anchor.currency = stock.currency
             # Refresh the drifting screen facts + freshness stamp on every run.
             anchor.market_cap = stock.market_cap
             anchor.screened_at = now
@@ -317,6 +322,8 @@ def _to_result(row: StockRecord) -> StockSearchResult:
         forward_eps_growth_yoy=row.forward_eps_growth_yoy,
         in_sp500=row.in_sp500,
         in_nasdaq100=row.in_nasdaq100,
+        country=row.country,
+        currency=row.currency,
         performance=_performance(row),
     )
 
@@ -554,6 +561,10 @@ class SqlStockSearchRepository(StockSearchRepository):
             conditions.append(StockRecord.sector.in_(criteria.sectors))
         if criteria.industries:
             conditions.append(StockRecord.industry.in_(criteria.industries))
+        if criteria.countries:
+            # Union of the chosen markets (ISO-2). Keeps a market-cap sort within one currency
+            # and lets a client show a single-market board.
+            conditions.append(StockRecord.country.in_(criteria.countries))
         if criteria.in_sp500 is not None:
             conditions.append(StockRecord.in_sp500 == criteria.in_sp500)
         if criteria.in_nasdaq100 is not None:

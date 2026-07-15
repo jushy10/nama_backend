@@ -19,14 +19,21 @@ from app.stocks.universe.entities import (
 
 
 class StockScreener(ABC):
-    """A gateway for screening the US market by market capitalisation."""
+    """A gateway for screening one market's listings by market capitalisation."""
 
     @abstractmethod
-    def screen(self, *, min_market_cap: float) -> tuple[ScreenedStock, ...]:
-        """Return every US-listed stock at/above ``min_market_cap`` (whole dollars).
+    def screen(
+        self, *, min_market_cap: float, region: str = "us"
+    ) -> tuple[ScreenedStock, ...]:
+        """Return every stock in ``region`` at/above ``min_market_cap`` — in the market's
+        **native trading currency**, not a converted one.
 
-        One bulk read of the whole market, filtered to the floor — the investable
-        universe the sync persists. Order is unspecified; callers must not rely on it.
+        One bulk read of the market, filtered to the floor — the investable universe the sync
+        persists. ``region`` is an ISO-2 market code (``"us"`` default, ``"ca"`` for the
+        Canadian TSX/TSXV listings); the floor is applied in that market's own currency (Yahoo
+        screens each quote in its native currency), so ``min_market_cap=1e9`` is $1B USD for
+        ``us`` and $1B CAD for ``ca``. Each returned ``ScreenedStock`` carries the ``country`` /
+        ``currency`` that unit belongs to. Order is unspecified; callers must not rely on it.
 
         Raises:
             StockDataUnavailable: the upstream screen failed. The sync treats this as a

@@ -4,8 +4,10 @@ the technical-indicator bundle.
 ``GET /stocks/ticker/{ticker}/candles`` / ``.../ema`` / ``.../support-levels`` /
 ``.../trend`` / ``.../indicators`` — controller + presenter + wiring, the
 composition-root way, sitting in ``app/stocks/endpoints/`` beside the other read
-endpoints. All ride the same Alpaca ``CandleProvider`` (the shared price-feed
-singleton from ``wiring.py``, with its missing-keys 503 gate).
+endpoints. All ride the same market-routing ``CandleProvider`` (the per-symbol
+price provider from ``wiring.py``): a US symbol reads Alpaca bars (behind its
+missing-keys 503 gate), a Canadian-suffixed one (``.TO``/``.V``/…) reads keyless
+Yahoo bars.
 """
 
 from contextlib import contextmanager
@@ -46,50 +48,50 @@ from app.stocks.charts.use_cases import (
     GetStockSupportLevels,
     GetStockTrend,
 )
-from app.stocks.adapters.alpaca_adapter import AlpacaStockDataProvider
+from app.stocks.charts.ports import CandleProvider
 from app.stocks.entities import CandleSeries, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.wiring import get_provider
+from app.stocks.wiring import get_price_provider
 
 router = APIRouter(tags=["charts"])
 
 
 def get_stock_candles(
-    # The Alpaca provider implements CandleProvider too, so the same instance
-    # serves both the snapshot and candle endpoints.
-    provider: AlpacaStockDataProvider = Depends(get_provider),
+    # The market-routing provider implements CandleProvider, so one instance serves the chart
+    # for either market — a US symbol reads Alpaca bars, a Canadian-suffixed one Yahoo bars.
+    provider: CandleProvider = Depends(get_price_provider),
 ) -> GetStockCandles:
     return GetStockCandles(provider)
 
 
 def get_stock_ema(
-    # EMA rides on the same CandleProvider as candles — it's derived from the
-    # OHLC bars, so the Alpaca instance backs this endpoint too.
-    provider: AlpacaStockDataProvider = Depends(get_provider),
+    # EMA rides on the same CandleProvider as candles — derived from the OHLC bars, so the
+    # routing provider (US→Alpaca / CA→Yahoo) backs this endpoint too.
+    provider: CandleProvider = Depends(get_price_provider),
 ) -> GetStockEma:
     return GetStockEma(provider)
 
 
 def get_stock_support_levels(
-    # Support levels ride on the same CandleProvider as candles — they're
-    # detected from the OHLC bars, so the Alpaca instance backs this endpoint too.
-    provider: AlpacaStockDataProvider = Depends(get_provider),
+    # Support levels ride on the same CandleProvider as candles — detected from the OHLC bars,
+    # so the routing provider backs this endpoint too.
+    provider: CandleProvider = Depends(get_price_provider),
 ) -> GetStockSupportLevels:
     return GetStockSupportLevels(provider)
 
 
 def get_stock_trend(
-    # Trend rides on the same CandleProvider as candles — it's read from the OHLC
-    # bars (EMA slopes), so the Alpaca instance backs this endpoint too.
-    provider: AlpacaStockDataProvider = Depends(get_provider),
+    # Trend rides on the same CandleProvider as candles — read from the OHLC bars (EMA slopes),
+    # so the routing provider backs this endpoint too.
+    provider: CandleProvider = Depends(get_price_provider),
 ) -> GetStockTrend:
     return GetStockTrend(provider)
 
 
 def get_stock_indicators(
-    # The indicator bundle rides on the same CandleProvider as candles — every
-    # indicator is derived from the OHLCV bars, so the Alpaca instance backs it too.
-    provider: AlpacaStockDataProvider = Depends(get_provider),
+    # The indicator bundle rides on the same CandleProvider as candles — every indicator is
+    # derived from the OHLCV bars, so the routing provider backs it too.
+    provider: CandleProvider = Depends(get_price_provider),
 ) -> GetStockIndicators:
     return GetStockIndicators(provider)
 

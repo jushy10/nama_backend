@@ -89,6 +89,20 @@ def _slugged(values: Sequence[str] | None) -> tuple[str, ...]:
     return tuple(dict.fromkeys(s for v in values if (s := slugify(v)) is not None))
 
 
+def _upper_codes(values: Sequence[str] | None) -> tuple[str, ...]:
+    """Upper-case each ISO-2 country code to the stored convention, dropping blanks/non-strings
+    and de-duplicating while preserving order — the multi-select edge for the ``country`` filter
+    (``?country=us&country=ca``). An off-vocabulary code simply matches no rows, like a stray
+    sector slug."""
+    if not values:
+        return ()
+    return tuple(
+        dict.fromkeys(
+            v.strip().upper() for v in values if isinstance(v, str) and v.strip()
+        )
+    )
+
+
 def _pe_ratio(price: float | None, ttm_eps: float | None) -> float | None:
     """The ticker card's trailing P/E, materialized for the sortable anchor column.
 
@@ -143,16 +157,28 @@ def _ev_ebitda(
 
 class SyncUniverse:
     """Populate/refresh the searchable universe from a live market screen, classify the stocks
-    that still lack a sector/industry, and value each screened stock with a trailing P/E."""
+    that still lack a sector/industry, and value each screened stock with a trailing P/E.
 
-    # The market-cap floor that defines the universe: US companies worth at least $1B.
+    Runs one market per instance (``region``): the US screen by default, or the Canadian
+    (TSX/TSXV) screen with ``region="ca"``. The two passes are independent — each an additive
+    upsert onto the shared anchor — so the cron runs one after the other, and a bad day for one
+    market never touches the other's stored rows."""
+
+    # The market-cap floor that defines the universe: companies worth at least $1B **in the
+    # screened market's own currency** (Yahoo screens each quote natively, so this is $1B USD
+    # for the US pass and $1B CAD for the CA pass — the floor is the same number, applied per
+    # market's money).
     MIN_MARKET_CAP = 1_000_000_000.0
 
-    # Below this many screened names the result is treated as truncated or blocked (a
-    # healthy US ≥$1B screen is ~2,800 names), so the upsert is skipped — a bad
-    # vendor day shouldn't re-stamp only a partial slice as freshly screened. The screener
-    # also raises on a hard failure (which propagates); this guards a *degraded* success.
+    # Below this many screened names the result is treated as truncated or blocked, so the
+    # upsert is skipped — a bad vendor day shouldn't re-stamp only a partial slice as freshly
+    # screened. The floor is **per market**, since a healthy screen's size differs by market (a
+    # US ≥$1B screen is ~2,800 names; a CA ≥$1B screen is only a few hundred). The screener also
+    # raises on a hard failure (which propagates); this guards a *degraded* success. Keyed by
+    # ISO-2 region; ``MIN_PLAUSIBLE_SCREEN`` is the US default and the fallback for any market
+    # not listed.
     MIN_PLAUSIBLE_SCREEN = 100
+    _MIN_PLAUSIBLE_BY_REGION: dict[str, int] = {"us": 100, "ca": 40}
 
     # Default stocks the enrichment pass classifies per run; the caller (the cron endpoint)
     # can override per invocation. Kept modest so the sequential per-ticker Yahoo calls stay
@@ -166,6 +192,8 @@ class SyncUniverse:
         repository: UniverseRepository,
         classifier: CompanyClassificationProvider,
         quarterly: QuarterlyEarningsRepository | None = None,
+        *,
+        region: str = "us",
     ) -> None:
         self._screener = screener
         self._repository = repository
@@ -176,24 +204,32 @@ class SyncUniverse:
         # sync's reason to exist: wired without it, the sync still screens and classifies and
         # simply writes no P/E.
         self._quarterly = quarterly
+        # The market this instance screens (ISO-2). Drives the screener's region and the
+        # per-market plausibility floor; the currency/country ride back on each ScreenedStock.
+        self._region = region.lower()
+        self._min_plausible = self._MIN_PLAUSIBLE_BY_REGION.get(
+            self._region, self.MIN_PLAUSIBLE_SCREEN
+        )
 
     def execute(self, *, limit: int | None = None) -> UniverseSyncReport:
         """Screen the market, upsert the result onto the anchor, classify up to ``limit``
         (default ``DEFAULT_LIMIT``) still-unclassified stocks, then value every screened stock.
 
         A hard screen failure (``StockDataUnavailable``) propagates to the caller (the
-        background runner logs it). A *degraded* screen — fewer than ``MIN_PLAUSIBLE_SCREEN``
-        names — is skipped so a partial/blocked fetch isn't written, and the enrichment and
-        valuation passes are skipped too (if the one bulk screen call was blocked, the
-        per-ticker calls would be as well). Otherwise the whole screen is upserted (additive),
-        the enrichment pass runs, and the valuation pass recomputes each screened stock's
-        trailing P/E from the screen-time price over the quarterly slice's stored TTM EPS. A
-        single symbol's classification failure never aborts the run — it's counted and the
-        sweep continues.
+        background runner logs it). A *degraded* screen — fewer than the market's plausibility
+        floor (``_MIN_PLAUSIBLE_BY_REGION``) — is skipped so a partial/blocked fetch isn't
+        written, and the enrichment and valuation passes are skipped too (if the one bulk screen
+        call was blocked, the per-ticker calls would be as well). Otherwise the whole screen is
+        upserted (additive), the enrichment pass runs, and the valuation pass recomputes each
+        screened stock's trailing P/E from the screen-time price over the quarterly slice's
+        stored TTM EPS. A single symbol's classification failure never aborts the run — it's
+        counted and the sweep continues.
         """
         capped = self.DEFAULT_LIMIT if limit is None else max(1, limit)
-        screened = self._screener.screen(min_market_cap=self.MIN_MARKET_CAP)
-        if len(screened) < self.MIN_PLAUSIBLE_SCREEN:
+        screened = self._screener.screen(
+            min_market_cap=self.MIN_MARKET_CAP, region=self._region
+        )
+        if len(screened) < self._min_plausible:
             return UniverseSyncReport(
                 screened=len(screened),
                 added=0,
@@ -315,6 +351,7 @@ class SearchStocks:
         direction: SortDirection = SortDirection.DESC,
         limit: int | None = None,
         offset: int = 0,
+        countries: Sequence[str] | None = None,
     ) -> StockSearchPage:
         """Normalize the inputs once, at the edge, then run the search.
 
@@ -323,11 +360,13 @@ class SearchStocks:
         stored slug match), blanks dropped and duplicates collapsed — an empty result means "don't
         filter", otherwise the search matches *any* of the slugs (an OR set, so several sectors or
         industries can be screened at once). ``market_cap_tiers`` is deduplicated to the union of
-        the given cap buckets (empty = every size). ``limit`` defaults to ``DEFAULT_LIMIT`` and is
-        clamped to ``[1, MAX_LIMIT]``, ``offset`` floored at 0. The index flags pass through as-is
-        (tri-state booleans, ``None`` = don't filter). ``sort`` defaults to ``None`` — an unsorted
-        browse the repository orders by ticker (A→Z); a ``StockSort`` value sorts by that column,
-        ``direction`` (default descending) then applying. The repository does the rest.
+        the given cap buckets (empty = every size). ``countries`` is upper-cased to ISO-2 codes,
+        blanks dropped and duplicates collapsed — the union of markets to include (empty = every
+        market). ``limit`` defaults to ``DEFAULT_LIMIT`` and is clamped to ``[1, MAX_LIMIT]``,
+        ``offset`` floored at 0. The index flags pass through as-is (tri-state booleans, ``None`` =
+        don't filter). ``sort`` defaults to ``None`` — an unsorted browse the repository orders by
+        ticker (A→Z); a ``StockSort`` value sorts by that column, ``direction`` (default
+        descending) then applying. The repository does the rest.
         """
         text = (query or "").strip()
         capped = self.DEFAULT_LIMIT if limit is None else min(max(1, limit), self.MAX_LIMIT)
@@ -344,6 +383,7 @@ class SearchStocks:
             direction=direction,
             limit=capped,
             offset=max(0, offset),
+            countries=_upper_codes(countries),
         )
         return self._repository.search(criteria)
 

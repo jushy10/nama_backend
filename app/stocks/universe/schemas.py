@@ -25,13 +25,19 @@ class StockSearchItemResponse(BaseModel):
     ``pe_ratio`` also until four quarters are cached, and for a trailing-year loss; ``ev_ebitda``
     until the fundamentals slice has landed the EBITDA, and on a non-positive EBITDA). The FE
     fetches a live quote or the full card per row on demand via ``GET /stocks/ticker/{ticker}``.
+
+    ``country`` / ``currency`` are the row's market (ISO-2 / ISO-3): the listing market and the
+    currency ``market_cap`` is quoted in. ``market_cap`` is raw whole units of that ``currency``
+    (USD for a US row, CAD for a TSX one) — the ≥$1B floor is applied in each market's native
+    currency, so a client reads a CAD cap against ``currency``, and keeps a market-cap sort within
+    one currency by filtering ``?country=``.
     """
 
     ticker: str
     name: str | None = None
     sector: str | None = None
     industry: str | None = None
-    market_cap: float | None = None  # raw USD
+    market_cap: float | None = None  # raw, in the row's trading `currency`
     pe_ratio: float | None = None  # trailing P/E, consensus basis (matches the card)
     fcf_yield: float | None = None  # percent, materialized FCF yield (signed; sortable)
     ev_ebitda: float | None = None  # materialized EV/EBITDA snapshot (signed; sortable)
@@ -42,6 +48,8 @@ class StockSearchItemResponse(BaseModel):
     forward_eps_growth_yoy: float | None = None  # percent, forward FY1→FY2 consensus
     in_sp500: bool
     in_nasdaq100: bool
+    country: str | None = None  # ISO-2 listing market (US / CA)
+    currency: str | None = None  # ISO-3 trading currency (USD / CAD)
 
 
 class StockSearchResponse(BaseModel):

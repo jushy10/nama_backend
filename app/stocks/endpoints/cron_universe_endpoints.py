@@ -14,12 +14,14 @@ handling (see it for the full rationale and the per-process-guard caveat). A par
 safe: the screen upsert and each enrichment write commit independently, and the enrichment is
 fill-once, so an interrupted run just resumes on the next trigger.
 
-Wiring lives here, the composition-root way: ``run_universe_sync`` opens a fresh session and
-builds the live yfinance screener + classification adapters, the universe SQL repository, and
-the quarterly-earnings cache repository (the DB-only TTM read the valuation pass pairs with the
-screen-time price to derive each stock's stored P/E) for the use case. Yahoo needs no API key,
-so there's no credential to gate on; the sync is always constructable. ``get_sync_runner`` is
-the DI seam tests override with a fake.
+Wiring lives here, the composition-root way: ``run_universe_sync`` opens a fresh session and,
+for each market in turn (US then Canada), builds the live yfinance screener + classification
+adapters, the universe SQL repository, and the quarterly-earnings cache repository (the DB-only
+TTM read the valuation pass pairs with the screen-time price to derive each stock's stored P/E)
+for the use case. The two passes are independent additive upserts onto the shared anchor, so a
+bad day for one market never touches the other's rows. Yahoo needs no API key, so there's no
+credential to gate on; the sync is always constructable. ``get_sync_runner`` is the DI seam
+tests override with a fake.
 
 Security: the trigger is guarded by a shared bearer token. The endpoint depends on
 ``require_cron_token`` (see ``cron_auth``), which requires ``Authorization: Bearer
@@ -56,38 +58,82 @@ router = APIRouter(tags=["universe-cron"])
 _sync_lock = threading.Lock()
 
 
+# The markets screened each run, in order. US first (the large pass), then Canada (TSX/TSXV).
+# Each pass is an independent additive upsert onto the shared anchor, so a bad day for one
+# market never touches the other's stored rows.
+_REGIONS = ("us", "ca")
+
+
+def _run_universe_pass(db, *, region: str, limit: int) -> UniverseSyncReport:
+    """Run one market's screen+enrich+value pass over the shared session, logging its outcome."""
+    report = SyncUniverse(
+        YfinanceScreenerProvider(),
+        SqlUniverseRepository(db),
+        YfinanceClassificationProvider(),
+        SqlQuarterlyEarningsRepository(db),
+        region=region,
+    ).execute(limit=limit)
+    if report.skipped:
+        logger.warning(
+            "universe sync (%s) skipped: screen came back too small (screened=%d) — "
+            "nothing written (Yahoo blocked?)",
+            region,
+            report.screened,
+        )
+    else:
+        logger.info(
+            "universe sync (%s) done: screened=%d added=%d updated=%d enriched=%d "
+            "enrich_failed=%d valued=%d limit=%d",
+            region,
+            report.screened,
+            report.added,
+            report.updated,
+            report.enriched,
+            report.enrich_failed,
+            report.valued,
+            limit,
+        )
+    return report
+
+
 def run_universe_sync(limit: int) -> UniverseSyncReport:
-    """Perform one full sync run (screen + enrich) with its **own** DB session (the request-
-    scoped ``get_db`` one is closed by the time the background thread runs)."""
+    """Perform one full sync run — the US screen then the Canadian screen — with its **own** DB
+    session (the request-scoped ``get_db`` one is closed by the time the background thread runs).
+
+    The two passes are independent: a hard failure or degraded (skipped) screen in one market
+    doesn't stop the other, and each commits its own writes. Returns a single report aggregating
+    both passes (counts summed; ``skipped`` true only when *every* pass was skipped) so the
+    fire-and-forget caller has one summary to log."""
     db = SessionLocal()
     try:
-        report = SyncUniverse(
-            YfinanceScreenerProvider(),
-            SqlUniverseRepository(db),
-            YfinanceClassificationProvider(),
-            SqlQuarterlyEarningsRepository(db),
-        ).execute(limit=limit)
-        if report.skipped:
-            logger.warning(
-                "universe sync skipped: screen came back too small (screened=%d) — "
-                "nothing written (Yahoo blocked?)",
-                report.screened,
-            )
-        else:
-            logger.info(
-                "universe sync done: screened=%d added=%d updated=%d enriched=%d "
-                "enrich_failed=%d valued=%d limit=%d",
-                report.screened,
-                report.added,
-                report.updated,
-                report.enriched,
-                report.enrich_failed,
-                report.valued,
-                limit,
-            )
-        return report
+        reports = []
+        for region in _REGIONS:
+            try:
+                reports.append(_run_universe_pass(db, region=region, limit=limit))
+            except Exception:  # noqa: BLE001 — one market's failure must not sink the other
+                logger.exception("universe sync (%s) failed", region)
+        return _merge_reports(reports)
     finally:
         db.close()
+
+
+def _merge_reports(reports: list[UniverseSyncReport]) -> UniverseSyncReport:
+    """Sum the per-market counts into one report. ``skipped`` is true only when every pass was
+    skipped (or none ran) — a mixed run (US written, CA skipped) is not a skip."""
+    if not reports:
+        return UniverseSyncReport(
+            screened=0, added=0, updated=0, skipped=True,
+            enriched=0, enrich_failed=0, valued=0,
+        )
+    return UniverseSyncReport(
+        screened=sum(r.screened for r in reports),
+        added=sum(r.added for r in reports),
+        updated=sum(r.updated for r in reports),
+        skipped=all(r.skipped for r in reports),
+        enriched=sum(r.enriched for r in reports),
+        enrich_failed=sum(r.enrich_failed for r in reports),
+        valued=sum(r.valued for r in reports),
+    )
 
 
 def get_sync_runner() -> SyncRunner:

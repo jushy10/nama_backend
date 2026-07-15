@@ -51,13 +51,24 @@ def repo(session, *, now=_NOW) -> SqlUniverseRepository:
     return SqlUniverseRepository(session, now=lambda: now)
 
 
-def _stock(ticker, *, name=None, exchange=None, market_cap=1e10, sector=None):
+def _stock(
+    ticker,
+    *,
+    name=None,
+    exchange=None,
+    market_cap=1e10,
+    sector=None,
+    country=None,
+    currency=None,
+):
     return ScreenedStock(
         ticker=ticker,
         name=name,
         exchange=exchange,
         market_cap=market_cap,
         sector=sector,
+        country=country,
+        currency=currency,
     )
 
 
@@ -103,6 +114,27 @@ def test_upsert_inserts_new_members_fills_the_anchor_and_stamps(session):
     assert aapl.screened_at.replace(tzinfo=timezone.utc) == _NOW
     xom = _row(session, "XOM")
     assert (xom.name, xom.exchange, xom.sector) == ("Exxon Mobil", None, None)
+
+
+def test_upsert_writes_country_and_currency(session):
+    # A Canadian screen row lands its market facts onto the anchor, whole CAD market cap.
+    repo(session).upsert_screen(
+        (
+            _stock("SHOP.TO", name="Shopify", market_cap=1.2e11, country="CA", currency="CAD"),
+        )
+    )
+    row = _row(session, "SHOP.TO")
+    assert (row.country, row.currency, row.market_cap) == ("CA", "CAD", 1.2e11)
+
+
+def test_upsert_fills_country_currency_once_then_never_clobbers(session):
+    # country/currency are fill-once market facts like the exchange: a later screen that came
+    # back without them (or with a different value) never overwrites the settled ones.
+    r = repo(session)
+    r.upsert_screen((_stock("SHOP.TO", market_cap=1.2e11, country="CA", currency="CAD"),))
+    r.upsert_screen((_stock("SHOP.TO", market_cap=1.3e11),))  # no market facts this run
+    row = _row(session, "SHOP.TO")
+    assert (row.country, row.currency, row.market_cap) == ("CA", "CAD", 1.3e11)
 
 
 def test_upsert_refreshes_market_cap_in_place(session):
@@ -401,6 +433,8 @@ def _seed(
     forward_eps_growth_yoy=None,
     in_sp500=False,
     in_nasdaq100=False,
+    country=None,
+    currency=None,
 ):
     """Insert a ``stocks`` anchor row directly — the search reads whatever the sync/annual
     slices would have written (a ``market_cap`` marks the row as screened; ``None`` leaves it an
@@ -423,6 +457,8 @@ def _seed(
             forward_eps_growth_yoy=forward_eps_growth_yoy,
             in_sp500=in_sp500,
             in_nasdaq100=in_nasdaq100,
+            country=country,
+            currency=currency,
         )
     )
     session.commit()
@@ -523,6 +559,28 @@ def test_search_filters_by_index_membership(session):
     assert _tickers(r.search(_criteria(in_sp500=False, in_nasdaq100=False))) == ["SMCI"]
     # A tri-state None doesn't filter — everyone is returned.
     assert len(r.search(_criteria()).results) == 4
+
+
+def test_search_filters_by_country(session):
+    _seed(session, "AAPL", country="US", currency="USD")
+    _seed(session, "XOM", country="US", currency="USD")
+    _seed(session, "SHOP.TO", country="CA", currency="CAD")
+    _seed(session, "RY.TO", country="CA", currency="CAD")
+    r = SqlStockSearchRepository(session)
+
+    assert set(_tickers(r.search(_criteria(countries=("CA",))))) == {"SHOP.TO", "RY.TO"}
+    assert set(_tickers(r.search(_criteria(countries=("US",))))) == {"AAPL", "XOM"}
+    # A union of markets returns both; an empty tuple doesn't filter (every market).
+    assert len(r.search(_criteria(countries=("US", "CA"))).results) == 4
+    assert len(r.search(_criteria()).results) == 4
+
+
+def test_search_maps_country_and_currency_onto_the_result(session):
+    _seed(session, "SHOP.TO", name="Shopify", country="CA", currency="CAD", market_cap=1.2e11)
+    r = SqlStockSearchRepository(session)
+
+    (row,) = r.search(_criteria(countries=("CA",))).results
+    assert (row.country, row.currency, row.market_cap) == ("CA", "CAD", 1.2e11)
 
 
 def test_search_filters_by_market_cap_tier(session):
@@ -801,6 +859,8 @@ def test_search_maps_every_row_field(session):
         forward_eps_growth_yoy=48.3,
         in_sp500=True,
         in_nasdaq100=True,
+        country="US",
+        currency="USD",
     )
     (result,) = SqlStockSearchRepository(session).search(_criteria()).results
 
@@ -816,6 +876,7 @@ def test_search_maps_every_row_field(session):
     assert (result.revenue_growth_yoy, result.eps_growth_yoy) == (61.6, 587.4)
     assert (result.forward_revenue_growth_yoy, result.forward_eps_growth_yoy) == (52.1, 48.3)
     assert (result.in_sp500, result.in_nasdaq100) == (True, True)
+    assert (result.country, result.currency) == ("US", "USD")
 
 
 def test_classifications_are_distinct_sorted_and_null_free(session):
