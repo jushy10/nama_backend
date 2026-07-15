@@ -68,5 +68,11 @@ class SqlFundamentalsRepository(FundamentalsRepository):
         stock.book_value_per_share = fundamentals.book_value_per_share
         stock.sales_per_share = fundamentals.sales_per_share
         stock.dividend_per_share = fundamentals.dividend_per_share
+        # Enterprise-value inputs (the card prices them live); the materialized ev_to_ebitda
+        # snapshot is the universe valuation pass's job, not written here.
+        stock.ebitda = fundamentals.ebitda
+        stock.total_debt = fundamentals.total_debt
+        stock.cash_and_equivalents = fundamentals.cash_and_equivalents
+        stock.shares_outstanding = fundamentals.shares_outstanding
         stock.fundamentals_synced_at = self._now()
         self._session.commit()

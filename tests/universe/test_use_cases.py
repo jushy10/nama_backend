@@ -19,6 +19,7 @@ from app.stocks.universe.entities import (
     Classifications,
     CompanyClassification,
     MarketCapTier,
+    PeerCompany,
     ScreenedStock,
     ScreenIntent,
     SortDirection,
@@ -40,6 +41,7 @@ from app.stocks.universe.repository import (
 from app.stocks.universe.use_cases import (
     AiScreenStocks,
     GetIndustryValuation,
+    GetPeerComparison,
     ListClassifications,
     SearchStocks,
     SyncUniverse,
@@ -142,19 +144,28 @@ class _FakeRepo(UniverseRepository):
     """Records the upsert input and the classifications written; serves a canned work-list."""
 
     def __init__(
-        self, *, counts=UniverseSyncCounts(0, 0), missing=(), fcf_per_share=None
+        self,
+        *,
+        counts=UniverseSyncCounts(0, 0),
+        missing=(),
+        fcf_per_share=None,
+        ev_components=None,
     ) -> None:
         self._counts = counts
         self._missing = tuple(missing)
         # The stored {ticker: fcf_per_share} the valuation pass reads (annual slice's write).
         self._fcf_per_share = dict(fcf_per_share or {})
+        # The stored {ticker: (ebitda, total_debt, cash)} the valuation pass reads for EV/EBITDA
+        # (fundamentals slice's write).
+        self._ev_components = dict(ev_components or {})
         self.upserted: tuple[ScreenedStock, ...] | None = None
         self.classified: list[tuple[str, CompanyClassification]] = []
         self.missing_limit: int | None = None
-        # The {ticker: pe} / {ticker: fcf_yield} maps handed to the setters — None until the
-        # valuation pass runs.
+        # The {ticker: pe} / {ticker: fcf_yield} / {ticker: ev_ebitda} maps handed to the
+        # setters — None until the valuation pass runs.
         self.pe_written: dict[str, float | None] | None = None
         self.fcf_yield_written: dict[str, float | None] | None = None
+        self.ev_ebitda_written: dict[str, float | None] | None = None
 
     def upsert_screen(self, stocks):
         self.upserted = tuple(stocks)
@@ -177,6 +188,13 @@ class _FakeRepo(UniverseRepository):
     def set_fcf_yields(self, fcf_yield_by_ticker):
         self.fcf_yield_written = dict(fcf_yield_by_ticker)
         return sum(1 for y in self.fcf_yield_written.values() if y is not None)
+
+    def ev_components_by_ticker(self):
+        return dict(self._ev_components)
+
+    def set_ev_ebitda(self, ev_ebitda_by_ticker):
+        self.ev_ebitda_written = dict(ev_ebitda_by_ticker)
+        return sum(1 for v in self.ev_ebitda_written.values() if v is not None)
 
 
 def test_sync_upserts_a_healthy_screen_and_reports_counts():
@@ -395,6 +413,65 @@ def test_sync_materializes_fcf_yield_even_without_a_quarterly_cache():
     assert repo.fcf_yield_written["AAPL"] == 4.0  # but the FCF yield still materialized
 
 
+def test_sync_materializes_ev_ebitda_from_stored_components():
+    # Two priced names; the anchor carries EV components (ebitda/debt/cash) for AAPL (the
+    # fundamentals slice's write) but not MSFT. EV = market_cap + debt - cash, over EBITDA:
+    # AAPL = (3e12 + 2e11 - 1e11) / 5e11 = 3.1e12 / 5e11 = 6.2.
+    priced = (
+        _stock("AAPL", market_cap=3e12, price=100.0),
+        _stock("MSFT", market_cap=2e12, price=50.0),
+    )
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN) + priced
+    repo = _FakeRepo(ev_components={"AAPL": (5e11, 2e11, 1e11)})  # MSFT has none
+    quarterly = _FakeQuarterlyRepo()
+
+    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), quarterly).execute()
+
+    assert set(repo.ev_ebitda_written) == {"AAPL", "MSFT"}
+    assert repo.ev_ebitda_written["AAPL"] == 6.2  # (3e12 + 2e11 - 1e11) / 5e11
+    assert repo.ev_ebitda_written["MSFT"] is None  # no stored EV components -> null
+
+
+def test_sync_ev_ebitda_defaults_missing_debt_and_cash_to_zero():
+    # A name whose only stored component is EBITDA (debt/cash null): EV is just its market cap,
+    # so ev_ebitda = market_cap / ebitda = 1e12 / 5e11 = 2.0.
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN) + (
+        _stock("DEBTFREE", market_cap=1e12, price=100.0),
+    )
+    repo = _FakeRepo(ev_components={"DEBTFREE": (5e11, None, None)})
+
+    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier()).execute()
+
+    assert repo.ev_ebitda_written["DEBTFREE"] == 2.0
+
+
+def test_sync_materializes_a_negative_ev_ebitda_for_a_net_cash_name():
+    # Like the FCF yield, the materialized EV/EBITDA keeps its sign: a company worth less than
+    # its net cash has a negative enterprise value, a real "valued below net cash" reading.
+    # EV = 1e10 + 0 - 5e10 = -4e10, over 1e9 EBITDA -> -40.0.
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN) + (
+        _stock("CASHPILE", market_cap=1e10, price=25.0),
+    )
+    repo = _FakeRepo(ev_components={"CASHPILE": (1e9, 0.0, 5e10)})
+
+    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier()).execute()
+
+    assert repo.ev_ebitda_written["CASHPILE"] == -40.0  # sign kept
+
+
+def test_sync_ev_ebitda_is_null_without_a_positive_ebitda():
+    # EV/EBITDA off a non-positive EBITDA is meaningless (the same guard as the card) -> null,
+    # even though the market cap and the other components are present.
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN) + (
+        _stock("LOSS", market_cap=1e10, price=25.0),
+    )
+    repo = _FakeRepo(ev_components={"LOSS": (0.0, 1e9, 0.0)})
+
+    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier()).execute()
+
+    assert repo.ev_ebitda_written["LOSS"] is None
+
+
 # --- SearchStocks / ListClassifications (the read side) ------------------------------------
 
 _RESULT = StockSearchResult(
@@ -405,6 +482,7 @@ _RESULT = StockSearchResult(
     market_cap=3e12,
     pe_ratio=48.2,
     fcf_yield=1.9,
+    ev_ebitda=42.5,
     revenue_growth_yoy=61.6,
     eps_growth_yoy=587.4,
     fcf_growth_yoy=60.8,
@@ -420,16 +498,24 @@ class _FakeSearchRepo(StockSearchRepository):
     per-industry P/E list."""
 
     def __init__(
-        self, *, page=None, classifications=None, pe_ratios=(), industry=None
+        self,
+        *,
+        page=None,
+        classifications=None,
+        pe_ratios=(),
+        industry=None,
+        peers=(),
     ) -> None:
         self._page = page or StockSearchPage(results=(), total=0, limit=0, offset=0)
         self._classifications = classifications or Classifications((), ())
         self._pe_ratios = pe_ratios
         self._industry = industry
+        self._peers = tuple(peers)
         self.criteria: StockSearchCriteria | None = None
         self.classifications_calls = 0
         self.industry_asked: str | None = None
         self.ticker_asked: str | None = None
+        self.peers_industry_asked: str | None = None
 
     def search(self, criteria):
         self.criteria = criteria
@@ -455,6 +541,10 @@ class _FakeSearchRepo(StockSearchRepository):
 
     def industry_peers(self, industry):  # pragma: no cover - the endpoint path is industry-wide
         raise NotImplementedError
+
+    def peers_for_industry(self, industry):
+        self.peers_industry_asked = industry
+        return self._peers
 
 
 def test_search_normalizes_inputs_and_passes_clean_criteria():
@@ -601,6 +691,59 @@ def test_industry_valuation_empty_when_no_peers():
 def test_industry_valuation_rejects_a_blank_industry():
     with pytest.raises(ValueError):
         GetIndustryValuation(_FakeSearchRepo()).execute("   ")
+
+
+# --- GetPeerComparison (the side-by-side peer table) --------------------------------------
+
+
+def _peer(ticker, tier, *, cap=1e12, pe=None):
+    return PeerCompany(
+        ticker=ticker,
+        name=f"{ticker} Inc.",
+        market_cap=cap,
+        pe_ratio=pe,
+        ev_ebitda=None,
+        fcf_yield=None,
+        net_margin=None,
+        revenue_growth_yoy=None,
+        tier=tier,
+    )
+
+
+def test_peer_comparison_resolves_the_industry_then_builds_the_cohort():
+    # The use case reads the anchor's industry, then its industry peers, and hands them to
+    # PeerComparison.build — which splits the anchor out and scopes the cohort to its tier.
+    peers = (
+        _peer("NVDA", MarketCapTier.MEGA, pe=50.0),  # the anchor, in its own industry
+        *[_peer(f"M{i}", MarketCapTier.MEGA, pe=20.0 + i) for i in range(4)],
+    )
+    repo = _FakeSearchRepo(industry="semiconductors", peers=peers)
+
+    result = GetPeerComparison(repo).execute("  nvda ")  # normalized to NVDA
+
+    assert repo.ticker_asked == "NVDA"  # industry looked up by the normalized symbol
+    assert repo.peers_industry_asked == "semiconductors"
+    assert result.industry == "semiconductors"
+    assert result.anchor is not None and result.anchor.ticker == "NVDA"
+    assert {p.ticker for p in result.peers} == {"M0", "M1", "M2", "M3"}
+
+
+def test_peer_comparison_is_empty_for_an_unclassified_stock():
+    # No stored industry -> nothing to compare against -> an empty comparison (a 200), and the
+    # peers read is never made.
+    repo = _FakeSearchRepo(industry=None)
+
+    result = GetPeerComparison(repo).execute("XYZ")
+
+    assert result.industry is None
+    assert result.anchor is None
+    assert result.peers == ()
+    assert repo.peers_industry_asked is None  # short-circuited before the peers read
+
+
+def test_peer_comparison_rejects_a_blank_ticker():
+    with pytest.raises(ValueError):
+        GetPeerComparison(_FakeSearchRepo()).execute("   ")
 
 
 # --- AiScreenStocks (the AI-driven screen) ------------------------------------------------

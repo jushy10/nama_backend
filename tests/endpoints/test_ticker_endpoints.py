@@ -33,6 +33,9 @@ from app.stocks.universe.entities import (
     Classifications,
     IndustryValuation,
     MarketCapTier,
+    PeerCompany,
+    PeerComparison,
+    PeerMedians,
     ScreenIntent,
     SortDirection,
     StockSearchPage,
@@ -94,6 +97,12 @@ def _a_card(
                 book_value_per_share=65.0,
                 sales_per_share=45.0,
                 eps_growth_yoy=587.4,
+                # EV inputs off the anchor, priced live: enterprise_value = 975.56 * 1e9 +
+                # 13e9 - 5e9 = 983_560_000_000; ev_ebitda = 983.56e9 / 40e9 -> 24.59.
+                shares_outstanding=1_000_000_000.0,
+                total_debt=13_000_000_000.0,
+                cash_and_equivalents=5_000_000_000.0,
+                ebitda=40_000_000_000.0,
             )
             if "metrics" in include
             else None
@@ -213,6 +222,8 @@ def test_presents_the_optin_blocks_when_included():
         "eps": 43.55,  # the TTM EPS the P/E divides by
         "forward_pe": 18.0,
         "forward_ps": 8.0,
+        "enterprise_value": 983_560_000_000.0,  # 975.56 * 1e9 + 13e9 - 5e9, raw USD
+        "ev_ebitda": 24.59,  # 983.56e9 / 40e9
         "price_to_fcf": 20.03,  # 975.56 / 48.7
         "fcf_yield": 4.99,  # 48.7 / 975.56 * 100
         "ocf_yield": 6.15,  # 60 / 975.56 * 100
@@ -289,6 +300,8 @@ def test_blocks_requested_but_anchor_unsynced_degrade_to_nulls():
         "eps": 43.55,
         "forward_pe": None,
         "forward_ps": None,
+        "enterprise_value": None,  # no shares_outstanding on the unsynced anchor
+        "ev_ebitda": None,
         "price_to_fcf": None,
         "fcf_yield": None,
         "ocf_yield": None,
@@ -472,6 +485,7 @@ def _a_page() -> StockSearchPage:
                 market_cap=3e12,
                 pe_ratio=48.2,
                 fcf_yield=1.9,
+                ev_ebitda=27.4,
                 revenue_growth_yoy=61.6,
                 eps_growth_yoy=587.4,
                 fcf_growth_yoy=60.8,
@@ -502,6 +516,7 @@ def test_search_returns_the_expected_json_shape():
         "market_cap": 3e12,
         "pe_ratio": 48.2,
         "fcf_yield": 1.9,
+        "ev_ebitda": 27.4,
         "revenue_growth_yoy": 61.6,
         "eps_growth_yoy": 587.4,
         "fcf_growth_yoy": 60.8,
@@ -822,4 +837,116 @@ def test_ai_search_translation_failure_is_a_502():
 def test_ai_search_sets_a_short_cache_header():
     fake = _FakeAiScreen(result=ScreenIntent())
     resp = _ai_client(fake).get("/stocks/ai-search", params={"q": "tech"})
+    assert resp.headers["cache-control"] == "public, max-age=60"
+
+
+# --- GET /stocks/ticker/{ticker}/peers (the peer comparison) -------------------------------
+
+
+class _FakePeerComparison:
+    """Stands in for GetPeerComparison; records the ticker, returns a canned comparison
+    (or raises)."""
+
+    def __init__(self, *, result=None, error=None) -> None:
+        self._result = result
+        self._error = error
+        self.ticker: str | None = None
+
+    def execute(self, ticker):
+        self.ticker = ticker
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def _peers_client(fake: _FakePeerComparison) -> TestClient:
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    app.dependency_overrides[endpoints.get_peer_comparison_use_case] = lambda: fake
+    return TestClient(app)
+
+
+def _a_peer(ticker, **overrides):
+    base = dict(
+        name=f"{ticker} Inc.",
+        market_cap=1e12,
+        pe_ratio=None,
+        ev_ebitda=None,
+        fcf_yield=None,
+        net_margin=None,
+        revenue_growth_yoy=None,
+        tier=MarketCapTier.MEGA,
+        is_anchor=False,
+    )
+    base.update(overrides)
+    return PeerCompany(ticker=ticker, **base)
+
+
+def test_peers_returns_the_expected_json_shape():
+    comparison = PeerComparison(
+        ticker="NVDA",
+        industry="semiconductors",
+        cohort="mega",
+        anchor=_a_peer("NVDA", market_cap=3e12, pe_ratio=46.5, ev_ebitda=40.0, net_margin=55.123, is_anchor=True),
+        peers=(
+            _a_peer("AMD", market_cap=2e11, pe_ratio=30.0, ev_ebitda=25.0),
+            _a_peer("AVGO", market_cap=6e11, pe_ratio=35.0, ev_ebitda=28.0),
+        ),
+        medians=PeerMedians(
+            pe_ratio=35.0, ev_ebitda=28.0, fcf_yield=None, net_margin=40.0, revenue_growth_yoy=None
+        ),
+    )
+    fake = _FakePeerComparison(result=comparison)
+
+    resp = _peers_client(fake).get("/stocks/ticker/nvda/peers")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert (body["ticker"], body["industry"], body["cohort"], body["count"]) == (
+        "NVDA", "semiconductors", "mega", 2,
+    )
+    assert body["anchor"]["ticker"] == "NVDA" and body["anchor"]["is_anchor"] is True
+    assert body["anchor"]["net_margin"] == 55.12  # rounded at the presenter
+    assert [p["ticker"] for p in body["peers"]] == ["AMD", "AVGO"]
+    assert body["medians"] == {
+        "pe_ratio": 35.0,
+        "ev_ebitda": 28.0,
+        "fcf_yield": None,
+        "net_margin": 40.0,
+        "revenue_growth_yoy": None,
+    }
+
+
+def test_peers_empty_comparison_is_a_200_not_a_404():
+    # An unclassified stock: null industry, null anchor, no peers — a 200, never a 404.
+    comparison = PeerComparison(
+        ticker="XYZ",
+        industry=None,
+        cohort="industry",
+        anchor=None,
+        peers=(),
+        medians=PeerMedians(None, None, None, None, None),
+    )
+    resp = _peers_client(_FakePeerComparison(result=comparison)).get("/stocks/ticker/XYZ/peers")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["industry"] is None
+    assert body["anchor"] is None
+    assert body["peers"] == []
+    assert body["count"] == 0
+
+
+def test_peers_malformed_ticker_is_a_400():
+    fake = _FakePeerComparison(error=ValueError("A ticker is required."))
+    resp = _peers_client(fake).get("/stocks/ticker/%20/peers")
+    assert resp.status_code == 400
+
+
+def test_peers_sets_a_short_cache_header():
+    comparison = PeerComparison(
+        ticker="NVDA", industry="semiconductors", cohort="mega", anchor=None, peers=(),
+        medians=PeerMedians(None, None, None, None, None),
+    )
+    resp = _peers_client(_FakePeerComparison(result=comparison)).get("/stocks/ticker/NVDA/peers")
     assert resp.headers["cache-control"] == "public, max-age=60"

@@ -45,6 +45,7 @@ def _result(
         market_cap=cap,
         pe_ratio=None,
         fcf_yield=None,
+        ev_ebitda=None,
         revenue_growth_yoy=None,
         eps_growth_yoy=None,
         fcf_growth_yoy=None,
@@ -108,6 +109,9 @@ class FakeSearchRepo(StockSearchRepository):
         raise NotImplementedError
 
     def industry_peers(self, industry):  # pragma: no cover - unused
+        raise NotImplementedError
+
+    def peers_for_industry(self, industry):  # pragma: no cover - unused
         raise NotImplementedError
 
 

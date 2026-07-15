@@ -15,6 +15,12 @@ Two kinds of figure sit together here, split by *clock*:
   get P/B, P/S and the dividend yield, the same "store the input, price it live" split
   ``fcf_per_share`` and the quarterly TTM EPS use — so those price-derived ratios stay fresh
   without storing a stale snapshot.
+- **Enterprise-value *inputs*** — ``ebitda`` / ``total_debt`` / ``cash_and_equivalents``
+  (absolute, trading currency) and ``shares_outstanding`` (a share count, currency-agnostic).
+  The reader forms enterprise value (live price × shares + debt − cash) and EV/EBITDA off the
+  live quote — the same "store the input, price it live" split, so the multiple tracks the
+  price rather than freezing at fetch time. The three currency figures are absolute (not
+  per-share) but ride the same reporting→trading normalization; the share count doesn't.
 
 Every field is optional: Yahoo covers tickers unevenly and this is best-effort enrichment, so
 any unknown value is left ``None``.
@@ -33,8 +39,10 @@ from dataclasses import dataclass, fields
 @dataclass(frozen=True)
 class Fundamentals:
     """A stock's trailing fundamentals snapshot — what the fundamentals sweep lands on the
-    anchor. Margins / ROE are percent; ``debt_to_equity`` a ratio; the per-share figures are in
-    the stock's trading currency; ``name`` is the clean display name for the anchor."""
+    anchor. Margins / ROE are percent; ``debt_to_equity`` a ratio; the per-share figures and the
+    enterprise-value inputs (``ebitda`` / ``total_debt`` / ``cash_and_equivalents``) are in the
+    stock's trading currency; ``shares_outstanding`` is a share count; ``name`` is the clean
+    display name for the anchor."""
 
     gross_margin: float | None = None
     operating_margin: float | None = None
@@ -46,6 +54,10 @@ class Fundamentals:
     book_value_per_share: float | None = None
     sales_per_share: float | None = None
     dividend_per_share: float | None = None
+    ebitda: float | None = None
+    total_debt: float | None = None
+    cash_and_equivalents: float | None = None
+    shares_outstanding: float | None = None
     name: str | None = None
 
     @property

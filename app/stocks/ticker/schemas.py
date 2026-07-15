@@ -48,7 +48,11 @@ class TickerMetricsResponse(BaseModel):
     ``null`` unless growth is positive). ``eps`` is the trailing TTM EPS (consensus basis) the
     ``pe`` divides by. ``forward_pe`` / ``forward_ps`` are the *forward* multiples — live price
     (or market cap) over the FY1 consensus EPS / revenue the annual slice stores — ``null``
-    for an uncovered symbol.
+    for an uncovered symbol. ``enterprise_value`` is the whole-business value net of cash at the
+    live price (price × shares + total debt − cash, raw USD), and ``ev_ebitda`` is it over
+    trailing EBITDA — the capital-structure-neutral multiple that compares across companies with
+    different leverage (``null`` on a non-positive EBITDA, the same guard ``pe`` uses on a loss).
+    Both ``null`` until the fundamentals sync has landed the EV inputs.
 
     **Cash flow.** ``price_to_fcf`` / ``fcf_yield`` / ``ocf_yield`` are live price over the
     annual-earnings slice's stored trailing free- (and operating-) cash-flow per share.
@@ -76,6 +80,8 @@ class TickerMetricsResponse(BaseModel):
     eps: float | None = None  # trailing TTM EPS (consensus basis), the pe denominator
     forward_pe: float | None = None  # forward: price / FY1 consensus EPS
     forward_ps: float | None = None  # forward: market cap / FY1 consensus revenue
+    enterprise_value: float | None = None  # live: price * shares + debt - cash (raw USD)
+    ev_ebitda: float | None = None  # live: enterprise value / trailing EBITDA (null if EBITDA <= 0)
     # Cash flow
     price_to_fcf: float | None = None  # trailing: price / FCF per share (null if FCF <= 0)
     fcf_yield: float | None = None  # percent: FCF per share / price (signed)

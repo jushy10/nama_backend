@@ -42,7 +42,10 @@ class StoredTickerFacts(NamedTuple):
     card serves directly; ``book_value_per_share`` / ``sales_per_share`` /
     ``dividend_per_share`` (trading currency) are the per-share inputs it prices against
     its live quote (book value → P/B, sales → P/S, dividend → yield), replacing the live
-    Finnhub fundamentals call it used to make."""
+    Finnhub fundamentals call it used to make. ``ebitda`` / ``total_debt`` /
+    ``cash_and_equivalents`` (absolute, trading currency) and ``shares_outstanding`` (a share
+    count) are the enterprise-value inputs the card prices against its live quote (price ×
+    shares + debt − cash → enterprise value, ÷ EBITDA → EV/EBITDA)."""
 
     name: str | None = None
     exchange: str | None = None
@@ -66,6 +69,10 @@ class StoredTickerFacts(NamedTuple):
     book_value_per_share: float | None = None
     sales_per_share: float | None = None
     dividend_per_share: float | None = None
+    ebitda: float | None = None
+    total_debt: float | None = None
+    cash_and_equivalents: float | None = None
+    shares_outstanding: float | None = None
 
 
 class TickerRepository(ABC):
