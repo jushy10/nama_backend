@@ -683,12 +683,12 @@ app/
     │   └── bedrock/        #    the six Claude-on-Bedrock AI analysers as <concern>_adapter.py
     │                       #    (analysis / etf_analysis / earnings_analysis / ratings_analysis / sector_analysis / market_summary)
     │                       #    + screener_query_adapter (translates a plain-English screen request into ScreenIntent filters — the AI screener, not an analyser)
-    ├── charts/             # ── charts sub-slice (candles + EMA + support levels + trend; no table/cron):
-    │   ├── indicators.py        #    pure domain calc (EMA, support levels, trend = short/long EMA-slope read) — imports only kernel entities
+    ├── charts/             # ── charts sub-slice (candles + EMA + support levels + trend + the technical-indicator bundle; no table/cron):
+    │   ├── indicators.py        #    pure domain calc — imports only kernel entities. EMA, support levels, trend (short/long EMA-slope read), AND the indicator bundle (RSI/MACD/Bollinger/ATR/Stochastic/ADX/OBV/VWAP/Williams %R/CCI/ROC/MFI/SMA/EMA): one pure compute_* fn per indicator returning tail-aligned values, plus build_indicator/build_indicators (candles→Indicator), the INDICATOR_NAMES catalogue, IndicatorSpec, and indicator_warmup_bars
     │   ├── chart_window.py      #    edge helper: range preset → time window
-    │   ├── ports.py             #    CandleProvider (implemented by the Alpaca adapter)
-    │   ├── use_cases.py         #    GetStockCandles + GetStockEma (warmup+trim) + GetStockSupportLevels + GetStockTrend (warmup, no trim)
-    │   └── schemas.py           #    Candle/EMA/SupportLevel/Trend DTOs (endpoints in endpoints/chart_endpoints.py)
+    │   ├── ports.py             #    CandleProvider (implemented by the Alpaca adapter — every indicator reads the same OHLCV bars, so no new port/source)
+    │   ├── use_cases.py         #    GetStockCandles + GetStockEma (warmup+trim) + GetStockSupportLevels + GetStockTrend (warmup, no trim) + GetStockIndicators (one warmup fetch sized to the deepest requested indicator, build the set, trim to the window)
+    │   └── schemas.py           #    Candle/EMA/SupportLevel/Trend/Indicators DTOs (endpoints in endpoints/chart_endpoints.py)
     ├── market/             # ── market-board sub-slice (the non-AI whole-market reads; no table/cron):
     │   ├── entities.py          #    SectorPerformance + MarketIndexPerformance (proxy-ETF boards)
     │   ├── ports.py             #    SectorPerformanceProvider + MarketOverviewProvider (Alpaca-implemented)
@@ -820,7 +820,7 @@ app/
     │   ├── annual_earnings_endpoints.py          #  GET /stocks/{symbol}/earnings/annual
     │   ├── cron_recommendations_endpoints.py     #  POST /internal/recommendations/sync
     │   ├── analyst_endpoints.py                  #  GET /stocks/ticker/{ticker}/analyst-info (trends + price targets + rating-change events + top credible firms, consolidated); the AI review GET .../analyst-info/analysis lives in analysis_endpoints.py
-    │   ├── chart_endpoints.py                    #  GET /stocks/ticker/{ticker}/candles + .../ema + .../support-levels + .../trend (short/long-horizon direction + combined reading)
+    │   ├── chart_endpoints.py                    #  GET /stocks/ticker/{ticker}/candles + .../ema + .../support-levels + .../trend (short/long-horizon direction + combined reading) + .../indicators (the unified technical-indicator bundle: ?indicator=rsi,macd,bbands,… comma-separated with optional :period, one fetch computes the whole set; each result is overlay-or-pane + named lines)
     │   ├── market_endpoints.py                   #  GET /sectors (the ranked sector board)
     │   ├── yields_endpoints.py                   #  GET /market/yield-curve (par-yield snapshot) + /market/yield-history (2Y/10Y series); live keyless, no table/cron
     │   ├── sentiment_endpoints.py                #  GET /market/sentiment (VIX from FRED + CNN Fear & Greed, one payload; each leg best-effort); live keyless, no table/cron

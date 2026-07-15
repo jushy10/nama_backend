@@ -129,3 +129,48 @@ class TrendResponse(BaseModel):
     reading: str
     short_term: HorizonTrendResponse | None = None
     long_term: HorizonTrendResponse | None = None
+
+
+class IndicatorPointResponse(BaseModel):
+    """One indicator reading. `time` is UNIX epoch seconds (UTC) for charting libs;
+    `timestamp` is the same instant in ISO 8601."""
+
+    time: int
+    timestamp: datetime
+    value: float
+
+
+class IndicatorLineResponse(BaseModel):
+    """One named series within an indicator (e.g. MACD's `signal`, Bollinger's
+    `upper`). `latest` is the final value; `points` is empty (and `latest` null)
+    when there wasn't enough history to compute the line."""
+
+    key: str
+    count: int
+    latest: float | None = None
+    points: list[IndicatorPointResponse]
+
+
+class IndicatorResponse(BaseModel):
+    """One computed indicator: its name, a display `label` carrying the resolved
+    parameters (e.g. "RSI (14)"), whether it's a price-axis `overlay` (draw on the
+    candles) or a separate pane, and its line(s)."""
+
+    name: str
+    label: str
+    overlay: bool
+    lines: list[IndicatorLineResponse]
+
+
+class IndicatorsResponse(BaseModel):
+    """The technical indicators computed for a symbol, in the order requested.
+
+    Each entry is one indicator (RSI, MACD, Bollinger, …) with one or more lines on
+    a shared `time`/`value` shape, so a client renders overlays on the price axis and
+    oscillators in their own pane. Computed from the same OHLCV bars the candle
+    endpoint serves."""
+
+    symbol: str
+    timeframe: str
+    count: int
+    indicators: list[IndicatorResponse]

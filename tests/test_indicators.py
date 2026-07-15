@@ -12,15 +12,32 @@ import pytest
 
 from app.stocks.entities import Candle, CandleSeries, Timeframe
 from app.stocks.charts.indicators import (
+    IndicatorSpec,
     SupportStrength,
     TrendDirection,
     TrendReading,
     assess_trend,
+    build_indicator,
+    build_indicators,
+    compute_adx,
+    compute_atr,
+    compute_bollinger,
+    compute_cci,
     compute_ema,
+    compute_macd,
+    compute_mfi,
+    compute_obv,
+    compute_roc,
+    compute_rsi,
+    compute_sma,
+    compute_stochastic,
     compute_support_levels,
+    compute_vwap,
+    compute_williams_r,
     ema_line,
     ema_series,
     horizon_trend,
+    indicator_warmup_bars,
     support_levels,
 )
 
@@ -434,3 +451,282 @@ def test_assess_trend_empty_series_is_graceful():
 def test_assess_trend_rejects_bad_periods(kwargs):
     with pytest.raises(ValueError):
         assess_trend(_candles([1.0, 2.0, 3.0, 4.0, 5.0]), **kwargs)
+
+
+# =============================== Technical-indicator bundle ===============================
+
+
+def _ohlcv(bars: list[tuple], timeframe: Timeframe = Timeframe.DAY_1) -> CandleSeries:
+    """Build a candle series from (high, low, close[, volume]) tuples; the open is
+    set to the close (irrelevant to these indicators)."""
+    base = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    candles = tuple(
+        Candle(
+            timestamp=base + timedelta(days=i),
+            open=bar[2],
+            high=bar[0],
+            low=bar[1],
+            close=bar[2],
+            volume=(bar[3] if len(bar) > 3 else 1000),
+        )
+        for i, bar in enumerate(bars)
+    )
+    return CandleSeries(symbol="AAPL", timeframe=timeframe, candles=candles)
+
+
+# --------------------------- compute_sma ---------------------------
+
+
+def test_compute_sma_matches_hand_computation():
+    # windows of 2: (2+4)/2, (4+6)/2, (6+8)/2
+    assert compute_sma([2.0, 4.0, 6.0, 8.0], period=2) == [3.0, 5.0, 7.0]
+
+
+def test_compute_sma_empty_when_not_enough_history():
+    assert compute_sma([5.0], period=2) == []
+
+
+# --------------------------- compute_rsi ---------------------------
+
+
+def test_compute_rsi_all_gains_is_100():
+    # A strictly rising series has no losses -> RSI pinned at 100.
+    values = compute_rsi([float(x) for x in range(1, 20)], period=14)
+    assert values == [100.0] * len(values)
+    # First value lands `period` closes in -> n - period readings.
+    assert len(values) == 19 - 14
+
+
+def test_compute_rsi_all_losses_is_zero():
+    values = compute_rsi([float(x) for x in range(20, 1, -1)], period=14)
+    assert values == [0.0] * len(values)
+
+
+def test_compute_rsi_flat_series_is_neutral_50():
+    values = compute_rsi([50.0] * 20, period=14)
+    assert values == [50.0] * len(values)
+
+
+def test_compute_rsi_empty_when_not_enough_history():
+    assert compute_rsi([1.0, 2.0, 3.0], period=14) == []
+
+
+# --------------------------- compute_macd ---------------------------
+
+
+def test_compute_macd_rising_series_is_positive_and_aligned():
+    closes = [float(x) for x in range(1, 60)]
+    macd_line, signal_line, histogram = compute_macd(closes)  # 12/26/9
+    assert macd_line and signal_line and histogram
+    assert macd_line[-1] > 0  # fast EMA above slow on a climb
+    # histogram is macd - signal over the signal's tail, so they share a length.
+    assert len(histogram) == len(signal_line)
+
+
+def test_compute_macd_empty_when_history_too_short():
+    assert compute_macd([1.0, 2.0, 3.0]) == ([], [], [])
+
+
+def test_compute_macd_rejects_fast_not_shorter_than_slow():
+    with pytest.raises(ValueError):
+        compute_macd([1.0, 2.0, 3.0], fast=26, slow=12)
+
+
+# --------------------------- compute_bollinger ---------------------------
+
+
+def test_compute_bollinger_flat_series_collapses_the_bands():
+    upper, middle, lower = compute_bollinger([5.0] * 5, period=3)
+    assert middle == [5.0, 5.0, 5.0]
+    assert upper == middle == lower  # zero deviation -> bands sit on the mean
+
+
+def test_compute_bollinger_orders_bands_and_centres_on_the_sma():
+    closes = [1.0, 2.0, 3.0, 4.0, 5.0]
+    upper, middle, lower = compute_bollinger(closes, period=3, num_std=2)
+    assert middle == compute_sma(closes, 3)  # centre line is the SMA
+    assert all(u > m > lo for u, m, lo in zip(upper, middle, lower))
+
+
+# --------------------------- compute_atr ---------------------------
+
+
+def test_compute_atr_matches_hand_computation():
+    highs = [10.0, 12.0, 11.0, 13.0]
+    lows = [8.0, 9.0, 9.0, 10.0]
+    closes = [9.0, 11.0, 10.0, 12.0]
+    # TR = [3, 2, 3]; seed = mean(3,2) = 2.5; next = (2.5*1 + 3)/2 = 2.75.
+    assert compute_atr(highs, lows, closes, period=2) == [2.5, 2.75]
+
+
+def test_compute_atr_empty_when_history_too_short():
+    assert compute_atr([1.0, 2.0], [1.0, 2.0], [1.0, 2.0], period=14) == []
+
+
+# --------------------------- compute_stochastic ---------------------------
+
+
+def test_compute_stochastic_close_at_range_top_reads_high():
+    # Close pinned to the high of a rising range -> %K near 100.
+    bars = [(float(h), float(h) - 5, float(h)) for h in range(10, 30)]
+    highs = [b[0] for b in bars]
+    lows = [b[1] for b in bars]
+    closes = [b[2] for b in bars]
+    k_line, d_line = compute_stochastic(highs, lows, closes, k_period=5)
+    assert k_line and d_line
+    assert k_line[-1] == 100.0  # last close is the period high
+    assert all(0.0 <= v <= 100.0 for v in k_line)
+
+
+# --------------------------- compute_adx ---------------------------
+
+
+def test_compute_adx_uptrend_has_plus_di_above_minus_di():
+    bars = [(float(h) + 1, float(h) - 1, float(h)) for h in range(10, 50)]
+    highs = [b[0] for b in bars]
+    lows = [b[1] for b in bars]
+    closes = [b[2] for b in bars]
+    adx, plus_di, minus_di = compute_adx(highs, lows, closes, period=14)
+    assert plus_di and minus_di and adx
+    assert plus_di[-1] > minus_di[-1]  # a clean climb: upward pressure dominates
+
+
+# --------------------------- compute_obv ---------------------------
+
+
+def test_compute_obv_matches_hand_computation():
+    closes = [10.0, 11.0, 10.0, 12.0]
+    volumes = [100, 200, 300, 400]
+    # 0, +200 (up), -300 (down), +400 (up)
+    assert compute_obv(closes, volumes) == [0.0, 200.0, -100.0, 300.0]
+
+
+def test_compute_obv_treats_missing_volume_as_zero():
+    assert compute_obv([10.0, 11.0], [None, None]) == [0.0, 0.0]
+
+
+# --------------------------- compute_vwap ---------------------------
+
+
+def test_compute_vwap_is_the_running_volume_weighted_average():
+    # Equal volumes -> cumulative mean of the typical prices (h=l=c here).
+    assert compute_vwap([10.0, 20.0], [10.0, 20.0], [10.0, 20.0], [10, 10]) == [10.0, 15.0]
+
+
+# --------------------------- compute_williams_r ---------------------------
+
+
+def test_compute_williams_r_close_at_low_is_minus_100():
+    # Close at the bottom of the range -> %R = -100.
+    values = compute_williams_r([10.0, 10.0], [5.0, 5.0], [7.0, 5.0], period=2)
+    assert values == [-100.0]
+
+
+# --------------------------- compute_cci ---------------------------
+
+
+def test_compute_cci_flat_series_is_zero():
+    flat = [5.0] * 5
+    assert compute_cci(flat, flat, flat, period=3) == [0.0, 0.0, 0.0]
+
+
+# --------------------------- compute_roc ---------------------------
+
+
+def test_compute_roc_matches_hand_computation():
+    # 100*(12-10)/10 = 20; 100*(13-11)/11 ~= 18.1818; 100*(14-12)/12 ~= 16.6667.
+    # compute_* return full precision; the 4dp rounding happens at the line boundary.
+    result = compute_roc([10.0, 11.0, 12.0, 13.0, 14.0], period=2)
+    assert result == pytest.approx([20.0, 100 * 2 / 11, 100 * 2 / 12])
+
+
+# --------------------------- compute_mfi ---------------------------
+
+
+def test_compute_mfi_all_positive_flow_is_100():
+    # Strictly rising typical price -> no negative money flow -> MFI pinned at 100.
+    bars = [(float(h), float(h) - 1, float(h)) for h in range(10, 25)]
+    highs = [b[0] for b in bars]
+    lows = [b[1] for b in bars]
+    closes = [b[2] for b in bars]
+    volumes = [1000] * len(bars)
+    values = compute_mfi(highs, lows, closes, volumes, period=5)
+    assert values == [100.0] * len(values)
+
+
+# --------------------------- build_indicator (candles -> Indicator) ---------------------------
+
+
+def test_build_indicator_rsi_shape_and_tail_alignment():
+    series = _candles([float(x) for x in range(1, 40)])
+    indicator = build_indicator(series, IndicatorSpec(name="rsi"))
+    assert indicator.name == "rsi"
+    assert indicator.label == "RSI (14)"
+    assert indicator.overlay is False
+    assert [line.key for line in indicator.lines] == ["rsi"]
+    line = indicator.lines[0]
+    # Tail-aligned: the final reading dates the final candle.
+    assert line.points[-1].timestamp == series.candles[-1].timestamp
+    assert line.latest.value == 100.0  # strictly rising -> RSI 100
+
+
+def test_build_indicator_macd_has_three_lines():
+    series = _candles([float(x) for x in range(1, 60)])
+    indicator = build_indicator(series, IndicatorSpec(name="macd"))
+    assert indicator.label == "MACD (12/26/9)"
+    assert [line.key for line in indicator.lines] == ["macd", "signal", "histogram"]
+
+
+def test_build_indicator_overlay_flags():
+    series = _candles([float(x) for x in range(1, 30)])
+    assert build_indicator(series, IndicatorSpec("sma", 10)).overlay is True
+    assert build_indicator(series, IndicatorSpec("vwap")).overlay is True
+    assert build_indicator(series, IndicatorSpec("rsi")).overlay is False
+
+
+def test_build_indicator_period_override_shows_in_label():
+    series = _candles([float(x) for x in range(1, 30)])
+    assert build_indicator(series, IndicatorSpec("sma", 20)).label == "SMA (20)"
+
+
+def test_build_indicator_rejects_unknown_name():
+    with pytest.raises(ValueError):
+        build_indicator(_candles([1.0, 2.0, 3.0]), IndicatorSpec("bogus"))
+
+
+def test_build_indicator_rejects_period_on_a_no_period_indicator():
+    with pytest.raises(ValueError):
+        build_indicator(_candles([1.0, 2.0, 3.0]), IndicatorSpec("macd", 5))
+
+
+def test_build_indicator_rejects_period_below_two():
+    with pytest.raises(ValueError):
+        build_indicator(_candles([1.0, 2.0, 3.0]), IndicatorSpec("rsi", 1))
+
+
+def test_build_indicators_preserves_request_order():
+    series = _candles([float(x) for x in range(1, 40)])
+    result = build_indicators(series, [IndicatorSpec("macd"), IndicatorSpec("rsi")])
+    assert result.symbol == "AAPL"
+    assert [ind.name for ind in result.indicators] == ["macd", "rsi"]
+
+
+# --------------------------- indicator_warmup_bars ---------------------------
+
+
+@pytest.mark.parametrize(
+    "name,period,expected",
+    [
+        ("rsi", None, 14),
+        ("rsi", 21, 21),
+        ("macd", None, 35),  # slow (26) + signal (9)
+        ("adx", None, 28),  # 2 x period
+        ("adx", 10, 20),
+        ("stoch", None, 20),  # period (14) + smooth (3) + signal (3)
+        ("sma", 200, 200),
+        ("obv", None, 0),
+        ("vwap", None, 0),
+    ],
+)
+def test_indicator_warmup_bars(name, period, expected):
+    assert indicator_warmup_bars(name, period) == expected
