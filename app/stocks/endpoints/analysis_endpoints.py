@@ -19,10 +19,11 @@ until it ages past that kind's TTL (``wiring.analysis_cache_ttl``).
 import os
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.rate_limit import limiter
 from app.stocks.adapters.bedrock.analysis_adapter import BedrockScorecardProvider
 from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
     BedrockEarningsAnalysisProvider,
@@ -130,6 +131,18 @@ from app.stocks.wiring import (
 )
 
 router = APIRouter(tags=["stocks"])
+
+# A tight per-IP limit on the AI reads, layered on top of the app-wide default
+# limits (app/rate_limit.py). These routes each make a metered Bedrock call on a
+# cache miss (~$0.005), so the generic 20/s + 600/min per-IP allowance — sized for
+# cheap DB reads — is far too loose here: it lets one IP enumerate distinct symbols
+# and rack up model spend. The result cache stops *repeat* views of the same symbol
+# from re-billing; this stops a single IP from forcing many *distinct*-symbol misses.
+# Each decorated endpoint gets its **own** bucket (SlowAPI scopes by view function),
+# so the six reads don't share one allowance. Env-tunable so it can be tightened or
+# loosened without a deploy; the default is generous for a human browsing distinct
+# tickers but kills a scraping loop.
+_AI_ANALYSIS_RATE_LIMIT = os.environ.get("AI_ANALYSIS_RATE_LIMIT", "10/minute")
 
 
 def get_stock_info(
@@ -605,7 +618,9 @@ def _present_market_summary(summary: MarketSummary) -> MarketSummaryResponse:
 
 
 @router.get("/stocks/{symbol}/analysis", response_model=InvestmentAnalysisResponse)
+@limiter.limit(_AI_ANALYSIS_RATE_LIMIT)
 def get_stock_analysis_endpoint(
+    request: Request,
     symbol: str,
     response: Response,
     use_case: GetStockAnalysis = Depends(get_stock_analysis),
@@ -629,7 +644,9 @@ def get_stock_analysis_endpoint(
     "/stocks/{symbol}/earnings/analysis",
     response_model=EarningsAnalysisResponse,
 )
+@limiter.limit(_AI_ANALYSIS_RATE_LIMIT)
 def get_earnings_analysis_endpoint(
+    request: Request,
     symbol: str,
     response: Response,
     use_case: GetEarningsAnalysis = Depends(get_earnings_analysis),
@@ -653,7 +670,9 @@ def get_earnings_analysis_endpoint(
     "/stocks/ticker/{ticker}/analyst-info/analysis",
     response_model=RatingsAnalysisResponse,
 )
+@limiter.limit(_AI_ANALYSIS_RATE_LIMIT)
 def get_ratings_analysis_endpoint(
+    request: Request,
     ticker: str,
     response: Response,
     use_case: GetRatingsFindings = Depends(get_ratings_findings),
@@ -676,7 +695,9 @@ def get_ratings_analysis_endpoint(
     "/stocks/{symbol}/fundamentals/analysis",
     response_model=FundamentalsAnalysisResponse,
 )
+@limiter.limit(_AI_ANALYSIS_RATE_LIMIT)
 def get_fundamentals_analysis_endpoint(
+    request: Request,
     symbol: str,
     response: Response,
     use_case: GetFundamentalsAnalysis = Depends(get_fundamentals_analysis),
@@ -697,7 +718,9 @@ def get_fundamentals_analysis_endpoint(
 
 
 @router.get("/sectors/analysis", response_model=SectorAnalysisResponse)
+@limiter.limit(_AI_ANALYSIS_RATE_LIMIT)
 def get_sector_analysis_endpoint(
+    request: Request,
     response: Response,
     use_case: GetSectorAnalysis = Depends(get_sector_analysis),
 ) -> SectorAnalysisResponse:
@@ -716,7 +739,9 @@ def get_sector_analysis_endpoint(
 
 
 @router.get("/market/summary", response_model=MarketSummaryResponse)
+@limiter.limit(_AI_ANALYSIS_RATE_LIMIT)
 def get_market_summary_endpoint(
+    request: Request,
     response: Response,
     use_case: GetMarketSummary = Depends(get_market_summary),
 ) -> MarketSummaryResponse:
