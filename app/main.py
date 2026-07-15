@@ -66,6 +66,7 @@ from app.stocks.endpoints.cron_congress_endpoints import (
     router as congress_cron_router,
 )
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
+from app.stocks.endpoints.options_endpoints import router as options_router
 from app.stocks.endpoints.heatmap_endpoints import router as heatmap_router
 from app.stocks.endpoints.analysis_endpoints import router as analysis_router
 from app.stocks.endpoints.chart_endpoints import router as chart_router
@@ -207,6 +208,13 @@ app.include_router(annual_earnings_cron_router)
 # sector/industry, index membership; sort by market cap or trailing growth) and
 # GET /stocks/classifications (the distinct sector/industry slugs for the FE's filter menus).
 app.include_router(ticker_router)
+# The options-flow read endpoint (GET /stocks/ticker/{ticker}/options): one stock's live
+# options chain for an expiry — the calls/puts strike ladder (volume, open interest, IV,
+# per-contract dollar premium), the day's aggregate flow (put/call lean, net premium), and
+# the unusual-activity standouts (volume above open interest). Keyless (Yahoo via yfinance)
+# and computed live — options data decays hourly, so no table/cron, the same stance as the
+# ticker card's options_metrics block. See app/stocks/endpoints/options_endpoints.py.
+app.include_router(options_router)
 # The recommendations refresh cron endpoint (POST /internal/recommendations/sync); it
 # drives the SyncRecommendations use case out of band. See
 # app/stocks/endpoints/cron_recommendations_endpoints.py.
