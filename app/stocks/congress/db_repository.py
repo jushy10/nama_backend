@@ -90,6 +90,12 @@ class SqlCongressTradesRepository(CongressTradesRepository):
         total = models.count_recent_market_trades(self._session, since=since)
         return trades, total
 
+    def market_trades_in_window(self, *, since: date | None) -> list[CongressTrade]:
+        rows = models.market_trades_in_window(self._session, since=since)
+        return [
+            _to_entity(row[0], ticker=row.ticker, company_name=row.name) for row in rows
+        ]
+
     def upsert(self, symbol: str, name: str | None, activity: CongressActivity) -> None:
         stock = models.get_or_create_stock(self._session, symbol, name)
 

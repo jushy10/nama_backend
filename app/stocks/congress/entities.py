@@ -25,8 +25,10 @@ buy/sell signal derived from it.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from datetime import date
+from typing import Literal
 
 # The normalized transaction vocabulary the adapter maps both feeds onto.
 PURCHASE = "Purchase"
@@ -210,3 +212,153 @@ class CongressMarketActivity:
     @property
     def summary(self) -> CongressSummary:
         return summarize(self.trades)
+
+
+# The three ways the leaderboard ranks stocks by how much Congressional *attention* they're getting
+# over a window. ``members`` (the default) is the breadth of interest — how many distinct members
+# touched the stock — which reads as the truest "attention" signal; ``trades`` is the raw disclosure
+# count; ``value`` is the estimated gross dollars moved (summed band midpoints, buys + sells).
+CongressMetric = Literal["members", "trades", "value"]
+
+
+@dataclass(frozen=True)
+class CongressLeaderboardEntry:
+    """One stock's aggregated Congressional activity over a window — a row of the attention board.
+
+    A rollup across *every* member who traded the stock in the window, not a single disclosure:
+    ``trade_count`` is how many disclosures landed, ``member_count`` how many *distinct* members
+    were behind them (the breadth of attention), and the buy/sell counts and values split that by
+    direction. The dollar legs sum each trade's ``amount_midpoint`` (best-effort, since Congress
+    discloses only bands), so ``buy_value`` / ``sell_value`` / ``net_value`` / ``total_value`` are
+    *estimates* of the money moved, not reported totals. ``last_activity`` is the most recent
+    activity date among the stock's trades (the freshest disclosure), for a "traded N days ago" read.
+    """
+
+    ticker: str
+    company_name: str | None
+    trade_count: int
+    member_count: int
+    buy_count: int
+    sell_count: int
+    buy_value: float
+    sell_value: float
+    last_activity: date | None
+
+    @property
+    def net_value(self) -> float:
+        """Estimated net dollar flow: buy value minus sell value (positive = net buying)."""
+        return self.buy_value - self.sell_value
+
+    @property
+    def total_value(self) -> float:
+        """Estimated gross dollars moved: buys plus sells — the size of the attention, direction
+        aside (what the ``value`` metric ranks on)."""
+        return self.buy_value + self.sell_value
+
+
+@dataclass
+class _LeaderboardAccumulator:
+    """A mutable per-ticker tally used only while folding a run of trades into an entry.
+
+    Kept internal (and non-frozen, unlike the domain entities) so ``build_leaderboard`` can group in
+    a single pass; ``finish`` freezes it into the immutable ``CongressLeaderboardEntry``.
+    """
+
+    ticker: str
+    company_name: str | None
+    trade_count: int = 0
+    members: set[str] = field(default_factory=set)
+    buy_count: int = 0
+    sell_count: int = 0
+    buy_value: float = 0.0
+    sell_value: float = 0.0
+    last_activity: date | None = None
+
+    def add(self, trade: CongressTrade) -> None:
+        self.trade_count += 1
+        self.members.add(trade.member)
+        # Backfill a name if the first row for this ticker lacked one (best-effort context).
+        if self.company_name is None and trade.company_name:
+            self.company_name = trade.company_name
+        activity = trade.activity_date
+        if activity is not None and (
+            self.last_activity is None or activity > self.last_activity
+        ):
+            self.last_activity = activity
+        midpoint = trade.amount_midpoint
+        if trade.is_buy:
+            self.buy_count += 1
+            if midpoint is not None:
+                self.buy_value += midpoint
+        elif trade.is_sell:
+            self.sell_count += 1
+            if midpoint is not None:
+                self.sell_value += midpoint
+
+    def finish(self) -> CongressLeaderboardEntry:
+        return CongressLeaderboardEntry(
+            ticker=self.ticker,
+            company_name=self.company_name,
+            trade_count=self.trade_count,
+            member_count=len(self.members),
+            buy_count=self.buy_count,
+            sell_count=self.sell_count,
+            buy_value=self.buy_value,
+            sell_value=self.sell_value,
+            last_activity=self.last_activity,
+        )
+
+
+# The ranking each metric applies: all descending on the metric (biggest attention first), with the
+# other two rollups as tiebreakers and finally the ticker ascending, so the order is deterministic
+# across stocks that tie (a live-served and cache-served board match). Negating the numeric keys
+# gives descending under a single stable ascending sort.
+_SORT_KEYS: dict[str, Callable[[CongressLeaderboardEntry], tuple]] = {
+    "members": lambda e: (-e.member_count, -e.trade_count, -e.total_value, e.ticker),
+    "trades": lambda e: (-e.trade_count, -e.member_count, -e.total_value, e.ticker),
+    "value": lambda e: (-e.total_value, -e.trade_count, -e.member_count, e.ticker),
+}
+
+
+def build_leaderboard(
+    trades: Iterable[CongressTrade], *, metric: CongressMetric, limit: int
+) -> tuple[CongressLeaderboardEntry, ...]:
+    """Fold a run of trades into the top ``limit`` stocks ranked by ``metric`` — the pure reducer
+    behind the attention board (the leaderboard's ``summarize``).
+
+    Groups the trades by ticker in one pass, ranks by the chosen metric (see ``_SORT_KEYS``), and
+    cuts the top ``limit``. Exchange / Other actions still count toward ``trade_count`` and
+    ``member_count`` (they're attention) but toward neither dollar leg, matching ``summarize``.
+    Pure — no I/O — so it's exercised directly by the tests.
+    """
+    accumulators: dict[str, _LeaderboardAccumulator] = {}
+    for trade in trades:
+        accumulator = accumulators.get(trade.ticker)
+        if accumulator is None:
+            accumulator = accumulators[trade.ticker] = _LeaderboardAccumulator(
+                ticker=trade.ticker, company_name=trade.company_name
+            )
+        accumulator.add(trade)
+    entries = [accumulator.finish() for accumulator in accumulators.values()]
+    entries.sort(key=_SORT_KEYS[metric])
+    return tuple(entries[:limit])
+
+
+@dataclass(frozen=True)
+class CongressLeaderboard:
+    """The stocks getting the most Congressional attention over a window — the ranked board.
+
+    ``entries`` are the top stocks (already cut to the requested size) ordered by ``metric``;
+    ``total_stocks`` is how many distinct stocks Congress traded in the window before the top-N cut,
+    so the client can say "showing 20 of N". ``window_days`` echoes the window (``None`` = all
+    history).
+    """
+
+    entries: tuple[CongressLeaderboardEntry, ...]
+    metric: str
+    window_days: int | None
+    total_stocks: int
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.entries

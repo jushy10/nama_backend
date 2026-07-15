@@ -281,3 +281,27 @@ def test_recent_market_activity_windows_and_paginates(session):
     # Pagination: limit=1, offset=1 -> the second newest.
     page, total = r.recent_market_activity(since=None, limit=1, offset=1)
     assert total == 3 and len(page) == 1 and page[0].member == "Mid"
+
+
+def test_market_trades_in_window_returns_the_whole_unpaged_window(session):
+    r = repo(session)
+    r.upsert(
+        "NVDA",
+        "NVIDIA",
+        _activity(
+            "NVDA",
+            _trade(member="Recent", disc_date=date(2026, 7, 1)),
+            _trade(member="Old", disc_date=date(2020, 1, 1)),
+        ),
+    )
+    r.upsert("AAPL", "Apple", _activity("AAPL", _trade(ticker="AAPL", member="Mid", disc_date=date(2026, 6, 15))))
+
+    # No window: every stored trade, newest first, each carrying its ticker + anchor name — and no
+    # limit/offset (the leaderboard aggregates the whole set).
+    trades = r.market_trades_in_window(since=None)
+    assert [t.member for t in trades] == ["Recent", "Mid", "Old"]
+    assert trades[0].ticker == "NVDA" and trades[0].company_name == "NVIDIA"
+
+    # Windowed to 2026-06-01: drops the 2020 row.
+    trades = r.market_trades_in_window(since=date(2026, 6, 1))
+    assert [t.member for t in trades] == ["Recent", "Mid"]

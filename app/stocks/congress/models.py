@@ -139,6 +139,24 @@ def recent_market_trades(
     return session.execute(stmt).all()
 
 
+def market_trades_in_window(session: Session, *, since: date | None):
+    """*Every* market-wide trade in the window as ``(record, ticker, name)`` rows, newest first —
+    the unpaged set the attention leaderboard aggregates.
+
+    Same join and window as ``recent_market_trades`` but with no ``limit`` / ``offset``: the
+    leaderboard groups the whole window by ticker in memory, so it needs the full set, not a page.
+    Bounded in practice — the store is pruned to the newest N trades per stock — so the window stays
+    a modest read even for ``all`` history. ``since`` (inclusive) windows on the activity date;
+    ``None`` means all history."""
+    stmt = select(
+        StockCongressTradeRecord, StockRecord.ticker, StockRecord.name
+    ).join(StockRecord, StockCongressTradeRecord.stock_id == StockRecord.id)
+    if since is not None:
+        stmt = stmt.where(_activity_date() >= since)
+    stmt = stmt.order_by(*_order_newest_first())
+    return session.execute(stmt).all()
+
+
 def count_recent_market_trades(session: Session, *, since: date | None) -> int:
     """The full count of market-wide trades in the window (before the page is cut) — what the
     endpoint reports as ``total`` so a client can size its pager."""

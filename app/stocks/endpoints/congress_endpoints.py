@@ -24,19 +24,25 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.stocks.congress.db_repository import SqlCongressTradesRepository
 from app.stocks.congress.entities import (
+    CongressLeaderboard,
+    CongressLeaderboardEntry,
     CongressMarketActivity,
     CongressSummary,
     CongressTrade,
 )
 from app.stocks.congress.schemas import (
     CongressActivityResponse,
+    CongressLeaderboardEntryResponse,
+    CongressLeaderboardResponse,
     CongressMarketActivityResponse,
     CongressSummaryResponse,
     CongressTradeResponse,
 )
 from app.stocks.congress.use_cases import (
     GetCongressActivity,
+    GetCongressLeaderboard,
     GetCongressTrades,
+    parse_metric,
     parse_window,
 )
 
@@ -51,6 +57,12 @@ def get_congress_trades_use_case(db: Session = Depends(get_db)) -> GetCongressTr
 
 def get_congress_activity_use_case(db: Session = Depends(get_db)) -> GetCongressActivity:
     return GetCongressActivity(SqlCongressTradesRepository(db))
+
+
+def get_congress_leaderboard_use_case(
+    db: Session = Depends(get_db),
+) -> GetCongressLeaderboard:
+    return GetCongressLeaderboard(SqlCongressTradesRepository(db))
 
 
 # --- Presenters --------------------------------------------------------------------------
@@ -82,6 +94,24 @@ def _present_summary(summary: CongressSummary) -> CongressSummaryResponse:
         buy_value=summary.buy_value,
         sell_value=summary.sell_value,
         net_value=summary.net_value,
+    )
+
+
+def _present_leaderboard_entry(
+    entry: CongressLeaderboardEntry,
+) -> CongressLeaderboardEntryResponse:
+    return CongressLeaderboardEntryResponse(
+        ticker=entry.ticker,
+        name=entry.company_name,
+        trade_count=entry.trade_count,
+        member_count=entry.member_count,
+        buy_count=entry.buy_count,
+        sell_count=entry.sell_count,
+        buy_value=entry.buy_value,
+        sell_value=entry.sell_value,
+        net_value=entry.net_value,
+        total_value=entry.total_value,
+        last_activity=entry.last_activity,
     )
 
 
@@ -157,4 +187,47 @@ def get_congress_activity_endpoint(
         count=len(activity.trades),
         summary=_present_summary(activity.summary),
         items=[_present_trade(t) for t in activity.trades],
+    )
+
+
+# --- Market-wide attention leaderboard ---------------------------------------------------
+
+
+@router.get(
+    "/market/congress-leaderboard",
+    response_model=CongressLeaderboardResponse,
+)
+def get_congress_leaderboard_endpoint(
+    response: Response,
+    window: str = Query(
+        "30d",
+        description="Time window over the disclosure date: 7d, 30d, 90d, 180d, 1y or all.",
+    ),
+    metric: str = Query(
+        "members",
+        description=(
+            "How to rank: members (distinct members trading it), trades (disclosure count) "
+            "or value (estimated gross dollars moved)."
+        ),
+    ),
+    limit: int = Query(
+        20, ge=1, le=100, description="Max stocks to return in the ranked board."
+    ),
+    use_case: GetCongressLeaderboard = Depends(get_congress_leaderboard_use_case),
+) -> CongressLeaderboardResponse:
+    try:
+        window_days = parse_window(window)
+        metric_key = parse_metric(metric)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    board: CongressLeaderboard = use_case.execute(
+        window_days=window_days, metric=metric_key, limit=limit
+    )
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return CongressLeaderboardResponse(
+        window=window.strip().lower(),
+        metric=board.metric,
+        total=board.total_stocks,
+        count=len(board.entries),
+        items=[_present_leaderboard_entry(e) for e in board.entries],
     )

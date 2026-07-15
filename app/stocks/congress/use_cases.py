@@ -28,8 +28,11 @@ from datetime import date, timedelta
 
 from app.stocks.congress.entities import (
     CongressActivity,
+    CongressLeaderboard,
     CongressMarketActivity,
+    CongressMetric,
     CongressTrade,
+    build_leaderboard,
 )
 from app.stocks.congress.ports import CongressTradesSource
 from app.stocks.congress.repository import CongressTradesRepository
@@ -133,6 +136,58 @@ class GetCongressActivity:
             trades, total = [], 0
         return CongressMarketActivity(
             trades=tuple(trades), total=total, window_days=window_days
+        )
+
+
+# The metrics the leaderboard ranks on (see ``CongressMetric``). ``members`` is the default — the
+# breadth of Congressional interest reads as the truest "most attention" signal.
+_METRICS: tuple[CongressMetric, ...] = ("members", "trades", "value")
+_DEFAULT_METRIC: CongressMetric = "members"
+
+
+def parse_metric(metric: str | None) -> CongressMetric:
+    """Validate the leaderboard ranking metric token (``"members"`` / ``"trades"`` / ``"value"``),
+    defaulting to ``members``. An unknown token is a ``ValueError`` the endpoint maps to a 400."""
+    token = (metric or _DEFAULT_METRIC).strip().lower()
+    if token not in _METRICS:
+        allowed = ", ".join(_METRICS)
+        raise ValueError(f"Unknown metric '{metric}'. Use one of: {allowed}.")
+    return token  # type: ignore[return-value]
+
+
+class GetCongressLeaderboard:
+    """Use case: the stocks getting the most Congressional attention over a window — DB-only,
+    best-effort.
+
+    Reads the whole window of market-wide trades once, folds it by ticker into a ranked board (by
+    distinct members, disclosure count, or estimated dollars moved) and cuts the top ``limit``. Like
+    the other reads it's DB-only — the weekly cron keeps the store warm — and best-effort: a DB
+    hiccup reads as an empty board, never a 500.
+    """
+
+    def __init__(self, repository: CongressTradesRepository, *, today=None) -> None:
+        self._repository = repository
+        # Injectable clock keeps the window's cutoff deterministic in tests.
+        self._today = today or date.today
+
+    def execute(
+        self, *, window_days: int | None, metric: CongressMetric, limit: int
+    ) -> CongressLeaderboard:
+        since = None if window_days is None else self._today() - timedelta(days=window_days)
+        try:
+            trades = self._repository.market_trades_in_window(since=since)
+        except Exception:  # noqa: BLE001 — best-effort board; a DB hiccup reads empty, never 500s
+            logger.warning("congress leaderboard read failed", exc_info=True)
+            trades = []
+        entries = build_leaderboard(trades, metric=metric, limit=limit)
+        # Distinct stocks Congress touched in the window, before the top-N cut — so the client can
+        # say "showing N of M".
+        total_stocks = len({trade.ticker for trade in trades})
+        return CongressLeaderboard(
+            entries=entries,
+            metric=metric,
+            window_days=window_days,
+            total_stocks=total_stocks,
         )
 
 

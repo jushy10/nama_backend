@@ -88,3 +88,40 @@ class CongressMarketActivityResponse(BaseModel):
     count: int
     summary: CongressSummaryResponse
     items: list[CongressTradeResponse]
+
+
+class CongressLeaderboardEntryResponse(BaseModel):
+    """One stock's aggregated Congressional activity over a window — a row of the attention board.
+
+    A rollup across every member who traded the stock in the window: ``trade_count`` disclosures
+    from ``member_count`` distinct members, split into buys and sells. The dollar legs (``buy_value``
+    / ``sell_value`` / ``net_value`` / ``total_value``) sum best-effort band midpoints, so they're
+    *estimates* of the money moved, not reported totals. ``last_activity`` is the freshest
+    disclosure date among the stock's trades."""
+
+    ticker: str
+    name: str | None
+    trade_count: int
+    member_count: int
+    buy_count: int
+    sell_count: int
+    buy_value: float
+    sell_value: float
+    net_value: float
+    total_value: float
+    last_activity: date | None
+
+
+class CongressLeaderboardResponse(BaseModel):
+    """The stocks getting the most Congressional attention over a window, ranked by ``metric``.
+
+    ``window`` echoes the requested window token (``"30d"``); ``metric`` the ranking applied
+    (``members`` / ``trades`` / ``value``); ``total`` the number of distinct stocks Congress traded
+    in the window before the top-N cut; ``count`` the number of rows in ``items``. ``items`` is the
+    ranked board, biggest attention first."""
+
+    window: str
+    metric: str
+    total: int
+    count: int
+    items: list[CongressLeaderboardEntryResponse]
