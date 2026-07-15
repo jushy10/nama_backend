@@ -92,7 +92,8 @@ class AnchorMetrics:
     - **Fundamentals slice** (Yahoo ``.info``) — the trailing margins / ROE / liquidity /
       leverage / beta, plus the per-share *inputs* the reader prices against the live quote
       (``book_value_per_share`` → P/B, ``sales_per_share`` → P/S, ``dividend_per_share`` →
-      yield).
+      yield) and the enterprise-value *inputs* it prices live (``ebitda`` / ``total_debt`` /
+      ``cash_and_equivalents`` / ``shares_outstanding`` → EV/EBITDA).
     - **Anchor facts** — ``market_cap`` (the universe screen's figure) and the clean display
       ``name``, which replace the live Finnhub fundamentals/profile calls the analysis used to
       make.
@@ -118,6 +119,10 @@ class AnchorMetrics:
     book_value_per_share: float | None = None
     sales_per_share: float | None = None
     dividend_per_share: float | None = None
+    ebitda: float | None = None
+    total_debt: float | None = None
+    cash_and_equivalents: float | None = None
+    shares_outstanding: float | None = None
     market_cap: float | None = None
     name: str | None = None
 

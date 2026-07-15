@@ -90,7 +90,8 @@ def _a_stock(**overrides) -> Stock:
         as_of=datetime(2026, 6, 18, tzinfo=timezone.utc),
         market_cap=3_000_000_000_000.0, dividend_per_share=1.0, dividend_yield=0.42,
         metrics=KeyMetrics(
-            pe=28.5, pb=45.2, ps=7.1, eps=6.1, fcf_per_share=6.43, ocf_per_share=8.0,
+            pe=28.5, pb=45.2, ps=7.1, ev_to_ebitda=18.0, eps=6.1,
+            fcf_per_share=6.43, ocf_per_share=8.0,
             gross_margin=44.0, operating_margin=30.0, net_margin=25.0, roe=147.4,
             current_ratio=0.9, debt_to_equity=1.5,
             eps_growth_yoy=12.0, revenue_growth_yoy=8.0, fcf_growth_yoy=15.0, beta=1.2,
@@ -148,6 +149,7 @@ def test_renders_fundamentals_into_the_prompt():
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Fundamentals for AAPL" in prompt
     assert "P/E (trailing): 28.50" in prompt
+    assert "EV/EBITDA (trailing): 18.00" in prompt  # the capital-structure-neutral multiple
     assert "Net margin %: 25.00" in prompt
     assert "Forward P/E (consensus): 30.00" in prompt  # price 300 / FY1 eps 10
     # The cash-flow yields are priced on the snapshot quote (the ticker card's reads).

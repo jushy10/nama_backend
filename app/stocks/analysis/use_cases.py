@@ -127,6 +127,34 @@ def _dividend_yield(dividend_per_share: float | None, price: float | None) -> fl
     return round(dividend_per_share / price * 100, 2)
 
 
+def _ev_ebitda(
+    price: float | None,
+    ebitda: float | None,
+    total_debt: float | None,
+    cash: float | None,
+    shares_outstanding: float | None,
+) -> float | None:
+    """Trailing EV/EBITDA priced live off the quote — enterprise value (price × shares +
+    total debt − cash) over trailing EBITDA, the exact figure ``TickerValuation.ev_to_ebitda``
+    and the universe sync's valuation pass serve, so the scorecard reads the canonical multiple.
+
+    ``None`` on a non-positive/absent price, share count or EBITDA (a multiple off a non-positive
+    EBITDA is meaningless, the same guard ``_consensus_pe`` uses on a loss). A missing debt/cash
+    leg counts as ``0``; a net-cash negative enterprise value is kept (an informative "valued
+    below its net cash" reading, like the card's property), so only the denominator is guarded."""
+    if (
+        price is None
+        or price <= 0
+        or shares_outstanding is None
+        or shares_outstanding <= 0
+        or ebitda is None
+        or ebitda <= 0
+    ):
+        return None
+    enterprise_value = price * shares_outstanding + (total_debt or 0.0) - (cash or 0.0)
+    return round(enterprise_value / ebitda, 2)
+
+
 def _with_stored_fundamentals(
     stock: Stock, anchor: "AnchorMetrics", ttm_eps: float | None
 ) -> Stock:
@@ -138,7 +166,8 @@ def _with_stored_fundamentals(
     The trailing ratios (margins, ROE, current ratio, debt/equity, beta) and the annual slice's
     cash/growth come straight off the anchor; the price-derived multiples are computed here on
     the live quote — the consensus P/E from the quarterly TTM EPS (``ttm_eps``, ``None`` when no
-    quarterly context was gathered), and P/B / P/S from the stored per-share book value / sales.
+    quarterly context was gathered), P/B / P/S from the stored per-share book value / sales, and
+    EV/EBITDA from the stored enterprise-value inputs (shares/debt/cash/EBITDA).
     ``eps`` is set to the same consensus TTM so the prompt's EPS sits on the P/E's basis. The
     market cap, dividend (per share + a live-priced yield) and clean display name are filled off
     the anchor too, falling back to the price feed's name when the anchor hasn't got one yet.
@@ -165,6 +194,13 @@ def _with_stored_fundamentals(
         "pe": _consensus_pe(price, ttm_eps),
         "pb": _price_multiple(price, anchor.book_value_per_share),
         "ps": _price_multiple(price, anchor.sales_per_share),
+        "ev_to_ebitda": _ev_ebitda(
+            price,
+            anchor.ebitda,
+            anchor.total_debt,
+            anchor.cash_and_equivalents,
+            anchor.shares_outstanding,
+        ),
     }
     if stock.metrics is not None:
         metrics = replace(stock.metrics, **overlay)
