@@ -12,8 +12,10 @@ year-over-year growth columns, 0012 the three universe-screen columns, 0013 the
 ``industry`` column, 0014 the ``in_sp500`` / ``in_nasdaq100`` index-membership flags,
 0017 the ``pe_ratio`` column, 0018 the forward year-over-year growth columns, 0027 the
 free-cash-flow columns (``fcf_per_share`` / ``ocf_per_share`` / ``fcf_growth_yoy`` /
-``fcf_yield``), 0031 the trailing fundamentals columns, and 0033 the trailing-performance
-window columns (``perf_*`` / ``performance_synced_at``) — all below.
+``fcf_yield``), 0031 the trailing fundamentals columns, 0033 the trailing-performance
+window columns (``perf_*`` / ``performance_synced_at``), 0037 the enterprise-value inputs +
+materialized ``ev_to_ebitda``, and 0038 the ``country`` / ``currency`` screen facts (the
+multi-market universe) — all below.
 """
 
 from __future__ import annotations
@@ -62,12 +64,24 @@ class StockRecord(Base):
     reached the table some other way (a ticker-card lookup, an earnings refresh) has never
     been screened, so they stay null — which is exactly how search tells a screened company
     apart from an incidentally-known symbol (it filters on ``market_cap IS NOT NULL``).
-    ``market_cap`` is whole dollars; ``screened_at`` is when the last screen that included
-    the stock ran (the freshness stamp). ``sector`` and ``industry`` are the company's
+    ``market_cap`` is whole dollars **in the row's trading ``currency``** (see below);
+    ``screened_at`` is when the last screen that included the stock ran (the freshness
+    stamp). ``sector`` and ``industry`` are the company's
     classification as snake_case slugs (e.g. ``technology`` / ``consumer_electronics``),
     filled once by the sync's enrichment pass from Yahoo's per-ticker ``.info`` — the bulk
     screen carries neither, so they lag the other screen facts until enrichment reaches the
     stock (and stay null for a symbol Yahoo doesn't classify).
+
+    ``country`` / ``currency`` are the other two screen facts, added once the universe spans
+    more than one market (the US screen plus the Canadian TSX/TSXV screen). ``country`` is the
+    listing country as an ISO-2 code (``US`` / ``CA``) — what a client filters the universe by
+    market on, and what routes a stock's price feed (US → Alpaca, CA → Yahoo). ``currency`` is
+    the ISO-3 trading currency (``USD`` / ``CAD``) the row's ``market_cap`` and every
+    price-derived figure is quoted in: the ≥$1B floor is applied in each market's **native**
+    currency (Yahoo screens a quote in its own currency), so a CAD row's ``market_cap`` is whole
+    CAD — a mixed-currency ``market_cap`` sort is therefore nominal, and this column is the unit
+    the FE labels/converts against. Both are set by the sync's screen upsert (fill-once, like
+    ``exchange``), nullable for an incidentally-known ticker that's never been screened (0038).
 
     ``pe_ratio`` is the stock's trailing P/E on the analyst-consensus (adjusted) EPS basis —
     the same figure the ticker card computes live (``TickerValuation.trailing_pe``): a market
@@ -157,6 +171,8 @@ class StockRecord(Base):
     sector: Mapped[str | None] = mapped_column(String(64), nullable=True)
     industry: Mapped[str | None] = mapped_column(String(64), nullable=True)
     market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     screened_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

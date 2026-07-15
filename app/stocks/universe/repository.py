@@ -58,8 +58,9 @@ class UniverseRepository(ABC):
         """Upsert every screened stock onto the ``stocks`` anchor and return the per-row
         counts.
 
-        For each: create the anchor if absent, fill ticker/name/exchange when missing
-        (never clobbering a settled value), and set/refresh the screen facts
+        For each: create the anchor if absent, fill ticker/name/exchange/country/currency
+        when missing (never clobbering a settled value — country/currency are fill-once
+        market facts, like the exchange), and set/refresh the screen facts
         (``market_cap``/``sector``/``screened_at``) — ``sector`` only when supplied, so a
         source that omits it doesn't wipe a known one. Additive: stocks absent from the
         screen are left untouched (no delete). Commits its own write.

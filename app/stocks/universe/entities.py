@@ -35,10 +35,15 @@ from app.stocks.entities import StockPerformance
 class ScreenedStock:
     """One company in the screened universe.
 
-    ``market_cap`` is in whole dollars (e.g. ``3.01e12`` for a $3.01T company). Everything
-    but the ``ticker`` is optional: ``exchange`` comes from the screen, ``sector`` may be
-    absent (the yfinance screen doesn't publish it, so it rides in ``None``), and the name
-    may be missing.
+    ``market_cap`` is in whole units of the row's trading ``currency`` (e.g. ``3.01e12`` for a
+    $3.01T US company, or whole CAD for a TSX one). Everything but the ``ticker`` is optional:
+    ``exchange`` comes from the screen, ``sector`` may be absent (the yfinance screen doesn't
+    publish it, so it rides in ``None``), and the name may be missing.
+
+    ``country`` / ``currency`` are the screen's market facts: the ISO-2 listing country
+    (``US`` / ``CA``) and the ISO-3 trading currency (``USD`` / ``CAD``) the ``market_cap`` and
+    ``price`` are quoted in. They matter because the ≥$1B floor is applied in each market's
+    native currency, so a row must carry its unit — the sync persists both onto the anchor.
 
     ``price`` is the screen-time regular-market price the screen quote carries. It is *not*
     persisted: the sync uses it (over the quarterly slice's TTM consensus EPS) to derive the
@@ -52,6 +57,8 @@ class ScreenedStock:
     market_cap: float | None = None
     sector: str | None = None
     price: float | None = None  # screen-time price; derives pe_ratio, not itself stored
+    country: str | None = None  # ISO-2 listing country (US / CA)
+    currency: str | None = None  # ISO-3 trading currency (USD / CAD)
 
 
 @dataclass(frozen=True)
@@ -215,6 +222,11 @@ class StockSearchResult:
     anchor by the performance sync — ``None`` for a row it hasn't reached yet (or one with too
     little history). It's what lets a page-driven consumer (the heat map) colour a whole board's
     timeframe tiles from one DB read instead of a live year-of-bars computation per index.
+
+    ``country`` / ``currency`` are the row's market facts (ISO-2 / ISO-3): the market the stock
+    lists on and the currency its ``market_cap`` is quoted in. Nullable only for a legacy row a
+    screen hasn't re-stamped; every freshly screened member carries both. ``currency`` is what a
+    client needs to read a CAD ``market_cap`` correctly next to a USD one (the floor is native).
     """
 
     ticker: str
@@ -232,6 +244,10 @@ class StockSearchResult:
     forward_eps_growth_yoy: float | None
     in_sp500: bool
     in_nasdaq100: bool
+    # Market facts default to None so a pre-multi-market builder still constructs; the DB read
+    # (`_to_result`) always supplies them for a screened row.
+    country: str | None = None
+    currency: str | None = None
     performance: StockPerformance | None = None
 
 
@@ -251,6 +267,11 @@ class StockSearchCriteria:
     neutral, stable A→Z), the default when a client omits ``?sort=``; a ``StockSort`` value picks
     a column to order by. ``direction`` only bites once a ``sort`` is chosen (an unsorted page is
     always ascending by ticker).
+
+    ``countries`` narrows to the union of the given ISO-2 markets (``("US",)`` for US only,
+    ``("CA",)`` for Canadian, empty = every market). It's how a client keeps a ``market_cap``
+    sort within one currency (the floor is applied natively per market), or shows a single-market
+    board.
     """
 
     query: str | None
@@ -263,6 +284,7 @@ class StockSearchCriteria:
     limit: int
     offset: int
     market_cap_tiers: tuple[MarketCapTier, ...] = ()
+    countries: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

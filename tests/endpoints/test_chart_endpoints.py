@@ -2,7 +2,7 @@
 indicators).
 
 Offline: a fake CandleProvider is injected through dependency_overrides on the
-shared ``get_provider`` factory, so these exercise the *real* use cases and the pure
+market-routing ``get_price_provider`` factory, so these exercise the *real* use cases and the pure
 indicator math end-to-end — only the vendor fetch is faked. They cover the new
 unified ``/indicators`` endpoint (spec parsing, the JSON shape, overlay flags,
 window trimming, error mapping) and smoke-test that the four pre-existing endpoints
@@ -18,7 +18,7 @@ from app.stocks.endpoints import chart_endpoints as endpoints
 from app.stocks.charts.ports import CandleProvider
 from app.stocks.entities import Candle, CandleSeries, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.wiring import get_provider
+from app.stocks.wiring import get_price_provider
 
 
 class _FakeCandleProvider(CandleProvider):
@@ -57,7 +57,9 @@ def _rising_series(count: int = 60) -> CandleSeries:
 def _client(fake: _FakeCandleProvider) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
-    app.dependency_overrides[get_provider] = lambda: fake
+    # The chart endpoints ride the market-routing price provider; override it with the fake
+    # CandleProvider (the router slot accepts any CandleProvider), so these stay offline.
+    app.dependency_overrides[get_price_provider] = lambda: fake
     return TestClient(app)
 
 

@@ -76,7 +76,7 @@ from app.stocks.adapters.bedrock.screener_query_adapter import (
 from app.stocks.wiring import (
     get_estimates_provider,
     get_options_provider,
-    get_provider,
+    get_price_provider,
 )
 from app.stocks.schemas import StockPerformanceResponse
 from app.stocks.ticker.db_repository import SqlTickerRepository
@@ -134,14 +134,15 @@ router = APIRouter(tags=["ticker"])
 
 
 def get_ticker_card_use_case(
-    provider=Depends(get_provider),
+    provider=Depends(get_price_provider),
     options: OptionChainProvider = Depends(get_options_provider),
     earnings: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
     estimates: AnalystEstimatesProvider = Depends(get_estimates_provider),
     db: Session = Depends(get_db),
 ) -> GetTickerCard:
-    # The Alpaca singleton backs the quote, the trailing performance windows, and the
-    # one-time exchange lookup (the same instance every other price view uses). The
+    # The market-routing provider backs the quote, the trailing performance windows, and the
+    # one-time exchange lookup — a US symbol goes to the Alpaca singleton (real-time), a
+    # Canadian-suffixed one (.TO/.V/…) to the keyless Yahoo feed (delayed, best-effort). The
     # repository serves the anchor read — the stored name, exchange, screen facts, and the
     # annual/fundamentals slices' materialized figures (growth, cash, margins, ratios,
     # dividend) — off the stocks row, so the card needs no live fundamentals/profile vendor.
@@ -329,12 +330,12 @@ def _eps_history_provider() -> YfinanceEpsHistoryProvider:
 
 
 def get_pe_history_use_case(
-    provider=Depends(get_provider),
+    provider=Depends(get_price_provider),
 ) -> GetStockPeHistory:
-    # The Alpaca singleton supplies the daily closes (it implements CandleProvider — the
-    # same instance the candle chart uses), and the deep reported-EPS history rides the
-    # keyless yfinance adapter. The card's Alpaca 503 gate is inherited (the closes are
-    # primary here); the EPS leg is best-effort, so no extra key to gate on.
+    # The market-routing provider supplies the daily closes (it implements CandleProvider — the
+    # same instance the candle chart uses, US→Alpaca / CA→Yahoo), and the deep reported-EPS
+    # history rides the keyless yfinance adapter. The card's Alpaca 503 gate is inherited for a
+    # US symbol (the closes are primary here); the EPS leg is best-effort, so no key to gate on.
     return GetStockPeHistory(provider, _eps_history_provider())
 
 
@@ -551,6 +552,8 @@ def _present_search(page: StockSearchPage) -> StockSearchResponse:
                 forward_eps_growth_yoy=r.forward_eps_growth_yoy,
                 in_sp500=r.in_sp500,
                 in_nasdaq100=r.in_nasdaq100,
+                country=r.country,
+                currency=r.currency,
             )
             for r in page.results
         ],
@@ -610,6 +613,15 @@ def search_stocks_endpoint(
     in_nasdaq100: bool | None = Query(
         None, description="Filter by Nasdaq-100 membership. Omit for both."
     ),
+    country: list[str] | None = Query(
+        None,
+        description=(
+            "Filter by listing market as an ISO-2 code: us or ca. Repeat to match the union "
+            "(?country=us&country=ca). Omit for every market. Filtering to one market keeps a "
+            "market_cap sort within a single currency (the ≥$1B floor is applied natively per "
+            "market, so a CAD cap isn't comparable to a USD one)."
+        ),
+    ),
     market_cap: list[MarketCapTier] | None = Query(
         None,
         description=(
@@ -655,6 +667,7 @@ def search_stocks_endpoint(
             direction=order,
             limit=limit,
             offset=offset,
+            countries=country,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

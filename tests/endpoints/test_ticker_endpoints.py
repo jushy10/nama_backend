@@ -493,6 +493,8 @@ def _a_page() -> StockSearchPage:
                 forward_eps_growth_yoy=48.3,
                 in_sp500=True,
                 in_nasdaq100=True,
+                country="US",
+                currency="USD",
             ),
         ),
         total=1,
@@ -524,6 +526,8 @@ def test_search_returns_the_expected_json_shape():
         "forward_eps_growth_yoy": 48.3,
         "in_sp500": True,
         "in_nasdaq100": True,
+        "country": "US",
+        "currency": "USD",
     }
 
 
@@ -559,6 +563,7 @@ def test_search_passes_query_params_through_to_the_use_case():
         "direction": SortDirection.ASC,
         "limit": 10,
         "offset": 20,
+        "countries": None,
     }
 
 
@@ -584,6 +589,17 @@ def test_search_passes_repeated_filters_through_as_lists():
     assert fake.kwargs["market_cap_tiers"] == [MarketCapTier.LARGE, MarketCapTier.MID]
 
 
+def test_search_passes_country_filter_through_as_a_list():
+    # ?country= binds to a list the use case normalizes (uppercases) — repeat for a union.
+    fake = _FakeSearch(page=_a_page())
+    resp = _search_client(search=fake).get(
+        "/stocks/ticker", params=[("country", "us"), ("country", "ca")]
+    )
+
+    assert resp.status_code == 200
+    assert fake.kwargs["countries"] == ["us", "ca"]
+
+
 def test_search_uses_defaults_when_no_params_given():
     fake = _FakeSearch(page=_a_page())
     _search_client(search=fake).get("/stocks/ticker")
@@ -601,6 +617,7 @@ def test_search_uses_defaults_when_no_params_given():
         "direction": SortDirection.DESC,
         "limit": 25,
         "offset": 0,
+        "countries": None,
     }
 
 

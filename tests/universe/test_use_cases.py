@@ -49,7 +49,17 @@ from app.stocks.universe.use_cases import (
 )
 
 
-def _stock(ticker, *, market_cap=1e10, name=None, exchange=None, sector=None, price=None):
+def _stock(
+    ticker,
+    *,
+    market_cap=1e10,
+    name=None,
+    exchange=None,
+    sector=None,
+    price=None,
+    country=None,
+    currency=None,
+):
     return ScreenedStock(
         ticker=ticker,
         name=name,
@@ -57,6 +67,8 @@ def _stock(ticker, *, market_cap=1e10, name=None, exchange=None, sector=None, pr
         market_cap=market_cap,
         sector=sector,
         price=price,
+        country=country,
+        currency=currency,
     )
 
 
@@ -117,9 +129,11 @@ class _FakeScreener(StockScreener):
         self._stocks = tuple(stocks)
         self._error = error
         self.calls: list[float] = []
+        self.regions: list[str] = []
 
-    def screen(self, *, min_market_cap):
+    def screen(self, *, min_market_cap, region="us"):
         self.calls.append(min_market_cap)
+        self.regions.append(region)
         if self._error is not None:
             raise self._error
         return self._stocks
@@ -244,6 +258,46 @@ def test_sync_skips_an_implausibly_small_screen():
     assert repo.missing_limit is None  # enrichment not reached
     assert repo.pe_written is None  # valuation not reached either
     assert report.valued == 0
+
+
+def test_sync_ca_region_screens_canada_and_carries_the_market_facts():
+    # region="ca" is forwarded to the screener, and the ScreenedStocks' CA/CAD facts reach the
+    # upsert untouched (the sync doesn't derive or override them — the adapter stamped them).
+    screen = tuple(
+        _stock(f"C{i:04d}.TO", market_cap=2e9 + i, country="CA", currency="CAD")
+        for i in range(SyncUniverse._MIN_PLAUSIBLE_BY_REGION["ca"])
+    )
+    screener = _FakeScreener(screen)
+    repo = _FakeRepo(counts=UniverseSyncCounts(added=len(screen), updated=0))
+
+    report = SyncUniverse(screener, repo, _FakeClassifier(), region="ca").execute()
+
+    assert screener.regions == ["ca"]
+    assert report.skipped is False
+    assert repo.upserted == screen
+    assert {s.country for s in repo.upserted} == {"CA"}
+    assert {s.currency for s in repo.upserted} == {"CAD"}
+
+
+def test_ca_plausibility_floor_is_lower_than_us():
+    # A modest Canadian screen (below the US floor, above the CA one) is a healthy CA result —
+    # written for region="ca", but the same count under the US default would be treated as
+    # truncated and skipped.
+    count = SyncUniverse._MIN_PLAUSIBLE_BY_REGION["ca"]  # 40: >= CA floor, < US floor (100)
+    screen = tuple(
+        _stock(f"C{i:04d}.TO", market_cap=2e9 + i, country="CA", currency="CAD")
+        for i in range(count)
+    )
+
+    ca_repo = _FakeRepo(counts=UniverseSyncCounts(added=count, updated=0))
+    ca_report = SyncUniverse(_FakeScreener(screen), ca_repo, _FakeClassifier(), region="ca").execute()
+    assert ca_report.skipped is False
+    assert ca_repo.upserted == screen
+
+    us_repo = _FakeRepo()
+    us_report = SyncUniverse(_FakeScreener(screen), us_repo, _FakeClassifier(), region="us").execute()
+    assert us_report.skipped is True  # same count, but under the US floor -> skipped
+    assert us_repo.upserted is None
 
 
 def test_sync_propagates_a_hard_screen_failure():
@@ -584,6 +638,19 @@ def test_search_multi_select_slugs_dedupes_and_drops_blanks():
     assert c.sectors == ("technology", "energy")
     assert c.industries == ("semiconductors",)
     assert c.market_cap_tiers == (MarketCapTier.LARGE, MarketCapTier.MID)
+
+
+def test_search_uppercases_dedupes_and_drops_blank_countries():
+    repo = _FakeSearchRepo()
+    SearchStocks(repo).execute(countries=["ca", " US ", "", "ca"])
+    # ISO-2 codes upper-cased, blanks dropped, duplicates collapsed with first-seen order kept.
+    assert repo.criteria.countries == ("CA", "US")
+
+
+def test_search_defaults_countries_to_empty():
+    repo = _FakeSearchRepo()
+    SearchStocks(repo).execute()
+    assert repo.criteria.countries == ()  # no country filter -> every market
 
 
 def test_search_blank_text_and_filters_become_empty():

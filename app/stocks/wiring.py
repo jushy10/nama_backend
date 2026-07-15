@@ -1,9 +1,10 @@
 """Shared dependency wiring for the stocks feature.
 
 The factories every endpoint module reuses: the Alpaca price feed (the one
-process-singleton the whole slice's price views ride on), the yfinance options
-chain, the DB-projected analyst estimates, and the per-kind analysis
-result-cache TTL. Slice-specific wiring (a Bedrock analyser, the logo vendor)
+process-singleton the US price views ride on), the market-routing price provider
+(per-symbol reads dispatched US→Alpaca / CA→Yahoo), the yfinance options chain,
+the DB-projected analyst estimates, and the per-kind analysis result-cache TTL.
+Slice-specific wiring (a Bedrock analyser, the logo vendor)
 lives in that slice's endpoint module — this file holds only what is genuinely
 shared across endpoint modules, so none of them ever has to import another's
 router.
@@ -25,6 +26,8 @@ from app.stocks.adapters.alpaca_adapter import AlpacaStockDataProvider
 from app.stocks.adapters.annual_earnings_estimates_adapter import (
     AnnualEarningsEstimatesProvider,
 )
+from app.stocks.adapters.market_routing import MarketRoutingPriceProvider
+from app.stocks.adapters.yahoo_price_adapter import YahooPriceProvider
 from app.stocks.adapters.yfinance_options_adapter import YfinanceOptionChainProvider
 from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
 from app.stocks.ports import AnalystEstimatesProvider
@@ -39,6 +42,24 @@ def get_provider() -> AlpacaStockDataProvider:
             503, "Stock data is not configured (APCA_API_KEY_ID / APCA_API_SECRET_KEY)."
         )
     return AlpacaStockDataProvider(key, secret)
+
+
+@lru_cache(maxsize=1)
+def get_yahoo_price_provider() -> YahooPriceProvider:
+    # The Canadian (TSX/TSXV) price feed — keyless Yahoo via yfinance, like the earnings
+    # timelines' live source. Always constructable (no key gate); best-effort at read.
+    return YahooPriceProvider()
+
+
+def get_price_provider() -> MarketRoutingPriceProvider:
+    # The per-symbol price provider the ticker card and charts ride: routes a US symbol to
+    # Alpaca (real-time, the primary market) and a Canadian-suffixed one (.TO/.V/…) to the
+    # keyless Yahoo feed. A US-only deployment still needs the Alpaca keys (get_provider's 503
+    # gate), so wiring the US leg keeps that hard requirement — the CA leg is always available.
+    # Not @lru_cache'd: get_provider raises 503 without keys, and caching must not freeze that.
+    return MarketRoutingPriceProvider(
+        us=get_provider(), ca=get_yahoo_price_provider()
+    )
 
 
 @lru_cache(maxsize=1)
