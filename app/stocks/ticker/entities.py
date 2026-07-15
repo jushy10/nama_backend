@@ -93,6 +93,15 @@ class TickerValuation:
     to-the-second price as the P/E. ``eps_growth_yoy`` is the annual slice's trailing
     EPS growth (percent, consensus basis), carried only so the entity can form the
     trailing ``peg`` (P/E over growth) from figures that already sit on one basis.
+
+    ``ebitda`` / ``total_debt`` / ``cash_and_equivalents`` (absolute, trading
+    currency) and ``shares_outstanding`` (a share count) are the fundamentals slice's
+    enterprise-value *inputs* (Yahoo ``.info``, off the anchor). ``enterprise_value``
+    is formed *live* from the quote — price × shares + debt − cash — rather than the
+    anchor's stored ``market_cap`` snapshot, so EV (and ``ev_to_ebitda`` over it)
+    moves with the price exactly as ``trailing_pe`` does; the anchor's materialized
+    ``ev_to_ebitda`` snapshot is a separate, screen-time figure the search/peer views
+    read, the same split ``pe_ratio`` (snapshot) and ``metrics.pe`` (live) already use.
     """
 
     symbol: str
@@ -103,6 +112,10 @@ class TickerValuation:
     book_value_per_share: float | None = None  # P/B input (fundamentals slice, anchor)
     sales_per_share: float | None = None  # P/S input (fundamentals slice, anchor)
     eps_growth_yoy: float | None = None  # trailing EPS growth %, consensus basis (for peg)
+    ebitda: float | None = None  # trailing EBITDA, absolute (fundamentals slice, anchor)
+    total_debt: float | None = None  # total debt, absolute (fundamentals slice, anchor)
+    cash_and_equivalents: float | None = None  # cash + equivalents, absolute (anchor)
+    shares_outstanding: float | None = None  # share count, for live enterprise value (anchor)
 
     @property
     def trailing_pe(self) -> float | None:
@@ -201,6 +214,42 @@ class TickerValuation:
         if pe is None or self.eps_growth_yoy is None or self.eps_growth_yoy <= 0:
             return None
         return round(pe / self.eps_growth_yoy, 2)
+
+    @property
+    def enterprise_value(self) -> float | None:
+        """Enterprise value at today's price: market cap (price × shares) plus total debt
+        less cash & equivalents — what it would cost to buy the whole business net of its
+        cash, the numerator EV/EBITDA divides by.
+
+        Computed *live* off the quote (via ``shares_outstanding``) rather than the anchor's
+        stored ``market_cap`` snapshot, so it tracks the price like ``trailing_pe`` does.
+        ``None`` unless a positive share count and a live price are both present (the debt and
+        cash legs default to ``0`` when Yahoo doesn't carry them — a debt-free, cash-light
+        name's EV is simply its market cap). Not rounded: it's a large dollar figure the
+        presenter rounds/scales, and ``ev_to_ebitda`` needs the unrounded value.
+        """
+        if self.shares_outstanding is None or self.shares_outstanding <= 0 or self.price <= 0:
+            return None
+        market_cap = self.price * self.shares_outstanding
+        return market_cap + (self.total_debt or 0.0) - (self.cash_and_equivalents or 0.0)
+
+    @property
+    def ev_to_ebitda(self) -> float | None:
+        """EV/EBITDA at today's price: ``enterprise_value`` over trailing ``ebitda`` — the
+        capital-structure-neutral valuation multiple (it prices the whole enterprise against
+        pre-financing, pre-tax operating cash earnings, so it compares across companies with
+        different leverage the way P/E can't).
+
+        ``None`` unless enterprise value resolves and EBITDA is *positive* — EV/EBITDA off a
+        negative or zero EBITDA is meaningless (the same positivity guard ``trailing_pe`` uses
+        on a loss). A negative enterprise value (a net-cash company worth less than its cash)
+        is left to divide through: the resulting negative multiple is a real, informative "the
+        market values the operating business below its net cash" reading, not a degenerate one.
+        """
+        ev = self.enterprise_value
+        if ev is None or self.ebitda is None or self.ebitda <= 0:
+            return None
+        return round(ev / self.ebitda, 2)
 
 
 @dataclass(frozen=True)

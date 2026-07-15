@@ -36,6 +36,7 @@ from app.stocks.universe.entities import (
     Classifications,
     IndustryValuation,
     MarketCapTier,
+    PeerComparison,
     ScreenedStock,
     ScreenIntent,
     SortDirection,
@@ -113,6 +114,31 @@ def _fcf_yield(price: float | None, fcf_per_share: float | None) -> float | None
     if price is None or fcf_per_share is None or price <= 0:
         return None
     return round(fcf_per_share / price * 100, 2)
+
+
+def _ev_ebitda(
+    market_cap: float | None,
+    components: tuple[float, float | None, float | None] | None,
+) -> float | None:
+    """The ticker card's EV/EBITDA, materialized for the sortable anchor column.
+
+    The screen-time analogue of ``TickerValuation.ev_to_ebitda``: enterprise value = the
+    screen's ``market_cap`` + total debt − cash, over trailing EBITDA. ``components`` is
+    ``(ebitda, total_debt, cash)`` off the anchor (``None`` when the fundamentals slice hasn't
+    reached the stock); a missing debt/cash leg counts as ``0``. ``None`` when the market cap or
+    EBITDA is missing, or EBITDA is non-positive (the same guard the card's property uses — a
+    multiple off a non-positive EBITDA is meaningless). Keeps its **sign** like ``_fcf_yield``:
+    a net-cash company worth less than its cash reads negative, a real "valued below net cash"
+    signal rather than a dropout. Where the card prices EV off the live quote × shares, this
+    uses the screen-time market cap — a drifting snapshot for the search, exactly as ``_pe_ratio``
+    uses the screen price while the card serves a live P/E."""
+    if market_cap is None or components is None:
+        return None
+    ebitda, total_debt, cash = components
+    if ebitda is None or ebitda <= 0:
+        return None
+    enterprise_value = market_cap + (total_debt or 0.0) - (cash or 0.0)
+    return round(enterprise_value / ebitda, 2)
 
 
 class SyncUniverse:
@@ -228,12 +254,17 @@ class SyncUniverse:
         missing price never nulls a good prior figure; a stock with a price but no cached TTM
         (or a trailing loss) is written a ``None`` P/E, and one with no stored ``fcf_per_share``
         a ``None`` yield — genuinely no figure. The P/E leg is a no-op when no quarterly cache
-        was wired (best-effort enrichment); the FCF yield needs only the anchor read, so it
-        materializes regardless. The returned count stays the P/E tally (the report's
-        ``valued``), the FCF yield riding along as a silent enrichment like the growth pair."""
+        was wired (best-effort enrichment); the FCF yield and the EV/EBITDA need only anchor
+        reads, so they materialize regardless. The **EV/EBITDA** rides the same loop — the
+        screen-time market cap + the anchor's stored EV components (EBITDA/debt/cash) — a
+        sortable snapshot like the P/E, materialized whenever the fundamentals slice has landed
+        the EBITDA. The returned count stays the P/E tally (the report's ``valued``); the FCF
+        yield and EV/EBITDA ride along as silent enrichments like the growth pair."""
         pe_by_ticker: dict[str, float | None] = {}
         fcf_yield_by_ticker: dict[str, float | None] = {}
+        ev_ebitda_by_ticker: dict[str, float | None] = {}
         fcf_per_share = self._repository.fcf_per_share_by_ticker()
+        ev_components = self._repository.ev_components_by_ticker()
         for stock in screened:
             if stock.price is None:
                 continue  # no price this sweep — leave any prior figures untouched
@@ -244,7 +275,13 @@ class SyncUniverse:
             fcf_yield_by_ticker[stock.ticker] = _fcf_yield(
                 stock.price, fcf_per_share.get(stock.ticker)
             )
+            # EV/EBITDA off the screen-time market cap (not the price × shares the card uses
+            # live) + the anchor's stored EV components — a sortable snapshot like the P/E.
+            ev_ebitda_by_ticker[stock.ticker] = _ev_ebitda(
+                stock.market_cap, ev_components.get(stock.ticker)
+            )
         self._repository.set_fcf_yields(fcf_yield_by_ticker)
+        self._repository.set_ev_ebitda(ev_ebitda_by_ticker)
         return self._repository.set_pe_ratios(pe_by_ticker) if pe_by_ticker else 0
 
 
@@ -392,3 +429,45 @@ class GetIndustryValuation:
             raise ValueError("An industry is required.")
         pe_ratios = self._repository.pe_ratios_for_industry(slug)
         return IndustryValuation.from_pe_ratios(slug, pe_ratios)
+
+
+def _normalize_ticker(ticker: str) -> str:
+    """Trim/upper-case a ticker at the edge of a read use case, rejecting an empty one — so the
+    repository looks up the stored (upper-case) symbol. A light guard: unlike a live-quote path
+    this only reads the anchor, so an unknown-but-well-formed ticker simply finds no row (an empty
+    result), not an error."""
+    normalized = (ticker or "").strip().upper()
+    if not normalized:
+        raise ValueError("A ticker is required.")
+    return normalized
+
+
+class GetPeerComparison:
+    """A stock's valuation compared side-by-side with its industry, cap-tier-scoped peers
+    (``GET /stocks/ticker/{ticker}/peers``).
+
+    Resolves the anchor's industry (and its size tier, implicitly via the peer rows), reads every
+    screened company in that industry, and hands them to :meth:`PeerComparison.build`, which
+    scopes the cohort to the anchor's tier and medians every metric. Pure orchestration over the
+    read repository — no live feed; every figure is already materialized on the anchor by the
+    universe / fundamentals / annual syncs.
+
+    Best-effort, never a 404: a ticker the universe hasn't classified (no stored industry) yields
+    an empty comparison — the same "no coverage is a 200" stance the industry-P/E benchmark takes.
+    """
+
+    def __init__(self, repository: StockSearchRepository) -> None:
+        self._repository = repository
+
+    def execute(self, ticker: str) -> PeerComparison:
+        """Read the anchor's industry, its peers, and build the comparison.
+
+        A malformed ticker is a ``ValueError`` (400 at the edge). An anchor with no stored
+        industry (unclassified or unknown) has no peer set to build, so it returns an empty
+        comparison (``industry`` None, no anchor row, no peers) rather than erroring."""
+        normalized = _normalize_ticker(ticker)
+        industry = self._repository.industry_for_ticker(normalized)
+        if industry is None:
+            return PeerComparison.build(normalized, None, ())
+        candidates = self._repository.peers_for_industry(industry)
+        return PeerComparison.build(normalized, industry, candidates)

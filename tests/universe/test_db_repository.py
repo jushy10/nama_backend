@@ -307,6 +307,61 @@ def test_set_fcf_yields_writes_overwrites_keeps_sign_and_counts(session):
     assert _row(session, "BURN").fcf_yield is None  # cleared
 
 
+def test_ev_components_by_ticker_returns_only_rows_with_ebitda(session):
+    r = repo(session)
+    r.upsert_screen((_stock("AAPL", market_cap=3e12), _stock("MSFT", market_cap=2e12)))
+    # The fundamentals slice writes the EV components onto the anchor; set them directly here.
+    aapl = _row(session, "AAPL")
+    aapl.ebitda, aapl.total_debt, aapl.cash_and_equivalents = 5e11, 2e11, 1e11
+    # MSFT gets debt/cash but NO ebitda -> excluded (ebitda is the gate).
+    _row(session, "MSFT").total_debt = 9e10
+    session.commit()
+
+    by_ticker = r.ev_components_by_ticker()
+
+    assert by_ticker == {"AAPL": (5e11, 2e11, 1e11)}  # MSFT absent (no ebitda)
+
+
+def test_ev_components_by_ticker_carries_null_debt_and_cash(session):
+    r = repo(session)
+    r.upsert_screen((_stock("DEBTFREE", market_cap=1e12),))
+    _row(session, "DEBTFREE").ebitda = 5e11  # only ebitda, no debt/cash
+    session.commit()
+
+    assert r.ev_components_by_ticker() == {"DEBTFREE": (5e11, None, None)}
+
+
+def test_set_ev_ebitda_writes_overwrites_keeps_sign_and_counts(session):
+    r = repo(session)
+    r.upsert_screen(
+        (
+            _stock("AAPL", market_cap=3e12),
+            _stock("CASHPILE", market_cap=1e10),
+            _stock("MSFT", market_cap=2e12),
+        )
+    )
+
+    written = r.set_ev_ebitda({"AAPL": 6.2, "CASHPILE": -40.0, "MSFT": None})
+
+    assert written == 2  # AAPL + CASHPILE; the None isn't counted
+    assert _row(session, "AAPL").ev_to_ebitda == 6.2
+    assert _row(session, "CASHPILE").ev_to_ebitda == -40.0  # sign kept (net-cash name)
+    assert _row(session, "MSFT").ev_to_ebitda is None
+
+    # Overwrite in place, and a None clears a prior figure.
+    written = r.set_ev_ebitda({"AAPL": 5.5, "CASHPILE": None})
+    assert written == 1
+    assert _row(session, "AAPL").ev_to_ebitda == 5.5
+    assert _row(session, "CASHPILE").ev_to_ebitda is None  # cleared
+
+
+def test_set_ev_ebitda_skips_an_unknown_ticker(session):
+    r = repo(session)
+    r.upsert_screen((_stock("AAPL", market_cap=3e12),))
+    # An unknown ticker is silently skipped (no row to write), so only AAPL counts.
+    assert r.set_ev_ebitda({"AAPL": 6.2, "GHOST": 10.0}) == 1
+
+
 def test_set_pe_ratios_skips_an_unknown_ticker(session):
     r = repo(session)
     r.upsert_screen((_stock("AAPL", market_cap=3e12),))
@@ -337,6 +392,7 @@ def _seed(
     market_cap=1e10,
     pe_ratio=None,
     fcf_yield=None,
+    ev_ebitda=None,
     fcf_per_share=None,
     revenue_growth_yoy=None,
     eps_growth_yoy=None,
@@ -358,6 +414,7 @@ def _seed(
             market_cap=market_cap,
             pe_ratio=pe_ratio,
             fcf_yield=fcf_yield,
+            ev_to_ebitda=ev_ebitda,
             fcf_per_share=fcf_per_share,
             revenue_growth_yoy=revenue_growth_yoy,
             eps_growth_yoy=eps_growth_yoy,
@@ -655,6 +712,27 @@ def test_search_sorts_by_fcf_yield_with_nulls_last_either_direction(session):
     ) == ["BURN", "MIDCASH", "RICHCASH", "NONE"]
 
 
+def test_search_sorts_by_ev_ebitda_with_nulls_last_either_direction(session):
+    _seed(session, "CHEAP", ev_ebitda=6.0)  # cheapest on enterprise value
+    _seed(session, "MID", ev_ebitda=12.0)
+    _seed(session, "NETCASH", ev_ebitda=-4.0)  # negative kept — valued below net cash
+    _seed(session, "NONE", ev_ebitda=None)  # unvalued sinks to the bottom
+    r = SqlStockSearchRepository(session)
+
+    # Ascending surfaces the cheapest on enterprise value first (the net-cash name lowest of
+    # all); the null is last (nulls_last).
+    assert _tickers(
+        r.search(_criteria(sort=StockSort.EV_EBITDA, direction=SortDirection.ASC))
+    ) == ["NETCASH", "CHEAP", "MID", "NONE"]
+    # Descending: the priciest first, and the null is STILL last.
+    assert _tickers(r.search(_criteria(sort=StockSort.EV_EBITDA))) == [
+        "MID",
+        "CHEAP",
+        "NETCASH",
+        "NONE",
+    ]
+
+
 def test_search_with_no_sort_orders_by_ticker_ignoring_direction(session):
     # No sort chosen (sort=None): a neutral A→Z by ticker, independent of market cap — so an
     # unsorted browse isn't secretly market-cap ordered, yet still pages deterministically.
@@ -716,6 +794,7 @@ def test_search_maps_every_row_field(session):
         industry="semiconductors",
         market_cap=3.0e12,
         pe_ratio=48.2,
+        ev_ebitda=42.5,
         revenue_growth_yoy=61.6,
         eps_growth_yoy=587.4,
         forward_revenue_growth_yoy=52.1,
@@ -733,6 +812,7 @@ def test_search_maps_every_row_field(session):
     )
     assert result.market_cap == 3.0e12
     assert result.pe_ratio == 48.2
+    assert result.ev_ebitda == 42.5
     assert (result.revenue_growth_yoy, result.eps_growth_yoy) == (61.6, 587.4)
     assert (result.forward_revenue_growth_yoy, result.forward_eps_growth_yoy) == (52.1, 48.3)
     assert (result.in_sp500, result.in_nasdaq100) == (True, True)
@@ -877,3 +957,43 @@ def test_industry_peers_tags_each_mid_cap_and_up_peer_with_its_tier(session):
         (30.0, MarketCapTier.LARGE),
         (46.5, MarketCapTier.MEGA),
     ]
+
+
+def test_peers_for_industry_returns_every_screened_row_with_its_tier(session):
+    # Unlike industry_peers (the benchmark sample), the comparison candidates have NO P/E floor
+    # and NO $2B floor — a comparison table shows every screened peer, tier scoping does the rest.
+    _seed(
+        session,
+        "NVDA",
+        industry="semiconductors",
+        market_cap=3e12,
+        pe_ratio=46.5,
+        ev_ebitda=40.0,
+        fcf_yield=1.8,
+        revenue_growth_yoy=60.0,
+    )  # mega
+    _seed(session, "MU", industry="semiconductors", market_cap=5e9, pe_ratio=12.0)  # mid
+    _seed(session, "SMALL", industry="semiconductors", market_cap=1.5e9, pe_ratio=90.0)  # <$2B — KEPT
+    _seed(session, "LOSS", industry="semiconductors", market_cap=5e9, pe_ratio=None)  # no P/E — KEPT
+    _seed(session, "XOM", industry="oil_gas_integrated", market_cap=4e11)  # other industry — excluded
+    _seed(session, "PRIVATE", industry="semiconductors", market_cap=None)  # unscreened — excluded
+    _row(session, "NVDA").net_margin = 55.0  # net_margin isn't a _seed param; set it directly
+    session.commit()
+    r = SqlStockSearchRepository(session)
+
+    peers = {p.ticker: p for p in r.peers_for_industry("semiconductors")}
+
+    assert set(peers) == {"NVDA", "MU", "SMALL", "LOSS"}  # other industry + unscreened dropped
+    nvda = peers["NVDA"]
+    assert (nvda.market_cap, nvda.pe_ratio, nvda.ev_ebitda, nvda.fcf_yield) == (3e12, 46.5, 40.0, 1.8)
+    assert (nvda.net_margin, nvda.revenue_growth_yoy) == (55.0, 60.0)
+    assert nvda.tier == MarketCapTier.MEGA
+    assert peers["MU"].tier == MarketCapTier.MID
+    assert peers["SMALL"].tier == MarketCapTier.SMALL  # the $1–2B tail is kept here
+
+
+def test_peers_for_industry_empty_for_an_unknown_industry(session):
+    _seed(session, "NVDA", industry="semiconductors", market_cap=3e12)
+    r = SqlStockSearchRepository(session)
+
+    assert r.peers_for_industry("nonesuch") == ()

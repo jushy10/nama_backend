@@ -25,6 +25,7 @@ from app.stocks.universe.entities import (
     Classifications,
     CompanyClassification,
     MarketCapTier,
+    PeerCompany,
     ScreenedStock,
     StockSearchCriteria,
     StockSearchPage,
@@ -143,6 +144,35 @@ class UniverseRepository(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def ev_components_by_ticker(self) -> Mapping[str, tuple[float, float | None, float | None]]:
+        """Return ``{ticker: (ebitda, total_debt, cash_and_equivalents)}`` for every anchor row
+        carrying a non-null ``ebitda`` — the fundamentals slice's stored enterprise-value inputs.
+
+        The pieces the valuation pass pairs with the screen-time ``market_cap`` to materialize
+        ``ev_to_ebitda`` (enterprise value = market cap + debt − cash, over EBITDA), the EV
+        analogue of :meth:`fcf_per_share_by_ticker`. Only ``ebitda`` is required (its non-null
+        row is the gate); ``total_debt`` / ``cash_and_equivalents`` ride along and may be
+        ``None`` (the pass treats a missing leg as ``0``). A read on the write-side repository
+        because it feeds the sync; a ticker the fundamentals slice hasn't reached is simply
+        absent, so its ``ev_to_ebitda`` stays null.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_ev_ebitda(self, ev_ebitda_by_ticker: Mapping[str, float | None]) -> int:
+        """Overwrite each ticker's materialized ``ev_to_ebitda`` on the anchor in one commit,
+        and return how many were written with a non-null value.
+
+        The EV sibling of :meth:`set_pe_ratios` / :meth:`set_fcf_yields` — enterprise value at
+        the screen-time market cap over trailing EBITDA, so the search list and the peer
+        comparison are sortable/readable off one DB query. Overwrites (a price-derived
+        snapshot), and a ``None`` clears a prior figure (no EBITDA cached, or no price this
+        sweep). Like the card's live figure it keeps its sign — a net-cash company below its
+        cash reads negative. A ticker with no anchor row is skipped. Commits once.
+        """
+        raise NotImplementedError
+
 
 class StockSearchRepository(ABC):
     """A read-only view over the screened universe on the ``stocks`` anchor — what the
@@ -238,5 +268,22 @@ class StockSearchRepository(ABC):
         tier-scoped cohort (see :meth:`IndustryValuation.for_stock_peers`). An unknown
         industry (or one with no valued members) yields an empty tuple — no coverage, not an
         error.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def peers_for_industry(self, industry: str) -> tuple[PeerCompany, ...]:
+        """Return **every** screened company in ``industry`` as a :class:`PeerCompany` row — the
+        candidate set the peer comparison scopes and medians.
+
+        The named-row sibling of :meth:`industry_peers` (which returns only ``(pe, tier)`` pairs
+        for the aggregate benchmark): each row carries the anchor's comparison columns
+        (market cap, the P/E and EV/EBITDA snapshots, FCF yield, net margin, trailing revenue
+        growth) and its size ``tier``. Unlike the benchmark sample there is **no P/E floor and no
+        $2B floor** — a comparison table shows every peer (a missing metric is a blank cell, and
+        the tier scoping, not a market-cap floor, keeps the cohort sensible), and it includes the
+        looked-up stock itself when it's a screened member of the industry. Screened rows only
+        (``market_cap IS NOT NULL``). An unknown industry yields an empty tuple — no coverage,
+        not an error.
         """
         raise NotImplementedError

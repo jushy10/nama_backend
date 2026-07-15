@@ -338,6 +338,10 @@ class GetTickerCard:
             book_value_per_share=stored.book_value_per_share,
             sales_per_share=stored.sales_per_share,
             eps_growth_yoy=stored.eps_growth_yoy,
+            ebitda=stored.ebitda,
+            total_debt=stored.total_debt,
+            cash_and_equivalents=stored.cash_and_equivalents,
+            shares_outstanding=stored.shares_outstanding,
         )
 
     def _get_forward_multiples(

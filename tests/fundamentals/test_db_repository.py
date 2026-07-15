@@ -58,6 +58,10 @@ def _full() -> Fundamentals:
         book_value_per_share=4.2,
         sales_per_share=25.0,
         dividend_per_share=1.0,
+        ebitda=130_000_000_000.0,
+        total_debt=100_000_000_000.0,
+        cash_and_equivalents=60_000_000_000.0,
+        shares_outstanding=16_000_000_000.0,
     )
 
 
@@ -70,6 +74,13 @@ def test_upsert_lands_every_figure_and_stamps_the_sync_time(session):
     assert (row.return_on_equity, row.current_ratio, row.debt_to_equity) == (147.4, 0.9, 1.5)
     assert row.beta == 1.2
     assert (row.book_value_per_share, row.sales_per_share, row.dividend_per_share) == (4.2, 25.0, 1.0)
+    # The enterprise-value inputs land too (the materialized ev_to_ebitda snapshot is the
+    # universe pass's job, so it stays null here).
+    assert (row.ebitda, row.total_debt, row.cash_and_equivalents) == (
+        130_000_000_000.0, 100_000_000_000.0, 60_000_000_000.0,
+    )
+    assert row.shares_outstanding == 16_000_000_000.0
+    assert row.ev_to_ebitda is None
     assert _synced(row) == datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
 
 

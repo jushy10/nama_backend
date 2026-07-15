@@ -29,6 +29,7 @@ from app.stocks.universe.entities import (
     Classifications,
     CompanyClassification,
     MarketCapTier,
+    PeerCompany,
     ScreenedStock,
     SortDirection,
     StockSearchCriteria,
@@ -171,6 +172,44 @@ class SqlUniverseRepository(UniverseRepository):
         self._session.commit()
         return written
 
+    def ev_components_by_ticker(
+        self,
+    ) -> Mapping[str, tuple[float, float | None, float | None]]:
+        # Every anchor row the fundamentals slice has given an `ebitda` (the EV numerator's
+        # divisor). `is_not(None)` gates on EBITDA; debt/cash ride along and may be null (the
+        # valuation pass treats a missing leg as 0). Looked up by ticker in the pass, so no
+        # screened gate is needed here.
+        rows = self._session.execute(
+            select(
+                StockRecord.ticker,
+                StockRecord.ebitda,
+                StockRecord.total_debt,
+                StockRecord.cash_and_equivalents,
+            ).where(StockRecord.ebitda.is_not(None))
+        ).all()
+        return {
+            ticker: (ebitda, total_debt, cash)
+            for ticker, ebitda, total_debt, cash in rows
+        }
+
+    def set_ev_ebitda(self, ev_ebitda_by_ticker: Mapping[str, float | None]) -> int:
+        # Overwrite, mirroring set_pe_ratios / set_fcf_yields: the multiple is recomputed from a
+        # fresh screen-time market cap each sweep, so a None legitimately clears a stale figure
+        # (no cached EBITDA, or no price this run). Keeps its sign like the FCF yield. One commit
+        # for the whole batch.
+        written = 0
+        for ticker, ev_ebitda in ev_ebitda_by_ticker.items():
+            stock = self._session.execute(
+                select(StockRecord).where(StockRecord.ticker == ticker)
+            ).scalar_one_or_none()
+            if stock is None:
+                continue
+            stock.ev_to_ebitda = ev_ebitda
+            if ev_ebitda is not None:
+                written += 1
+        self._session.commit()
+        return written
+
 
 # Each domain sort field → the anchor column (or expression) it orders by. The growth figures
 # are nullable (the annual slice may not have filled them yet), so whichever is chosen gets
@@ -196,6 +235,7 @@ _SORT_EXPRESSIONS = {
     StockSort.PE: StockRecord.pe_ratio,
     StockSort.FCF_GROWTH: StockRecord.fcf_growth_yoy,
     StockSort.FCF_YIELD: StockRecord.fcf_yield,
+    StockSort.EV_EBITDA: StockRecord.ev_to_ebitda,
 }
 
 # Each market-cap tier → its (min_inclusive, max_exclusive) dollar bounds; ``None`` = unbounded
@@ -269,6 +309,7 @@ def _to_result(row: StockRecord) -> StockSearchResult:
         market_cap=row.market_cap,
         pe_ratio=row.pe_ratio,
         fcf_yield=row.fcf_yield,
+        ev_ebitda=row.ev_to_ebitda,
         revenue_growth_yoy=row.revenue_growth_yoy,
         eps_growth_yoy=row.eps_growth_yoy,
         fcf_growth_yoy=row.fcf_growth_yoy,
@@ -448,6 +489,41 @@ class SqlStockSearchRepository(StockSearchRepository):
             (pe, _tier_for_market_cap(cap))
             for pe, cap in rows
             if _tier_for_market_cap(cap) is not None
+        )
+
+    def peers_for_industry(self, industry: str) -> tuple[PeerCompany, ...]:
+        # Every screened row in the industry (market_cap NOT NULL is the screened gate), with the
+        # comparison columns straight off the anchor. No P/E or market-cap floor — a comparison
+        # table shows every peer (a null metric is a blank cell) and the cohort's *tier* scoping,
+        # applied by PeerComparison.build, does the size-narrowing the benchmark's $2B floor did.
+        rows = self._session.execute(
+            select(
+                StockRecord.ticker,
+                StockRecord.name,
+                StockRecord.market_cap,
+                StockRecord.pe_ratio,
+                StockRecord.ev_to_ebitda,
+                StockRecord.fcf_yield,
+                StockRecord.net_margin,
+                StockRecord.revenue_growth_yoy,
+            ).where(
+                StockRecord.industry == industry,
+                StockRecord.market_cap.is_not(None),
+            )
+        ).all()
+        return tuple(
+            PeerCompany(
+                ticker=row.ticker,
+                name=row.name,
+                market_cap=row.market_cap,
+                pe_ratio=row.pe_ratio,
+                ev_ebitda=row.ev_to_ebitda,
+                fcf_yield=row.fcf_yield,
+                net_margin=row.net_margin,
+                revenue_growth_yoy=row.revenue_growth_yoy,
+                tier=_tier_for_market_cap(row.market_cap),
+            )
+            for row in rows
         )
 
     def _conditions(self, criteria: StockSearchCriteria) -> list:

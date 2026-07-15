@@ -399,6 +399,9 @@ class FakeSearchRepo(StockSearchRepository):
             raise self._raises
         return tuple(pe for pe, _ in self._peers)
 
+    def peers_for_industry(self, industry):  # pragma: no cover - not the analysis path
+        raise NotImplementedError
+
     def search(self, criteria):  # pragma: no cover - not used by the analysis path
         raise NotImplementedError
 
@@ -3246,6 +3249,9 @@ class _FakeConstituentsRepo(StockSearchRepository):
     def industry_peers(self, industry):  # pragma: no cover - unused
         raise NotImplementedError
 
+    def peers_for_industry(self, industry):  # pragma: no cover - unused
+        raise NotImplementedError
+
 
 class _FakeBulkQuotes:
     """A ``BulkQuoteProvider`` fake: turns a {ticker: day-percent} map into Quotes; can raise
@@ -3306,6 +3312,7 @@ def _screened(ticker, sector, market_cap, *, name=None) -> StockSearchResult:
         market_cap=market_cap,
         pe_ratio=None,
         fcf_yield=None,
+        ev_ebitda=None,
         revenue_growth_yoy=None,
         eps_growth_yoy=None,
         fcf_growth_yoy=None,

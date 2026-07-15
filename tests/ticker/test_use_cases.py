@@ -140,6 +140,10 @@ class _FakeRepo(TickerRepository):
         operating_margin: float | None = None,
         net_margin: float | None = None,
         dividend_per_share: float | None = None,
+        ebitda: float | None = None,
+        total_debt: float | None = None,
+        cash_and_equivalents: float | None = None,
+        shares_outstanding: float | None = None,
     ) -> None:
         self._name = name
         self._exchange = exchange
@@ -155,6 +159,10 @@ class _FakeRepo(TickerRepository):
         self._operating_margin = operating_margin
         self._net_margin = net_margin
         self._dividend_per_share = dividend_per_share
+        self._ebitda = ebitda
+        self._total_debt = total_debt
+        self._cash_and_equivalents = cash_and_equivalents
+        self._shares_outstanding = shares_outstanding
         self.name_saves: list[tuple[str, str]] = []
         self.exchange_saves: list[tuple[str, str]] = []
 
@@ -174,6 +182,10 @@ class _FakeRepo(TickerRepository):
             operating_margin=self._operating_margin,
             net_margin=self._net_margin,
             dividend_per_share=self._dividend_per_share,
+            ebitda=self._ebitda,
+            total_debt=self._total_debt,
+            cash_and_equivalents=self._cash_and_equivalents,
+            shares_outstanding=self._shares_outstanding,
         )
 
     def save_name(self, symbol: str, name: str) -> None:
@@ -340,6 +352,64 @@ def test_fcf_multiples_are_none_without_the_fcf_leg():
     v = TickerValuation(symbol="MU", price=100.0)
     assert v.price_to_fcf is None
     assert v.fcf_yield is None
+
+
+def test_enterprise_value_and_ev_ebitda_price_shares_debt_cash_live():
+    # $100 quote x 1B shares = $100B market cap; + $20B debt - $5B cash = $115B EV;
+    # over $10B EBITDA -> 11.5x. All taken at the live price, like the P/E.
+    v = TickerValuation(
+        symbol="MU",
+        price=100.0,
+        shares_outstanding=1_000_000_000.0,
+        total_debt=20_000_000_000.0,
+        cash_and_equivalents=5_000_000_000.0,
+        ebitda=10_000_000_000.0,
+    )
+    assert v.enterprise_value == 115_000_000_000.0
+    assert v.ev_to_ebitda == 11.5
+
+
+def test_enterprise_value_defaults_missing_debt_and_cash_to_zero():
+    # A debt-free, cash-light name Yahoo carries no debt/cash for: its EV is just its
+    # live market cap (the legs default to 0 rather than nulling the whole figure).
+    v = TickerValuation(symbol="MU", price=50.0, shares_outstanding=1_000_000_000.0)
+    assert v.enterprise_value == 50_000_000_000.0
+
+
+@pytest.mark.parametrize("shares", [None, 0.0, -1.0])
+def test_enterprise_value_is_none_without_a_positive_share_count(shares):
+    # No usable share count -> no market cap -> no enterprise value (and so no EV/EBITDA).
+    v = TickerValuation(
+        symbol="MU", price=100.0, shares_outstanding=shares, ebitda=10_000_000_000.0
+    )
+    assert v.enterprise_value is None
+    assert v.ev_to_ebitda is None
+
+
+@pytest.mark.parametrize("ebitda", [None, 0.0, -3_000_000_000.0])
+def test_ev_ebitda_is_none_without_a_positive_ebitda(ebitda):
+    # EV/EBITDA off a non-positive EBITDA is meaningless — the same guard trailing_pe
+    # applies to a loss. Enterprise value itself still resolves.
+    v = TickerValuation(
+        symbol="MU", price=100.0, shares_outstanding=1_000_000_000.0, ebitda=ebitda
+    )
+    assert v.enterprise_value == 100_000_000_000.0
+    assert v.ev_to_ebitda is None
+
+
+def test_ev_ebitda_keeps_a_negative_enterprise_value():
+    # A net-cash company worth less than its cash: $10B market cap - $50B net cash = -$40B
+    # EV; over $10B EBITDA -> -4.0. The negative multiple is a real "valued below net cash"
+    # reading, so it's served (positive EBITDA is all that's required).
+    v = TickerValuation(
+        symbol="MU",
+        price=10.0,
+        shares_outstanding=1_000_000_000.0,
+        cash_and_equivalents=50_000_000_000.0,
+        ebitda=10_000_000_000.0,
+    )
+    assert v.enterprise_value == -40_000_000_000.0
+    assert v.ev_to_ebitda == -4.0
 
 
 def test_options_metrics_derives_all_four_reads_from_the_two_chains():
@@ -787,6 +857,25 @@ def test_metrics_carries_the_fcf_multiples_off_the_anchor():
     assert card.valuation.price_to_fcf == pytest.approx(25.0)
     assert card.valuation.fcf_yield == pytest.approx(4.0)
     assert card.valuation.ocf_yield == pytest.approx(6.0)
+
+
+def test_metrics_carries_enterprise_value_and_ev_ebitda_off_the_anchor():
+    # The EV inputs (shares/debt/cash/EBITDA) come from the stored anchor (the fundamentals
+    # slice's write), priced at the live quote: $100 x 1B shares + $20B debt - $5B cash =
+    # $115B EV, over $10B EBITDA -> 11.5x. Rides the same anchor read as the FCF/margins legs.
+    repo = _FakeRepo(
+        shares_outstanding=1_000_000_000.0,
+        total_debt=20_000_000_000.0,
+        cash_and_equivalents=5_000_000_000.0,
+        ebitda=10_000_000_000.0,
+    )
+
+    card = GetTickerCard(
+        _FakeQuotes(price=100.0), repository=repo
+    ).execute("MU", include=["metrics"])
+
+    assert card.valuation.enterprise_value == pytest.approx(115_000_000_000.0)
+    assert card.valuation.ev_to_ebitda == pytest.approx(11.5)
 
 
 def test_fcf_multiples_and_trailing_pe_ride_the_anchor_and_earnings():

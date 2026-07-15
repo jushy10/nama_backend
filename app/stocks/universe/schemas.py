@@ -14,14 +14,17 @@ class StockSearchItemResponse(BaseModel):
 
     ``market_cap`` is raw USD; ``pe_ratio`` is the trailing P/E on the analyst-consensus
     (adjusted) basis — the same figure the ticker card serves, materialized here for sorting;
-    ``revenue_growth_yoy`` / ``eps_growth_yoy`` are the annual slice's latest trailing
-    year-over-year growth and ``forward_revenue_growth_yoy`` / ``forward_eps_growth_yoy`` its
-    forward (FY1→FY2 consensus) counterparts (all percent, EPS on the analyst-consensus basis);
-    ``in_sp500`` / ``in_nasdaq100`` are definite booleans. Everything but the flags and the
-    ticker can be ``null`` until the enriching sync / annual slice reaches the stock (the forward
-    pair the most often, since it needs two upcoming years; ``pe_ratio`` also until four quarters
-    are cached, and for a trailing-year loss). The FE fetches a live quote or the full card per
-    row on demand via ``GET /stocks/ticker/{ticker}``.
+    ``ev_ebitda`` is the materialized EV/EBITDA snapshot (enterprise value at the screen-time
+    market cap over trailing EBITDA — the capital-structure-neutral cousin of ``pe_ratio``,
+    signed so a net-cash name reads negative); ``revenue_growth_yoy`` / ``eps_growth_yoy`` are
+    the annual slice's latest trailing year-over-year growth and ``forward_revenue_growth_yoy`` /
+    ``forward_eps_growth_yoy`` its forward (FY1→FY2 consensus) counterparts (all percent, EPS on
+    the analyst-consensus basis); ``in_sp500`` / ``in_nasdaq100`` are definite booleans.
+    Everything but the flags and the ticker can be ``null`` until the enriching sync / annual
+    slice reaches the stock (the forward pair the most often, since it needs two upcoming years;
+    ``pe_ratio`` also until four quarters are cached, and for a trailing-year loss; ``ev_ebitda``
+    until the fundamentals slice has landed the EBITDA, and on a non-positive EBITDA). The FE
+    fetches a live quote or the full card per row on demand via ``GET /stocks/ticker/{ticker}``.
     """
 
     ticker: str
@@ -31,6 +34,7 @@ class StockSearchItemResponse(BaseModel):
     market_cap: float | None = None  # raw USD
     pe_ratio: float | None = None  # trailing P/E, consensus basis (matches the card)
     fcf_yield: float | None = None  # percent, materialized FCF yield (signed; sortable)
+    ev_ebitda: float | None = None  # materialized EV/EBITDA snapshot (signed; sortable)
     revenue_growth_yoy: float | None = None  # percent, latest trailing YoY
     eps_growth_yoy: float | None = None  # percent, latest trailing YoY, consensus basis
     fcf_growth_yoy: float | None = None  # percent, latest trailing FCF/share YoY
@@ -96,6 +100,62 @@ class ClassificationsResponse(BaseModel):
 
     sectors: list[str]
     industries: list[str]
+
+
+class PeerCompanyResponse(BaseModel):
+    """One row of a peer comparison — a company on the shared metric columns.
+
+    ``market_cap`` is raw USD; ``pe_ratio`` the trailing P/E (consensus basis) and ``ev_ebitda``
+    the EV/EBITDA snapshot (signed) — the same materialized figures the search sorts on;
+    ``fcf_yield`` / ``net_margin`` / ``revenue_growth_yoy`` are percent. Every metric is ``null``
+    until the enriching syncs reach the company, so a sparse peer shows blank cells rather than
+    dropping out. ``is_anchor`` is ``true`` on the looked-up stock so a client can highlight it.
+    """
+
+    ticker: str
+    name: str | None = None
+    market_cap: float | None = None  # raw USD
+    pe_ratio: float | None = None  # trailing P/E, consensus basis
+    ev_ebitda: float | None = None  # EV/EBITDA snapshot (signed)
+    fcf_yield: float | None = None  # percent, signed
+    net_margin: float | None = None  # percent
+    revenue_growth_yoy: float | None = None  # percent, latest trailing
+    is_anchor: bool = False
+
+
+class PeerMediansResponse(BaseModel):
+    """The median of each metric over the displayed cohort (the anchor and its peers).
+
+    The reference a client draws the anchor against — where its multiple sits versus the peer
+    set. Each is ``null`` when no company in the cohort carries that metric.
+    """
+
+    pe_ratio: float | None = None
+    ev_ebitda: float | None = None
+    fcf_yield: float | None = None
+    net_margin: float | None = None
+    revenue_growth_yoy: float | None = None
+
+
+class PeerComparisonResponse(BaseModel):
+    """A stock compared side-by-side with its industry, cap-tier-scoped peers.
+
+    ``ticker`` echoes the looked-up (normalized) symbol; ``industry`` is its stored slug
+    (``null`` when it isn't classified — then there are no peers). ``cohort`` names the size slice
+    the peers were drawn from (``"mega"`` / ``"large/mega"`` / ``"industry"``), so a peer set
+    scoped to the mega-caps doesn't read as the whole industry. ``anchor`` is the looked-up stock's
+    own row (``null`` when it isn't a screened member), ``peers`` the comparables (largest by
+    market cap first), and ``medians`` the cohort reference line. ``count`` is the number of peers
+    shown. An unclassified or peerless stock is an empty comparison (a 200), not a 404.
+    """
+
+    ticker: str
+    industry: str | None = None
+    cohort: str
+    count: int  # number of peers shown (excludes the anchor)
+    anchor: PeerCompanyResponse | None = None
+    peers: list[PeerCompanyResponse]
+    medians: PeerMediansResponse
 
 
 class IndustryValuationResponse(BaseModel):

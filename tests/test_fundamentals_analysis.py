@@ -175,6 +175,9 @@ class _FakeSearchRepo(StockSearchRepository):
     def pe_ratios_for_industry(self, industry):  # pragma: no cover - not the analysis path
         raise NotImplementedError
 
+    def peers_for_industry(self, industry):  # pragma: no cover - not the analysis path
+        raise NotImplementedError
+
     def search(self, criteria):  # pragma: no cover - not the analysis path
         raise NotImplementedError
 

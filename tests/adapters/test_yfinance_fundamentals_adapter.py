@@ -31,6 +31,9 @@ _AAPL_INFO = {
     "totalRevenue": 400_000_000_000,  # -> sales_per_share = revenue / shares
     "sharesOutstanding": 16_000_000_000,  # -> 400e9 / 16e9 = 25.0
     "dividendRate": 1.0,  # annual dividend per share
+    "ebitda": 130_000_000_000,  # absolute (USD) -> EV input
+    "totalDebt": 100_000_000_000,  # absolute (USD) -> EV input
+    "totalCash": 60_000_000_000,  # absolute (USD) -> EV input
 }
 
 
@@ -67,6 +70,11 @@ def test_maps_and_normalizes_every_field():
     assert f.book_value_per_share == pytest.approx(4.2)
     assert f.sales_per_share == pytest.approx(25.0)  # 400e9 / 16e9
     assert f.dividend_per_share == pytest.approx(1.0)
+    # EV inputs: absolute dollar figures (USD issuer -> no conversion), shares a raw count.
+    assert f.ebitda == pytest.approx(130_000_000_000)
+    assert f.total_debt == pytest.approx(100_000_000_000)
+    assert f.cash_and_equivalents == pytest.approx(60_000_000_000)
+    assert f.shares_outstanding == pytest.approx(16_000_000_000)
 
 
 def test_missing_fields_degrade_to_none():
@@ -78,6 +86,10 @@ def test_missing_fields_degrade_to_none():
     assert f.book_value_per_share is None
     assert f.sales_per_share is None  # needs both revenue and shares
     assert f.dividend_per_share is None
+    assert f.ebitda is None
+    assert f.total_debt is None
+    assert f.cash_and_equivalents is None
+    assert f.shares_outstanding is None
 
 
 def test_dividend_falls_back_to_trailing_and_a_non_payer_is_none():
@@ -121,6 +133,9 @@ def test_foreign_adr_reporting_figures_are_converted_to_trading_currency():
         "totalRevenue": 3_200_000_000_000,  # TWD -> /1e9 shares -> 3200 TWD/sh -> x(1/32) -> 100
         "sharesOutstanding": 1_000_000_000,
         "dividendRate": 2.0,  # trading currency (USD) -> unchanged
+        "ebitda": 320_000_000_000,  # TWD absolute -> x(1/32) -> 10e9 USD
+        "totalDebt": 32_000_000_000,  # TWD absolute -> x(1/32) -> 1e9 USD
+        "totalCash": 64_000_000_000,  # TWD absolute -> x(1/32) -> 2e9 USD
     }
     stock = _FakeTicker(info)
     fx = _FakeTicker({}, fast_info={"last_price": 1 / 32})  # TWDUSD=X: USD per TWD
@@ -134,3 +149,14 @@ def test_foreign_adr_reporting_figures_are_converted_to_trading_currency():
     assert f.book_value_per_share == pytest.approx(10.0)  # 320 / 32
     assert f.sales_per_share == pytest.approx(100.0)  # 3200 TWD/sh / 32
     assert f.dividend_per_share == pytest.approx(2.0)  # already trading currency
+    # The EV absolute figures ride the same reporting->trading conversion; shares (a count) don't.
+    assert f.ebitda == pytest.approx(10_000_000_000)  # 320e9 TWD / 32
+    assert f.total_debt == pytest.approx(1_000_000_000)  # 32e9 TWD / 32
+    assert f.cash_and_equivalents == pytest.approx(2_000_000_000)  # 64e9 TWD / 32
+    assert f.shares_outstanding == pytest.approx(1_000_000_000)  # count: currency-agnostic
+
+
+def test_shares_outstanding_is_positive_only():
+    # A zero/negative share count is junk (it would divide an enterprise value), so it's nulled.
+    f = _provider({"currency": "USD", "sharesOutstanding": 0}).get_fundamentals("X")
+    assert f.shares_outstanding is None

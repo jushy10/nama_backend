@@ -32,6 +32,12 @@ Beside the card's *item* route live its *collection* and *filter menus*, reading
   error is a 400 (a bad ``sort``/``order`` is a 422 from the enum binding).
 - ``GET /stocks/classifications`` — the distinct sector + industry slugs, for the FE's
   filter menus (``ListClassifications``).
+- ``GET /stocks/ticker/{ticker}/peers`` — the stock side-by-side with its industry,
+  cap-tier-scoped peers (same industry, scoped to its size class) on market cap, trailing P/E,
+  EV/EBITDA, FCF yield, net margin and trailing revenue growth, with the cohort medians
+  (``GetPeerComparison``). A per-ticker read grouped here with the universe collection because it
+  reads the same screened anchor — the named comparable-company table the industry-P/E benchmark
+  only summarized. Pure DB read; an unclassified stock is a 200 with an empty comparison.
 
 Wiring convention: this endpoint owns no vendor of its own — it reuses the composition
 root's factories. The quote and performance windows ride the ``@lru_cache``d Alpaca
@@ -97,6 +103,8 @@ from app.stocks.universe.entities import (
     Classifications,
     IndustryValuation,
     MarketCapTier,
+    PeerCompany,
+    PeerComparison,
     ScreenIntent,
     SortDirection,
     StockSearchPage,
@@ -108,12 +116,16 @@ from app.stocks.universe.schemas import (
     AiScreenResponse,
     ClassificationsResponse,
     IndustryValuationResponse,
+    PeerCompanyResponse,
+    PeerComparisonResponse,
+    PeerMediansResponse,
     StockSearchItemResponse,
     StockSearchResponse,
 )
 from app.stocks.universe.use_cases import (
     AiScreenStocks,
     GetIndustryValuation,
+    GetPeerComparison,
     ListClassifications,
     SearchStocks,
 )
@@ -239,6 +251,10 @@ def _present(card: TickerCard) -> TickerCardResponse:
             # rounded by the entity's forward_pe/forward_ps).
             forward_pe=card.forward_pe,
             forward_ps=card.forward_ps,
+            # Enterprise value + EV/EBITDA, priced live off the quote (the entity rounds
+            # ev_ebitda; EV is a large dollar figure served raw for the FE to scale).
+            enterprise_value=valuation.enterprise_value if valuation else None,
+            ev_ebitda=valuation.ev_to_ebitda if valuation else None,
             price_to_fcf=valuation.price_to_fcf if valuation else None,
             fcf_yield=valuation.fcf_yield if valuation else None,
             ocf_yield=valuation.ocf_yield if valuation else None,
@@ -391,6 +407,78 @@ def get_pe_history_endpoint(
     return _present_pe_history(history)
 
 
+def get_peer_comparison_use_case(
+    db: Session = Depends(get_db),
+) -> GetPeerComparison:
+    # Same request-scoped read repository the search / industry-P/E reads use — a pure DB read
+    # over the shared anchor, no vendor or key.
+    return GetPeerComparison(SqlStockSearchRepository(db))
+
+
+def _present_peer_company(company: PeerCompany) -> PeerCompanyResponse:
+    """Presenter: one peer row -> DTO. The metrics are already stored rounded (the materialized
+    snapshots and percents), so this just maps fields and carries the anchor flag."""
+    return PeerCompanyResponse(
+        ticker=company.ticker,
+        name=company.name,
+        market_cap=company.market_cap,
+        pe_ratio=company.pe_ratio,
+        ev_ebitda=company.ev_ebitda,
+        fcf_yield=company.fcf_yield,
+        net_margin=_round2(company.net_margin),
+        revenue_growth_yoy=company.revenue_growth_yoy,
+        is_anchor=company.is_anchor,
+    )
+
+
+def _present_peer_comparison(comparison: PeerComparison) -> PeerComparisonResponse:
+    """Presenter: the peer-comparison composition -> HTTP response DTO."""
+    medians = comparison.medians
+    return PeerComparisonResponse(
+        ticker=comparison.ticker,
+        industry=comparison.industry,
+        cohort=comparison.cohort,
+        count=len(comparison.peers),
+        anchor=(
+            _present_peer_company(comparison.anchor)
+            if comparison.anchor is not None
+            else None
+        ),
+        peers=[_present_peer_company(p) for p in comparison.peers],
+        medians=PeerMediansResponse(
+            pe_ratio=medians.pe_ratio,
+            ev_ebitda=medians.ev_ebitda,
+            fcf_yield=medians.fcf_yield,
+            net_margin=_round2(medians.net_margin),
+            revenue_growth_yoy=medians.revenue_growth_yoy,
+        ),
+    )
+
+
+@router.get(
+    "/stocks/ticker/{ticker}/peers", response_model=PeerComparisonResponse
+)
+def get_peer_comparison_endpoint(
+    ticker: str,
+    response: Response,
+    use_case: GetPeerComparison = Depends(get_peer_comparison_use_case),
+) -> PeerComparisonResponse:
+    """A stock compared side-by-side with its industry, cap-tier-scoped peers — the anchor beside
+    the comparables most like it (same industry, scoped to its size class), each on market cap,
+    trailing P/E, EV/EBITDA, FCF yield, net margin and trailing revenue growth, with the cohort
+    medians as the reference. Pure DB read over the screened universe; every figure is the same
+    materialized one the search and ticker card serve. A stock the universe hasn't classified is a
+    200 with an empty comparison, not a 404."""
+    try:
+        comparison = use_case.execute(ticker)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    # A plain DB read over the slow-moving universe (refreshed out of band by the syncs) — cache
+    # briefly like the search list so a burst of viewers collapses onto one query.
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return _present_peer_comparison(comparison)
+
+
 def get_classify_ticker_use_case(db: Session = Depends(get_db)) -> ClassifyTicker:
     # Pure DB read: a single indexed membership check against the etfs table — no
     # vendor, no key, request-scoped session — so it's always constructable.
@@ -455,6 +543,7 @@ def _present_search(page: StockSearchPage) -> StockSearchResponse:
                 market_cap=r.market_cap,
                 pe_ratio=r.pe_ratio,
                 fcf_yield=r.fcf_yield,
+                ev_ebitda=r.ev_ebitda,
                 revenue_growth_yoy=r.revenue_growth_yoy,
                 eps_growth_yoy=r.eps_growth_yoy,
                 fcf_growth_yoy=r.fcf_growth_yoy,
@@ -535,8 +624,9 @@ def search_stocks_endpoint(
             "Sort field. Omit for no sort (a neutral A->Z by ticker). Otherwise: market_cap; "
             "the trailing growth figures revenue_growth, eps_growth, or growth (their "
             "equal-weight blend); their forward (FY1->FY2 consensus) counterparts "
-            "forward_revenue_growth, forward_eps_growth, forward_growth; or pe (trailing P/E on "
-            "the consensus basis; ascending surfaces the cheapest on earnings). Stocks missing "
+            "forward_revenue_growth, forward_eps_growth, forward_growth; pe (trailing P/E on "
+            "the consensus basis; ascending surfaces the cheapest on earnings); or ev_ebitda "
+            "(EV/EBITDA; ascending surfaces the cheapest on enterprise value). Stocks missing "
             "the chosen figure sort last."
         ),
     ),

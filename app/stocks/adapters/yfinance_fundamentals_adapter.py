@@ -32,7 +32,10 @@ which Yahoo always denominates in the *reporting* currency (TWD/CNY/…), while 
 reader prices them against is the *trading* currency (USD). Left raw, an ADR's P/B and P/S would
 be off by the FX factor (~32× for TWD). So the two per-share inputs are passed through the shared
 ``yfinance_currency`` normalizer's unconditional reporting→trading conversion — the identity for a
-US issuer or when the rate can't be read (best-effort, never-worse). The margins/ROE/ratios are
+US issuer or when the rate can't be read (best-effort, never-worse). The enterprise-value absolute
+figures (``ebitda`` / ``totalDebt`` / ``totalCash``) ride the same conversion — they're reporting-
+currency statement figures the card prices against the USD quote, so they'd be off by the same FX
+factor left raw; ``sharesOutstanding`` is a count and needs none. The margins/ROE/ratios are
 dimensionless and need no conversion; ``dividendRate`` is already trading-currency.
 
 **Failure contract — raises on a hard ``.info`` read, best-effort on each field.** A hard
@@ -81,6 +84,14 @@ class YfinanceFundamentalsProvider(FundamentalsProvider):
             book_value_per_share=normalizer.to_trading(_number(info.get("bookValue"))),
             sales_per_share=normalizer.to_trading(_sales_per_share(info)),
             dividend_per_share=_dividend_per_share(info),
+            # Enterprise-value inputs. EBITDA / total debt / cash are absolute statement
+            # figures in the reporting currency, so they ride the same reporting→trading
+            # conversion as the per-share inputs (identity for a US issuer). Shares outstanding
+            # is a count — currency-agnostic, so it's left raw.
+            ebitda=normalizer.to_trading(_number(info.get("ebitda"))),
+            total_debt=normalizer.to_trading(_number(info.get("totalDebt"))),
+            cash_and_equivalents=normalizer.to_trading(_number(info.get("totalCash"))),
+            shares_outstanding=_positive(_number(info.get("sharesOutstanding"))),
             name=_clean(info.get("longName")) or _clean(info.get("shortName")),
         )
 
@@ -148,6 +159,14 @@ def _number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+def _positive(value: float | None) -> float | None:
+    """A figure kept only when strictly positive, else ``None`` — for ``sharesOutstanding``,
+    where a zero/negative count is junk (and a divisor of an enterprise value, so it must be
+    usable). EBITDA / debt / cash are left as-is (EBITDA can genuinely be negative; the EV/EBITDA
+    positivity guard lives on the entity, like P/E's on a loss)."""
+    return value if value is not None and value > 0 else None
 
 
 def _clean(value: object) -> str | None:

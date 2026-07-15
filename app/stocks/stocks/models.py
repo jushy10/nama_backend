@@ -110,6 +110,21 @@ class StockRecord(Base):
     batch by it (un-synced rows first, then the oldest) — the anchor-column analogue of the
     earnings slices' per-row ``fetched_at`` (0031).
 
+    ``ebitda`` / ``total_debt`` / ``cash_and_equivalents`` / ``shares_outstanding`` are the
+    enterprise-value *inputs*, also landed by the fundamentals sweep (Yahoo ``.info``). The
+    first three are absolute figures in the trading currency (a foreign ADR's reporting-currency
+    values normalized in the adapter, like the per-share inputs); ``shares_outstanding`` is a
+    share count. The ticker card prices them against its *live* quote — enterprise value =
+    price × ``shares_outstanding`` + ``total_debt`` − ``cash_and_equivalents``, and EV/EBITDA
+    over ``ebitda`` — the same "store the input, price it live" split ``pe_ratio`` and the
+    per-share inputs use, so the multiple stays fresh without materializing a snapshot that
+    drifts. ``ev_to_ebitda`` is the *materialized* EV/EBITDA snapshot for the sortable search
+    column and the peer comparison — the universe sync's valuation pass computes it from the
+    screen-time ``market_cap`` + ``total_debt`` − ``cash_and_equivalents`` over ``ebitda`` and
+    **overwrites** it every run (a drifting, price-derived snapshot like ``pe_ratio`` /
+    ``fcf_yield``), null until both syncs have reached the stock or on a non-positive EBITDA
+    (0037). All five nullable.
+
     ``perf_one_week`` / ``perf_one_month`` / ``perf_three_month`` / ``perf_six_month`` /
     ``perf_ytd`` / ``perf_one_year`` are the stock's trailing price-return over the standard
     windows (percent) — the six fields of the shared ``StockPerformance`` value object,
@@ -160,6 +175,11 @@ class StockRecord(Base):
     book_value_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
     sales_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
     dividend_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ebitda: Mapped[float | None] = mapped_column(Float, nullable=True)
+    total_debt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cash_and_equivalents: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shares_outstanding: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ev_to_ebitda: Mapped[float | None] = mapped_column(Float, nullable=True)
     fundamentals_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -211,14 +231,17 @@ def anchor_facts(session: Session, ticker: str) -> Row | None:
     ``forward_revenue_growth_yoy``, ``forward_eps_growth_yoy``, ``fcf_per_share``,
     ``ocf_per_share``, ``fcf_growth_yoy``, ``gross_margin``, ``operating_margin``,
     ``net_margin``, ``return_on_equity``, ``current_ratio``, ``debt_to_equity``,
-    ``beta``, ``book_value_per_share``, ``sales_per_share``, ``dividend_per_share``);
+    ``beta``, ``book_value_per_share``, ``sales_per_share``, ``dividend_per_share``,
+    ``ebitda``, ``total_debt``, ``cash_and_equivalents``, ``shares_outstanding``);
     per-field ``None`` for whatever the row hasn't learned. Widened past name/exchange
     because the card also serves the universe-screen facts, the annual slice's trailing
     + forward growth and cash-flow per share, and the fundamentals slice's full trailing
     ratios (margins / ROE / liquidity / leverage / beta) plus the per-share inputs it
-    prices live (book value → P/B, sales → P/S, dividend → yield) straight off the anchor
-    — the caller maps it into ``StoredTickerFacts``. The same set the AI analysis reads
-    via ``AnchorMetrics``, so card and scorecard show one canonical figure."""
+    prices live (book value → P/B, sales → P/S, dividend → yield) and the enterprise-value
+    inputs it prices live (shares / debt / cash → enterprise value, ÷ EBITDA → EV/EBITDA)
+    straight off the anchor — the caller maps it into ``StoredTickerFacts``. The same set
+    the AI analysis reads via ``AnchorMetrics``, so card and scorecard show one canonical
+    figure."""
     return session.execute(
         select(
             StockRecord.name,
@@ -243,6 +266,10 @@ def anchor_facts(session: Session, ticker: str) -> Row | None:
             StockRecord.book_value_per_share,
             StockRecord.sales_per_share,
             StockRecord.dividend_per_share,
+            StockRecord.ebitda,
+            StockRecord.total_debt,
+            StockRecord.cash_and_equivalents,
+            StockRecord.shares_outstanding,
         ).where(StockRecord.ticker == ticker)
     ).one_or_none()
 

@@ -137,7 +137,9 @@ class StockSort(str, Enum):
     fastest all-round growers, trailing or expected; ``PE`` orders by the stored trailing P/E
     (the consensus-basis figure the universe sync writes) — ascending surfaces the cheapest on
     earnings first; ``FCF_YIELD`` orders by the materialized free-cash-flow yield — descending
-    surfaces the cheapest on cash (highest yield) first. The value → ORM column/expression
+    surfaces the cheapest on cash (highest yield) first; ``EV_EBITDA`` orders by the materialized
+    EV/EBITDA snapshot — ascending surfaces the cheapest on enterprise value (the
+    capital-structure-neutral cousin of ``PE``) first. The value → ORM column/expression
     mapping is the adapter's job — the enum just names the choices in domain terms.
     """
 
@@ -151,6 +153,7 @@ class StockSort(str, Enum):
     FORWARD_GROWTH = "forward_growth"
     PE = "pe"
     FCF_YIELD = "fcf_yield"
+    EV_EBITDA = "ev_ebitda"
 
 
 class SortDirection(str, Enum):
@@ -197,9 +200,11 @@ class StockSearchResult:
     ``in_sp500`` / ``in_nasdaq100`` are definite yes/no (the anchor stores them ``NOT NULL``);
     everything else is nullable — a screened stock always has a ``market_cap`` (the search
     only returns screened rows) but may still lack a name, a classification, the trailing /
-    forward growth, or a ``pe_ratio`` until the enriching sync/annual slice reaches it (forward
-    growth the most often, since it needs two upcoming years; ``pe_ratio`` stays null until the
-    quarterly cache holds four reported quarters, and for a trailing-year loss).
+    forward growth, a ``pe_ratio``, or an ``ev_ebitda`` until the enriching sync/annual slice
+    reaches it (forward growth the most often, since it needs two upcoming years; ``pe_ratio``
+    stays null until the quarterly cache holds four reported quarters, and for a trailing-year
+    loss; ``ev_ebitda`` until the fundamentals slice has landed the EBITDA, and on a non-positive
+    EBITDA).
 
     ``performance`` is the stock's trailing-window returns (1W…1Y, YTD), materialized on the
     anchor by the performance sync — ``None`` for a row it hasn't reached yet (or one with too
@@ -214,6 +219,7 @@ class StockSearchResult:
     market_cap: float | None
     pe_ratio: float | None
     fcf_yield: float | None
+    ev_ebitda: float | None
     revenue_growth_yoy: float | None
     eps_growth_yoy: float | None
     fcf_growth_yoy: float | None
@@ -414,6 +420,162 @@ class IndustryValuation:
                 return replace(cls.from_pe_ratios(industry, cohort_pes), cohort=label)
         # Unreachable: max_radius always terminates the loop above.
         return cls.from_pe_ratios(industry, all_pes)
+
+
+@dataclass(frozen=True)
+class PeerCompany:
+    """One company in a peer comparison — a row of the side-by-side table.
+
+    The valuation/quality columns available DB-only off the ``stocks`` anchor: ``market_cap``
+    (raw USD), the two materialized valuation snapshots ``pe_ratio`` (trailing, consensus basis)
+    and ``ev_ebitda`` (signed), the ``fcf_yield`` (percent, signed), ``net_margin`` (percent) and
+    ``revenue_growth_yoy`` (percent, latest trailing). Every metric is nullable — a peer the
+    enriching syncs haven't fully reached shows blanks for what it lacks, so the comparison
+    degrades gracefully rather than dropping the row. ``tier`` is the company's market-cap size
+    bucket (the axis the cohort is scoped along); ``is_anchor`` marks the looked-up stock so a
+    client can highlight it in the table. Deliberately *not* P/B or P/S — those are computed
+    live off the quote on the card and aren't materialized as sortable snapshots, so they aren't
+    available for a whole cohort in one DB read."""
+
+    ticker: str
+    name: str | None
+    market_cap: float | None
+    pe_ratio: float | None
+    ev_ebitda: float | None
+    fcf_yield: float | None
+    net_margin: float | None
+    revenue_growth_yoy: float | None
+    tier: MarketCapTier | None = None
+    is_anchor: bool = False
+
+
+@dataclass(frozen=True)
+class PeerMedians:
+    """The median of each comparison metric over the displayed cohort (the anchor and its peers).
+
+    The reference line a client draws the anchor against — "is this stock's P/E rich or cheap
+    *for this peer set*". Each is the median of the non-null values present in the cohort (so a
+    metric several peers lack still yields a median from those that carry it), or ``None`` when
+    no company in the cohort has it. Includes the anchor in the sample, matching how
+    :class:`IndustryValuation` measures a stock against a group it belongs to."""
+
+    pe_ratio: float | None
+    ev_ebitda: float | None
+    fcf_yield: float | None
+    net_margin: float | None
+    revenue_growth_yoy: float | None
+
+
+@dataclass(frozen=True)
+class PeerComparison:
+    """A stock's valuation compared side-by-side with its industry, cap-tier-scoped peers.
+
+    The named comparable-company table the industry P/E benchmark only ever summarized: the
+    looked-up stock (``anchor``) beside the ``peers`` it's most comparable to — same industry,
+    scoped to its own size tier and widened only as far as needed (a mega-cap against other
+    mega/large-caps, not $2B minnows) — each on the same metrics, with the cohort ``medians`` as
+    the reference. ``industry`` is the anchor's stored slug (``None`` when it isn't classified, in
+    which case there are no peers to find); ``cohort`` names the size slice the peers were drawn
+    from (``"mega"`` / ``"large/mega"`` / ``"industry"``), the same honesty label
+    :class:`IndustryValuation.cohort` carries. ``anchor`` is ``None`` when the looked-up stock
+    isn't in the screened universe (unscreened, so no row to compare) — the peer list still
+    serves. Best-effort throughout: an unclassified or peerless stock is an empty comparison, not
+    an error."""
+
+    # The cohort widens (to neighbouring size tiers) until it holds at least this many peers
+    # besides the anchor — enough for a median to mean "versus the group" rather than versus one
+    # or two names. Deliberately looser than IndustryValuation's benchmark floor (which needs a
+    # statistically representative sample); a comparison table is useful with a handful of named
+    # peers, and the tier scoping matters more than the count.
+    MIN_PEERS = 4
+    # The most peers to show beside the anchor — the largest by market cap, so the table stays a
+    # readable "you vs the giants of your industry" rather than a full sector dump.
+    MAX_PEERS = 11
+
+    ticker: str
+    industry: str | None
+    cohort: str
+    anchor: PeerCompany | None
+    peers: tuple[PeerCompany, ...]
+    medians: PeerMedians
+
+    @classmethod
+    def build(
+        cls, ticker: str, industry: str | None, candidates: Sequence[PeerCompany]
+    ) -> "PeerComparison":
+        """Assemble the comparison from every same-industry screened company (``candidates``,
+        which includes the anchor itself).
+
+        Splits the anchor out by ticker, scopes the remaining peers to the anchor's cap tier
+        (widening to neighbouring tiers until at least ``MIN_PEERS`` are in the cohort — the same
+        size-anchoring :meth:`IndustryValuation.for_stock_peers` uses, counting *rows* rather than
+        usable P/Es), takes the ``MAX_PEERS`` largest by market cap, and medians every metric over
+        the anchor-plus-peers cohort. An anchor missing from ``candidates`` (unscreened, or an
+        unknown ticker) yields the whole-industry cohort with no anchor row."""
+        anchor = next((c for c in candidates if c.ticker == ticker), None)
+        others = [c for c in candidates if c.ticker != ticker]
+        cohort, label = cls._select_cohort(anchor, others)
+        cohort = sorted(cohort, key=lambda c: c.market_cap or 0.0, reverse=True)[
+            : cls.MAX_PEERS
+        ]
+        displayed = ([anchor] if anchor is not None else []) + cohort
+        return cls(
+            ticker=ticker,
+            industry=industry,
+            cohort=label,
+            anchor=replace(anchor, is_anchor=True) if anchor is not None else None,
+            peers=tuple(cohort),
+            medians=cls._medians(displayed),
+        )
+
+    @classmethod
+    def _select_cohort(
+        cls, anchor: PeerCompany | None, others: list[PeerCompany]
+    ) -> tuple[list[PeerCompany], str]:
+        """The peers to show and the size-slice label they were drawn from.
+
+        Starts at the anchor's own tier and widens to the nearest neighbouring tiers until the
+        cohort holds ``MIN_PEERS`` peers, falling back to the whole industry. The whole industry
+        when the anchor has no tier (unscreened / unknown cap) or there are no tiered peers to
+        anchor on."""
+        order = _TIER_ORDER_ASC
+        present = {c.tier for c in others if c.tier is not None}
+        if anchor is None or anchor.tier is None or not present:
+            return others, "industry"
+        anchor_rank = order.index(anchor.tier)
+        max_radius = max(abs(order.index(tier) - anchor_rank) for tier in present)
+        for radius in range(max_radius + 1):
+            allowed = {
+                tier for i, tier in enumerate(order) if abs(i - anchor_rank) <= radius
+            }
+            cohort = [c for c in others if c.tier in allowed]
+            if len(cohort) >= cls.MIN_PEERS or radius == max_radius:
+                return cohort, _cohort_label(allowed & present, present)
+        return others, "industry"  # unreachable: the loop always terminates at max_radius
+
+    @staticmethod
+    def _medians(companies: Sequence[PeerCompany]) -> PeerMedians:
+        """The median of each metric over ``companies``, non-null values only."""
+
+        def median(values: list[float]) -> float | None:
+            return _percentile(sorted(values), 50)
+
+        def column(attr: str) -> float | None:
+            return median(
+                [
+                    value
+                    for c in companies
+                    if (value := getattr(c, attr)) is not None
+                ]
+            )
+
+        return PeerMedians(
+            pe_ratio=column("pe_ratio"),
+            ev_ebitda=column("ev_ebitda"),
+            fcf_yield=column("fcf_yield"),
+            net_margin=column("net_margin"),
+            revenue_growth_yoy=column("revenue_growth_yoy"),
+        )
 
 
 def _cohort_label(chosen: set[MarketCapTier], present: set[MarketCapTier]) -> str:
