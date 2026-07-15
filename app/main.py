@@ -6,11 +6,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from starlette.requests import Request
 
+from app.rate_limit import limiter
 from app.stocks.endpoints.annual_earnings_endpoints import (
     router as annual_earnings_router,
 )
@@ -108,31 +108,6 @@ CORS_ALLOW_ORIGINS = [
 ]
 
 
-def _client_ip(request: Request) -> str:
-    """Identify the caller for rate limiting.
-
-    Behind the API Gateway VPC link the socket peer is the gateway's ENI — the
-    same address for every caller — so keying on ``request.client.host`` would
-    lump all traffic into one bucket. The real client IP arrives in the
-    ``X-Client-IP`` header, which the gateway *overwrites* with the observed
-    source IP (see the integration's request_parameters in infra), so it's
-    trustworthy and can't be spoofed by a client-supplied header. (It's a custom
-    header rather than X-Forwarded-For because API Gateway v2 forbids mapping
-    operations on XFF.)
-
-    The X-Forwarded-For fallback covers running without the gateway in front
-    (local dev, tests); off the gateway there's nothing to overwrite the header,
-    so treat it as untrusted best-effort keying, not a security boundary.
-    """
-    stamped = request.headers.get("x-client-ip")
-    if stamped:
-        return stamped.strip()
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "anonymous"
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Database schema is owned by Alembic migrations (`alembic upgrade head`),
@@ -143,24 +118,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="nama_backend", lifespan=lifespan)
 
-# Per-client (per-IP) rate limiting so one abusive caller can't exhaust the
-# service — a token bucket per client IP; over it, SlowAPI raises
-# RateLimitExceeded and the handler returns HTTP 429. These limits sit under API
-# Gateway's global throttle: that caps total load/cost, this stops any single IP
-# from consuming it. Tune as traffic grows.
-#
-# The counter defaults to in-process ("memory://"), which is exact for a single
-# task. Under autoscaling the service can run several tasks, and an in-process
-# counter is then per-task — a single IP can reach up to (task count) * the limit,
-# with the API Gateway throttle as the hard global backstop. Set
-# RATE_LIMIT_STORAGE_URI to a shared store (e.g. redis://host:6379) to make the
-# count exact across tasks; it's a one-env-var flip, no code change.
-_rate_limit_storage = os.environ.get("RATE_LIMIT_STORAGE_URI", "memory://")
-limiter = Limiter(
-    key_func=_client_ip,
-    default_limits=["20/second", "600/minute"],
-    storage_uri=_rate_limit_storage,
-)
+# Install the per-client (per-IP) rate limiter (defined in app/rate_limit.py so
+# endpoint modules can attach per-route limits without importing this module).
+# The limiter's ``default_limits`` apply to every route via the middleware;
+# expensive routes (the AI-analysis reads) layer a tighter per-route limit on
+# top. These sit under API Gateway's global throttle: that caps total load/cost,
+# this stops any single IP from consuming it.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
