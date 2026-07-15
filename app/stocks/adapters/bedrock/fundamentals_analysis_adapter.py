@@ -112,8 +112,10 @@ _ANALYSIS_TOOL = {
 _SYSTEM_PROMPT = (
     "You are a friendly investing assistant explaining a company's fundamentals to an "
     "everyday person with no finance background. You are given a snapshot of the stock: its "
-    "valuation multiples (how its price compares with its earnings, book value and sales, "
-    "both on past results and on what analysts expect next), its cash generation (how much "
+    "valuation multiples (how its price compares with its earnings, book value and sales, and "
+    "how the whole business — including its debt — compares with its operating earnings via "
+    "EV/EBITDA, which is fairer than price-to-earnings when companies carry very different debt "
+    "loads; all both on past results and on what analysts expect next), its cash generation (how much "
     "free and operating cash flow it produces per dollar of share price, and how fast that "
     "cash is growing), its profitability (margins and return on equity), its financial health "
     "(debt and how easily it covers short-term bills), how fast its revenue and earnings are "
@@ -310,6 +312,10 @@ def _render_prompt(
             ("PEG (trailing)", metrics.peg),
             ("P/B", metrics.pb),
             ("P/S", metrics.ps),
+            # EV/EBITDA — the whole enterprise (equity + net debt) against its operating
+            # earnings, so it's comparable across companies with different debt loads in a way
+            # P/E isn't. Priced live off the quote upstream, like the other multiples.
+            ("EV/EBITDA (trailing)", metrics.ev_to_ebitda),
             ("EPS (trailing)", metrics.eps),
             ("FCF/share (trailing)", metrics.fcf_per_share),
             # Cash-flow yields the ticker card shows, priced here on the live quote so the
