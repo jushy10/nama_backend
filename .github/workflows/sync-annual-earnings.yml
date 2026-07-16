@@ -1,9 +1,10 @@
 name: Sync annual earnings
 run-name: Sync annual earnings
 
-# Monthly (and on-demand). Reported fiscal years — and the trailing YoY growth derived from
-# them onto the stocks anchor — change about once a year per stock. The sweep both keeps the
-# already-stored rows fresh and SEEDS stocks not yet cached (the ≥$1B universe), un-cached first.
+# Weekly (and on-demand). Reported fiscal years — and the trailing YoY growth and per-share cash
+# flow derived from them onto the stocks anchor — change about once a year per stock. The sweep
+# both keeps the already-stored rows fresh and SEEDS stocks not yet cached (the ≥$1B universe),
+# un-cached first. The cadence is set by the seeding, not the refreshing — see the schedule note.
 #
 # It launches a one-off ECS Fargate task that runs `python -m app.sync annual-earnings [limit]`
 # (the SyncAnnualEarnings use case) to completion and exits. The sweep runs on its OWN 1 GB task
@@ -42,13 +43,24 @@ on:
         required: false
         type: string
         default: "750"
-  # 1st of each month, 09:00 UTC — an hour after the quarterly-earnings sync so the two don't
-  # hit Yahoo from the same host at once on a month whose 1st is a Monday. The stored annual rows
-  # change about once a year per stock, so a monthly refresh keeps them current; exact timing
-  # doesn't matter. Caveats: scheduled workflows run only from the default branch, and GitHub
-  # auto-disables the schedule after 60 days with no repo activity.
+  # Mondays, 12:00 UTC — four hours after the quarterly-earnings sync starts (08:00), so the two
+  # never hit Yahoo from the same host at once: a full sweep takes ~3h at the 750ms default pace,
+  # and overlapping them is what trips the data-centre-IP gate.
+  #
+  # Weekly, not monthly, because of what the sweep SEEDS rather than what it refreshes. A
+  # reported fiscal year changes about once a year, so monthly was ample for existing rows — but
+  # this sweep is also the only populator of the `stocks` anchor's trailing growth and
+  # `fcf_per_share`, which the universe sync's valuation pass then turns into the search list's
+  # `pe_ratio` / `fcf_yield`. A newly-screened stock therefore waits for THIS run before it can
+  # be valued, and at monthly that wait was up to a month (the Canadian universe landed
+  # 2026-07-15, two weeks after the 07-01 run, and its whole search list read null until a manual
+  # sweep). Weekly caps that at ~a week; the daily universe run publishes it the next morning.
+  # Both sweeps order un-cached stocks first, so a new listing seeds on the very next run.
+  #
+  # Caveats: scheduled workflows run only from the default branch, and GitHub auto-disables the
+  # schedule after 60 days with no repo activity.
   schedule:
-    - cron: "0 9 1 * *"
+    - cron: "0 12 * * 1"
 
 concurrency:
   group: sync-annual-earnings
