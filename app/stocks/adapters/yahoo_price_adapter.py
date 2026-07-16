@@ -1,12 +1,14 @@
 """Interface Adapter: live price data from Yahoo Finance (via ``yfinance``), keyless.
 
 The price-feed counterpart to the Alpaca adapter, for the markets Alpaca doesn't cover —
-the Canadian listings (TSX/TSXV, suffixed ``.TO`` / ``.V``). It implements the same four
-shared price ports off Yahoo:
+the Canadian listings (TSX/TSXV, suffixed ``.TO`` / ``.V``). It implements the same shared
+price ports off Yahoo:
 
 - ``StockQuoteProvider.get_quote`` — ``Ticker.fast_info`` (last price + previous close).
 - ``CandleProvider.get_candles`` — ``Ticker.history(interval=…)`` → OHLC bars.
 - ``StockPerformanceProvider.get_performance`` — a year of daily ``history`` → trailing windows.
+- ``AllTimeHighProvider.get_all_time_high`` — the full daily ``history`` → the highest high +
+  when + the earliest date covered (the analysis context's drawdown-from-high input).
 - ``StockDataProvider.get_stock`` — ``fast_info`` price fields + a best-effort ``.info`` for
   the name/exchange.
 
@@ -39,6 +41,7 @@ import yfinance as yf
 
 from app.stocks.adapters import yfinance_session
 from app.stocks.entities import (
+    AllTimeHigh,
     Candle,
     CandleSeries,
     Quote,
@@ -48,6 +51,7 @@ from app.stocks.entities import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import (
+    AllTimeHighProvider,
     StockDataProvider,
     StockPerformanceProvider,
     StockQuoteProvider,
@@ -82,7 +86,11 @@ _WINDOW_DAYS = {
 
 
 class YahooPriceProvider(
-    StockDataProvider, StockQuoteProvider, StockPerformanceProvider, CandleProvider
+    StockDataProvider,
+    StockQuoteProvider,
+    StockPerformanceProvider,
+    AllTimeHighProvider,
+    CandleProvider,
 ):
     """Live price data from Yahoo (``yfinance``) for the markets Alpaca doesn't serve."""
 
@@ -138,6 +146,17 @@ class YahooPriceProvider(
         frame = self._history(symbol, interval="1d", start=start)
         return _compute_performance(_close_series(frame))
 
+    # --- AllTimeHighProvider ---
+
+    def get_all_time_high(self, symbol: str) -> AllTimeHigh:
+        # The full daily history Yahoo carries (split/dividend-adjusted, so old highs stay
+        # comparable to today's adjusted price — the same basis as the candle/performance reads).
+        frame = self._history(symbol, interval="1d", period="max")
+        high = _to_all_time_high(frame)
+        if high is None:
+            raise StockNotFound(symbol)  # no history — the best-effort wrapper omits the field
+        return high
+
     # --- CandleProvider ---
 
     def get_candles(
@@ -180,12 +199,20 @@ class YahooPriceProvider(
         except Exception as exc:  # noqa: BLE001 — vendor boundary: any failure → domain error
             raise StockDataUnavailable(symbol, f"yfinance fast_info failed ({exc})") from exc
 
-    def _history(self, symbol, *, interval, start=None, end=None):
-        """A history DataFrame over the window, through the crumb-retry seam (an empty frame is
-        the swallowed-401 signature). Split/dividend-adjusted for a continuous line."""
+    def _history(self, symbol, *, interval, start=None, end=None, period=None):
+        """A history DataFrame over the window (or ``period`` — e.g. ``"max"`` for the all-time
+        high), through the crumb-retry seam (an empty frame is the swallowed-401 signature).
+        Split/dividend-adjusted for a continuous line."""
         ticker = self._ticker_factory(symbol)
 
         def read():
+            if period is not None:
+                return ticker.history(
+                    period=period,
+                    interval=interval,
+                    auto_adjust=True,
+                    actions=False,
+                )
             return ticker.history(
                 start=start,
                 end=end,
@@ -250,6 +277,30 @@ def _close_series(frame) -> list[tuple[object, float]]:
         if close is not None:
             series.append((_to_utc(ts).date(), close))
     return series
+
+
+def _to_all_time_high(frame) -> AllTimeHigh | None:
+    """A daily-history DataFrame → the highest intraday high, the day it was reached, and the
+    earliest date the history covers (the "all-time" bound). ``None`` when the frame is empty
+    or carries no usable high — the same shape the Alpaca adapter derives from its bars."""
+    if frame is None or getattr(frame, "empty", True):
+        return None
+    peak_price: float | None = None
+    peak_date = None
+    earliest = None
+    for ts, row in frame.iterrows():
+        high = _float(row.get("High"))
+        if high is None:
+            continue
+        day = _to_utc(ts).date()
+        if earliest is None or day < earliest:
+            earliest = day
+        if peak_price is None or high > peak_price:
+            peak_price = high
+            peak_date = day
+    if peak_price is None:
+        return None
+    return AllTimeHigh(price=peak_price, reached_on=peak_date, since=earliest)
 
 
 def _compute_performance(points: list[tuple[object, float]]) -> StockPerformance:

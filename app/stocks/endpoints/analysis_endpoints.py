@@ -127,6 +127,7 @@ from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.wiring import (
     analysis_cache_ttl,
     get_estimates_provider,
+    get_price_provider,
     get_provider,
 )
 
@@ -146,16 +147,19 @@ _AI_ANALYSIS_RATE_LIMIT = os.environ.get("AI_ANALYSIS_RATE_LIMIT", "10/minute")
 
 
 def get_stock_info(
-    provider: StockDataProvider = Depends(get_provider),
+    provider: StockDataProvider = Depends(get_price_provider),
     estimates: AnalystEstimatesProvider | None = Depends(get_estimates_provider),
 ) -> GetStockInfo:
     # The enriched snapshot use case now serves only as the AI analysis context
-    # (the standalone GET /stocks/{symbol} endpoint was removed). The Alpaca
-    # provider supplies the snapshot, the performance windows, and the all-time
-    # high — all derived from the same price feed, so one instance backs each
-    # capability via its respective port. The trailing fundamentals + clean name are
-    # no longer read from a live vendor here — the analysis use cases overlay them from
-    # the stocks anchor (materialized by the fundamentals/universe syncs).
+    # (the standalone GET /stocks/{symbol} endpoint was removed). The market-routing
+    # provider supplies the snapshot, the performance windows, and the all-time high —
+    # all derived from the same price feed, one instance backing each capability via its
+    # respective port — routed per symbol (US→Alpaca / CA→Yahoo), so a Canadian ticker's
+    # analysis context reads its price from Yahoo. The router implements AllTimeHighProvider
+    # too, so this keeps the drawdown-from-high context for US symbols (a router missing it
+    # would drop it for everyone). The trailing fundamentals + clean name are no longer read
+    # from a live vendor here — the analysis use cases overlay them from the stocks anchor
+    # (materialized by the fundamentals/universe syncs).
     performance = provider if isinstance(provider, StockPerformanceProvider) else None
     all_time_high = provider if isinstance(provider, AllTimeHighProvider) else None
     return GetStockInfo(provider, performance, all_time_high, estimates)
@@ -410,9 +414,10 @@ def _eps_history_provider() -> YfinanceEpsHistoryProvider:
 def get_fundamentals_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
     analyzer: FundamentalsAnalysisProvider = Depends(get_fundamentals_analysis_provider),
-    # The Alpaca singleton supplies the daily closes for the P/E-history context (it implements
-    # CandleProvider — the same instance the candle chart and pe-history endpoint use).
-    candles: StockDataProvider = Depends(get_provider),
+    # The market-routing provider supplies the daily closes for the P/E-history context (it
+    # implements CandleProvider — the same instance the candle chart and pe-history endpoint
+    # use, routed US→Alpaca / CA→Yahoo).
+    candles: StockDataProvider = Depends(get_price_provider),
     # The industry-P/E benchmark is a pure DB read off the shared anchor (the same screened
     # universe the /stocks/industries/{industry}/pe endpoint groups on) — best-effort context
     # for the fundamentals read, so a miss just omits it.

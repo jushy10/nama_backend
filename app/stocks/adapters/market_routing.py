@@ -7,9 +7,9 @@ screen stores) routes to the Yahoo feed, everything else to Alpaca.
 
 This is a composition adapter, not a vendor one: it knows *no* vendor, only the two ports it
 delegates to (injected), so it stays swappable and testable like everything else. It implements
-the four per-symbol price ports at once (quote / candles / performance / full snapshot) because
-the card and the chart use cases inject one provider that plays several of those roles — the same
-way the Alpaca singleton does. The batched board/bulk feeds (sectors, market, heat-map quotes)
+the per-symbol price ports at once (quote / candles / performance / all-time-high / full
+snapshot) because the card, the chart, and the analysis-context use cases inject one provider
+that plays several of those roles — the same way the Alpaca singleton does. The batched board/bulk feeds (sectors, market, heat-map quotes)
 are US-only and keep using the Alpaca provider directly; only the per-symbol reads route.
 """
 
@@ -18,8 +18,16 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.stocks.charts.ports import CandleProvider
-from app.stocks.entities import CandleSeries, Quote, Stock, StockPerformance, Timeframe
+from app.stocks.entities import (
+    AllTimeHigh,
+    CandleSeries,
+    Quote,
+    Stock,
+    StockPerformance,
+    Timeframe,
+)
 from app.stocks.ports import (
+    AllTimeHighProvider,
     StockDataProvider,
     StockPerformanceProvider,
     StockQuoteProvider,
@@ -40,13 +48,19 @@ def is_canadian(symbol: str) -> bool:
 
 
 class MarketRoutingPriceProvider(
-    StockDataProvider, StockQuoteProvider, StockPerformanceProvider, CandleProvider
+    StockDataProvider,
+    StockQuoteProvider,
+    StockPerformanceProvider,
+    AllTimeHighProvider,
+    CandleProvider,
 ):
     """Dispatches each per-symbol price read to the US (Alpaca) or CA (Yahoo) feed by suffix.
 
-    ``us`` and ``ca`` each implement all four per-symbol price ports; this picks one per call.
+    ``us`` and ``ca`` each implement all five per-symbol price ports; this picks one per call.
     A US symbol behaves exactly as before (straight to ``us``), so routing is transparent to
-    the existing US path; a Canadian-suffixed symbol goes to ``ca``.
+    the existing US path; a Canadian-suffixed symbol goes to ``ca``. Implementing
+    ``AllTimeHighProvider`` too matters: the analysis context reads the injected provider as
+    one, so a router missing it would silently drop the all-time high for *US* symbols as well.
     """
 
     def __init__(self, *, us, ca) -> None:
@@ -64,6 +78,9 @@ class MarketRoutingPriceProvider(
 
     def get_performance(self, symbol: str) -> StockPerformance:
         return self._for(symbol).get_performance(symbol)
+
+    def get_all_time_high(self, symbol: str) -> AllTimeHigh:
+        return self._for(symbol).get_all_time_high(symbol)
 
     def get_candles(
         self,
