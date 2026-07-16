@@ -30,6 +30,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from app.stocks.earnings.quarterly.repository import QuarterlyEarningsRepository
+from app.stocks.entities import is_cboe_canada
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.progress import iter_with_progress
 from app.stocks.universe.entities import (
@@ -224,10 +225,19 @@ class SyncUniverse:
         screened stock's trailing P/E from the screen-time price over the quarterly slice's
         stored TTM EPS. A single symbol's classification failure never aborts the run — it's
         counted and the sweep continues.
+
+        Cboe Canada (``.NE``) listings are dropped from the screen up front: they're Canadian
+        Depositary Receipts (wrappers of US / foreign companies), so they're never written onto
+        the anchor in the first place — not merely hidden at read time. (No-op for the US pass,
+        whose exchange-scoped screen returns no ``.NE``.)
         """
         capped = self.DEFAULT_LIMIT if limit is None else max(1, limit)
-        screened = self._screener.screen(
-            min_market_cap=self.MIN_MARKET_CAP, region=self._region
+        screened = tuple(
+            stock
+            for stock in self._screener.screen(
+                min_market_cap=self.MIN_MARKET_CAP, region=self._region
+            )
+            if not is_cboe_canada(stock.ticker)
         )
         if len(screened) < self._min_plausible:
             return UniverseSyncReport(

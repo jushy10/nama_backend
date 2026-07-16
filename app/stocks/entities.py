@@ -16,6 +16,12 @@ from enum import Enum
 # interlisted Canadian listing can be matched to its US sibling and deduped.
 CANADIAN_SUFFIXES = (".TO", ".V", ".NE", ".CN")
 
+# Cboe Canada (NEO), Yahoo suffix ``.NE`` — the venue Canadian Depositary Receipts list on. A CDR
+# wraps a US / foreign company (``INTC.NE`` → Intel, ``ZAAP.NE`` → Apple), not a Canadian one, so
+# the universe deliberately keeps ``.NE`` out of the Canadian screen entirely (genuine Canadian
+# companies list on TSX ``.TO`` / TSXV ``.V``).
+CBOE_CANADA_SUFFIX = ".NE"
+
 
 def is_canadian(symbol: str) -> bool:
     """Whether ``symbol`` is a Canadian listing (by Yahoo suffix). Case-insensitive; a blank or
@@ -24,6 +30,13 @@ def is_canadian(symbol: str) -> bool:
         return False
     upper = symbol.upper()
     return any(upper.endswith(suffix) for suffix in CANADIAN_SUFFIXES)
+
+
+def is_cboe_canada(symbol: str) -> bool:
+    """Whether ``symbol`` is a Cboe Canada (NEO, ``.NE``) listing — the CDR venue. The universe
+    excludes these from the Canadian screen (a CDR is a wrapper of a US / foreign company, not a
+    Canadian one). Case-insensitive; a blank or non-string symbol is not Cboe Canada."""
+    return isinstance(symbol, str) and symbol.upper().endswith(CBOE_CANADA_SUFFIX)
 
 
 def base_ticker(symbol: str) -> str:
