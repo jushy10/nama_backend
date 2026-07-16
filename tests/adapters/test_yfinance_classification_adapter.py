@@ -1,8 +1,8 @@
-"""Tests for the yfinance classification adapter (sector + industry from Ticker.info).
+"""Tests for the yfinance classification adapter (sector + industry + domicile from Ticker.info).
 
 Offline: a fake Ticker is injected through the adapter's ``ticker_factory`` seam, so this
-exercises the mapping (Yahoo display labels → snake_case slugs) and the vendor-error and
-missing-data handling without touching Yahoo.
+exercises the mapping (Yahoo display labels → snake_case slugs, country → ISO-2 domicile) and the
+vendor-error and missing-data handling without touching Yahoo.
 """
 
 import pytest
@@ -48,6 +48,33 @@ def test_slugs_collapse_punctuation_and_whitespace():
     assert provider.get_classification("MET") == CompanyClassification(
         sector="financial_services", industry="insurance_life_health"
     )
+
+
+def test_captures_the_issuer_domicile_as_iso2():
+    # info['country'] is Yahoo's display name; the entity maps it to an ISO-2 domicile.
+    provider = _provider(
+        _FakeTicker(
+            {
+                "sector": "Technology",
+                "industry": "Semiconductors",
+                "country": "Taiwan",
+            }
+        )
+    )
+    assert provider.get_classification("TSM") == CompanyClassification(
+        sector="technology", industry="semiconductors", domicile_country="TW"
+    )
+
+
+def test_unrecognized_or_missing_country_yields_no_domicile():
+    # A country Yahoo names but the ISO-2 map doesn't cover, and an absent country, both leave
+    # the domicile None (an unknown domicile the search shows in its listing market).
+    assert _provider(
+        _FakeTicker({"sector": "Technology", "country": "Atlantis"})
+    ).get_classification("X") == CompanyClassification(sector="technology")
+    assert _provider(
+        _FakeTicker({"industry": "Software"})
+    ).get_classification("X") == CompanyClassification(industry="software")
 
 
 def test_missing_or_non_string_fields_yield_none():

@@ -27,10 +27,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from app.stocks.earnings.quarterly.repository import QuarterlyEarningsRepository
-from app.stocks.entities import base_ticker
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.progress import iter_with_progress
 from app.stocks.universe.entities import (
@@ -44,7 +43,6 @@ from app.stocks.universe.entities import (
     StockSearchCriteria,
     StockSearchPage,
     StockSort,
-    normalize_company_name,
     slugify,
 )
 from app.stocks.universe.ports import (
@@ -157,19 +155,6 @@ def _ev_ebitda(
     return round(enterprise_value / ebitda, 2)
 
 
-# Cboe Canada (NEO), Yahoo suffix ``.NE``, is the venue Canadian Depositary Receipts list on.
-# The name-based interlisting match is scoped to it: a CDR there carries its *US* company's
-# name, so matching that name to the US universe catches a rebranded CDR (``COLA`` / ``CHEV``)
-# the base-ticker match misses — while a genuine Canadian operating company (which lists on TSX
-# ``.TO`` / TSXV ``.V``, not ``.NE``) can't be wrongly hidden by a chance name collision.
-_CBOE_CANADA_SUFFIX = ".NE"
-
-
-def _is_cboe_canada(ticker: str) -> bool:
-    """Whether ``ticker`` is a Cboe Canada (NEO) listing — the CDR venue the name match scopes to."""
-    return isinstance(ticker, str) and ticker.upper().endswith(_CBOE_CANADA_SUFFIX)
-
-
 class SyncUniverse:
     """Populate/refresh the searchable universe from a live market screen, classify the stocks
     that still lack a sector/industry, and value each screened stock with a trailing P/E.
@@ -254,12 +239,6 @@ class SyncUniverse:
                 enrich_failed=0,
                 valued=0,
             )
-        if self._region != "us":
-            # A non-US pass runs after the US pass in the same sweep, so the US universe is on
-            # the anchor: flag each listing that duplicates a US company (a CDR or a same-ticker
-            # dual-listing), which the search hides by default. The US pass itself never flags
-            # (its rows are the originals), so this is skipped for region="us".
-            screened = self._flag_interlisted(screened)
         counts = self._repository.upsert_screen(screened)
         enriched, enrich_failed = self._enrich_missing_classifications(capped)
         valued = self._value_screened(screened)
@@ -273,65 +252,12 @@ class SyncUniverse:
             valued=valued,
         )
 
-    def _flag_interlisted(
-        self, screened: tuple[ScreenedStock, ...]
-    ) -> tuple[ScreenedStock, ...]:
-        """Set ``has_us_listing`` on each screened Canadian listing that duplicates a US-listed
-        company, so the search hides it by default (a Canadian search returns only companies that
-        don't already trade in the US). Two signals combine:
-
-        1. **Base ticker** — the listing's ticker with its venue suffix stripped is already a
-           screened US ticker: a CDR that kept its US ticker (``AAPL.NE`` → ``AAPL``) or a
-           same-ticker dual-listing (``SHOP.TO`` → ``SHOP``).
-        2. **Company name** (Cboe Canada ``.NE`` only) — the listing's normalized name matches a
-           screened US company's. This catches a **rebranded** CDR whose ticker shares nothing
-           with the US ticker (``COLA`` → Coca-Cola / ``KO``, ``CHEV`` → Chevron / ``CVX``), which
-           signal 1 alone can't. Scoped to the CDR venue (``.NE``) so a genuine TSX/TSXV company
-           can't be hidden by a chance name collision.
-
-        The flag is set explicitly on *every* listing (``True`` for a match, ``False`` otherwise),
-        not just the matches, so a re-run **clears** the flag on a listing that lost its US sibling
-        — the upsert overwrites it each run. When the US index is empty (nothing to match against)
-        the screen is returned unchanged (every row already defaults to ``False``). Still out of
-        scope: a *different-ticker* dual-listing on TSX (``CNR.TO`` ↔ ``CNI``) — signal 2 is
-        ``.NE``-scoped, so it isn't caught by name there."""
-        us_tickers = self._repository.screened_us_tickers()
-        if not us_tickers:
-            return screened
-        # Normalize the US company names once (a few thousand) into the name-match index; the
-        # repository returns them raw so this domain rule stays out of the adapter.
-        us_names = frozenset(
-            normalized
-            for name in self._repository.screened_us_company_names()
-            if (normalized := normalize_company_name(name)) is not None
-        )
-        return tuple(
-            replace(
-                stock, has_us_listing=self._is_interlisted(stock, us_tickers, us_names)
-            )
-            for stock in screened
-        )
-
-    @staticmethod
-    def _is_interlisted(
-        stock: ScreenedStock, us_tickers: frozenset[str], us_names: frozenset[str]
-    ) -> bool:
-        """Whether ``stock`` (a Canadian listing) duplicates a screened US company — by base
-        ticker (any venue), or by normalized company name (Cboe Canada ``.NE`` only). See
-        :meth:`_flag_interlisted` for why the name match is venue-scoped."""
-        if base_ticker(stock.ticker).upper() in us_tickers:
-            return True
-        if _is_cboe_canada(stock.ticker):
-            normalized = normalize_company_name(stock.name)
-            return normalized is not None and normalized in us_names
-        return False
-
     def _enrich_missing_classifications(self, limit: int) -> tuple[int, int]:
-        """Classify up to ``limit`` stored stocks still missing a sector or industry, writing
-        each one's sector/industry. Returns ``(enriched, failed)``: ``enriched`` wrote a
-        classification, ``failed`` couldn't reach the source. A symbol the source reaches but
-        can't classify (both sides ``None``) is neither — it's left for a later run rather than
-        counted, since nothing was written and nothing went wrong."""
+        """Classify up to ``limit`` stored stocks still missing a sector, industry, or issuer
+        domicile, writing each from one per-ticker ``.info`` call. Returns ``(enriched, failed)``:
+        ``enriched`` wrote at least one field, ``failed`` couldn't reach the source. A symbol the
+        source reaches but can't classify at all (every side ``None``) is neither — it's left for a
+        later run rather than counted, since nothing was written and nothing went wrong."""
         enriched = 0
         failed = 0
         tickers = self._repository.tickers_missing_classification(limit)
@@ -345,8 +271,12 @@ class SyncUniverse:
                 # is and count it; the next run retries it.
                 failed += 1
                 continue
-            if classification.industry is None and classification.sector is None:
-                continue  # source has no classification yet — leave it for a later run
+            if (
+                classification.industry is None
+                and classification.sector is None
+                and classification.domicile_country is None
+            ):
+                continue  # source has nothing for it yet — leave it for a later run
             self._repository.set_classification(ticker, classification)
             enriched += 1
         return enriched, failed

@@ -626,10 +626,12 @@ def search_stocks_endpoint(
     include_interlisted: bool = Query(
         False,
         description=(
-            "Include Canadian listings that duplicate a US-listed company (a CDR like AAPL.NE, "
-            "or a same-ticker dual-listing like SHOP.TO). Hidden by default so a Canadian search "
-            "returns only companies that don't already trade in the US; set true to see them. "
-            "US listings are never affected."
+            "When a single market is chosen, scope it to that market's home companies by issuer "
+            "domicile (the default): the US market drops Canadian companies' US listings (e.g. CNI) "
+            "while keeping other foreign ADRs, and the Canadian market drops the CDRs of US / "
+            "foreign companies while keeping Canadian companies. Set true to skip that scoping and "
+            "see every listing in the market, cross-listed duplicates included. No effect when zero "
+            "or several markets are chosen."
         ),
     ),
     market_cap: list[MarketCapTier] | None = Query(

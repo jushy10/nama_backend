@@ -90,44 +90,12 @@ class SqlUniverseRepository(UniverseRepository):
         self._session.commit()
         return UniverseSyncCounts(added=added, updated=updated)
 
-    def screened_us_tickers(self) -> frozenset[str]:
-        # Every screened US listing (market_cap NOT NULL is the screened gate), uppercased for a
-        # case-insensitive base-ticker match. Tickers are stored uppercase already; the upper()
-        # is belt-and-suspenders.
-        rows = (
-            self._session.execute(
-                select(StockRecord.ticker).where(
-                    StockRecord.country == "US",
-                    StockRecord.market_cap.is_not(None),
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return frozenset(ticker.upper() for ticker in rows)
-
-    def screened_us_company_names(self) -> frozenset[str]:
-        # The raw names of every screened US listing (same country/screened gate as
-        # screened_us_tickers, plus name NOT NULL). Returned unnormalized — the use case
-        # normalizes both sides for the .NE CDR name match, keeping that domain rule out of SQL.
-        rows = (
-            self._session.execute(
-                select(StockRecord.name).where(
-                    StockRecord.country == "US",
-                    StockRecord.market_cap.is_not(None),
-                    StockRecord.name.is_not(None),
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return frozenset(rows)
-
     def tickers_missing_classification(self, limit: int) -> tuple[str, ...]:
-        # Missing *either* side: a stock is on the work-list until both sector and industry
-        # are filled, so a one-sided classification (Yahoo returned only industry, say) gets
-        # revisited instead of being stuck with a null sector forever — set_classification is
-        # fill-once per side, so a later run completes it.
+        # Missing *any* of the three enrichment fields keeps a stock on the work-list until
+        # sector, industry AND domicile are all filled — so a stock classified on an earlier
+        # run (before domicile was captured) gets revisited to backfill its domicile, and a
+        # one-sided classification (Yahoo returned only industry, say) is completed later.
+        # set_classification is fill-once per side, so a revisit only fills what's still null.
         #
         # Largest market cap first (ticker as a stable tiebreak) so a capped, rate-limited
         # run spends its scarce successful .info calls on the biggest, most-viewed names —
@@ -141,6 +109,7 @@ class SqlUniverseRepository(UniverseRepository):
                     or_(
                         StockRecord.industry.is_(None),
                         StockRecord.sector.is_(None),
+                        StockRecord.domicile_country.is_(None),
                     )
                 )
                 .order_by(nulls_last(StockRecord.market_cap.desc()), StockRecord.ticker)
@@ -160,11 +129,13 @@ class SqlUniverseRepository(UniverseRepository):
         if stock is None:
             return
         # Fill-once per side: write only what the source supplies and the column still lacks,
-        # so a settled value survives and a one-sided classification leaves room for the rest.
+        # so a settled value survives and a partial classification leaves room for the rest.
         if classification.industry and not stock.industry:
             stock.industry = classification.industry
         if classification.sector and not stock.sector:
             stock.sector = classification.sector
+        if classification.domicile_country and not stock.domicile_country:
+            stock.domicile_country = classification.domicile_country
         self._session.commit()
 
     def set_pe_ratios(self, pe_by_ticker: Mapping[str, float | None]) -> int:
@@ -599,14 +570,33 @@ class SqlStockSearchRepository(StockSearchRepository):
         if criteria.industries:
             conditions.append(StockRecord.industry.in_(criteria.industries))
         if criteria.countries:
-            # Union of the chosen markets (ISO-2). Keeps a market-cap sort within one currency
-            # and lets a client show a single-market board.
+            # Union of the chosen *listing* markets (ISO-2). Keeps a market-cap sort within one
+            # currency and lets a client show a single-market board.
             conditions.append(StockRecord.country.in_(criteria.countries))
-        if not criteria.include_interlisted:
-            # Hide a Canadian listing that duplicates a US company (a CDR or a same-ticker
-            # dual-listing) — a client sees the US listing, not the Canadian duplicate. US and
-            # Canadian-only rows are has_us_listing=False, so they're unaffected.
-            conditions.append(StockRecord.has_us_listing.is_(False))
+            # Home-market scoping by issuer domicile, when exactly one market is chosen and the
+            # caller hasn't opted into the cross-listed duplicates. A row whose domicile is still
+            # unknown (null) is kept — shown in its listing market — so the screen fills in as the
+            # enrichment backfill runs rather than emptying.
+            if not criteria.include_interlisted and len(criteria.countries) == 1:
+                (market,) = criteria.countries
+                if market == "US":
+                    # US screen: drop Canadian companies' US listings (CNI, CP on NYSE); keep US
+                    # companies and non-Canadian foreign ADRs (domicile not CA, or not yet known).
+                    conditions.append(
+                        or_(
+                            StockRecord.domicile_country.is_(None),
+                            StockRecord.domicile_country != "CA",
+                        )
+                    )
+                elif market == "CA":
+                    # Canadian screen: drop the CDRs of US / foreign companies (a known non-CA
+                    # domicile); keep Canadian companies (domicile CA, or not yet known).
+                    conditions.append(
+                        or_(
+                            StockRecord.domicile_country.is_(None),
+                            StockRecord.domicile_country == "CA",
+                        )
+                    )
         if criteria.in_sp500 is not None:
             conditions.append(StockRecord.in_sp500 == criteria.in_sp500)
         if criteria.in_nasdaq100 is not None:

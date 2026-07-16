@@ -74,28 +74,39 @@ class ScreenedStock:
 
 @dataclass(frozen=True)
 class CompanyClassification:
-    """A stock's sector + industry, as canonical snake_case slugs.
+    """A stock's sector + industry (snake_case slugs) plus its issuer domicile (ISO-2).
 
-    The screen (``ScreenedStock``) carries neither — Yahoo publishes sector/industry only on
-    the per-ticker ``.info`` surface — so this is the shape the sync's enrichment pass fetches
-    and persists. Both sides are optional: a symbol Yahoo doesn't classify (or only half
-    classifies) yields ``None`` for the missing side, which the sync leaves for a later run.
+    The screen (``ScreenedStock``) carries none of these — Yahoo publishes them only on the
+    per-ticker ``.info`` surface — so this is the shape the sync's enrichment pass fetches and
+    persists off one ``.info`` call. Every side is optional: a symbol Yahoo doesn't classify (or
+    only half classifies) yields ``None`` for the missing side, which the sync leaves for a later
+    run.
 
-    Labels are stored as slugs — lower-cased, with every run of non-alphanumeric characters
-    collapsed to a single underscore (``"Consumer Electronics"`` → ``consumer_electronics``,
-    ``"Oil & Gas E&P"`` → ``oil_gas_e_p``) — a stable, join-friendly key rather than Yahoo's
-    display text. ``from_labels`` is the constructor callers use, so the slug rule lives in
-    one place.
+    ``sector`` / ``industry`` are stored as slugs — lower-cased, with every run of non-alphanumeric
+    characters collapsed to a single underscore (``"Consumer Electronics"`` → ``consumer_electronics``,
+    ``"Oil & Gas E&P"`` → ``oil_gas_e_p``) — a stable, join-friendly key rather than Yahoo's display
+    text. ``domicile_country`` is the company's home country as an ISO-2 code (``"United States"`` →
+    ``US``, ``"Canada"`` → ``CA``, ``"Switzerland"`` → ``CH``), which the universe search splits the
+    US / Canadian screeners on — distinct from the *listing* market a row carries. ``from_labels`` is
+    the constructor callers use, so the slug and country-mapping rules live in one place.
     """
 
     sector: str | None = None
     industry: str | None = None
+    domicile_country: str | None = None
 
     @classmethod
-    def from_labels(cls, sector: object, industry: object) -> "CompanyClassification":
-        """Build a classification from raw vendor labels, each slugged to snake_case (and
-        dropped to ``None`` when blank or non-string)."""
-        return cls(sector=slugify(sector), industry=slugify(industry))
+    def from_labels(
+        cls, sector: object, industry: object, country: object = None
+    ) -> "CompanyClassification":
+        """Build a classification from raw vendor labels — sector/industry each slugged to
+        snake_case, ``country`` mapped from Yahoo's display name to an ISO-2 code — each dropped
+        to ``None`` when blank, non-string, or (for the country) unrecognized."""
+        return cls(
+            sector=slugify(sector),
+            industry=slugify(industry),
+            domicile_country=country_to_iso2(country),
+        )
 
 
 @dataclass(frozen=True)
@@ -281,15 +292,18 @@ class StockSearchCriteria:
     a column to order by. ``direction`` only bites once a ``sort`` is chosen (an unsorted page is
     always ascending by ticker).
 
-    ``countries`` narrows to the union of the given ISO-2 markets (``("US",)`` for US only,
-    ``("CA",)`` for Canadian, empty = every market). It's how a client keeps a ``market_cap``
+    ``countries`` narrows to the union of the given ISO-2 *listing* markets (``("US",)`` for US
+    only, ``("CA",)`` for Canadian, empty = every market). It's how a client keeps a ``market_cap``
     sort within one currency (the floor is applied natively per market), or shows a single-market
     board.
 
-    ``include_interlisted`` is ``False`` by default, so the search **hides** a Canadian listing
-    that duplicates a US-listed company (a CDR, or a same-ticker dual-listing) — a Canadian
-    browse then returns only companies that don't already trade in the US. Set it ``True`` to
-    include those duplicates (US rows are never affected either way).
+    ``include_interlisted`` is ``False`` by default, so when a *single* market is chosen the search
+    scopes it to that market's **home companies** by issuer domicile: the US market drops
+    Canadian-domiciled rows (a Canadian company's US line, ``CNI``) while keeping other foreign
+    ADRs, and the Canadian market drops foreign-domiciled rows (the CDRs of US / European / Japanese
+    companies) while keeping Canadian companies. A row whose domicile is still unknown is kept
+    (shown in its listing market). Set it ``True`` to skip that scoping and see every listing in the
+    market, duplicates included. (No effect when zero or several markets are chosen.)
     """
 
     query: str | None
@@ -670,41 +684,85 @@ def slugify(label: object) -> str | None:
     return slug or None
 
 
-# Tokens dropped when reducing a company name to its interlisting key: legal-form suffixes
-# (which vary between a CDR listing and its US line — "Corp" vs "Corporation") and the
-# depositary-receipt markers a Cboe Canada CDR carries in its name ("… CDR (CAD Hedged)").
-# Deliberately limited to legal-form + CDR noise — NOT generic business words like
-# "Group"/"Holdings"/"Technologies" — so two genuinely different companies don't collapse onto
-# the same key and get wrongly deduped.
-_NAME_NOISE_TOKENS = frozenset(
-    {
-        "THE",
-        # Legal-form suffixes
-        "INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "COMPANIES",
-        "LTD", "LIMITED", "LLC", "LP", "LLP", "PLC", "SA", "AG", "NV", "SE",
-        # CDR / depositary-receipt markers
-        "CDR", "CDRS", "DEPOSITARY", "DEPOSITORY", "RECEIPT", "RECEIPTS",
-        "CAD", "USD", "HEDGED", "UNHEDGED", "NONHEDGED",
-    }
-)
+# Yahoo `.info['country']` display name → ISO-2 code, for the issuer-domicile column the US /
+# Canadian screener split filters on. Only ``US`` and ``CA`` need to be exact (they drive the
+# split); the rest are here so a *foreign* issuer (a CDR's underlying) reads as a definite
+# non-``CA`` / non-``US`` code rather than an unknown ``None`` — an unmapped country stays
+# ``None`` and is treated leniently (shown in its listing market). Covers the domiciles that
+# actually appear at ≥$1B on a North-American listing, including every common CDR-issuer home.
+_COUNTRY_ISO2 = {
+    "united states": "US",
+    "canada": "CA",
+    "united kingdom": "GB",
+    "ireland": "IE",
+    "switzerland": "CH",
+    "germany": "DE",
+    "france": "FR",
+    "netherlands": "NL",
+    "belgium": "BE",
+    "luxembourg": "LU",
+    "spain": "ES",
+    "italy": "IT",
+    "sweden": "SE",
+    "denmark": "DK",
+    "norway": "NO",
+    "finland": "FI",
+    "austria": "AT",
+    "portugal": "PT",
+    "greece": "GR",
+    "japan": "JP",
+    "china": "CN",
+    "hong kong": "HK",
+    "taiwan": "TW",
+    "south korea": "KR",
+    "korea, republic of": "KR",
+    "india": "IN",
+    "singapore": "SG",
+    "australia": "AU",
+    "new zealand": "NZ",
+    "israel": "IL",
+    "brazil": "BR",
+    "mexico": "MX",
+    "argentina": "AR",
+    "chile": "CL",
+    "colombia": "CO",
+    "peru": "PE",
+    "south africa": "ZA",
+    "united arab emirates": "AE",
+    "saudi arabia": "SA",
+    "turkey": "TR",
+    "indonesia": "ID",
+    "thailand": "TH",
+    "malaysia": "MY",
+    "philippines": "PH",
+    "vietnam": "VN",
+    "bermuda": "BM",
+    "cayman islands": "KY",
+    "jersey": "JE",
+    "guernsey": "GG",
+    "monaco": "MC",
+    "cyprus": "CY",
+    "panama": "PA",
+    "uruguay": "UY",
+    "puerto rico": "PR",
+}
 
 
-def normalize_company_name(name: object) -> str | None:
-    """A company name → a canonical interlisting key, or ``None``.
+def country_to_iso2(country: object) -> str | None:
+    """A Yahoo ``.info['country']`` display name → its ISO-2 code, or ``None``.
 
-    Upper-cases, splits on every run of non-alphanumeric characters, drops the legal-form and
-    depositary-receipt noise tokens (:data:`_NAME_NOISE_TOKENS`), and joins the rest — so a
-    rebranded Cboe Canada CDR ("The Coca-Cola Company CDR (CAD Hedged)") and its US line ("The
-    Coca-Cola Company") both collapse to ``COCACOLA``. That's what lets the universe sync's CA
-    pass catch a CDR whose *ticker* (``COLA`` / ``CHEV``) shares nothing with the US ticker
-    (``KO`` / ``CVX``), which the base-ticker match alone cannot. A non-string, or a name that is
-    *only* noise tokens (so the key would be empty), collapses to ``None`` — there is nothing to
-    match on, so such a listing is never flagged a duplicate."""
-    if not isinstance(name, str):
+    Case/space-insensitive lookup against :data:`_COUNTRY_ISO2`; also accepts an already-ISO-2
+    value (a two-letter string) so the mapping is idempotent. A non-string, a blank, or an
+    unrecognized country collapses to ``None`` — an unknown domicile the search shows in its
+    listing market rather than wrongly excluding."""
+    if not isinstance(country, str):
         return None
-    tokens = [
-        token
-        for token in re.split(r"[^A-Z0-9]+", name.upper())
-        if token and token not in _NAME_NOISE_TOKENS
-    ]
-    return "".join(tokens) or None
+    text = country.strip()
+    if not text:
+        return None
+    mapped = _COUNTRY_ISO2.get(text.lower())
+    if mapped is not None:
+        return mapped
+    if len(text) == 2 and text.isalpha():
+        return text.upper()
+    return None

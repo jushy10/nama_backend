@@ -1,11 +1,13 @@
-"""Interface Adapter: a stock's sector + industry from Yahoo (via ``yfinance``).
+"""Interface Adapter: a stock's sector + industry + issuer domicile from Yahoo (via ``yfinance``).
 
-Yahoo's bulk screener carries no sector/industry — the universe screen adapter documents
-this — so they're read here one ticker at a time off ``Ticker.info`` (the same per-ticker
-surface the annual-earnings adapter reads ``nextFiscalYearEnd`` from). ``info['sector']`` /
-``info['industry']`` are Yahoo's display labels (``"Technology"`` / ``"Consumer
-Electronics"``); the entity slugs them to snake_case. This is the only module that knows
-``yfinance``/Yahoo backs the classification; swap it for another
+Yahoo's bulk screener carries none of these — the universe screen adapter documents this — so
+they're read here one ticker at a time off ``Ticker.info`` (the same per-ticker surface the
+annual-earnings adapter reads ``nextFiscalYearEnd`` from). ``info['sector']`` / ``info['industry']``
+are Yahoo's display labels (``"Technology"`` / ``"Consumer Electronics"``), which the entity slugs
+to snake_case; ``info['country']`` is the company's home country (``"United States"`` /
+``"Canada"`` / ``"Switzerland"``), which the entity maps to an ISO-2 code — the domicile the
+universe search splits the US / Canadian screeners on. All three ride one ``.info`` call. This is
+the only module that knows ``yfinance``/Yahoo backs the classification; swap it for another
 ``CompanyClassificationProvider`` and only this file changes.
 
 Best-effort by design: ``.info`` is an unofficial, rate-limited surface Yahoo gates from
@@ -56,5 +58,5 @@ class YfinanceClassificationProvider(CompanyClassificationProvider):
                 symbol, f"yfinance classification failed ({exc})"
             ) from exc
         return CompanyClassification.from_labels(
-            info.get("sector"), info.get("industry")
+            info.get("sector"), info.get("industry"), info.get("country")
         )
