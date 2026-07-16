@@ -600,18 +600,17 @@ class SqlStockSearchRepository(StockSearchRepository):
                     # Structural CDR guard: Cboe Canada (Yahoo suffix `.NE`) is a Canadian
                     # Depositary Receipt venue — a `.NE` listing wraps a US / foreign company
                     # (Intel, Chevron, SoftBank), while genuine Canadian companies list on TSX
-                    # (`.TO`) / TSXV (`.V`). So a `.NE` row is shown only when its domicile is
-                    # *confirmed* CA (the rare genuine Cboe-Canada company), never on the lenient
-                    # null-shown rule the `.TO` / `.V` listings get — this drops the CDRs at once,
-                    # with no dependence on the per-ticker domicile backfill (unlike the clause
-                    # above), and keeps a newly-listed CDR out automatically. `%.NE` matches only a
-                    # true suffix (the literal `.` anchors it, so a name like `STONE` is unaffected).
-                    conditions.append(
-                        or_(
-                            ~StockRecord.ticker.ilike("%.NE"),
-                            StockRecord.domicile_country == "CA",
-                        )
-                    )
+                    # (`.TO`) / TSXV (`.V`). So the CA screen excludes every `.NE` listing outright.
+                    # It must be **unconditional** (not "unless domicile is CA"): Yahoo reports some
+                    # CDRs' `.info['country']` as *Canada* — the receipt's own listing country, not
+                    # the underlying's — so a domicile carve-out lets those CA-mislabeled CDRs
+                    # (INTC.NE, CHEV.NE) back in, and domicile can't tell a CA-mislabeled CDR from a
+                    # genuine Cboe-Canada company anyway. This drops the CDRs at once, with no
+                    # dependence on the domicile backfill, and keeps a newly-listed CDR out
+                    # automatically; a genuine Canadian name is never lost (it lists on `.TO`/`.V`).
+                    # `%.NE` matches only a true suffix (the literal `.` anchors it, so a name like
+                    # `STONE` is unaffected).
+                    conditions.append(~StockRecord.ticker.ilike("%.NE"))
         if criteria.in_sp500 is not None:
             conditions.append(StockRecord.in_sp500 == criteria.in_sp500)
         if criteria.in_nasdaq100 is not None:

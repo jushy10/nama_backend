@@ -661,28 +661,28 @@ def test_ca_screen_excludes_foreign_domiciled_cdrs(session):
     }
 
 
-def test_ca_screen_excludes_cboe_canada_cdrs_even_with_unknown_domicile(session):
-    # The structural CDR guard: a Cboe Canada (.NE) listing is dropped from the CA screen unless
-    # its domicile is *confirmed* CA — so a not-yet-backfilled CDR (null domicile) is excluded at
-    # once, without waiting on the per-ticker domicile backfill. TSX (.TO) / TSXV (.V) listings
-    # keep the lenient null-shown rule (they're genuine Canadian listings, not a CDR venue).
-    _seed(session, "ZAAP.NE", country="CA", currency="CAD", domicile_country=None)  # Apple CDR, not yet backfilled
-    _seed(session, "CHEV.NE", country="CA", currency="CAD", domicile_country=None)  # Chevron CDR, not yet backfilled
+def test_ca_screen_excludes_every_cboe_canada_ne_listing(session):
+    # The structural CDR guard: EVERY Cboe Canada (.NE) listing is dropped from the CA screen,
+    # unconditionally -- regardless of its domicile. It must be unconditional because Yahoo reports
+    # some CDRs' country as *Canada* (the receipt's listing country), so a "unless domicile is CA"
+    # carve-out would let those CA-mislabeled CDRs (CHEV.NE here) back in. TSX (.TO) / TSXV (.V)
+    # listings are unaffected -- kept unless their domicile is a confirmed foreign country.
+    _seed(session, "ZAAP.NE", country="CA", currency="CAD", domicile_country=None)  # CDR, not yet backfilled
+    _seed(session, "CHEV.NE", country="CA", currency="CAD", domicile_country="CA")  # CDR Yahoo mislabels as Canada
+    _seed(session, "INTC.NE", country="CA", currency="CAD", domicile_country="US")  # CDR labelled US
     _seed(session, "SHOP.TO", country="CA", currency="CAD", domicile_country=None)  # genuine TSX, unknown domicile
-    _seed(session, "REAL.NE", country="CA", currency="CAD", domicile_country="CA")  # rare genuine Cboe-Canada company
     _seed(session, "STONE.TO", country="CA", currency="CAD", domicile_country=None)  # ".NE" is a suffix — "STONE" isn't a CDR
     r = SqlStockSearchRepository(session)
 
-    # The null-domicile CDRs drop immediately; the TSX names and the confirmed-CA .NE company stay.
+    # Every .NE listing drops (whatever its domicile); only the TSX names remain.
     assert set(_tickers(r.search(_criteria(countries=("CA",))))) == {
         "SHOP.TO",
-        "REAL.NE",
         "STONE.TO",
     }
     # Opting into the duplicates brings the .NE CDRs back.
-    assert "ZAAP.NE" in _tickers(
-        r.search(_criteria(countries=("CA",), include_interlisted=True))
-    )
+    assert set(
+        _tickers(r.search(_criteria(countries=("CA",), include_interlisted=True)))
+    ) == {"ZAAP.NE", "CHEV.NE", "INTC.NE", "SHOP.TO", "STONE.TO"}
 
 
 def test_include_interlisted_skips_domicile_scoping(session):
