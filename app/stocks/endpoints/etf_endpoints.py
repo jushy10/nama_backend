@@ -94,7 +94,11 @@ from app.stocks.ports import (
 from app.stocks.adapters.bedrock.etf_screener_query_adapter import (
     BedrockEtfScreenerQueryTranslator,
 )
-from app.stocks.wiring import analysis_cache_ttl, get_provider
+from app.stocks.wiring import (
+    analysis_cache_ttl,
+    bedrock_recovery_model_id,
+    get_provider,
+)
 
 @lru_cache(maxsize=1)
 def get_etf_screener_translator() -> EtfScreenerQueryTranslator:
@@ -167,10 +171,15 @@ def get_etf_analysis_provider() -> EtfAnalysisProvider:
     # deploy without it turns the ImportError into a 503 here rather than failing app import.
     region = os.environ.get("BEDROCK_REGION", "us-east-1")
     model_id = os.environ.get("BEDROCK_ANALYSIS_MODEL_ID")
+    # Shares the stock analyser's escalation env (BEDROCK_ANALYSIS_RECOVERY_MODEL_ID),
+    # like the primary model above — one deploy config drives both. Unset → no escalation.
+    recovery = bedrock_recovery_model_id("BEDROCK_ANALYSIS_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockEtfAnalysisProvider(model_id=model_id, region=region)
-        return BedrockEtfAnalysisProvider(region=region)
+            return BedrockEtfAnalysisProvider(
+                model_id=model_id, region=region, recovery_model_id=recovery
+            )
+        return BedrockEtfAnalysisProvider(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."

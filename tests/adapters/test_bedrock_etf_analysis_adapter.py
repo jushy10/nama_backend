@@ -267,3 +267,46 @@ def test_retries_once_when_bullets_come_back_empty():
     assert client.calls[1]["tool_choice"] == {"type": "tool", "name": "submit_bullets"}
     assert analysis.strengths == ("Very low yearly cost",)
     assert analysis.risks == ("Heavy in a handful of tech names",)
+
+
+def test_incomplete_retry_escalates_to_the_recovery_model():
+    # When recovery_model_id is set, the single retry runs on that (more capable) model
+    # rather than re-calling the fast primary that just dropped the bullets — the first
+    # (full) pass stays on the primary.
+    empty = _tool_message(strengths=[], risks=[])
+    bullets = _bullets_message()
+    client = _SeqStubClient([empty, bullets])
+    recovery = "us.anthropic.claude-sonnet-4-6-v1:0"
+
+    BedrockEtfAnalysisProvider(client=client, recovery_model_id=recovery).analyze(
+        _detail()
+    )
+
+    assert len(client.calls) == 2
+    assert client.calls[0]["model"] == BedrockEtfAnalysisProvider._DEFAULT_MODEL_ID
+    assert client.calls[1]["model"] == recovery  # the retry escalated
+
+
+def test_escalated_recovery_failure_is_best_effort():
+    # If the escalated recovery call fails (e.g. the model isn't entitled), the failure
+    # is swallowed and the first pass's (incomplete) read is still served — escalation
+    # can never sink an otherwise-usable analysis.
+    class _EmptyThenBoom:
+        def __init__(self):
+            self.calls: list[dict] = []
+            self.messages = self
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return _tool_message(strengths=[], risks=[])
+            raise RuntimeError("recovery model not entitled")
+
+    client = _EmptyThenBoom()
+    analysis = BedrockEtfAnalysisProvider(
+        client=client, recovery_model_id="us.anthropic.claude-sonnet-4-6-v1:0"
+    ).analyze(_detail())
+
+    assert len(client.calls) == 2  # attempted the escalated recovery once
+    assert analysis.strengths == ()  # served the incomplete read, not a 502
+    assert analysis.risks == ()

@@ -106,6 +106,34 @@ def test_accumulator_sums_calls_into_one_line():
     assert "(AAPL)" in msg
 
 
+def test_accumulator_prices_each_model_at_its_own_rate():
+    # An escalated retry runs on a pricier recovery model — each call is costed at its
+    # own model's rate (not the primary's), and every model that ran is named.
+    acc = CostAccumulator()
+    acc.add(
+        _Message(_Usage(1_000_000, 200_000)),
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",  # 1M*$1 + 0.2M*$5 = $2
+    )
+    acc.add(
+        _Message(_Usage(1_000_000, 1_000_000)),
+        "us.anthropic.claude-sonnet-4-6-v1:0",  # 1M*$3 + 1M*$15 = $18
+    )
+    records = _capture_logs(
+        lambda: acc.log(
+            label="stock analysis",
+            model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            key="AAPL",
+        )
+    )
+    assert len(records) == 1
+    msg = records[0].getMessage()
+    assert "model_calls=2" in msg
+    assert "input_tokens=2000000" in msg
+    assert "output_tokens=1200000" in msg
+    assert "est_cost=$20.000000" in msg  # $2 + $18, not all tokens at the Haiku rate
+    assert "haiku-4-5" in msg and "sonnet-4-6" in msg  # both models named
+
+
 def test_accumulator_skips_usageless_calls():
     # A stub response (no usage) contributes nothing and isn't counted.
     acc = CostAccumulator()

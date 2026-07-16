@@ -187,17 +187,25 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
     _MAX_TOKENS = 900
     # Bedrock does not enforce the tool schema's minItems, and the fast Haiku tier
     # occasionally returns an empty highlights list anyway. Re-issue the forced call
-    # up to this many *extra* times to recover it. Only fires on the miss.
-    _MAX_EMPTY_RETRIES = 4
+    # this many *extra* times to recover it. Kept at ONE: re-calling the same fast model
+    # rarely recovers what it just dropped, so extra Haiku retries mostly just bill; the
+    # single retry is instead escalated onto ``recovery_model_id`` (when configured).
+    # Only fires on the miss.
+    _MAX_EMPTY_RETRIES = 1
 
     def __init__(
         self,
         *,
         model_id: str = _DEFAULT_MODEL_ID,
         region: str = _DEFAULT_REGION,
+        recovery_model_id: str | None = None,
         client=None,
     ) -> None:
         self._model_id = model_id
+        # The model the single empty-list retry runs on. Defaults to the primary model (a
+        # plain retry); set it to a more capable entitled model to escalate the recovery
+        # (see ``wiring.bedrock_recovery_model_id``).
+        self._recovery_model_id = recovery_model_id or model_id
         if client is not None:
             self._client = client
             return
@@ -253,16 +261,19 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
         tool: dict = _ANALYSIS_TOOL,
         tool_name: str = "submit_earnings_analysis",
         system: str = _SYSTEM_PROMPT,
+        model: str | None = None,
     ) -> dict | None:
         """One forced-tool call, returning the tool's arguments (or ``None`` if the
         model somehow didn't call the forced tool). Defaults to the full earnings
-        tool; the retry path passes the lighter ``submit_highlights`` tool. Any
-        SDK/botocore failure is mapped to this port's ``StockDataUnavailable``. The
-        call's token usage is folded into ``costs`` for the caller's single
-        per-endpoint cost line."""
+        tool; the retry path passes the lighter ``submit_highlights`` tool. ``model``
+        overrides which model runs (the retry escalates onto ``recovery_model_id``);
+        defaults to the primary. Any SDK/botocore failure is mapped to this port's
+        ``StockDataUnavailable``. The call's token usage is folded into ``costs`` under
+        the model that produced it, for the caller's single per-endpoint cost line."""
+        chosen = model or self._model_id
         try:
             message = self._client.messages.create(
-                model=self._model_id,
+                model=chosen,
                 max_tokens=self._MAX_TOKENS,
                 system=system,
                 tools=[tool],
@@ -273,7 +284,7 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
             raise StockDataUnavailable(
                 key, f"earnings analysis model call failed: {exc}"
             ) from exc
-        costs.add(message)
+        costs.add(message, chosen)
         return _tool_payload(message, tool_name)
 
     def _recover_highlights(
@@ -281,17 +292,22 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
     ) -> dict | None:
         """One targeted retry that regenerates *only* the highlights, grounded in the
         same figures the first pass saw — far fewer output tokens than re-running the
-        whole analysis. Returns the ``submit_highlights`` arguments, or ``None`` when
-        the model didn't call the tool (the caller then leaves the payload unchanged
-        and consumes a bounded retry)."""
-        return self._invoke(
-            _HIGHLIGHTS_INSTRUCTION + prompt,
-            key,
-            costs,
-            tool=_HIGHLIGHTS_TOOL,
-            tool_name="submit_highlights",
-            system=_HIGHLIGHTS_SYSTEM,
-        )
+        whole analysis. Escalated onto ``recovery_model_id`` when configured. **Best-
+        effort**: a failure on the recovery call is swallowed to ``None`` so escalation
+        can never sink an otherwise-usable read. Returns the ``submit_highlights``
+        arguments, or ``None`` when the model didn't call the tool."""
+        try:
+            return self._invoke(
+                _HIGHLIGHTS_INSTRUCTION + prompt,
+                key,
+                costs,
+                tool=_HIGHLIGHTS_TOOL,
+                tool_name="submit_highlights",
+                system=_HIGHLIGHTS_SYSTEM,
+                model=self._recovery_model_id,
+            )
+        except StockDataUnavailable:
+            return None
 
 
 def _tool_payload(message, name: str) -> dict | None:

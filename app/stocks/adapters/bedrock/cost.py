@@ -70,16 +70,21 @@ def _usage_of(message) -> tuple[int, int] | None:
     return input_tokens or 0, output_tokens or 0
 
 
-def _emit(
-    *, label: str, model_id: str, calls: int, input_tokens: int, output_tokens: int, key: str
+def _emit_line(
+    *,
+    label: str,
+    calls: int,
+    input_tokens: int,
+    output_tokens: int,
+    cost_str: str,
+    model_str: str,
+    key: str,
 ) -> None:
     """Format and log one aggregated cost line at info. Silent when no priced call was
     seen (``calls == 0`` — e.g. offline stubs)."""
     if calls == 0:
         return
     suffix = f" ({key})" if key else ""
-    cost = estimate_cost_usd(model_id, input_tokens, output_tokens)
-    cost_str = "unknown" if cost is None else f"${cost:.6f}"
     logger.info(
         "%s cost: model_calls=%d input_tokens=%d output_tokens=%d est_cost=%s "
         "(model=%s)%s",
@@ -88,7 +93,7 @@ def _emit(
         input_tokens,
         output_tokens,
         cost_str,
-        model_id,
+        model_str,
         suffix,
     )
 
@@ -97,32 +102,64 @@ class CostAccumulator:
     """Sums token usage across the model calls of one endpoint request so an adapter
     whose ``analyze()`` may retry logs a **single** aggregated cost line, not one per
     call. Create one per ``analyze()``, ``add()`` each response, and ``log()`` once — in
-    a ``finally``, so a mid-retry failure still records what was spent."""
+    a ``finally``, so a mid-retry failure still records what was spent.
+
+    Usage is bucketed **per model**, so a request that escalates its retry onto a
+    pricier recovery model (see the analysers' ``recovery_model_id``) is costed with
+    each call at its own rate rather than the primary's — the one aggregated line still
+    reports the summed tokens/calls, but ``est_cost`` and the ``model=`` field reflect
+    every model that ran."""
 
     def __init__(self) -> None:
-        self.calls = 0
-        self.input_tokens = 0
-        self.output_tokens = 0
+        # raw model id passed to add() (or None → priced at log()'s primary) -> [calls, in, out]
+        self._buckets: dict[str | None, list[int]] = {}
 
-    def add(self, message) -> None:
-        """Fold one model response's usage into the running total. Best-effort: a
-        message without usage (a stub client) contributes nothing."""
+    @property
+    def calls(self) -> int:
+        return sum(b[0] for b in self._buckets.values())
+
+    def add(self, message, model_id: str | None = None) -> None:
+        """Fold one model response's usage into the running total, under ``model_id``
+        (the model that produced it; ``None`` → priced at ``log()``'s primary model).
+        Best-effort: a message without usage (a stub client) contributes nothing."""
         tokens = _usage_of(message)
         if tokens is None:
             return
-        self.calls += 1
-        self.input_tokens += tokens[0]
-        self.output_tokens += tokens[1]
+        bucket = self._buckets.setdefault(model_id, [0, 0, 0])
+        bucket[0] += 1
+        bucket[1] += tokens[0]
+        bucket[2] += tokens[1]
 
     def log(self, *, label: str, model_id: str, key: str = "") -> None:
         """Emit the single aggregated cost line for this request, or stay silent if no
-        priced call was seen."""
-        _emit(
+        priced call was seen. Each bucket is priced with its own model (calls recorded
+        without one fall back to ``model_id``); an unpriceable model makes the whole line
+        ``unknown`` rather than understating."""
+        if not self._buckets:
+            return
+        total = 0.0
+        priced = True
+        models: list[str] = []
+        input_tokens = output_tokens = 0
+        for raw, (_calls, tok_in, tok_out) in self._buckets.items():
+            effective = raw if raw is not None else model_id
+            input_tokens += tok_in
+            output_tokens += tok_out
+            if effective not in models:
+                models.append(effective)
+            piece = estimate_cost_usd(effective, tok_in, tok_out)
+            if piece is None:
+                priced = False
+            else:
+                total += piece
+        cost_str = f"${total:.6f}" if priced else "unknown"
+        _emit_line(
             label=label,
-            model_id=model_id,
             calls=self.calls,
-            input_tokens=self.input_tokens,
-            output_tokens=self.output_tokens,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_str=cost_str,
+            model_str=",".join(models),
             key=key,
         )
 
@@ -134,11 +171,13 @@ def log_model_cost(*, label: str, model_id: str, message, key: str = "") -> None
     tokens = _usage_of(message)
     if tokens is None:
         return
-    _emit(
+    cost = estimate_cost_usd(model_id, tokens[0], tokens[1])
+    _emit_line(
         label=label,
-        model_id=model_id,
         calls=1,
         input_tokens=tokens[0],
         output_tokens=tokens[1],
+        cost_str="unknown" if cost is None else f"${cost:.6f}",
+        model_str=model_id,
         key=key,
     )

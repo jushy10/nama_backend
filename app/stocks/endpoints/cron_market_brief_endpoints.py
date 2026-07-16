@@ -50,7 +50,7 @@ from app.stocks.heatmap.use_cases import GetStockHeatMap
 from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
 from app.stocks.news.db_repository import SqlNewsRepository
 from app.stocks.universe.db_repository import SqlStockSearchRepository
-from app.stocks.wiring import get_provider
+from app.stocks.wiring import bedrock_recovery_model_id, get_provider
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["market-brief-cron"])
@@ -67,9 +67,14 @@ def get_market_brief_provider() -> MarketBriefProvider:
     ``ImportError``, which the runner logs as a failed generation."""
     region = os.environ.get("BEDROCK_REGION", "us-east-1")
     model_id = os.environ.get("BEDROCK_MARKET_BRIEF_MODEL_ID")
+    # The single incomplete-result retry escalates onto this model when set (else it
+    # stays on the primary) — see wiring.bedrock_recovery_model_id.
+    recovery = bedrock_recovery_model_id("BEDROCK_MARKET_BRIEF_RECOVERY_MODEL_ID")
     if model_id:
-        return BedrockMarketBriefProvider(model_id=model_id, region=region)
-    return BedrockMarketBriefProvider(region=region)
+        return BedrockMarketBriefProvider(
+            model_id=model_id, region=region, recovery_model_id=recovery
+        )
+    return BedrockMarketBriefProvider(region=region, recovery_model_id=recovery)
 
 
 def run_market_brief_sync(limit: int | None) -> MarketBriefSyncReport:
