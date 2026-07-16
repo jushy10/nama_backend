@@ -554,6 +554,7 @@ def _present_search(page: StockSearchPage) -> StockSearchResponse:
                 in_nasdaq100=r.in_nasdaq100,
                 country=r.country,
                 currency=r.currency,
+                has_us_listing=r.has_us_listing,
             )
             for r in page.results
         ],
@@ -622,6 +623,15 @@ def search_stocks_endpoint(
             "market, so a CAD cap isn't comparable to a USD one)."
         ),
     ),
+    include_interlisted: bool = Query(
+        False,
+        description=(
+            "Include Canadian listings that duplicate a US-listed company (a CDR like AAPL.NE, "
+            "or a same-ticker dual-listing like SHOP.TO). Hidden by default so a Canadian search "
+            "returns only companies that don't already trade in the US; set true to see them. "
+            "US listings are never affected."
+        ),
+    ),
     market_cap: list[MarketCapTier] | None = Query(
         None,
         description=(
@@ -668,6 +678,7 @@ def search_stocks_endpoint(
             limit=limit,
             offset=offset,
             countries=country,
+            include_interlisted=include_interlisted,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

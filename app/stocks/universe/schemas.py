@@ -50,6 +50,10 @@ class StockSearchItemResponse(BaseModel):
     in_nasdaq100: bool
     country: str | None = None  # ISO-2 listing market (US / CA)
     currency: str | None = None  # ISO-3 trading currency (USD / CAD)
+    # True for a Canadian listing that duplicates a US-listed company (a CDR or a same-ticker
+    # dual-listing). Hidden from search by default, so this is False on every returned row
+    # unless the client opted in with ?include_interlisted=true.
+    has_us_listing: bool = False
 
 
 class StockSearchResponse(BaseModel):

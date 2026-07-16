@@ -164,8 +164,10 @@ class _FakeRepo(UniverseRepository):
         missing=(),
         fcf_per_share=None,
         ev_components=None,
+        us_tickers=(),
     ) -> None:
         self._counts = counts
+        self._us_tickers = frozenset(t.upper() for t in us_tickers)
         self._missing = tuple(missing)
         # The stored {ticker: fcf_per_share} the valuation pass reads (annual slice's write).
         self._fcf_per_share = dict(fcf_per_share or {})
@@ -184,6 +186,9 @@ class _FakeRepo(UniverseRepository):
     def upsert_screen(self, stocks):
         self.upserted = tuple(stocks)
         return self._counts
+
+    def screened_us_tickers(self):
+        return self._us_tickers
 
     def tickers_missing_classification(self, limit):
         self.missing_limit = limit
@@ -277,6 +282,57 @@ def test_sync_ca_region_screens_canada_and_carries_the_market_facts():
     assert repo.upserted == screen
     assert {s.country for s in repo.upserted} == {"CA"}
     assert {s.currency for s in repo.upserted} == {"CAD"}
+
+
+def test_ca_pass_flags_interlisted_duplicates():
+    # SHOP.TO duplicates US SHOP (same ticker); AAPL.NE is a CDR of US AAPL; DOL.TO has no US
+    # sibling. The US universe is on the anchor (US pass ran first), so the CA pass flags the
+    # first two and leaves DOL.TO unflagged.
+    screen = (
+        _stock("SHOP.TO", market_cap=1.2e11, country="CA", currency="CAD"),
+        _stock("AAPL.NE", market_cap=3e12, country="CA", currency="CAD"),
+        _stock("DOL.TO", market_cap=2e10, country="CA", currency="CAD"),
+        *_a_screen(SyncUniverse._MIN_PLAUSIBLE_BY_REGION["ca"]),  # padding above the floor
+    )
+    repo = _FakeRepo(
+        counts=UniverseSyncCounts(added=len(screen), updated=0),
+        us_tickers=("SHOP", "AAPL", "MSFT"),
+    )
+
+    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), region="ca").execute()
+
+    flagged = {s.ticker: s.has_us_listing for s in repo.upserted}
+    assert flagged["SHOP.TO"] is True
+    assert flagged["AAPL.NE"] is True
+    assert flagged["DOL.TO"] is False
+    # The padding names (T0000…) have no US sibling either.
+    assert all(v is False for k, v in flagged.items() if k.startswith("T"))
+
+
+def test_us_pass_never_flags_interlisted():
+    # The US pass upserts the originals — has_us_listing stays False, and it never reads the
+    # US-ticker index (region == "us").
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN)
+    repo = _FakeRepo(counts=UniverseSyncCounts(added=len(screen), updated=0), us_tickers=("T0001",))
+
+    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), region="us").execute()
+
+    assert all(s.has_us_listing is False for s in repo.upserted)
+
+
+def test_ca_flag_is_recomputed_off_when_the_us_sibling_is_gone():
+    # A re-run where SHOP no longer trades in the US (not in the US index) must CLEAR the flag —
+    # the flag is set explicitly every run, not just when it matches.
+    screen = (
+        _stock("SHOP.TO", market_cap=1.2e11, country="CA", currency="CAD"),
+        *_a_screen(SyncUniverse._MIN_PLAUSIBLE_BY_REGION["ca"]),
+    )
+    repo = _FakeRepo(counts=UniverseSyncCounts(added=len(screen), updated=0), us_tickers=("AAPL",))
+
+    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), region="ca").execute()
+
+    flagged = {s.ticker: s.has_us_listing for s in repo.upserted}
+    assert flagged["SHOP.TO"] is False  # no US SHOP this run → not a duplicate
 
 
 def test_ca_plausibility_floor_is_lower_than_us():

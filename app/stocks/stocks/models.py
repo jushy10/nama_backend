@@ -14,8 +14,8 @@ year-over-year growth columns, 0012 the three universe-screen columns, 0013 the
 free-cash-flow columns (``fcf_per_share`` / ``ocf_per_share`` / ``fcf_growth_yoy`` /
 ``fcf_yield``), 0031 the trailing fundamentals columns, 0033 the trailing-performance
 window columns (``perf_*`` / ``performance_synced_at``), 0037 the enterprise-value inputs +
-materialized ``ev_to_ebitda``, and 0038 the ``country`` / ``currency`` screen facts (the
-multi-market universe) — all below.
+materialized ``ev_to_ebitda``, 0038 the ``country`` / ``currency`` screen facts (the
+multi-market universe), and 0039 the ``has_us_listing`` interlisted flag — all below.
 """
 
 from __future__ import annotations
@@ -82,6 +82,16 @@ class StockRecord(Base):
     CAD — a mixed-currency ``market_cap`` sort is therefore nominal, and this column is the unit
     the FE labels/converts against. Both are set by the sync's screen upsert (fill-once, like
     ``exchange``), nullable for an incidentally-known ticker that's never been screened (0038).
+
+    ``has_us_listing`` marks a Canadian listing that **duplicates** a US-listed company — a CDR
+    (``AAPL.NE`` wraps ``AAPL``) or a dual-listed Canadian company whose ticker matches its US
+    line (``SHOP.TO`` ↔ ``SHOP``). The universe search hides these by default (a client sees the
+    US listing, not the Canadian duplicate), so a Canadian search returns only the companies that
+    *don't* already trade in the US. Unlike the fill-once market facts it's **overwritten** every
+    run: the CA sync matches each Canadian listing's base ticker (suffix stripped) against the US
+    names already on the anchor and sets the flag, so a listing is reclassified if it gains/loses
+    a US sibling. ``NOT NULL``, default ``False`` — every US listing and every Canadian-only
+    listing is ``False``; only the interlisted duplicates flip ``True`` (0039).
 
     ``pe_ratio`` is the stock's trailing P/E on the analyst-consensus (adjusted) EPS basis —
     the same figure the ticker card computes live (``TickerValuation.trailing_pe``): a market
@@ -212,6 +222,9 @@ class StockRecord(Base):
         Boolean, nullable=False, server_default=false(), default=False
     )
     in_nasdaq100: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(), default=False
+    )
+    has_us_listing: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=false(), default=False
     )
 

@@ -61,9 +61,20 @@ class UniverseRepository(ABC):
         For each: create the anchor if absent, fill ticker/name/exchange/country/currency
         when missing (never clobbering a settled value — country/currency are fill-once
         market facts, like the exchange), and set/refresh the screen facts
-        (``market_cap``/``sector``/``screened_at``) — ``sector`` only when supplied, so a
-        source that omits it doesn't wipe a known one. Additive: stocks absent from the
-        screen are left untouched (no delete). Commits its own write.
+        (``market_cap``/``sector``/``screened_at``/``has_us_listing``) — ``sector`` only when
+        supplied, so a source that omits it doesn't wipe a known one; ``has_us_listing`` is
+        overwritten every run (a recomputed fact, not fill-once). Additive: stocks absent from
+        the screen are left untouched (no delete). Commits its own write.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def screened_us_tickers(self) -> frozenset[str]:
+        """The uppercase tickers of every screened **US** listing on the anchor — the CA pass's
+        interlisting index. A Canadian listing whose *base* ticker (venue suffix stripped) is in
+        this set duplicates a US-listed company (a CDR or a same-ticker dual-listing), so the
+        sync flags it ``has_us_listing`` and the search hides it by default. Read after the US
+        pass has upserted, so it reflects this run's US universe.
         """
         raise NotImplementedError
 

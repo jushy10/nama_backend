@@ -25,6 +25,7 @@ from app.stocks.entities import (
     Stock,
     StockPerformance,
     Timeframe,
+    is_canadian,  # re-exported: the market-identity rule lives in the shared kernel
 )
 from app.stocks.ports import (
     AllTimeHighProvider,
@@ -33,18 +34,7 @@ from app.stocks.ports import (
     StockQuoteProvider,
 )
 
-# Yahoo's suffixes for the Canadian venues — the form the universe screen stores (SHOP.TO). A
-# symbol carrying one of these routes to the Yahoo feed; a bare US symbol stays on Alpaca.
-CANADIAN_SUFFIXES = (".TO", ".V", ".NE", ".CN")
-
-
-def is_canadian(symbol: str) -> bool:
-    """Whether ``symbol`` is a Canadian listing (by Yahoo suffix). Case-insensitive; a blank or
-    non-string symbol is not Canadian (it routes to the US default)."""
-    if not isinstance(symbol, str):
-        return False
-    upper = symbol.upper()
-    return any(upper.endswith(suffix) for suffix in CANADIAN_SUFFIXES)
+__all__ = ["MarketRoutingPriceProvider", "is_canadian"]
 
 
 class MarketRoutingPriceProvider(
