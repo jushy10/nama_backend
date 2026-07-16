@@ -766,3 +766,38 @@ def country_to_iso2(country: object) -> str | None:
     if len(text) == 2 and text.isalpha():
         return text.upper()
     return None
+
+
+# Tokens dropped when reducing a company name to its identity key — legal-form suffixes (which
+# vary between a listing and its cross-listing, "Corp" vs "Corporation") and depositary-receipt
+# markers. Limited to legal-form + DR noise, NOT generic words like "Group"/"Holdings", so two
+# genuinely different companies don't collapse onto the same key.
+_NAME_NOISE_TOKENS = frozenset(
+    {
+        "THE",
+        "INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "COMPANIES",
+        "LTD", "LIMITED", "LLC", "LP", "LLP", "PLC", "SA", "AG", "NV", "SE",
+        "CDR", "CDRS", "DEPOSITARY", "DEPOSITORY", "RECEIPT", "RECEIPTS",
+        "CAD", "USD", "HEDGED", "UNHEDGED", "NONHEDGED",
+    }
+)
+
+
+def normalize_company_name(name: object) -> str | None:
+    """A company name → a canonical identity key, or ``None``.
+
+    Upper-cases, splits on every run of non-alphanumeric characters, drops the legal-form and
+    depositary-receipt noise tokens (:data:`_NAME_NOISE_TOKENS`), and joins the rest — so a
+    Canadian listing and its US line reduce to the same key (``"Apple Inc."`` → ``APPLE`` on both
+    the US ``AAPL`` row and its ``AAPL.TO`` CDR). The universe sync uses this to spot a Canadian
+    listing that duplicates a **US-domiciled** company (a CDR / cross-listing of a US company) and
+    keep it out of the Canadian screen. A non-string, or a name that is only noise tokens, is
+    ``None`` — nothing to match on."""
+    if not isinstance(name, str):
+        return None
+    tokens = [
+        token
+        for token in re.split(r"[^A-Z0-9]+", name.upper())
+        if token and token not in _NAME_NOISE_TOKENS
+    ]
+    return "".join(tokens) or None

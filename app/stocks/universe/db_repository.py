@@ -16,10 +16,10 @@ table of its own — and are the only layer that touches SQLAlchemy:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, func, nulls_last, or_, select
+from sqlalchemy import and_, delete, func, nulls_last, or_, select
 from sqlalchemy.orm import Session
 
 from app.stocks.entities import StockPerformance
@@ -89,6 +89,37 @@ class SqlUniverseRepository(UniverseRepository):
             anchor.screened_at = now
         self._session.commit()
         return UniverseSyncCounts(added=added, updated=updated)
+
+    def us_domiciled_company_names(self) -> frozenset[str]:
+        # Raw names of every screened US-listed row confirmed US-domiciled (the CA CDR name
+        # index). The domicile gate is what keeps a Canadian company dual-listed in the US
+        # (SHOP/CP/RY — domicile CA) out of the set, so its .TO listing survives. name NOT NULL.
+        rows = (
+            self._session.execute(
+                select(StockRecord.name).where(
+                    StockRecord.country == "US",
+                    StockRecord.domicile_country == "US",
+                    StockRecord.market_cap.is_not(None),
+                    StockRecord.name.is_not(None),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return frozenset(rows)
+
+    def delete_stocks(self, tickers: Sequence[str]) -> int:
+        # The one delete the universe does (otherwise additive): purge a Canadian listing that's
+        # really a US company's CDR. FK children (ON DELETE CASCADE) go with the anchor. One
+        # commit for the batch; a no-op for an empty list.
+        tickers = list(tickers)
+        if not tickers:
+            return 0
+        result = self._session.execute(
+            delete(StockRecord).where(StockRecord.ticker.in_(tickers))
+        )
+        self._session.commit()
+        return result.rowcount or 0
 
     def tickers_missing_classification(self, limit: int) -> tuple[str, ...]:
         # Missing *any* of the three enrichment fields keeps a stock on the work-list until

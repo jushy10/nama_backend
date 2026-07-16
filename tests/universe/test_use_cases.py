@@ -164,9 +164,14 @@ class _FakeRepo(UniverseRepository):
         missing=(),
         fcf_per_share=None,
         ev_components=None,
+        us_domiciled_names=(),
     ) -> None:
         self._counts = counts
         self._missing = tuple(missing)
+        # Raw names of US-domiciled US rows the CA pass matches CDRs against.
+        self._us_domiciled_names = frozenset(us_domiciled_names)
+        # Tickers the CA pass asked to delete (previously-stored CDRs).
+        self.deleted: list[str] = []
         # The stored {ticker: fcf_per_share} the valuation pass reads (annual slice's write).
         self._fcf_per_share = dict(fcf_per_share or {})
         # The stored {ticker: (ebitda, total_debt, cash)} the valuation pass reads for EV/EBITDA
@@ -184,6 +189,14 @@ class _FakeRepo(UniverseRepository):
     def upsert_screen(self, stocks):
         self.upserted = tuple(stocks)
         return self._counts
+
+    def us_domiciled_company_names(self):
+        return self._us_domiciled_names
+
+    def delete_stocks(self, tickers):
+        tickers = list(tickers)
+        self.deleted.extend(tickers)
+        return len(tickers)
 
     def tickers_missing_classification(self, limit):
         self.missing_limit = limit
@@ -301,6 +314,54 @@ def test_sync_drops_cboe_canada_ne_cdrs_before_the_upsert():
     assert not any(t.endswith(".NE") for t in upserted)  # no CDR reached the anchor
     assert {s.ticker for s in tsx} <= upserted  # every TSX company still landed
     assert report.screened == len(tsx)  # the reported size is the post-filter CA universe
+
+
+def test_sync_drops_and_purges_to_cdrs_of_us_companies():
+    # A .TO CDR of a US company (AAPL.TO / MSFT.TO — same name as the US-domiciled AAPL / MSFT) is
+    # dropped from the upsert AND purged from the anchor. A genuinely Canadian company dual-listed
+    # in the US (SHOP.TO — US SHOP is CA-domiciled, so its name isn't in the US-domiciled index) is
+    # kept, as is a ticker collision (CNR.TO Canadian National, whose name doesn't match US Core
+    # Natural Resources).
+    cdrs = (
+        _stock("AAPL.TO", name="Apple Inc.", market_cap=3e12, country="CA", currency="CAD"),
+        _stock("MSFT.TO", name="Microsoft Corporation", market_cap=3e12, country="CA", currency="CAD"),
+    )
+    canadian = (
+        _stock("SHOP.TO", name="Shopify Inc.", market_cap=1.2e11, country="CA", currency="CAD"),
+        _stock("CNR.TO", name="Canadian National Railway Company", market_cap=1e11, country="CA", currency="CAD"),
+    )
+    pad = _a_screen(SyncUniverse._MIN_PLAUSIBLE_BY_REGION["ca"])
+    repo = _FakeRepo(
+        counts=UniverseSyncCounts(added=len(canadian) + len(pad), updated=0),
+        # The US universe (post-enrichment) — Apple/Microsoft are US-domiciled; Shopify is NOT
+        # (it's Canadian, so its US listing is CA-domiciled and absent here), Core Natural
+        # Resources is a different name than Canadian National.
+        us_domiciled_names=("Apple Inc.", "Microsoft Corporation", "Core Natural Resources, Inc."),
+    )
+
+    SyncUniverse(
+        _FakeScreener(cdrs + canadian + pad), repo, _FakeClassifier(), region="ca"
+    ).execute()
+
+    assert set(repo.deleted) == {"AAPL.TO", "MSFT.TO"}  # existing CDR copies purged
+    upserted = {s.ticker for s in repo.upserted}
+    assert "AAPL.TO" not in upserted and "MSFT.TO" not in upserted  # not (re-)ingested
+    assert {"SHOP.TO", "CNR.TO"} <= upserted  # the real Canadian companies stay
+
+
+def test_us_pass_never_purges_by_name():
+    # The name-match CDR purge is CA-only: the US pass must not match US rows against their own
+    # US-domiciled names (which would delete/skip them). region="us" skips the whole step.
+    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN)
+    repo = _FakeRepo(
+        counts=UniverseSyncCounts(added=len(screen), updated=0),
+        us_domiciled_names=(f"T{i:04d}" for i in range(5)),
+    )
+
+    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), region="us").execute()
+
+    assert repo.deleted == []  # nothing purged on the US pass
+    assert {s.ticker for s in repo.upserted} == {s.ticker for s in screen}
 
 
 def test_ca_plausibility_floor_is_lower_than_us():

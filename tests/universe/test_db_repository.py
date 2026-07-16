@@ -318,6 +318,40 @@ def test_set_classification_fills_domicile_once(session):
     assert _row(session, "SHOP.TO").domicile_country == "CA"
 
 
+def test_us_domiciled_company_names_returns_us_listed_us_domiciled_only(session):
+    r = repo(session)
+    r.upsert_screen(
+        (
+            _stock("AAPL", name="Apple Inc.", market_cap=3e12, country="US", currency="USD"),
+            # US-listed but CA-domiciled (Shopify) — must NOT be in the index, so SHOP.TO survives.
+            _stock("SHOP", name="Shopify Inc.", market_cap=1e11, country="US", currency="USD"),
+            _stock("NONM", name=None, market_cap=1e10, country="US", currency="USD"),
+            _stock("RY.TO", name="Royal Bank of Canada", market_cap=4e11, country="CA", currency="CAD"),
+        )
+    )
+    r.set_classification("AAPL", CompanyClassification(domicile_country="US"))
+    r.set_classification("SHOP", CompanyClassification(domicile_country="CA"))
+
+    # Only the US-listed, US-domiciled, named row.
+    assert r.us_domiciled_company_names() == frozenset({"Apple Inc."})
+
+
+def test_delete_stocks_removes_rows_and_no_ops_on_empty(session):
+    r = repo(session)
+    r.upsert_screen(
+        (
+            _stock("AAPL.TO", market_cap=3e12, country="CA", currency="CAD"),
+            _stock("SHOP.TO", market_cap=1e11, country="CA", currency="CAD"),
+        )
+    )
+
+    assert r.delete_stocks([]) == 0  # no-op
+    assert r.delete_stocks(["AAPL.TO", "ZZZZ"]) == 1  # only the existing one is removed
+    remaining = {row.ticker for row in session.execute(select(StockRecord)).scalars()}
+    assert "AAPL.TO" not in remaining
+    assert "SHOP.TO" in remaining
+
+
 def test_set_classification_ignores_an_unknown_ticker(session):
     # No row for NOPE — a no-op: no row is created and nothing raises.
     repo(session).set_classification("NOPE", CompanyClassification(industry="x"))
