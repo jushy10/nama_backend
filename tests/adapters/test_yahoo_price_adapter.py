@@ -214,3 +214,37 @@ def test_performance_history_failure_is_data_unavailable():
     ticker = _FakeTicker(history_error=RuntimeError("yahoo blocked"))
     with pytest.raises(StockDataUnavailable):
         _provider(ticker).get_performance("SHOP.TO")
+
+
+# --------------------------- get_all_time_high ---------------------------
+
+
+def test_all_time_high_from_full_history():
+    frame = _frame(
+        [
+            ("2024-01-02", 48, 50.0, 47, 49, 100),  # earliest date covered
+            ("2025-06-01", 118, 120.0, 115, 119, 100),  # the peak high
+            ("2026-03-01", 88, 90.0, 86, 89, 100),
+        ]
+    )
+    ath = _provider(_FakeTicker(frame=frame)).get_all_time_high("SHOP.TO")
+    assert ath.price == 120.0
+    assert ath.reached_on == datetime(2025, 6, 1).date()
+    assert ath.since == datetime(2024, 1, 2).date()  # the "all-time" bound
+
+
+def test_all_time_high_requests_the_max_period():
+    ticker = _FakeTicker(frame=_frame([("2025-01-02", 1, 2, 1, 1.5, 1)]))
+    _provider(ticker).get_all_time_high("SHOP.TO")
+    assert ticker.history_calls[-1]["period"] == "max"
+
+
+def test_all_time_high_empty_history_is_stock_not_found():
+    with pytest.raises(StockNotFound):
+        _provider(_FakeTicker(frame=_frame([]))).get_all_time_high("SHOP.TO")
+
+
+def test_all_time_high_history_failure_is_data_unavailable():
+    ticker = _FakeTicker(history_error=RuntimeError("yahoo blocked"))
+    with pytest.raises(StockDataUnavailable):
+        _provider(ticker).get_all_time_high("SHOP.TO")
