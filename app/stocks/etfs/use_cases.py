@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 from app.stocks.analysis.entities import InvestmentAnalysis
-from app.stocks.entities import StockPerformance
+from app.stocks.entities import StockPerformance, normalize_symbol
 from app.stocks.etfs.entities import (
     EtfCategories,
     EtfDetail,
@@ -311,16 +311,9 @@ class AiScreenEtfs:
 
 
 def _normalize_symbol(symbol: str) -> str:
-    """Trim/upper-case the ticker and reject obvious junk, once, at the edge of the use case —
-    the same guard the ticker/stocks slices apply, so ``GET /stocks/etf/{ticker}`` 400s on the
+    """The shared kernel guard, with ETF wording — so ``GET /stocks/etf/{ticker}`` 400s on the
     same bad input as its siblings."""
-    normalized = (symbol or "").strip().upper()
-    if not normalized:
-        raise ValueError("An ETF symbol is required.")
-    if not normalized.isalpha() or len(normalized) > 5:
-        # Simple guard; ETF tickers are 1-5 letters, like the stock guard.
-        raise ValueError(f"'{symbol}' is not a valid ETF symbol.")
-    return normalized
+    return normalize_symbol(symbol, kind="ETF", article="An")
 
 
 def _normalize_includes(include: Sequence[str] | None) -> frozenset[str]:

@@ -45,6 +45,7 @@ from app.stocks.entities import (
     KeyMetrics,
     Stock,
     StockPerformance,
+    normalize_symbol,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
@@ -219,13 +220,9 @@ def _with_stored_fundamentals(
 
 
 def _normalize_symbol(symbol: str) -> str:
-    normalized = (symbol or "").strip().upper()
-    if not normalized:
-        raise ValueError("A stock symbol is required.")
-    if not normalized.isalpha() or len(normalized) > 5:
-        # Simple guard; real tickers are 1-5 letters (ignoring class suffixes).
-        raise ValueError(f"'{symbol}' is not a valid stock symbol.")
-    return normalized
+    """The shared kernel guard — accepts a Canadian ``.TO``/``.V``/``.NE``/``.CN`` suffix and
+    preserves it so the price router can dispatch on it."""
+    return normalize_symbol(symbol)
 
 
 class GetStockInfo:

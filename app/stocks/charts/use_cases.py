@@ -24,20 +24,13 @@ from app.stocks.charts.indicators import (
     support_levels,
 )
 from app.stocks.charts.ports import CandleProvider
-from app.stocks.entities import CandleSeries, Timeframe
+from app.stocks.entities import CandleSeries, Timeframe, normalize_symbol
 
 
 def _normalize_symbol(symbol: str) -> str:
-    """Trim/upper-case the ticker and reject obvious junk, once, at the edge of the
-    use case — so every layer below sees a clean symbol. Mirrors the other slices'
-    guard."""
-    normalized = (symbol or "").strip().upper()
-    if not normalized:
-        raise ValueError("A stock symbol is required.")
-    if not normalized.isalpha() or len(normalized) > 5:
-        # Simple guard; real tickers are 1-5 letters (ignoring class suffixes).
-        raise ValueError(f"'{symbol}' is not a valid stock symbol.")
-    return normalized
+    """The shared kernel guard — accepts a Canadian ``.TO``/``.V``/``.NE``/``.CN`` suffix and
+    preserves it so the price router can dispatch on it."""
+    return normalize_symbol(symbol)
 
 
 class GetStockCandles:

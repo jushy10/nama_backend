@@ -58,6 +58,28 @@ def base_ticker(symbol: str) -> str:
     return symbol
 
 
+def normalize_symbol(symbol: str, *, kind: str = "stock", article: str = "A") -> str:
+    """Trim/upper-case a ticker and reject obvious junk — once, at the edge of a use case,
+    so every layer below sees a clean symbol. This is the single guard every per-symbol read
+    shares (each slice's ``_normalize_symbol`` delegates here).
+
+    A Canadian venue suffix (``.TO`` / ``.V`` / ``.NE`` / ``.CN``) is **preserved**, so the
+    per-symbol price router can still dispatch on it (``is_canadian``) — only the *base* ticker
+    is validated (1-5 letters). A US symbol comes back unchanged (``AAPL`` → ``AAPL``); a
+    Canadian one keeps its suffix (``SHOP.TO`` → ``SHOP.TO``); junk (a non-letter base, an
+    over-long base, or a trailing string that isn't a known venue suffix) is a ``ValueError``.
+    ``kind`` / ``article`` shape the error text so a slice keeps its own wording ("stock" vs
+    "ETF")."""
+    normalized = (symbol or "").strip().upper()
+    if not normalized:
+        raise ValueError(f"{article} {kind} symbol is required.")
+    base = base_ticker(normalized)  # strip a Canadian venue suffix, if present
+    if not base.isalpha() or len(base) > 5:
+        # Simple guard; real tickers are 1-5 letters (plus an optional Canadian suffix).
+        raise ValueError(f"'{symbol}' is not a valid {kind} symbol.")
+    return normalized
+
+
 class Timeframe(str, Enum):
     """How much time each candle covers — the chart's granularity.
 

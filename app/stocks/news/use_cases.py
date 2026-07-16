@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from app.stocks.entities import normalize_symbol
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.news.entities import StockNews
 from app.stocks.news.ports import NewsProvider
@@ -29,13 +30,7 @@ logger = logging.getLogger(__name__)
 def _normalize_symbol(symbol: str) -> str:
     """Trim/upper-case the ticker and reject obvious junk, once, at the edge of the use
     case — so every layer below sees a clean symbol. Mirrors the stocks slice's guard."""
-    normalized = (symbol or "").strip().upper()
-    if not normalized:
-        raise ValueError("A stock symbol is required.")
-    if not normalized.isalpha() or len(normalized) > 5:
-        # Simple guard; real tickers are 1-5 letters (ignoring class suffixes).
-        raise ValueError(f"'{symbol}' is not a valid stock symbol.")
-    return normalized
+    return normalize_symbol(symbol)
 
 
 class GetStockNews:
