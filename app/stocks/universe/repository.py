@@ -79,6 +79,20 @@ class UniverseRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def screened_us_company_names(self) -> frozenset[str]:
+        """The raw (unnormalized) company names of every screened **US** listing on the anchor —
+        the CA pass's *name*-based interlisting index, complementing :meth:`screened_us_tickers`.
+
+        A rebranded Cboe Canada CDR carries its US company's *name* even though its ticker
+        (``COLA`` / ``CHEV``) shares nothing with the US ticker (``KO`` / ``CVX``), so the sync
+        matches a ``.NE`` listing's normalized name against this set to catch the duplicates the
+        base-ticker match misses. Names are returned raw; normalizing both sides
+        (``normalize_company_name``) is the use case's job, keeping that domain rule out of the
+        adapter. Read after the US pass has upserted, like the ticker index.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def tickers_missing_classification(self, limit: int) -> tuple[str, ...]:
         """Return up to ``limit`` tickers still missing a ``sector`` *or* an ``industry`` —
         the enrichment pass's work-list.

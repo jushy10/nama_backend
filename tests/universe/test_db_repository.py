@@ -152,6 +152,26 @@ def test_screened_us_tickers_returns_upper_us_screened_only(session):
     assert r.screened_us_tickers() == frozenset({"AAPL", "MSFT"})
 
 
+def test_screened_us_company_names_returns_us_screened_names_only(session):
+    # The name index for the .NE CDR match: raw (unnormalized) names of US screened rows only.
+    # The Canadian row is excluded, and a US row with no name contributes nothing.
+    r = repo(session)
+    r.upsert_screen(
+        (
+            _stock("KO", name="The Coca-Cola Company", market_cap=2.8e11,
+                   country="US", currency="USD"),
+            _stock("CVX", name="Chevron Corporation", market_cap=3e11,
+                   country="US", currency="USD"),
+            _stock("NONM", name=None, market_cap=1e10, country="US", currency="USD"),
+            _stock("COLA.NE", name="Coca-Cola Co CDR", market_cap=2.8e11,
+                   country="CA", currency="CAD"),
+        )
+    )
+    assert r.screened_us_company_names() == frozenset(
+        {"The Coca-Cola Company", "Chevron Corporation"}
+    )
+
+
 def test_upsert_fills_country_currency_once_then_never_clobbers(session):
     # country/currency are fill-once market facts like the exchange: a later screen that came
     # back without them (or with a different value) never overwrites the settled ones.
