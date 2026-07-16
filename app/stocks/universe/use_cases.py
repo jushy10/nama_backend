@@ -44,6 +44,7 @@ from app.stocks.universe.entities import (
     StockSearchCriteria,
     StockSearchPage,
     StockSort,
+    normalize_company_name,
     slugify,
 )
 from app.stocks.universe.ports import (
@@ -156,6 +157,19 @@ def _ev_ebitda(
     return round(enterprise_value / ebitda, 2)
 
 
+# Cboe Canada (NEO), Yahoo suffix ``.NE``, is the venue Canadian Depositary Receipts list on.
+# The name-based interlisting match is scoped to it: a CDR there carries its *US* company's
+# name, so matching that name to the US universe catches a rebranded CDR (``COLA`` / ``CHEV``)
+# the base-ticker match misses — while a genuine Canadian operating company (which lists on TSX
+# ``.TO`` / TSXV ``.V``, not ``.NE``) can't be wrongly hidden by a chance name collision.
+_CBOE_CANADA_SUFFIX = ".NE"
+
+
+def _is_cboe_canada(ticker: str) -> bool:
+    """Whether ``ticker`` is a Cboe Canada (NEO) listing — the CDR venue the name match scopes to."""
+    return isinstance(ticker, str) and ticker.upper().endswith(_CBOE_CANADA_SUFFIX)
+
+
 class SyncUniverse:
     """Populate/refresh the searchable universe from a live market screen, classify the stocks
     that still lack a sector/industry, and value each screened stock with a trailing P/E.
@@ -262,24 +276,55 @@ class SyncUniverse:
     def _flag_interlisted(
         self, screened: tuple[ScreenedStock, ...]
     ) -> tuple[ScreenedStock, ...]:
-        """Set ``has_us_listing`` on each screened listing whose base ticker (venue suffix
-        stripped) is already a screened US listing — a CDR (``AAPL.NE`` → ``AAPL``) or a
-        same-ticker dual-listing (``SHOP.TO`` → ``SHOP``). The search hides these by default so a
-        Canadian search returns only companies that don't already trade in the US.
+        """Set ``has_us_listing`` on each screened Canadian listing that duplicates a US-listed
+        company, so the search hides it by default (a Canadian search returns only companies that
+        don't already trade in the US). Two signals combine:
+
+        1. **Base ticker** — the listing's ticker with its venue suffix stripped is already a
+           screened US ticker: a CDR that kept its US ticker (``AAPL.NE`` → ``AAPL``) or a
+           same-ticker dual-listing (``SHOP.TO`` → ``SHOP``).
+        2. **Company name** (Cboe Canada ``.NE`` only) — the listing's normalized name matches a
+           screened US company's. This catches a **rebranded** CDR whose ticker shares nothing
+           with the US ticker (``COLA`` → Coca-Cola / ``KO``, ``CHEV`` → Chevron / ``CVX``), which
+           signal 1 alone can't. Scoped to the CDR venue (``.NE``) so a genuine TSX/TSXV company
+           can't be hidden by a chance name collision.
 
         The flag is set explicitly on *every* listing (``True`` for a match, ``False`` otherwise),
         not just the matches, so a re-run **clears** the flag on a listing that lost its US sibling
         — the upsert overwrites it each run. When the US index is empty (nothing to match against)
-        the screen is returned unchanged (every row already defaults to ``False``). It's a
-        different-ticker dual-listing (``CNR.TO`` ↔ ``CNI``) that this base-ticker match can't
-        catch — that needs a company-name match, deliberately out of scope."""
+        the screen is returned unchanged (every row already defaults to ``False``). Still out of
+        scope: a *different-ticker* dual-listing on TSX (``CNR.TO`` ↔ ``CNI``) — signal 2 is
+        ``.NE``-scoped, so it isn't caught by name there."""
         us_tickers = self._repository.screened_us_tickers()
         if not us_tickers:
             return screened
+        # Normalize the US company names once (a few thousand) into the name-match index; the
+        # repository returns them raw so this domain rule stays out of the adapter.
+        us_names = frozenset(
+            normalized
+            for name in self._repository.screened_us_company_names()
+            if (normalized := normalize_company_name(name)) is not None
+        )
         return tuple(
-            replace(stock, has_us_listing=base_ticker(stock.ticker).upper() in us_tickers)
+            replace(
+                stock, has_us_listing=self._is_interlisted(stock, us_tickers, us_names)
+            )
             for stock in screened
         )
+
+    @staticmethod
+    def _is_interlisted(
+        stock: ScreenedStock, us_tickers: frozenset[str], us_names: frozenset[str]
+    ) -> bool:
+        """Whether ``stock`` (a Canadian listing) duplicates a screened US company — by base
+        ticker (any venue), or by normalized company name (Cboe Canada ``.NE`` only). See
+        :meth:`_flag_interlisted` for why the name match is venue-scoped."""
+        if base_ticker(stock.ticker).upper() in us_tickers:
+            return True
+        if _is_cboe_canada(stock.ticker):
+            normalized = normalize_company_name(stock.name)
+            return normalized is not None and normalized in us_names
+        return False
 
     def _enrich_missing_classifications(self, limit: int) -> tuple[int, int]:
         """Classify up to ``limit`` stored stocks still missing a sector or industry, writing

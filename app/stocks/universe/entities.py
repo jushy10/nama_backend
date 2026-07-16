@@ -45,10 +45,11 @@ class ScreenedStock:
     ``price`` are quoted in. They matter because the ≥$1B floor is applied in each market's
     native currency, so a row must carry its unit — the sync persists both onto the anchor.
 
-    ``has_us_listing`` is ``True`` for a Canadian listing that duplicates a US-listed company
-    (a CDR, or a dual-listing whose ticker matches its US line). The screen adapter always
-    leaves it ``False``; the sync's CA pass computes it (this listing's base ticker against the
-    US universe) and persists it so the search can hide the duplicate.
+    ``has_us_listing`` is ``True`` for a Canadian listing that duplicates a US-listed company —
+    a CDR or a same-ticker dual-listing (matched by base ticker), or a *rebranded* Cboe Canada
+    CDR whose ticker differs from its US line (matched by company name, e.g. ``COLA`` → Coca-Cola).
+    The screen adapter always leaves it ``False``; the sync's CA pass computes it (this listing
+    against the US universe) and persists it so the search can hide the duplicate.
 
     ``price`` is the screen-time regular-market price the screen quote carries. It is *not*
     persisted: the sync uses it (over the quarterly slice's TTM consensus EPS) to derive the
@@ -65,8 +66,9 @@ class ScreenedStock:
     country: str | None = None  # ISO-2 listing country (US / CA)
     currency: str | None = None  # ISO-3 trading currency (USD / CAD)
     # True when this Canadian listing duplicates a US-listed company (a CDR or a same-ticker
-    # dual-listing) — computed by the sync's CA pass (base ticker vs the US universe), not the
-    # screen adapter, which always leaves it False. The search hides these by default.
+    # dual-listing, matched by base ticker; or a rebranded .NE CDR, matched by company name) —
+    # computed by the sync's CA pass (this listing vs the US universe), not the screen adapter,
+    # which always leaves it False. The search hides these by default.
     has_us_listing: bool = False
 
 
@@ -666,3 +668,43 @@ def slugify(label: object) -> str | None:
         return None
     slug = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
     return slug or None
+
+
+# Tokens dropped when reducing a company name to its interlisting key: legal-form suffixes
+# (which vary between a CDR listing and its US line — "Corp" vs "Corporation") and the
+# depositary-receipt markers a Cboe Canada CDR carries in its name ("… CDR (CAD Hedged)").
+# Deliberately limited to legal-form + CDR noise — NOT generic business words like
+# "Group"/"Holdings"/"Technologies" — so two genuinely different companies don't collapse onto
+# the same key and get wrongly deduped.
+_NAME_NOISE_TOKENS = frozenset(
+    {
+        "THE",
+        # Legal-form suffixes
+        "INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "COMPANIES",
+        "LTD", "LIMITED", "LLC", "LP", "LLP", "PLC", "SA", "AG", "NV", "SE",
+        # CDR / depositary-receipt markers
+        "CDR", "CDRS", "DEPOSITARY", "DEPOSITORY", "RECEIPT", "RECEIPTS",
+        "CAD", "USD", "HEDGED", "UNHEDGED", "NONHEDGED",
+    }
+)
+
+
+def normalize_company_name(name: object) -> str | None:
+    """A company name → a canonical interlisting key, or ``None``.
+
+    Upper-cases, splits on every run of non-alphanumeric characters, drops the legal-form and
+    depositary-receipt noise tokens (:data:`_NAME_NOISE_TOKENS`), and joins the rest — so a
+    rebranded Cboe Canada CDR ("The Coca-Cola Company CDR (CAD Hedged)") and its US line ("The
+    Coca-Cola Company") both collapse to ``COCACOLA``. That's what lets the universe sync's CA
+    pass catch a CDR whose *ticker* (``COLA`` / ``CHEV``) shares nothing with the US ticker
+    (``KO`` / ``CVX``), which the base-ticker match alone cannot. A non-string, or a name that is
+    *only* noise tokens (so the key would be empty), collapses to ``None`` — there is nothing to
+    match on, so such a listing is never flagged a duplicate."""
+    if not isinstance(name, str):
+        return None
+    tokens = [
+        token
+        for token in re.split(r"[^A-Z0-9]+", name.upper())
+        if token and token not in _NAME_NOISE_TOKENS
+    ]
+    return "".join(tokens) or None

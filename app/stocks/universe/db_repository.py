@@ -106,6 +106,23 @@ class SqlUniverseRepository(UniverseRepository):
         )
         return frozenset(ticker.upper() for ticker in rows)
 
+    def screened_us_company_names(self) -> frozenset[str]:
+        # The raw names of every screened US listing (same country/screened gate as
+        # screened_us_tickers, plus name NOT NULL). Returned unnormalized — the use case
+        # normalizes both sides for the .NE CDR name match, keeping that domain rule out of SQL.
+        rows = (
+            self._session.execute(
+                select(StockRecord.name).where(
+                    StockRecord.country == "US",
+                    StockRecord.market_cap.is_not(None),
+                    StockRecord.name.is_not(None),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return frozenset(rows)
+
     def tickers_missing_classification(self, limit: int) -> tuple[str, ...]:
         # Missing *either* side: a stock is on the work-list until both sector and industry
         # are filled, so a one-sided classification (Yahoo returned only industry, say) gets
