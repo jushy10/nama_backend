@@ -44,6 +44,7 @@ from app.stocks.universe.entities import (
     StockSearchCriteria,
     StockSearchPage,
     StockSort,
+    normalize_company_name,
     slugify,
 )
 from app.stocks.universe.ports import (
@@ -229,7 +230,11 @@ class SyncUniverse:
         Cboe Canada (``.NE``) listings are dropped from the screen up front: they're Canadian
         Depositary Receipts (wrappers of US / foreign companies), so they're never written onto
         the anchor in the first place — not merely hidden at read time. (No-op for the US pass,
-        whose exchange-scoped screen returns no ``.NE``.)
+        whose exchange-scoped screen returns no ``.NE``.) The CA pass also drops — and purges from
+        the anchor — any Canadian listing that duplicates a **US-domiciled** company by name (a
+        ``.TO`` CDR / cross-listing like ``AAPL.TO`` / ``MSFT.TO``), while keeping a genuinely
+        Canadian company dual-listed in the US (``SHOP.TO`` / ``CP.TO``); see
+        :meth:`_drop_and_purge_us_company_cdrs`.
         """
         capped = self.DEFAULT_LIMIT if limit is None else max(1, limit)
         screened = tuple(
@@ -249,6 +254,12 @@ class SyncUniverse:
                 enrich_failed=0,
                 valued=0,
             )
+        if self._region != "us":
+            # A CA pass runs after the US pass (US universe + its domicile on the anchor), so we
+            # can spot a .TO CDR of a US company by name and both drop it from this upsert and
+            # purge any copy a prior run stored. Skipped for the US pass (a US row would match
+            # itself). Only on a healthy screen (past the plausibility gate above).
+            screened = self._drop_and_purge_us_company_cdrs(screened)
         counts = self._repository.upsert_screen(screened)
         enriched, enrich_failed = self._enrich_missing_classifications(capped)
         valued = self._value_screened(screened)
@@ -261,6 +272,43 @@ class SyncUniverse:
             enrich_failed=enrich_failed,
             valued=valued,
         )
+
+    def _drop_and_purge_us_company_cdrs(
+        self, screened: tuple[ScreenedStock, ...]
+    ) -> tuple[ScreenedStock, ...]:
+        """Drop from ``screened`` — and delete from the anchor — every Canadian listing that
+        duplicates a **US-domiciled** company by normalized name (a ``.TO`` CDR / cross-listing of
+        a US company, e.g. ``AAPL.TO`` / ``MSFT.TO`` / ``META.TO``), returning the rest.
+
+        The US pass has already run, so the US-domiciled company names are on the anchor. Matching
+        on the **name** (not the base ticker) against **US-domiciled** rows is what makes this
+        precise: a genuinely Canadian company dual-listed in the US (``SHOP`` / ``CP`` / ``RY`` —
+        all *CA*-domiciled) isn't in the set, so its ``.TO`` listing is kept; and a ticker
+        collision (``CNR.TO`` Canadian National vs US ``CNR`` Core Natural Resources) can't misfire
+        because the names differ. Using the **US sibling's** domicile also sidesteps the fact that
+        Yahoo sometimes can't be trusted for the CDR's *own* domicile — the US row's is reliable
+        and, for these mega-cap underlyings, backfilled early. When the US-domiciled index is empty
+        (the backfill hasn't run yet) nothing is dropped."""
+        us_names = frozenset(
+            normalized
+            for name in self._repository.us_domiciled_company_names()
+            if (normalized := normalize_company_name(name)) is not None
+        )
+        if not us_names:
+            return screened
+        cdr_tickers = tuple(
+            stock.ticker
+            for stock in screened
+            if (norm := normalize_company_name(stock.name)) is not None
+            and norm in us_names
+        )
+        if cdr_tickers:
+            # Purge any copies a prior run stored (the row's own domicile may be stale/absent),
+            # then drop them from this upsert so they're never (re-)written.
+            self._repository.delete_stocks(cdr_tickers)
+            dropped = set(cdr_tickers)
+            screened = tuple(s for s in screened if s.ticker not in dropped)
+        return screened
 
     def _enrich_missing_classifications(self, limit: int) -> tuple[int, int]:
         """Classify up to ``limit`` stored stocks still missing a sector, industry, or issuer

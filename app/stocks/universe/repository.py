@@ -17,7 +17,7 @@ front the same ``stocks`` anchor.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from app.stocks.universe.entities import (
@@ -65,6 +65,34 @@ class UniverseRepository(ABC):
         supplied, so a source that omits it doesn't wipe a known one; ``has_us_listing`` is
         overwritten every run (a recomputed fact, not fill-once). Additive: stocks absent from
         the screen are left untouched (no delete). Commits its own write.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def us_domiciled_company_names(self) -> frozenset[str]:
+        """The raw company names of every screened **US-listed, US-domiciled** row on the anchor.
+
+        The Canadian pass matches each Canadian listing's normalized name against this set to spot
+        a **CDR / cross-listing of a US company** (``AAPL.TO`` / ``MSFT.TO`` — same name as the US
+        ``AAPL`` / ``MSFT``, which are US-domiciled) and keep it out of the Canadian screen. The
+        domicile gate is the crux: a genuinely Canadian company dual-listed in the US (``SHOP`` /
+        ``CP`` / ``RY`` — CA-domiciled) is *not* in this set, so its ``.TO`` listing is kept; and a
+        ticker collision (``CNR.TO`` Canadian National vs US ``CNR`` Core Natural Resources) can't
+        misfire because it's the *name*, not the ticker, that matches. Names are returned raw;
+        normalizing both sides (``normalize_company_name``) is the use case's job. Read after the US
+        pass has upserted + been enriched, so the US-side domicile it depends on is populated.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_stocks(self, tickers: Sequence[str]) -> int:
+        """Hard-delete the anchor rows for ``tickers`` and return how many were removed.
+
+        The one place the universe *removes* an anchor row (the sync is otherwise additive) — used
+        to purge a Canadian listing that's really a US company's CDR / cross-listing (see
+        :meth:`us_domiciled_company_names`). Every child FK to ``stocks.id`` is ``ON DELETE
+        CASCADE``, so any dependent rows go with the anchor. A no-op for an empty list. Commits its
+        own write.
         """
         raise NotImplementedError
 
