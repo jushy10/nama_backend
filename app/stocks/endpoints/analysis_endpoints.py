@@ -126,6 +126,7 @@ from app.stocks.recommendations.db_repository import (
 from app.stocks.universe.db_repository import SqlStockSearchRepository
 from app.stocks.wiring import (
     analysis_cache_ttl,
+    bedrock_recovery_model_id,
     get_estimates_provider,
     get_price_provider,
     get_provider,
@@ -175,10 +176,15 @@ def get_analysis_provider() -> StockScorecardProvider:
     # 'anthropic' Bedrock extra surfaces as a clean 503 here rather than a 500.
     region = os.environ.get("BEDROCK_REGION", "us-east-1")
     model_id = os.environ.get("BEDROCK_ANALYSIS_MODEL_ID")
+    # The single incomplete-result retry escalates onto this model when set (else it
+    # stays on the primary) — see wiring.bedrock_recovery_model_id.
+    recovery = bedrock_recovery_model_id("BEDROCK_ANALYSIS_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockScorecardProvider(model_id=model_id, region=region)
-        return BedrockScorecardProvider(region=region)
+            return BedrockScorecardProvider(
+                model_id=model_id, region=region, recovery_model_id=recovery
+            )
+        return BedrockScorecardProvider(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -234,10 +240,13 @@ def get_sector_analysis_provider() -> SectorAnalysisProvider:
     # there's no secret to gate on; a missing 'bedrock' extra surfaces as a 503.
     region = os.environ.get("BEDROCK_REGION", "us-east-1")
     model_id = os.environ.get("BEDROCK_SECTOR_ANALYSIS_MODEL_ID")
+    recovery = bedrock_recovery_model_id("BEDROCK_SECTOR_ANALYSIS_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockSectorAnalysisProvider(model_id=model_id, region=region)
-        return BedrockSectorAnalysisProvider(region=region)
+            return BedrockSectorAnalysisProvider(
+                model_id=model_id, region=region, recovery_model_id=recovery
+            )
+        return BedrockSectorAnalysisProvider(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -281,10 +290,13 @@ def get_market_summary_provider() -> MarketSummaryProvider:
     # no secret to gate on; a missing 'bedrock' extra surfaces as a 503.
     region = os.environ.get("BEDROCK_REGION", "us-east-1")
     model_id = os.environ.get("BEDROCK_MARKET_SUMMARY_MODEL_ID")
+    recovery = bedrock_recovery_model_id("BEDROCK_MARKET_SUMMARY_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockMarketSummaryProvider(model_id=model_id, region=region)
-        return BedrockMarketSummaryProvider(region=region)
+            return BedrockMarketSummaryProvider(
+                model_id=model_id, region=region, recovery_model_id=recovery
+            )
+        return BedrockMarketSummaryProvider(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -320,10 +332,13 @@ def get_earnings_analysis_provider() -> EarningsAnalysisProvider:
     # surfaces as a 503.
     region = os.environ.get("BEDROCK_REGION", "us-east-1")
     model_id = os.environ.get("BEDROCK_EARNINGS_ANALYSIS_MODEL_ID")
+    recovery = bedrock_recovery_model_id("BEDROCK_EARNINGS_ANALYSIS_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockEarningsAnalysisProvider(model_id=model_id, region=region)
-        return BedrockEarningsAnalysisProvider(region=region)
+            return BedrockEarningsAnalysisProvider(
+                model_id=model_id, region=region, recovery_model_id=recovery
+            )
+        return BedrockEarningsAnalysisProvider(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."

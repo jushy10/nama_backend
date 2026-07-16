@@ -99,6 +99,26 @@ _ANALYSIS_TTL_DEFAULT_MINUTES = {
 _ANALYSIS_TTL_FALLBACK_MINUTES = 30  # any kind not in the map above
 
 
+def bedrock_recovery_model_id(specific_env: str | None = None) -> str | None:
+    """The model an analyser escalates its (single) incomplete-result retry onto, or
+    ``None`` to retry on the same model.
+
+    When the fast Haiku tier keeps returning a blank required list, re-calling Haiku
+    tends to fail the same way — so the retry can instead run once on a more capable
+    model that reliably fills the fields, which (unlike a repeated Haiku call) produces
+    a *complete* read the use case will cache, stopping that symbol from re-entering the
+    retry loop on every view. Reads a per-analyser override (``specific_env``, e.g.
+    ``BEDROCK_ANALYSIS_RECOVERY_MODEL_ID``) first, then the shared
+    ``BEDROCK_RECOVERY_MODEL_ID``. **Unset means no escalation** (the retry stays on the
+    primary model) — so this is off until a deploy points it at an entitled model (a
+    cross-region inference profile, e.g. a Sonnet one)."""
+    if specific_env:
+        override = os.environ.get(specific_env)
+        if override:
+            return override
+    return os.environ.get("BEDROCK_RECOVERY_MODEL_ID") or None
+
+
 def analysis_cache_ttl(kind: str) -> timedelta:
     # How long a stored `kind` analysis is served before it's regenerated. The default per
     # kind reflects how often that analysis's input data changes (see the map above); a

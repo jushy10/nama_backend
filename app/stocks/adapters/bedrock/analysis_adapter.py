@@ -435,21 +435,28 @@ class BedrockScorecardProvider(StockScorecardProvider):
     _MAX_TOKENS = 3000
     # Bedrock does not enforce the tool schema's required/non-empty fields, and the
     # fast Haiku tier occasionally returns the overall verdict with the sections left
-    # blank (empty label/summary). Re-issue a *targeted* sections-only call up to this
-    # many extra times to fill them; paired with the use case refusing to cache an
-    # incomplete read, a blank-section result is effectively never served (and never
-    # frozen for the TTL). Only fires on the miss — zero cost when the first call is
-    # already complete.
-    _MAX_INCOMPLETE_RETRIES = 3
+    # blank (empty label/summary). Re-issue a *targeted* sections-only call this many
+    # extra times to fill them. Kept at ONE: re-calling the same fast model rarely
+    # recovers what it just dropped, so a 2nd/3rd Haiku retry mostly just bills; the
+    # single retry is instead escalated onto ``recovery_model_id`` (when configured),
+    # which fills the sections reliably and yields a *complete* read the use case
+    # caches — so that symbol stops re-entering this loop on every view. Only fires on
+    # the miss — zero cost when the first call is already complete.
+    _MAX_INCOMPLETE_RETRIES = 1
 
     def __init__(
         self,
         *,
         model_id: str = _DEFAULT_MODEL_ID,
         region: str = _DEFAULT_REGION,
+        recovery_model_id: str | None = None,
         client=None,
     ) -> None:
         self._model_id = model_id
+        # The model the single incomplete-result retry runs on. Defaults to the primary
+        # model (a plain retry); set it to a more capable entitled model to escalate the
+        # recovery — see ``wiring.bedrock_recovery_model_id``.
+        self._recovery_model_id = recovery_model_id or model_id
         if client is not None:
             self._client = client
             return
@@ -517,16 +524,20 @@ class BedrockScorecardProvider(StockScorecardProvider):
         tool: dict = _SCORECARD_TOOL,
         tool_name: str = "submit_scorecard",
         system: str = _SYSTEM_PROMPT,
+        model: str | None = None,
     ) -> dict | None:
         """One forced-tool call, returning the tool's arguments (or ``None`` if the
         model somehow didn't call the forced tool). Defaults to the full scorecard
-        tool; the retry path passes the lighter ``submit_sections`` tool. Any
-        SDK/botocore failure is mapped to this port's documented ``StockDataUnavailable``.
-        The call's token usage is folded into ``costs`` for the caller's single
+        tool; the retry path passes the lighter ``submit_sections`` tool. ``model``
+        overrides which model runs (the retry escalates onto ``recovery_model_id``);
+        defaults to the primary. Any SDK/botocore failure is mapped to this port's
+        documented ``StockDataUnavailable``. The call's token usage is folded into
+        ``costs`` under the model that produced it, for the caller's single
         per-endpoint cost line."""
+        chosen = model or self._model_id
         try:
             message = self._client.messages.create(
-                model=self._model_id,
+                model=chosen,
                 max_tokens=self._MAX_TOKENS,
                 system=system,
                 tools=[tool],
@@ -537,7 +548,7 @@ class BedrockScorecardProvider(StockScorecardProvider):
             raise StockDataUnavailable(
                 key, f"analysis model call failed: {exc}"
             ) from exc
-        costs.add(message)
+        costs.add(message, chosen)
         return _tool_payload(message, tool_name)
 
     def _recover_sections(
@@ -546,17 +557,24 @@ class BedrockScorecardProvider(StockScorecardProvider):
         """One targeted retry that regenerates *only* the section reads
         (stance/label/summary), grounded in the same figures the first pass saw — far
         fewer output tokens than re-running the whole scorecard, and a narrower ask that
-        lands more reliably. Returns the ``submit_sections`` arguments, or ``None`` when
-        the model didn't call the tool (the caller then leaves the payload unchanged and
-        consumes a bounded retry)."""
-        return self._invoke(
-            _SECTIONS_INSTRUCTION + prompt,
-            key,
-            costs,
-            tool=_SECTIONS_TOOL,
-            tool_name="submit_sections",
-            system=_SECTIONS_SYSTEM,
-        )
+        lands more reliably. Escalated onto ``recovery_model_id`` when configured (a more
+        capable model fills what the fast tier dropped). **Best-effort**: a failure on the
+        recovery call (e.g. the escalation model isn't entitled) is swallowed to ``None``,
+        so escalation can never sink an otherwise-usable read — the caller keeps the
+        first pass's payload. Returns the ``submit_sections`` arguments, or ``None`` when
+        the model didn't call the tool."""
+        try:
+            return self._invoke(
+                _SECTIONS_INSTRUCTION + prompt,
+                key,
+                costs,
+                tool=_SECTIONS_TOOL,
+                tool_name="submit_sections",
+                system=_SECTIONS_SYSTEM,
+                model=self._recovery_model_id,
+            )
+        except StockDataUnavailable:
+            return None
 
 
 def _tool_payload(message, name: str) -> dict | None:

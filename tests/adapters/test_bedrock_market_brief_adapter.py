@@ -157,6 +157,46 @@ def test_retries_when_sections_come_back_empty():
     assert len(client.calls) == 2  # one retry fired
 
 
+def test_incomplete_retry_escalates_to_the_recovery_model():
+    # When recovery_model_id is set, the single retry runs on that (more capable) model;
+    # the first pass stays on the primary.
+    empty = _tool_message(sections=[])
+    good = _tool_message()
+    client = _StubClient(empty, good)
+    recovery = "us.anthropic.claude-sonnet-4-6-v1:0"
+
+    BedrockMarketBriefProvider(
+        client=client, model_id="test-model", recovery_model_id=recovery
+    ).generate(_context(), _D)
+
+    assert len(client.calls) == 2
+    assert client.calls[0]["model"] == "test-model"
+    assert client.calls[1]["model"] == recovery  # the retry escalated
+
+
+def test_escalated_recovery_failure_is_best_effort():
+    # If the escalated recovery call fails (e.g. the model isn't entitled), the failure
+    # is swallowed and the first pass's (incomplete) brief is still served.
+    class _EmptyThenBoom:
+        def __init__(self):
+            self.calls: list[dict] = []
+            self.messages = self
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return _tool_message(sections=[])
+            raise RuntimeError("recovery model not entitled")
+
+    client = _EmptyThenBoom()
+    brief = BedrockMarketBriefProvider(
+        client=client, recovery_model_id="us.anthropic.claude-sonnet-4-6-v1:0"
+    ).generate(_context(), _D)
+
+    assert len(client.calls) == 2  # attempted the escalated recovery once
+    assert len(brief.sections) == 0  # served the incomplete brief, not raised
+
+
 def test_raises_when_the_model_never_calls_the_tool():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
     with pytest.raises(StockDataUnavailable):

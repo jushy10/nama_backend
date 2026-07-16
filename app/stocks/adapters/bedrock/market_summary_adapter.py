@@ -177,18 +177,26 @@ class BedrockMarketSummaryProvider(MarketSummaryProvider):
     # cap is ample — and fewer generated tokens is the main lever on latency.
     _MAX_TOKENS = 800
     # Bedrock does not enforce the tool schema's minItems, and the fast Haiku tier
-    # occasionally returns an empty periods list anyway. Re-issue the forced call
-    # up to this many *extra* times to recover the notes. Only fires on the miss.
-    _MAX_EMPTY_RETRIES = 4
+    # occasionally returns an empty periods list anyway. Re-issue the forced call this
+    # many *extra* times to recover the notes. Kept at ONE: re-calling the same fast
+    # model rarely recovers what it just dropped, so extra Haiku retries mostly just
+    # bill; the single retry is instead escalated onto ``recovery_model_id`` (when
+    # configured). Only fires on the miss.
+    _MAX_EMPTY_RETRIES = 1
 
     def __init__(
         self,
         *,
         model_id: str = _DEFAULT_MODEL_ID,
         region: str = _DEFAULT_REGION,
+        recovery_model_id: str | None = None,
         client=None,
     ) -> None:
         self._model_id = model_id
+        # The model the single empty-notes retry runs on. Defaults to the primary model
+        # (a plain retry); set it to a more capable entitled model to escalate the recovery
+        # (see ``wiring.bedrock_recovery_model_id``).
+        self._recovery_model_id = recovery_model_id or model_id
         if client is not None:
             self._client = client
             return
@@ -212,10 +220,21 @@ class BedrockMarketSummaryProvider(MarketSummaryProvider):
             # summary and hands back an empty periods list. Re-issue a bounded number of
             # times to recover the notes (this read isn't result-cached, so a view that
             # still came back empty would otherwise show the periods without notes).
+            # The retry escalates onto ``recovery_model_id`` when configured (a more
+            # capable model fills what the fast tier dropped and yields a *complete*
+            # read the use case caches). Best-effort: a failure on the recovery call is
+            # swallowed so escalation can never sink a summary-present read.
             for _ in range(self._MAX_EMPTY_RETRIES):
                 if not _missing_notes(payload):
                     break
-                payload = self._invoke(prompt, costs) or payload
+                try:
+                    recovered = self._invoke(
+                        prompt, costs, model=self._recovery_model_id
+                    )
+                except StockDataUnavailable:
+                    recovered = None
+                if recovered is not None:
+                    payload = recovered
             if payload is None:
                 raise StockDataUnavailable(
                     _MARKET_KEY, "summary model returned no structured result"
@@ -224,15 +243,19 @@ class BedrockMarketSummaryProvider(MarketSummaryProvider):
         finally:
             costs.log(label="market summary", model_id=self._model_id)
 
-    def _invoke(self, prompt: str, costs: CostAccumulator) -> dict | None:
+    def _invoke(
+        self, prompt: str, costs: CostAccumulator, *, model: str | None = None
+    ) -> dict | None:
         """One forced-tool call, returning the ``submit_market_summary`` arguments
-        (or ``None`` if the model somehow didn't call the tool). Any SDK/botocore
-        failure is mapped to this port's documented ``StockDataUnavailable``. The
-        call's token usage is folded into ``costs`` for the caller's single
-        per-endpoint cost line."""
+        (or ``None`` if the model somehow didn't call the tool). ``model`` overrides
+        which model runs (the retry escalates onto ``recovery_model_id``); defaults to
+        the primary. Any SDK/botocore failure is mapped to this port's documented
+        ``StockDataUnavailable``. The call's token usage is folded into ``costs`` under
+        the model that produced it, for the caller's single per-endpoint cost line."""
+        chosen = model or self._model_id
         try:
             message = self._client.messages.create(
-                model=self._model_id,
+                model=chosen,
                 max_tokens=self._MAX_TOKENS,
                 system=_SYSTEM_PROMPT,
                 tools=[_SUMMARY_TOOL],
@@ -243,7 +266,7 @@ class BedrockMarketSummaryProvider(MarketSummaryProvider):
             raise StockDataUnavailable(
                 _MARKET_KEY, f"summary model call failed: {exc}"
             ) from exc
-        costs.add(message)
+        costs.add(message, chosen)
         return _tool_payload(message)
 
 
