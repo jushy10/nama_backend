@@ -597,6 +597,21 @@ class SqlStockSearchRepository(StockSearchRepository):
                             StockRecord.domicile_country == "CA",
                         )
                     )
+                    # Structural CDR guard: Cboe Canada (Yahoo suffix `.NE`) is a Canadian
+                    # Depositary Receipt venue — a `.NE` listing wraps a US / foreign company
+                    # (Intel, Chevron, SoftBank), while genuine Canadian companies list on TSX
+                    # (`.TO`) / TSXV (`.V`). So a `.NE` row is shown only when its domicile is
+                    # *confirmed* CA (the rare genuine Cboe-Canada company), never on the lenient
+                    # null-shown rule the `.TO` / `.V` listings get — this drops the CDRs at once,
+                    # with no dependence on the per-ticker domicile backfill (unlike the clause
+                    # above), and keeps a newly-listed CDR out automatically. `%.NE` matches only a
+                    # true suffix (the literal `.` anchors it, so a name like `STONE` is unaffected).
+                    conditions.append(
+                        or_(
+                            ~StockRecord.ticker.ilike("%.NE"),
+                            StockRecord.domicile_country == "CA",
+                        )
+                    )
         if criteria.in_sp500 is not None:
             conditions.append(StockRecord.in_sp500 == criteria.in_sp500)
         if criteria.in_nasdaq100 is not None:
