@@ -48,6 +48,12 @@ router = APIRouter(tags=["fundamentals-cron"])
 # which may run at the same time (a lock only stops a sweep overlapping itself).
 _sync_lock = threading.Lock()
 
+# Pause between the sync's retry passes in production. The use case defaults this to 0 (so the
+# offline tests never sleep); here — the composition root — we dial it up so an intermittent
+# Yahoo block has ~30s to lift before a gated symbol is re-attempted. A batch run isn't behind
+# the API Gateway's 30s clock (it's a one-off ECS task), so the added seconds are free.
+_RETRY_BACKOFF_SECONDS = 30.0
+
 
 def run_fundamentals_sync(limit: int | None) -> FundamentalsSyncReport:
     """Perform one full refresh run with its **own** DB session (the request-scoped ``get_db``
@@ -57,6 +63,7 @@ def run_fundamentals_sync(limit: int | None) -> FundamentalsSyncReport:
         report = SyncFundamentals(
             YfinanceFundamentalsProvider(),
             SqlFundamentalsRepository(db),
+            retry_backoff_seconds=_RETRY_BACKOFF_SECONDS,
         ).execute(limit=limit)
         logger.info(
             "fundamentals sync done: refreshed=%d failed=%d limit=%s",
