@@ -1133,7 +1133,26 @@ def test_logo_use_case_normalizes_symbol():
     assert fake.received == ["AAPL"]
 
 
-@pytest.mark.parametrize("bad", ["", "   ", "123", "AA1", "AA.B", "TOOLONG"])
+@pytest.mark.parametrize(
+    "symbol,expected",
+    [
+        ("ry.to", "RY.TO"),  # Canadian TSX listing — the suffix is kept and upper-cased
+        ("SHOP.TO", "SHOP.TO"),
+        ("x.v", "X.V"),  # TSX Venture
+        ("brk.b", "BRK.B"),  # US class share
+        ("aapl", "AAPL"),  # a bare US ticker is unchanged
+    ],
+)
+def test_logo_use_case_keeps_exchange_and_class_suffixes(symbol, expected):
+    # Logo.dev is exchange-aware, so the suffix must reach it (T.TO is Telus, bare T is AT&T).
+    fake = FakeLogoProvider(logo=a_logo(content=b"PNG"))
+    GetStockLogo(fake).execute(symbol)
+    assert fake.received == [expected]
+
+
+@pytest.mark.parametrize(
+    "bad", ["", "   ", "123", "AA1", "TOOLONG", "RY.", ".TO", "RY..TO", "A/B", "RY TO"]
+)
 def test_logo_use_case_rejects_invalid_symbols(bad):
     fake = FakeLogoProvider(logo=a_logo())
     with pytest.raises(ValueError):
@@ -2585,6 +2604,17 @@ def test_get_logo_passes_through_media_type(make_client):
     client = make_client(logo_provider=FakeLogoProvider(svg))
     r = client.get("/stocks/AAPL/logo")
     assert r.headers["content-type"] == "image/svg+xml"
+
+
+def test_get_logo_serves_a_canadian_ticker_keeping_the_suffix(make_client):
+    # A Canadian listing (RY.TO) reaches the provider with its suffix intact — Logo.dev is
+    # exchange-aware, so the suffix is what fetches Royal Bank's logo (and disambiguates a
+    # collision like T.TO / T). Before the fix the dotted symbol was rejected as a 400.
+    fake = FakeLogoProvider(a_logo(content=b"\x89PNG\r\n"))
+    client = make_client(logo_provider=fake)
+    r = client.get("/stocks/RY.TO/logo")
+    assert r.status_code == 200, r.text
+    assert fake.received == ["RY.TO"]
 
 
 def test_get_logo_invalid_symbol_400(make_client):
