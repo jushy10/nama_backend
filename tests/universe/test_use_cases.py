@@ -279,6 +279,30 @@ def test_sync_ca_region_screens_canada_and_carries_the_market_facts():
     assert {s.currency for s in repo.upserted} == {"CAD"}
 
 
+def test_sync_drops_cboe_canada_ne_cdrs_before_the_upsert():
+    # The CA screen returns Cboe Canada (.NE) CDRs alongside genuine TSX (.TO) companies. The sync
+    # filters the .NE rows out up front, so a CDR is never written onto the anchor in the first
+    # place (not merely hidden at read time). Enough .TO names remain to clear the CA floor.
+    cdrs = (
+        _stock("INTC.NE", market_cap=6e11, country="CA", currency="CAD"),
+        _stock("ZAAP.NE", market_cap=3e12, country="CA", currency="CAD"),
+    )
+    tsx = tuple(
+        _stock(f"C{i:04d}.TO", market_cap=2e9 + i, country="CA", currency="CAD")
+        for i in range(SyncUniverse._MIN_PLAUSIBLE_BY_REGION["ca"])
+    )
+    repo = _FakeRepo(counts=UniverseSyncCounts(added=len(tsx), updated=0))
+
+    report = SyncUniverse(
+        _FakeScreener(cdrs + tsx), repo, _FakeClassifier(), region="ca"
+    ).execute()
+
+    upserted = {s.ticker for s in repo.upserted}
+    assert not any(t.endswith(".NE") for t in upserted)  # no CDR reached the anchor
+    assert {s.ticker for s in tsx} <= upserted  # every TSX company still landed
+    assert report.screened == len(tsx)  # the reported size is the post-filter CA universe
+
+
 def test_ca_plausibility_floor_is_lower_than_us():
     # A modest Canadian screen (below the US floor, above the CA one) is a healthy CA result —
     # written for region="ca", but the same count under the US default would be treated as

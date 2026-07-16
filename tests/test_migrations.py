@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -128,6 +128,28 @@ def test_upgrade_adds_the_etf_profile_columns_and_child_tables(alembic):
     command.downgrade(config, "base")
     remaining = set(inspect(create_engine(url)).get_table_names())
     assert not ({"etf_sector_weightings", "etf_top_holdings"} & remaining)
+
+
+def test_0041_purges_ne_cdr_rows_from_stocks(alembic):
+    # 0041 deletes the Cboe Canada (.NE) CDR rows the old CA screen wrote onto the anchor,
+    # leaving TSX (.TO) names — and a lookalike like STONE (no dotted suffix) — untouched.
+    config, url = alembic
+    command.upgrade(config, "0040_domicile_country")
+
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        for i, ticker in enumerate(["INTC.NE", "ZAAP.NE", "SHOP.TO", "STONE"]):
+            conn.execute(
+                text("INSERT INTO stocks (id, ticker) VALUES (:id, :t)"),
+                {"id": f"{i:032d}", "t": ticker},
+            )
+
+    command.upgrade(config, "head")
+
+    with engine.connect() as conn:
+        tickers = {r[0] for r in conn.execute(text("SELECT ticker FROM stocks"))}
+    assert not any(t.endswith(".NE") for t in tickers)  # every .NE CDR is purged
+    assert {"SHOP.TO", "STONE"} <= tickers  # the TSX name and the lookalike stay
 
 
 def test_upgrade_creates_the_market_brief_table(alembic):
