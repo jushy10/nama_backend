@@ -320,9 +320,10 @@ class AlpacaStockDataProvider(
             feed = self._HISTORICAL_FEED
             cutoff = datetime.now(timezone.utc) - self._SIP_FREE_DELAY
             end = cutoff if end is None else min(end, cutoff)
+        alpaca_symbol = self._to_alpaca_symbol(symbol)
         try:
             request = StockBarsRequest(
-                symbol_or_symbols=symbol,
+                symbol_or_symbols=alpaca_symbol,
                 timeframe=TimeFrame(amount, unit),
                 start=start,
                 end=end,
@@ -335,7 +336,7 @@ class AlpacaStockDataProvider(
         except APIError as exc:
             raise StockDataUnavailable(symbol, str(exc)) from exc
 
-        bars = barset.data.get(symbol, [])
+        bars = barset.data.get(alpaca_symbol, [])
         if not bars:
             raise StockNotFound(symbol)
         # Reverse the newest-first response into chronological (oldest-first)
@@ -407,13 +408,18 @@ class AlpacaStockDataProvider(
     # --- Alpaca calls (thin and isolated) ---
 
     def _fetch_snapshot(self, symbol: str):
+        # Ask in Alpaca's symbology (BRK-B -> BRK.B) and read the response back under that
+        # key; the domain errors stay keyed by the caller's symbol.
+        alpaca_symbol = self._to_alpaca_symbol(symbol)
         try:
-            request = StockSnapshotRequest(symbol_or_symbols=symbol, feed=self._feed)
+            request = StockSnapshotRequest(
+                symbol_or_symbols=alpaca_symbol, feed=self._feed
+            )
             snapshots = self._data.get_stock_snapshot(request)
         except APIError as exc:
             raise StockDataUnavailable(symbol, str(exc)) from exc
 
-        snapshot = snapshots.get(symbol)
+        snapshot = snapshots.get(alpaca_symbol)
         if snapshot is None or snapshot.latest_trade is None:
             raise StockNotFound(symbol)
         return snapshot
@@ -421,7 +427,7 @@ class AlpacaStockDataProvider(
     def _fetch_asset_metadata(self, symbol: str) -> tuple[str | None, str | None]:
         """Company name + listing exchange. Best-effort; never fatal."""
         try:
-            asset = self._trading.get_asset(symbol)
+            asset = self._trading.get_asset(self._to_alpaca_symbol(symbol))
         except APIError:
             return None, None
         exchange = asset.exchange.value if asset.exchange else None
@@ -431,9 +437,10 @@ class AlpacaStockDataProvider(
         """Daily bars over the lookback window (oldest first)."""
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=self._PERFORMANCE_LOOKBACK_DAYS)
+        alpaca_symbol = self._to_alpaca_symbol(symbol)
         try:
             request = StockBarsRequest(
-                symbol_or_symbols=symbol,
+                symbol_or_symbols=alpaca_symbol,
                 timeframe=TimeFrame.Day,
                 start=start,
                 end=now - self._SIP_FREE_DELAY,
@@ -443,7 +450,7 @@ class AlpacaStockDataProvider(
             barset = self._data.get_stock_bars(request)
         except APIError as exc:
             raise StockDataUnavailable(symbol, str(exc)) from exc
-        return barset.data.get(symbol, [])
+        return barset.data.get(alpaca_symbol, [])
 
     def _fetch_all_daily_bars(self, symbol: str):
         """Every daily bar the feed carries for the symbol, for the all-time high.
@@ -454,9 +461,10 @@ class AlpacaStockDataProvider(
         back from now by the SIP-on-free delay, like the performance fetch, and
         ``start`` reaches back past Alpaca's data floor to capture all of it.
         """
+        alpaca_symbol = self._to_alpaca_symbol(symbol)
         try:
             request = StockBarsRequest(
-                symbol_or_symbols=symbol,
+                symbol_or_symbols=alpaca_symbol,
                 timeframe=TimeFrame.Day,
                 start=self._HISTORY_START,
                 end=datetime.now(timezone.utc) - self._SIP_FREE_DELAY,
@@ -466,7 +474,7 @@ class AlpacaStockDataProvider(
             barset = self._data.get_stock_bars(request)
         except APIError as exc:
             raise StockDataUnavailable(symbol, str(exc)) from exc
-        return barset.data.get(symbol, [])
+        return barset.data.get(alpaca_symbol, [])
 
     def _fetch_daily_bars_batch(self, symbols: list[str]) -> dict[str, list]:
         """Daily bars over the lookback for several symbols in one request.

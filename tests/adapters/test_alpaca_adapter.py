@@ -683,3 +683,77 @@ def test_get_quotes_requests_class_shares_in_alpaca_symbology():
     assert client.requested_chunks == [["BRK.B"]]  # requested in Alpaca's symbology
     assert set(quotes) == {"BRK-B"}  # returned in ours
     assert quotes["BRK-B"].symbol == "BRK-B"
+
+
+# --------------------- per-symbol reads: class-share symbology ---------------------
+# The PER-SYMBOL paths (the ticker card, charts, performance, all-time high) once passed our
+# dash form straight through, so a class share reached Alpaca as BRK-B and came back unknown.
+# Each read below must ask in the dot form and still answer under ours.
+
+
+class RecordingSingleSnapshotClient:
+    """Records the single-symbol snapshot request and serves a fixed symbol->snapshot map.
+    Separate from RecordingSnapshotClient because the per-symbol path sends a bare string,
+    not a list."""
+
+    def __init__(self, snapshots_by_symbol):
+        self._snapshots = snapshots_by_symbol
+        self.requested = []  # each call's symbol, in order
+
+    def get_stock_snapshot(self, request):
+        symbol = request.symbol_or_symbols
+        self.requested.append(symbol)
+        return {symbol: self._snapshots[symbol]} if symbol in self._snapshots else {}
+
+
+def test_get_quote_requests_a_class_share_in_alpaca_symbology():
+    client = RecordingSingleSnapshotClient({"BRK.B": make_snapshot()})
+    p = provider_with(client, ExplodingTradingClient())
+    quote = p.get_quote("BRK-B")
+    assert client.requested == ["BRK.B"]  # asked in Alpaca's symbology
+    assert quote.symbol == "BRK-B"  # answered in ours
+
+
+def test_get_stock_requests_a_class_share_in_alpaca_symbology():
+    client = RecordingSingleSnapshotClient({"BRK.B": make_snapshot()})
+    trading = FakeTradingClient(
+        asset=SimpleNamespace(name="Berkshire Hathaway Inc. Class B", exchange=None)
+    )
+    stock = provider_with(client, trading).get_stock("BRK-B")
+    assert client.requested == ["BRK.B"]
+    assert stock.symbol == "BRK-B"
+
+
+def test_get_stock_asks_the_trading_client_in_alpaca_symbology():
+    # The asset-metadata lookup (name/exchange) is the other per-symbol vendor call.
+    class RecordingTradingClient:
+        def __init__(self):
+            self.requested = []
+
+        def get_asset(self, symbol):
+            self.requested.append(symbol)
+            return SimpleNamespace(name="Berkshire Hathaway Inc. Class B", exchange=None)
+
+    trading = RecordingTradingClient()
+    client = RecordingSingleSnapshotClient({"BRK.B": make_snapshot()})
+    provider_with(client, trading).get_stock("BRK-B")
+    assert trading.requested == ["BRK.B"]
+
+
+def test_get_candles_requests_a_class_share_in_alpaca_symbology():
+    # The bars response is keyed by the requested symbol, so a dash/dot mismatch here reads
+    # as "no bars" -> StockNotFound rather than a chart.
+    bar = SimpleNamespace(
+        timestamp=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        open=1.0,
+        high=2.0,
+        low=0.5,
+        close=1.5,
+        volume=100.0,
+    )
+    client = FakeBarsClient(bars_by_symbol={"BRK.B": [bar]})
+    series = bars_provider(client).get_candles(
+        "BRK-B", Timeframe.DAY_1, start=None, end=None
+    )
+    assert client.last_request.symbol_or_symbols == "BRK.B"
+    assert series.symbol == "BRK-B"  # the entity keeps our spelling

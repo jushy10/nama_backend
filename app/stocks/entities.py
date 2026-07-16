@@ -65,19 +65,42 @@ def normalize_symbol(symbol: str, *, kind: str = "stock", article: str = "A") ->
 
     A Canadian venue suffix (``.TO`` / ``.V`` / ``.NE`` / ``.CN``) is **preserved**, so the
     per-symbol price router can still dispatch on it (``is_canadian``) — only the *base* ticker
-    is validated (1-5 letters). A US symbol comes back unchanged (``AAPL`` → ``AAPL``); a
-    Canadian one keeps its suffix (``SHOP.TO`` → ``SHOP.TO``); junk (a non-letter base, an
-    over-long base, or a trailing string that isn't a known venue suffix) is a ``ValueError``.
-    ``kind`` / ``article`` shape the error text so a slice keeps its own wording ("stock" vs
-    "ETF")."""
+    is validated (see :func:`_is_valid_base`). A US symbol comes back unchanged (``AAPL`` →
+    ``AAPL``); a Canadian one keeps its suffix (``SHOP.TO`` → ``SHOP.TO``); a class/series line
+    keeps its dash (``BRK-B`` → ``BRK-B``, ``CAR-UN.TO`` → ``CAR-UN.TO``); junk (a non-letter
+    base, an over-long base, or a trailing string that isn't a known venue suffix) is a
+    ``ValueError``. ``kind`` / ``article`` shape the error text so a slice keeps its own wording
+    ("stock" vs "ETF")."""
     normalized = (symbol or "").strip().upper()
     if not normalized:
         raise ValueError(f"{article} {kind} symbol is required.")
     base = base_ticker(normalized)  # strip a Canadian venue suffix, if present
-    if not base.isalpha() or len(base) > 5:
-        # Simple guard; real tickers are 1-5 letters (plus an optional Canadian suffix).
+    if not _is_valid_base(base):
         raise ValueError(f"'{symbol}' is not a valid {kind} symbol.")
     return normalized
+
+
+def _is_valid_base(base: str) -> bool:
+    """Whether ``base`` (a symbol with any Canadian venue suffix already stripped) is a
+    plausible ticker: 1-5 letters, plus an optional ``-``-separated class/series suffix of 1-3
+    letters.
+
+    The dash is what carries a **class or series** line in the convention the universe stores
+    (Yahoo's): a share class (``BRK-B``, ``TECK-A``, ``RCI-B``), a trust/REIT unit
+    (``CAR-UN``, ``BEP-UN``), or a preferred series (``WFC-PC``, ``POW-PE``). Those are ordinary
+    listings the screen ingests and values, so rejecting them here would 404 the very rows the
+    search list serves.
+
+    Note the dot stays invalid (``AA.B``): Alpaca writes a class share ``BRK.B`` but the anchor
+    stores Yahoo's ``BRK-B``, and this guard validates the *stored* convention. Translating to a
+    vendor's spelling is an adapter's job, not the domain's.
+    """
+    root, dash, series = base.partition("-")
+    if not root.isalpha() or len(root) > 5:
+        return False
+    if not dash:
+        return True
+    return series.isalpha() and len(series) <= 3
 
 
 class Timeframe(str, Enum):
