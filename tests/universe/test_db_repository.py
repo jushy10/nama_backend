@@ -60,6 +60,7 @@ def _stock(
     sector=None,
     country=None,
     currency=None,
+    has_us_listing=False,
 ):
     return ScreenedStock(
         ticker=ticker,
@@ -69,6 +70,7 @@ def _stock(
         sector=sector,
         country=country,
         currency=currency,
+        has_us_listing=has_us_listing,
     )
 
 
@@ -125,6 +127,29 @@ def test_upsert_writes_country_and_currency(session):
     )
     row = _row(session, "SHOP.TO")
     assert (row.country, row.currency, row.market_cap) == ("CA", "CAD", 1.2e11)
+
+
+def test_upsert_writes_and_overwrites_has_us_listing(session):
+    # The flag is recomputed each run (not fill-once): a listing flagged as a US duplicate can be
+    # un-flagged on a later run when its US sibling is gone.
+    r = repo(session)
+    r.upsert_screen((_stock("SHOP.TO", market_cap=1.2e11, has_us_listing=True),))
+    assert _row(session, "SHOP.TO").has_us_listing is True
+    r.upsert_screen((_stock("SHOP.TO", market_cap=1.3e11, has_us_listing=False),))
+    assert _row(session, "SHOP.TO").has_us_listing is False  # overwritten, not fill-once
+
+
+def test_screened_us_tickers_returns_upper_us_screened_only(session):
+    r = repo(session)
+    r.upsert_screen(
+        (
+            _stock("AAPL", market_cap=3e12, country="US", currency="USD"),
+            _stock("MSFT", market_cap=2e12, country="US", currency="USD"),
+            _stock("SHOP.TO", market_cap=1.2e11, country="CA", currency="CAD"),
+        )
+    )
+    # Only the US listings, uppercased; the Canadian one is excluded.
+    assert r.screened_us_tickers() == frozenset({"AAPL", "MSFT"})
 
 
 def test_upsert_fills_country_currency_once_then_never_clobbers(session):
@@ -435,6 +460,7 @@ def _seed(
     in_nasdaq100=False,
     country=None,
     currency=None,
+    has_us_listing=False,
 ):
     """Insert a ``stocks`` anchor row directly — the search reads whatever the sync/annual
     slices would have written (a ``market_cap`` marks the row as screened; ``None`` leaves it an
@@ -459,6 +485,7 @@ def _seed(
             in_nasdaq100=in_nasdaq100,
             country=country,
             currency=currency,
+            has_us_listing=has_us_listing,
         )
     )
     session.commit()
@@ -573,6 +600,35 @@ def test_search_filters_by_country(session):
     # A union of markets returns both; an empty tuple doesn't filter (every market).
     assert len(r.search(_criteria(countries=("US", "CA"))).results) == 4
     assert len(r.search(_criteria()).results) == 4
+
+
+def test_search_hides_interlisted_duplicates_by_default(session):
+    _seed(session, "SHOP", country="US", currency="USD")  # the US listing
+    _seed(session, "SHOP.TO", country="CA", currency="CAD", has_us_listing=True)  # the duplicate
+    _seed(session, "DOL.TO", country="CA", currency="CAD", has_us_listing=False)  # Canadian-only
+    r = SqlStockSearchRepository(session)
+
+    # Default: the interlisted duplicate is hidden; the US listing and the Canadian-only stay.
+    assert set(_tickers(r.search(_criteria()))) == {"SHOP", "DOL.TO"}
+    # A Canadian browse returns only companies that don't already trade in the US.
+    assert _tickers(r.search(_criteria(countries=("CA",)))) == ["DOL.TO"]
+
+
+def test_search_includes_interlisted_when_opted_in(session):
+    _seed(session, "SHOP", country="US", currency="USD")
+    _seed(session, "SHOP.TO", country="CA", currency="CAD", has_us_listing=True)
+    _seed(session, "DOL.TO", country="CA", currency="CAD", has_us_listing=False)
+    r = SqlStockSearchRepository(session)
+
+    assert set(_tickers(r.search(_criteria(include_interlisted=True)))) == {
+        "SHOP",
+        "SHOP.TO",
+        "DOL.TO",
+    }
+    assert set(_tickers(r.search(_criteria(countries=("CA",), include_interlisted=True)))) == {
+        "SHOP.TO",
+        "DOL.TO",
+    }
 
 
 def test_search_maps_country_and_currency_onto_the_result(session):

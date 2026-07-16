@@ -42,6 +42,23 @@ def test_is_canadian(symbol, expected):
     assert is_canadian(symbol) is expected
 
 
+@pytest.mark.parametrize(
+    "symbol, expected",
+    [
+        ("SHOP.TO", "SHOP"),  # dual-listing → its US ticker
+        ("AAPL.NE", "AAPL"),  # CDR → the underlying's ticker
+        ("ABC.V", "ABC"),
+        ("QRS.CN", "QRS"),
+        ("AAPL", "AAPL"),  # a US symbol is unchanged
+        ("BRK-B", "BRK-B"),  # a dash isn't a Canadian suffix
+    ],
+)
+def test_base_ticker(symbol, expected):
+    from app.stocks.entities import base_ticker
+
+    assert base_ticker(symbol) == expected
+
+
 class _RecordingFeed:
     """Records every symbol it was asked for and returns a tagged stub, so a test can prove
     which feed a call was routed to."""

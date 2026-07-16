@@ -528,6 +528,7 @@ def test_search_returns_the_expected_json_shape():
         "in_nasdaq100": True,
         "country": "US",
         "currency": "USD",
+        "has_us_listing": False,
     }
 
 
@@ -564,6 +565,7 @@ def test_search_passes_query_params_through_to_the_use_case():
         "limit": 10,
         "offset": 20,
         "countries": None,
+        "include_interlisted": False,
     }
 
 
@@ -600,6 +602,17 @@ def test_search_passes_country_filter_through_as_a_list():
     assert fake.kwargs["countries"] == ["us", "ca"]
 
 
+def test_search_passes_include_interlisted_through():
+    # ?include_interlisted=true reaches the use case; default is False (hide the duplicates).
+    fake = _FakeSearch(page=_a_page())
+    resp = _search_client(search=fake).get(
+        "/stocks/ticker", params={"include_interlisted": "true"}
+    )
+
+    assert resp.status_code == 200
+    assert fake.kwargs["include_interlisted"] is True
+
+
 def test_search_uses_defaults_when_no_params_given():
     fake = _FakeSearch(page=_a_page())
     _search_client(search=fake).get("/stocks/ticker")
@@ -618,6 +631,7 @@ def test_search_uses_defaults_when_no_params_given():
         "limit": 25,
         "offset": 0,
         "countries": None,
+        "include_interlisted": False,
     }
 
 

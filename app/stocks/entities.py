@@ -9,6 +9,41 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
 
+# Canadian venue suffixes, in Yahoo's convention — the marker that a ticker is a Canadian
+# listing (TSX ``.TO`` / TSX Venture ``.V`` / Cboe Canada ``.NE`` / CSE ``.CN``), the form the
+# universe screen stores. Two domain rules ride on them: routing a per-symbol price read
+# (US → Alpaca / CA → Yahoo), and deriving a listing's *base* (US-equivalent) ticker so an
+# interlisted Canadian listing can be matched to its US sibling and deduped.
+CANADIAN_SUFFIXES = (".TO", ".V", ".NE", ".CN")
+
+
+def is_canadian(symbol: str) -> bool:
+    """Whether ``symbol`` is a Canadian listing (by Yahoo suffix). Case-insensitive; a blank or
+    non-string symbol is not Canadian."""
+    if not isinstance(symbol, str):
+        return False
+    upper = symbol.upper()
+    return any(upper.endswith(suffix) for suffix in CANADIAN_SUFFIXES)
+
+
+def base_ticker(symbol: str) -> str:
+    """The listing's *base* ticker: a Canadian symbol with its venue suffix stripped
+    (``SHOP.TO`` → ``SHOP``, ``AAPL.NE`` → ``AAPL``), any other symbol returned unchanged.
+
+    This is the key an **interlisted** Canadian listing shares with its US sibling — a CDR
+    (``AAPL.NE`` wraps ``AAPL``) or a dual-listed Canadian company whose ticker matches its US
+    line (``SHOP.TO`` ↔ ``SHOP``) — so the universe dedup can keep the US listing and hide the
+    Canadian duplicate. It does *not* catch a dual-listing whose Canadian ticker differs from
+    its US one (``CNR.TO`` ↔ ``CNI``); that needs a name match, deliberately out of scope here.
+    """
+    if not isinstance(symbol, str):
+        return symbol
+    upper = symbol.upper()
+    for suffix in CANADIAN_SUFFIXES:
+        if upper.endswith(suffix):
+            return symbol[: -len(suffix)]
+    return symbol
+
 
 class Timeframe(str, Enum):
     """How much time each candle covers — the chart's granularity.

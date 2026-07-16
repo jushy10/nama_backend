@@ -45,6 +45,11 @@ class ScreenedStock:
     ``price`` are quoted in. They matter because the ≥$1B floor is applied in each market's
     native currency, so a row must carry its unit — the sync persists both onto the anchor.
 
+    ``has_us_listing`` is ``True`` for a Canadian listing that duplicates a US-listed company
+    (a CDR, or a dual-listing whose ticker matches its US line). The screen adapter always
+    leaves it ``False``; the sync's CA pass computes it (this listing's base ticker against the
+    US universe) and persists it so the search can hide the duplicate.
+
     ``price`` is the screen-time regular-market price the screen quote carries. It is *not*
     persisted: the sync uses it (over the quarterly slice's TTM consensus EPS) to derive the
     stored ``pe_ratio`` on the anchor, the same way ``market_cap`` is a price-derived screen
@@ -59,6 +64,10 @@ class ScreenedStock:
     price: float | None = None  # screen-time price; derives pe_ratio, not itself stored
     country: str | None = None  # ISO-2 listing country (US / CA)
     currency: str | None = None  # ISO-3 trading currency (USD / CAD)
+    # True when this Canadian listing duplicates a US-listed company (a CDR or a same-ticker
+    # dual-listing) — computed by the sync's CA pass (base ticker vs the US universe), not the
+    # screen adapter, which always leaves it False. The search hides these by default.
+    has_us_listing: bool = False
 
 
 @dataclass(frozen=True)
@@ -245,9 +254,11 @@ class StockSearchResult:
     in_sp500: bool
     in_nasdaq100: bool
     # Market facts default to None so a pre-multi-market builder still constructs; the DB read
-    # (`_to_result`) always supplies them for a screened row.
+    # (`_to_result`) always supplies them for a screened row. has_us_listing is surfaced so a
+    # client can label / opt into the interlisted Canadian duplicates the search hides by default.
     country: str | None = None
     currency: str | None = None
+    has_us_listing: bool = False
     performance: StockPerformance | None = None
 
 
@@ -272,6 +283,11 @@ class StockSearchCriteria:
     ``("CA",)`` for Canadian, empty = every market). It's how a client keeps a ``market_cap``
     sort within one currency (the floor is applied natively per market), or shows a single-market
     board.
+
+    ``include_interlisted`` is ``False`` by default, so the search **hides** a Canadian listing
+    that duplicates a US-listed company (a CDR, or a same-ticker dual-listing) — a Canadian
+    browse then returns only companies that don't already trade in the US. Set it ``True`` to
+    include those duplicates (US rows are never affected either way).
     """
 
     query: str | None
@@ -285,6 +301,7 @@ class StockSearchCriteria:
     offset: int
     market_cap_tiers: tuple[MarketCapTier, ...] = ()
     countries: tuple[str, ...] = ()
+    include_interlisted: bool = False
 
 
 @dataclass(frozen=True)

@@ -27,9 +27,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.stocks.earnings.quarterly.repository import QuarterlyEarningsRepository
+from app.stocks.entities import base_ticker
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.progress import iter_with_progress
 from app.stocks.universe.entities import (
@@ -239,6 +240,12 @@ class SyncUniverse:
                 enrich_failed=0,
                 valued=0,
             )
+        if self._region != "us":
+            # A non-US pass runs after the US pass in the same sweep, so the US universe is on
+            # the anchor: flag each listing that duplicates a US company (a CDR or a same-ticker
+            # dual-listing), which the search hides by default. The US pass itself never flags
+            # (its rows are the originals), so this is skipped for region="us".
+            screened = self._flag_interlisted(screened)
         counts = self._repository.upsert_screen(screened)
         enriched, enrich_failed = self._enrich_missing_classifications(capped)
         valued = self._value_screened(screened)
@@ -250,6 +257,28 @@ class SyncUniverse:
             enriched=enriched,
             enrich_failed=enrich_failed,
             valued=valued,
+        )
+
+    def _flag_interlisted(
+        self, screened: tuple[ScreenedStock, ...]
+    ) -> tuple[ScreenedStock, ...]:
+        """Set ``has_us_listing`` on each screened listing whose base ticker (venue suffix
+        stripped) is already a screened US listing — a CDR (``AAPL.NE`` → ``AAPL``) or a
+        same-ticker dual-listing (``SHOP.TO`` → ``SHOP``). The search hides these by default so a
+        Canadian search returns only companies that don't already trade in the US.
+
+        The flag is set explicitly on *every* listing (``True`` for a match, ``False`` otherwise),
+        not just the matches, so a re-run **clears** the flag on a listing that lost its US sibling
+        — the upsert overwrites it each run. When the US index is empty (nothing to match against)
+        the screen is returned unchanged (every row already defaults to ``False``). It's a
+        different-ticker dual-listing (``CNR.TO`` ↔ ``CNI``) that this base-ticker match can't
+        catch — that needs a company-name match, deliberately out of scope."""
+        us_tickers = self._repository.screened_us_tickers()
+        if not us_tickers:
+            return screened
+        return tuple(
+            replace(stock, has_us_listing=base_ticker(stock.ticker).upper() in us_tickers)
+            for stock in screened
         )
 
     def _enrich_missing_classifications(self, limit: int) -> tuple[int, int]:
@@ -352,6 +381,7 @@ class SearchStocks:
         limit: int | None = None,
         offset: int = 0,
         countries: Sequence[str] | None = None,
+        include_interlisted: bool = False,
     ) -> StockSearchPage:
         """Normalize the inputs once, at the edge, then run the search.
 
@@ -362,7 +392,9 @@ class SearchStocks:
         industries can be screened at once). ``market_cap_tiers`` is deduplicated to the union of
         the given cap buckets (empty = every size). ``countries`` is upper-cased to ISO-2 codes,
         blanks dropped and duplicates collapsed — the union of markets to include (empty = every
-        market). ``limit`` defaults to ``DEFAULT_LIMIT`` and is clamped to ``[1, MAX_LIMIT]``,
+        market). ``include_interlisted`` (default ``False``) passes through: left ``False`` the
+        search hides a Canadian listing that duplicates a US company. ``limit`` defaults to
+        ``DEFAULT_LIMIT`` and is clamped to ``[1, MAX_LIMIT]``,
         ``offset`` floored at 0. The index flags pass through as-is (tri-state booleans, ``None`` =
         don't filter). ``sort`` defaults to ``None`` — an unsorted browse the repository orders by
         ticker (A→Z); a ``StockSort`` value sorts by that column, ``direction`` (default
@@ -384,6 +416,7 @@ class SearchStocks:
             limit=capped,
             offset=max(0, offset),
             countries=_upper_codes(countries),
+            include_interlisted=include_interlisted,
         )
         return self._repository.search(criteria)
 

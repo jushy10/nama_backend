@@ -81,11 +81,30 @@ class SqlUniverseRepository(UniverseRepository):
                 anchor.country = stock.country
             if stock.currency and not anchor.currency:
                 anchor.currency = stock.currency
-            # Refresh the drifting screen facts + freshness stamp on every run.
+            # Refresh the drifting screen facts + freshness stamp on every run. has_us_listing
+            # is recomputed each run (the CA pass sets it; the US pass leaves it False), so it's
+            # overwritten, not fill-once — a listing is reclassified if it gains/loses a US sibling.
             anchor.market_cap = stock.market_cap
+            anchor.has_us_listing = stock.has_us_listing
             anchor.screened_at = now
         self._session.commit()
         return UniverseSyncCounts(added=added, updated=updated)
+
+    def screened_us_tickers(self) -> frozenset[str]:
+        # Every screened US listing (market_cap NOT NULL is the screened gate), uppercased for a
+        # case-insensitive base-ticker match. Tickers are stored uppercase already; the upper()
+        # is belt-and-suspenders.
+        rows = (
+            self._session.execute(
+                select(StockRecord.ticker).where(
+                    StockRecord.country == "US",
+                    StockRecord.market_cap.is_not(None),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return frozenset(ticker.upper() for ticker in rows)
 
     def tickers_missing_classification(self, limit: int) -> tuple[str, ...]:
         # Missing *either* side: a stock is on the work-list until both sector and industry
@@ -324,6 +343,7 @@ def _to_result(row: StockRecord) -> StockSearchResult:
         in_nasdaq100=row.in_nasdaq100,
         country=row.country,
         currency=row.currency,
+        has_us_listing=row.has_us_listing,
         performance=_performance(row),
     )
 
@@ -565,6 +585,11 @@ class SqlStockSearchRepository(StockSearchRepository):
             # Union of the chosen markets (ISO-2). Keeps a market-cap sort within one currency
             # and lets a client show a single-market board.
             conditions.append(StockRecord.country.in_(criteria.countries))
+        if not criteria.include_interlisted:
+            # Hide a Canadian listing that duplicates a US company (a CDR or a same-ticker
+            # dual-listing) — a client sees the US listing, not the Canadian duplicate. US and
+            # Canadian-only rows are has_us_listing=False, so they're unaffected.
+            conditions.append(StockRecord.has_us_listing.is_(False))
         if criteria.in_sp500 is not None:
             conditions.append(StockRecord.in_sp500 == criteria.in_sp500)
         if criteria.in_nasdaq100 is not None:
