@@ -102,6 +102,7 @@ from app.stocks.entities import (
     Stock,
     StockPerformance,
     Timeframe,
+    normalize_symbol,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.logo.entities import Logo
@@ -997,6 +998,53 @@ def test_use_case_rejects_invalid_symbols(bad):
     with pytest.raises(ValueError):
         GetStockInfo(fake).execute(bad)
     assert fake.received == []  # provider untouched on invalid input
+
+
+# --------------------------- normalize_symbol ---------------------------
+# The guard every per-symbol read shares. The dashed forms below are all real rows the universe
+# screen stores, so rejecting one 400s a ticker card the search list happily lists.
+
+
+@pytest.mark.parametrize(
+    "symbol",
+    [
+        "BRK-B",  # US share class
+        "BRK-A",
+        "TECK-B.TO",  # Canadian share class
+        "RCI-A.TO",
+        "CAR-UN.TO",  # Canadian REIT/trust unit
+        "BEP-UN.TO",
+        "U-UN.TO",  # single-letter root
+        "FIH-U.TO",  # single-letter series
+        "POW-PE.TO",  # preferred series
+        "WFC-PC",
+        "VITL-UN.TO",  # 4-letter root + 2-letter series
+    ],
+)
+def test_normalize_symbol_accepts_class_and_series_lines(symbol):
+    assert normalize_symbol(symbol) == symbol
+
+
+def test_normalize_symbol_upper_cases_a_class_line():
+    assert normalize_symbol("  brk-b ") == "BRK-B"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "BRK.B",  # Alpaca's dot convention — the anchor stores BRK-B; translating is an
+        "AA.B",  # adapter's job, so the dot stays invalid here
+        "AA-",  # dangling dash / empty series
+        "-B",  # no root
+        "A-B-C",  # two dashes
+        "AA-1",  # non-letter series
+        "AA-BCDE",  # over-long series
+        "TOOLONG-B",  # over-long root
+    ],
+)
+def test_normalize_symbol_still_rejects_junk(bad):
+    with pytest.raises(ValueError):
+        normalize_symbol(bad)
 
 
 def test_use_case_propagates_not_found():
