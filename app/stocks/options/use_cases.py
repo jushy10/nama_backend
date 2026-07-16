@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
+from app.stocks.entities import normalize_symbol
 from app.stocks.options.entities import ExpiryChain
 from app.stocks.options.ports import OptionsChainProvider
 
@@ -30,12 +31,7 @@ from app.stocks.options.ports import OptionsChainProvider
 def _normalize_symbol(symbol: str) -> str:
     """Trim/upper-case the ticker and reject obvious junk, once, at the edge of the use
     case — so every layer below sees a clean symbol. Mirrors the other slices' guard."""
-    normalized = (symbol or "").strip().upper()
-    if not normalized:
-        raise ValueError("A stock symbol is required.")
-    if not normalized.isalpha() or len(normalized) > 5:
-        raise ValueError(f"'{symbol}' is not a valid stock symbol.")
-    return normalized
+    return normalize_symbol(symbol)
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass
 from datetime import date
 
+from app.stocks.entities import base_ticker, is_canadian
 from app.stocks.seo.repository import (
     CongressPageTrade,
     EtfPageFacts,
@@ -26,19 +27,29 @@ from app.stocks.seo.repository import (
 )
 
 # A ticker is 1–5 letters, optionally with a single class suffix (BRK-B, BF-B). Yahoo/the
-# universe store the suffix with a hyphen, so a dotted input (BRK.B) is normalized to it.
+# universe store a US class suffix with a hyphen, so a dotted input (BRK.B) is normalized to it.
 # Deliberately a touch more permissive than the ticker card's alpha-only guard so the
 # class-share names in the universe still get a page.
 _TICKER_RE = re.compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
 
 
 def normalize_ticker(raw: str) -> str:
-    """Trim/upper-case the ticker, fold a dotted class suffix onto the stored hyphen form,
-    and reject obvious junk — once, at the edge, so the layers below see a clean symbol
-    (the same stance the other slices' ``_normalize_symbol`` takes)."""
-    ticker = (raw or "").strip().upper().replace(".", "-")
-    if not ticker:
+    """Trim/upper-case the ticker and reject obvious junk — once, at the edge, so the layers
+    below see a clean symbol (the same stance the other slices' ``_normalize_symbol`` takes).
+
+    A Canadian venue suffix (``.TO``/``.V``/``.NE``/``.CN``) is **preserved** — that's the form
+    the universe stores, so the facts lookup keys on it (folding it to a hyphen would 404 every
+    Canadian page). A US dotted class suffix is still folded onto the stored hyphen form
+    (``BRK.B`` -> ``BRK-B``)."""
+    text = (raw or "").strip().upper()
+    if not text:
         raise ValueError("A ticker is required.")
+    if is_canadian(text):
+        base = base_ticker(text)
+        if not base.isalpha() or len(base) > 5:
+            raise ValueError(f"'{raw}' is not a valid ticker.")
+        return text  # keep the Canadian suffix — the universe stores SHOP.TO, not SHOP-TO
+    ticker = text.replace(".", "-")
     if not _TICKER_RE.match(ticker):
         raise ValueError(f"'{raw}' is not a valid ticker.")
     return ticker

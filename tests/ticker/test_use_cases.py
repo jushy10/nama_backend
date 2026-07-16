@@ -663,6 +663,18 @@ def test_normalizes_the_symbol_before_calling_the_ports():
     assert quotes.calls == ["MU"]  # trimmed + upper-cased once, at the edge
 
 
+def test_accepts_a_canadian_symbol_and_preserves_its_venue_suffix():
+    # A Canadian listing (Yahoo suffix) must pass the guard and reach the port with its
+    # suffix intact — that suffix is what the price router dispatches on (US -> Alpaca /
+    # CA -> Yahoo), so stripping or rejecting it would break every CA card and chart.
+    quotes = _FakeQuotes()
+
+    for raw, expected in ((" shop.to ", "SHOP.TO"), ("cp.to", "CP.TO"), ("x.ne", "X.NE")):
+        quotes.calls.clear()
+        GetTickerCard(quotes).execute(raw)
+        assert quotes.calls == [expected]
+
+
 def test_rejects_bad_symbols_before_touching_a_port():
     quotes = _FakeQuotes()
     for bad in ("   ", "123", "TOOLONG", "BR.K"):

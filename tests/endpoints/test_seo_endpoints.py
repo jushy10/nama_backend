@@ -8,6 +8,7 @@ canonical + robots directives, the JSON-LD block, the visible facts, and the err
 
 from datetime import date
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -25,6 +26,7 @@ from app.stocks.seo.use_cases import (
     SectorPage,
     SitemapData,
     TickerStockPage,
+    normalize_ticker,
 )
 
 
@@ -134,6 +136,21 @@ def test_malformed_ticker_is_400() -> None:
     fake = _FakeUseCase(error=ValueError("'123' is not a valid ticker."))
     resp = _client(fake).get("/stock/123")
     assert resp.status_code == 400
+
+
+def test_normalize_ticker_preserves_a_canadian_suffix_but_folds_a_us_class_suffix() -> None:
+    # A Canadian listing keeps its venue suffix — that's the form the universe stores, so the
+    # facts lookup keys on SHOP.TO (folding it to SHOP-TO would 404 every Canadian page).
+    assert normalize_ticker(" shop.to ") == "SHOP.TO"
+    assert normalize_ticker("cp.to") == "CP.TO"
+    assert normalize_ticker("x.ne") == "X.NE"
+    # A US dotted class suffix is still folded onto the stored hyphen form.
+    assert normalize_ticker("brk.b") == "BRK-B"
+    assert normalize_ticker("aapl") == "AAPL"
+    # Junk (bad base behind a venue suffix, or a plain bad ticker) is still rejected.
+    for bad in ("", "123.to", "toolong.to", "1"):
+        with pytest.raises(ValueError):
+            normalize_ticker(bad)
 
 
 # --- Crawler files -----------------------------------------------------------------------

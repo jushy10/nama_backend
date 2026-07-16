@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.earnings.annual.ports import AnnualEarningsProvider
 from app.stocks.earnings.annual.repository import AnnualEarningsRepository, RefreshTarget
+from app.stocks.entities import normalize_symbol
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.progress import iter_with_progress
 
@@ -47,13 +48,7 @@ _DEFAULT_MAX_ATTEMPTS = 3
 def _normalize_symbol(symbol: str) -> str:
     """Trim/upper-case the ticker and reject obvious junk, once, at the edge of the use case
     — so every layer below sees a clean symbol. Mirrors the stocks slice's guard."""
-    normalized = (symbol or "").strip().upper()
-    if not normalized:
-        raise ValueError("A stock symbol is required.")
-    if not normalized.isalpha() or len(normalized) > 5:
-        # Simple guard; real tickers are 1-5 letters (ignoring class suffixes).
-        raise ValueError(f"'{symbol}' is not a valid stock symbol.")
-    return normalized
+    return normalize_symbol(symbol)
 
 
 class GetAnnualEarnings:
