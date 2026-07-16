@@ -15,7 +15,9 @@ free-cash-flow columns (``fcf_per_share`` / ``ocf_per_share`` / ``fcf_growth_yoy
 ``fcf_yield``), 0031 the trailing fundamentals columns, 0033 the trailing-performance
 window columns (``perf_*`` / ``performance_synced_at``), 0037 the enterprise-value inputs +
 materialized ``ev_to_ebitda``, 0038 the ``country`` / ``currency`` screen facts (the
-multi-market universe), and 0039 the ``has_us_listing`` interlisted flag — all below.
+multi-market universe), 0039 the ``has_us_listing`` interlisted flag, and 0040 the
+``domicile_country`` issuer-home-country column (which supersedes ``has_us_listing`` for the
+US / Canadian screener split) — all below.
 """
 
 from __future__ import annotations
@@ -83,15 +85,26 @@ class StockRecord(Base):
     the FE labels/converts against. Both are set by the sync's screen upsert (fill-once, like
     ``exchange``), nullable for an incidentally-known ticker that's never been screened (0038).
 
-    ``has_us_listing`` marks a Canadian listing that **duplicates** a US-listed company — a CDR
-    (``AAPL.NE`` wraps ``AAPL``) or a dual-listed Canadian company whose ticker matches its US
-    line (``SHOP.TO`` ↔ ``SHOP``). The universe search hides these by default (a client sees the
-    US listing, not the Canadian duplicate), so a Canadian search returns only the companies that
-    *don't* already trade in the US. Unlike the fill-once market facts it's **overwritten** every
-    run: the CA sync matches each Canadian listing's base ticker (suffix stripped) against the US
-    names already on the anchor and sets the flag, so a listing is reclassified if it gains/loses
-    a US sibling. ``NOT NULL``, default ``False`` — every US listing and every Canadian-only
-    listing is ``False``; only the interlisted duplicates flip ``True`` (0039).
+    ``domicile_country`` is the ISO-2 country the *company* is domiciled in (``US`` / ``CA`` /
+    ``CH`` / ``JP`` / …), read from Yahoo's per-ticker ``.info['country']`` by the enrichment pass
+    (the same call that fills ``sector`` / ``industry``) and mapped to ISO-2. It's **distinct from
+    ``country``** — which is the *listing* market — and the two diverge exactly where the universe
+    overlaps: a Canadian company dual-listed in the US (``CNI`` is listing ``US`` but domicile
+    ``CA``) and a Canadian Depositary Receipt (``ZCVX.NE``, a Chevron CDR, is listing ``CA`` but
+    domicile ``US``). The universe search splits the screeners by *home market* on it — the US
+    screen shows US-listed rows whose domicile isn't ``CA`` (so ``CNI`` drops, foreign ADRs stay),
+    the Canadian screen shows Canadian-listed rows whose domicile isn't a known *foreign* country
+    (so CDRs drop, Canadian companies stay); an **unknown (null)** domicile is treated leniently —
+    shown in its listing market — so the screeners improve as the backfill fills rather than
+    emptying. Fill-once like ``sector`` (a company doesn't change domicile), nullable until the
+    enrichment pass reaches the stock (0040).
+
+    ``has_us_listing`` (0039) is **superseded by ``domicile_country``** and no longer read by the
+    search or written by the sync — a vestigial column kept only to avoid a destructive drop here
+    (a later migration removes it). It was the base-ticker interlisting heuristic, which couldn't
+    tell a US company's Canadian CDR (hide the Canadian one) from a Canadian company's US
+    dual-listing (hide the US one) and so wrongly hid names like ``CP.TO`` / ``CNR.TO``; domicile
+    resolves both directions. ``NOT NULL``, default ``False``.
 
     ``pe_ratio`` is the stock's trailing P/E on the analyst-consensus (adjusted) EPS basis —
     the same figure the ticker card computes live (``TickerValuation.trailing_pe``): a market
@@ -183,6 +196,7 @@ class StockRecord(Base):
     market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
     country: Mapped[str | None] = mapped_column(String(2), nullable=True)
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    domicile_country: Mapped[str | None] = mapped_column(String(2), nullable=True)
     screened_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

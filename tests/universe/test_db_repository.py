@@ -139,39 +139,6 @@ def test_upsert_writes_and_overwrites_has_us_listing(session):
     assert _row(session, "SHOP.TO").has_us_listing is False  # overwritten, not fill-once
 
 
-def test_screened_us_tickers_returns_upper_us_screened_only(session):
-    r = repo(session)
-    r.upsert_screen(
-        (
-            _stock("AAPL", market_cap=3e12, country="US", currency="USD"),
-            _stock("MSFT", market_cap=2e12, country="US", currency="USD"),
-            _stock("SHOP.TO", market_cap=1.2e11, country="CA", currency="CAD"),
-        )
-    )
-    # Only the US listings, uppercased; the Canadian one is excluded.
-    assert r.screened_us_tickers() == frozenset({"AAPL", "MSFT"})
-
-
-def test_screened_us_company_names_returns_us_screened_names_only(session):
-    # The name index for the .NE CDR match: raw (unnormalized) names of US screened rows only.
-    # The Canadian row is excluded, and a US row with no name contributes nothing.
-    r = repo(session)
-    r.upsert_screen(
-        (
-            _stock("KO", name="The Coca-Cola Company", market_cap=2.8e11,
-                   country="US", currency="USD"),
-            _stock("CVX", name="Chevron Corporation", market_cap=3e11,
-                   country="US", currency="USD"),
-            _stock("NONM", name=None, market_cap=1e10, country="US", currency="USD"),
-            _stock("COLA.NE", name="Coca-Cola Co CDR", market_cap=2.8e11,
-                   country="CA", currency="CAD"),
-        )
-    )
-    assert r.screened_us_company_names() == frozenset(
-        {"The Coca-Cola Company", "Chevron Corporation"}
-    )
-
-
 def test_upsert_fills_country_currency_once_then_never_clobbers(session):
     # country/currency are fill-once market facts like the exchange: a later screen that came
     # back without them (or with a different value) never overwrites the settled ones.
@@ -262,15 +229,36 @@ def test_tickers_missing_classification_lists_unclassified_by_market_cap_and_cap
     # stocks table, not only screened members — but with no market cap it sorts last.
     get_or_create_stock(session, "TSLA", None)
     session.commit()
-    # Fully classify one so it drops out of the work-list.
+    # Fully classify one (sector + industry + domicile) so it drops out of the work-list.
     r.set_classification(
-        "MSFT", CompanyClassification(sector="technology", industry="software_infrastructure")
+        "MSFT",
+        CompanyClassification(
+            sector="technology",
+            industry="software_infrastructure",
+            domicile_country="US",
+        ),
     )
 
     # Largest market cap first (the megacaps before the tail), the null-cap incidental
     # ticker last, and capped to the limit — so a run classifies the biggest names first.
     assert r.tickers_missing_classification(10) == ("AAPL", "XOM", "TSLA")
     assert r.tickers_missing_classification(2) == ("AAPL", "XOM")
+
+
+def test_tickers_missing_classification_includes_a_classified_row_missing_domicile(session):
+    r = repo(session)
+    r.upsert_screen((_stock("AAPL", market_cap=3e12),))
+    # Sector + industry filled on an earlier run, but domicile was never captured — the stock
+    # must stay on the work-list so the enrichment pass revisits it to backfill the domicile.
+    r.set_classification(
+        "AAPL", CompanyClassification(sector="technology", industry="consumer_electronics")
+    )
+
+    assert r.tickers_missing_classification(10) == ("AAPL",)
+
+    # Once the domicile lands too, it finally drops out.
+    r.set_classification("AAPL", CompanyClassification(domicile_country="US"))
+    assert r.tickers_missing_classification(10) == ()
 
 
 def test_tickers_missing_classification_includes_a_one_sided_classification(session):
@@ -310,6 +298,24 @@ def test_set_classification_is_fill_once_and_one_sided(session):
     )
     aapl = _row(session, "AAPL")
     assert (aapl.sector, aapl.industry) == ("technology", "consumer_electronics")
+
+
+def test_set_classification_fills_domicile_once(session):
+    r = repo(session)
+    r.upsert_screen((_stock("SHOP.TO", market_cap=1.2e11, country="CA", currency="CAD"),))
+
+    # The domicile rides the same call as sector/industry and is fill-once like them.
+    r.set_classification(
+        "SHOP.TO",
+        CompanyClassification(
+            sector="technology", industry="software", domicile_country="CA"
+        ),
+    )
+    assert _row(session, "SHOP.TO").domicile_country == "CA"
+
+    # A later run never clobbers a settled domicile.
+    r.set_classification("SHOP.TO", CompanyClassification(domicile_country="US"))
+    assert _row(session, "SHOP.TO").domicile_country == "CA"
 
 
 def test_set_classification_ignores_an_unknown_ticker(session):
@@ -480,6 +486,7 @@ def _seed(
     in_nasdaq100=False,
     country=None,
     currency=None,
+    domicile_country=None,
     has_us_listing=False,
 ):
     """Insert a ``stocks`` anchor row directly — the search reads whatever the sync/annual
@@ -505,6 +512,7 @@ def _seed(
             in_nasdaq100=in_nasdaq100,
             country=country,
             currency=currency,
+            domicile_country=domicile_country,
             has_us_listing=has_us_listing,
         )
     )
@@ -622,33 +630,62 @@ def test_search_filters_by_country(session):
     assert len(r.search(_criteria()).results) == 4
 
 
-def test_search_hides_interlisted_duplicates_by_default(session):
-    _seed(session, "SHOP", country="US", currency="USD")  # the US listing
-    _seed(session, "SHOP.TO", country="CA", currency="CAD", has_us_listing=True)  # the duplicate
-    _seed(session, "DOL.TO", country="CA", currency="CAD", has_us_listing=False)  # Canadian-only
+def test_us_screen_excludes_canadian_domiciled_listings(session):
+    # The US screen (single market, default) scopes to US *home* companies by issuer domicile:
+    # a Canadian company's US listing (CNI, domicile CA) drops out, while US companies, foreign
+    # ADRs (TSM, domicile TW), and rows whose domicile isn't known yet all stay.
+    _seed(session, "AAPL", country="US", currency="USD", domicile_country="US")
+    _seed(session, "CNI", country="US", currency="USD", domicile_country="CA")
+    _seed(session, "TSM", country="US", currency="USD", domicile_country="TW")
+    _seed(session, "UNKN", country="US", currency="USD", domicile_country=None)
     r = SqlStockSearchRepository(session)
 
-    # Default: the interlisted duplicate is hidden; the US listing and the Canadian-only stay.
-    assert set(_tickers(r.search(_criteria()))) == {"SHOP", "DOL.TO"}
-    # A Canadian browse returns only companies that don't already trade in the US.
-    assert _tickers(r.search(_criteria(countries=("CA",)))) == ["DOL.TO"]
+    assert set(_tickers(r.search(_criteria(countries=("US",))))) == {"AAPL", "TSM", "UNKN"}
 
 
-def test_search_includes_interlisted_when_opted_in(session):
-    _seed(session, "SHOP", country="US", currency="USD")
-    _seed(session, "SHOP.TO", country="CA", currency="CAD", has_us_listing=True)
-    _seed(session, "DOL.TO", country="CA", currency="CAD", has_us_listing=False)
+def test_ca_screen_excludes_foreign_domiciled_cdrs(session):
+    # The Canadian screen (single market, default) scopes to Canadian *home* companies: the CDRs
+    # of US / foreign issuers (ZCVX.NE domicile US, NEST.NE domicile CH) drop out, while Canadian
+    # companies — including one dual-listed in the US (CNR.TO) — and not-yet-known rows stay.
+    _seed(session, "SHOP.TO", country="CA", currency="CAD", domicile_country="CA")
+    _seed(session, "CNR.TO", country="CA", currency="CAD", domicile_country="CA")
+    _seed(session, "ZCVX.NE", country="CA", currency="CAD", domicile_country="US")
+    _seed(session, "NEST.NE", country="CA", currency="CAD", domicile_country="CH")
+    _seed(session, "UNK.TO", country="CA", currency="CAD", domicile_country=None)
     r = SqlStockSearchRepository(session)
 
-    assert set(_tickers(r.search(_criteria(include_interlisted=True)))) == {
-        "SHOP",
+    assert set(_tickers(r.search(_criteria(countries=("CA",))))) == {
         "SHOP.TO",
-        "DOL.TO",
+        "CNR.TO",
+        "UNK.TO",
     }
-    assert set(_tickers(r.search(_criteria(countries=("CA",), include_interlisted=True)))) == {
-        "SHOP.TO",
-        "DOL.TO",
+
+
+def test_include_interlisted_skips_domicile_scoping(session):
+    # Opting in shows every listing in the market, cross-listed duplicates included.
+    _seed(session, "SHOP.TO", country="CA", currency="CAD", domicile_country="CA")
+    _seed(session, "ZCVX.NE", country="CA", currency="CAD", domicile_country="US")
+    r = SqlStockSearchRepository(session)
+
+    assert set(
+        _tickers(r.search(_criteria(countries=("CA",), include_interlisted=True)))
+    ) == {"SHOP.TO", "ZCVX.NE"}
+
+
+def test_domicile_scoping_only_applies_to_a_single_market(session):
+    # The home-market scoping is a single-market concept: a multi-market query (or no market)
+    # returns every listing, foreign-domiciled duplicates included.
+    _seed(session, "CNI", country="US", currency="USD", domicile_country="CA")
+    _seed(session, "ZCVX.NE", country="CA", currency="CAD", domicile_country="US")
+    _seed(session, "AAPL", country="US", currency="USD", domicile_country="US")
+    r = SqlStockSearchRepository(session)
+
+    assert set(_tickers(r.search(_criteria(countries=("US", "CA"))))) == {
+        "CNI",
+        "ZCVX.NE",
+        "AAPL",
     }
+    assert set(_tickers(r.search(_criteria()))) == {"CNI", "ZCVX.NE", "AAPL"}
 
 
 def test_search_maps_country_and_currency_onto_the_result(session):

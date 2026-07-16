@@ -164,13 +164,8 @@ class _FakeRepo(UniverseRepository):
         missing=(),
         fcf_per_share=None,
         ev_components=None,
-        us_tickers=(),
-        us_names=(),
     ) -> None:
         self._counts = counts
-        self._us_tickers = frozenset(t.upper() for t in us_tickers)
-        # The raw US company names the CA pass's name match reads (returned unnormalized).
-        self._us_names = frozenset(us_names)
         self._missing = tuple(missing)
         # The stored {ticker: fcf_per_share} the valuation pass reads (annual slice's write).
         self._fcf_per_share = dict(fcf_per_share or {})
@@ -189,12 +184,6 @@ class _FakeRepo(UniverseRepository):
     def upsert_screen(self, stocks):
         self.upserted = tuple(stocks)
         return self._counts
-
-    def screened_us_tickers(self):
-        return self._us_tickers
-
-    def screened_us_company_names(self):
-        return self._us_names
 
     def tickers_missing_classification(self, limit):
         self.missing_limit = limit
@@ -290,129 +279,6 @@ def test_sync_ca_region_screens_canada_and_carries_the_market_facts():
     assert {s.currency for s in repo.upserted} == {"CAD"}
 
 
-def test_ca_pass_flags_interlisted_duplicates():
-    # SHOP.TO duplicates US SHOP (same ticker); AAPL.NE is a CDR of US AAPL; DOL.TO has no US
-    # sibling. The US universe is on the anchor (US pass ran first), so the CA pass flags the
-    # first two and leaves DOL.TO unflagged.
-    screen = (
-        _stock("SHOP.TO", market_cap=1.2e11, country="CA", currency="CAD"),
-        _stock("AAPL.NE", market_cap=3e12, country="CA", currency="CAD"),
-        _stock("DOL.TO", market_cap=2e10, country="CA", currency="CAD"),
-        *_a_screen(SyncUniverse._MIN_PLAUSIBLE_BY_REGION["ca"]),  # padding above the floor
-    )
-    repo = _FakeRepo(
-        counts=UniverseSyncCounts(added=len(screen), updated=0),
-        us_tickers=("SHOP", "AAPL", "MSFT"),
-    )
-
-    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), region="ca").execute()
-
-    flagged = {s.ticker: s.has_us_listing for s in repo.upserted}
-    assert flagged["SHOP.TO"] is True
-    assert flagged["AAPL.NE"] is True
-    assert flagged["DOL.TO"] is False
-    # The padding names (T0000…) have no US sibling either.
-    assert all(v is False for k, v in flagged.items() if k.startswith("T"))
-
-
-def test_ca_pass_flags_a_rebranded_cdr_by_company_name():
-    # COLA.NE is Coca-Cola's Cboe Canada CDR — its ticker (COLA) shares nothing with the US
-    # ticker (KO), so the base-ticker match misses it. The listing carries the US company's name,
-    # so the .NE name match catches it. CHEV.NE (Chevron / CVX) is the same rebranded case; DOL.TO
-    # (Dollarama) has no US sibling and is left alone.
-    screen = (
-        _stock("COLA.NE", market_cap=2.5e12, name="Coca-Cola Co CDR (CAD Hedged)",
-               country="CA", currency="CAD"),
-        _stock("CHEV.NE", market_cap=3e11, name="Chevron Corporation CDR",
-               country="CA", currency="CAD"),
-        _stock("DOL.TO", market_cap=2e10, name="Dollarama Inc",
-               country="CA", currency="CAD"),
-        *_a_screen(SyncUniverse._MIN_PLAUSIBLE_BY_REGION["ca"]),
-    )
-    repo = _FakeRepo(
-        counts=UniverseSyncCounts(added=len(screen), updated=0),
-        us_tickers=("KO", "CVX", "AAPL"),  # deliberately NOT COLA / CHEV
-        us_names=("The Coca-Cola Company", "Chevron Corporation", "Apple Inc."),
-    )
-
-    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), region="ca").execute()
-
-    flagged = {s.ticker: s.has_us_listing for s in repo.upserted}
-    assert flagged["COLA.NE"] is True  # matched by normalized name, not ticker
-    assert flagged["CHEV.NE"] is True
-    assert flagged["DOL.TO"] is False  # no US sibling by ticker or name
-
-
-def test_name_match_is_scoped_to_cboe_canada():
-    # The name match only applies to Cboe Canada (.NE), the CDR venue. A TSX (.TO) listing whose
-    # name happens to match a US company but whose ticker differs is left unflagged — a genuine
-    # Canadian company must not be hidden by a chance name collision. (A same-ticker .TO duplicate
-    # is still caught by the base-ticker match, which isn't venue-scoped.)
-    screen = (
-        _stock("XYZ.TO", market_cap=3e10, name="Acme Widgets Inc",
-               country="CA", currency="CAD"),
-        *_a_screen(SyncUniverse._MIN_PLAUSIBLE_BY_REGION["ca"]),
-    )
-    repo = _FakeRepo(
-        counts=UniverseSyncCounts(added=len(screen), updated=0),
-        us_tickers=("ACME",),
-        us_names=("Acme Widgets Inc",),
-    )
-
-    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), region="ca").execute()
-
-    flagged = {s.ticker: s.has_us_listing for s in repo.upserted}
-    assert flagged["XYZ.TO"] is False
-
-
-def test_name_match_leaves_a_genuine_neo_company_unflagged():
-    # A real Cboe Canada (.NE) listing whose name matches no US company is not hidden, and a .NE
-    # row with no name at all has nothing to match on (so it's never flagged by name).
-    screen = (
-        _stock("REAL.NE", market_cap=2e9, name="Genuine Canadian Cboe Company",
-               country="CA", currency="CAD"),
-        _stock("NONAME.NE", market_cap=2e9, name=None, country="CA", currency="CAD"),
-        *_a_screen(SyncUniverse._MIN_PLAUSIBLE_BY_REGION["ca"]),
-    )
-    repo = _FakeRepo(
-        counts=UniverseSyncCounts(added=len(screen), updated=0),
-        us_tickers=("AAPL",),
-        us_names=("The Coca-Cola Company",),
-    )
-
-    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), region="ca").execute()
-
-    flagged = {s.ticker: s.has_us_listing for s in repo.upserted}
-    assert flagged["REAL.NE"] is False  # name matches nothing US
-    assert flagged["NONAME.NE"] is False  # no name → nothing to match on
-
-
-def test_us_pass_never_flags_interlisted():
-    # The US pass upserts the originals — has_us_listing stays False, and it never reads the
-    # US-ticker index (region == "us").
-    screen = _a_screen(SyncUniverse.MIN_PLAUSIBLE_SCREEN)
-    repo = _FakeRepo(counts=UniverseSyncCounts(added=len(screen), updated=0), us_tickers=("T0001",))
-
-    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), region="us").execute()
-
-    assert all(s.has_us_listing is False for s in repo.upserted)
-
-
-def test_ca_flag_is_recomputed_off_when_the_us_sibling_is_gone():
-    # A re-run where SHOP no longer trades in the US (not in the US index) must CLEAR the flag —
-    # the flag is set explicitly every run, not just when it matches.
-    screen = (
-        _stock("SHOP.TO", market_cap=1.2e11, country="CA", currency="CAD"),
-        *_a_screen(SyncUniverse._MIN_PLAUSIBLE_BY_REGION["ca"]),
-    )
-    repo = _FakeRepo(counts=UniverseSyncCounts(added=len(screen), updated=0), us_tickers=("AAPL",))
-
-    SyncUniverse(_FakeScreener(screen), repo, _FakeClassifier(), region="ca").execute()
-
-    flagged = {s.ticker: s.has_us_listing for s in repo.upserted}
-    assert flagged["SHOP.TO"] is False  # no US SHOP this run → not a duplicate
-
-
 def test_ca_plausibility_floor_is_lower_than_us():
     # A modest Canadian screen (below the US floor, above the CA one) is a healthy CA result —
     # written for region="ca", but the same count under the US default would be treated as
@@ -449,8 +315,13 @@ def test_sync_enriches_stocks_missing_an_industry():
     repo = _FakeRepo(missing=("AAPL", "MSFT"))
     classifier = _FakeClassifier(
         {
-            "AAPL": CompanyClassification("technology", "consumer_electronics"),
-            "MSFT": CompanyClassification("technology", "software_infrastructure"),
+            # The domicile rides the same classification the enrichment writes (here US for both).
+            "AAPL": CompanyClassification(
+                "technology", "consumer_electronics", "US"
+            ),
+            "MSFT": CompanyClassification(
+                "technology", "software_infrastructure", "US"
+            ),
         }
     )
 
@@ -458,8 +329,8 @@ def test_sync_enriches_stocks_missing_an_industry():
 
     assert classifier.calls == ["AAPL", "MSFT"]
     assert repo.classified == [
-        ("AAPL", CompanyClassification("technology", "consumer_electronics")),
-        ("MSFT", CompanyClassification("technology", "software_infrastructure")),
+        ("AAPL", CompanyClassification("technology", "consumer_electronics", "US")),
+        ("MSFT", CompanyClassification("technology", "software_infrastructure", "US")),
     ]
     assert (report.enriched, report.enrich_failed) == (2, 0)
 

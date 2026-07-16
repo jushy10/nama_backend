@@ -69,38 +69,14 @@ class UniverseRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def screened_us_tickers(self) -> frozenset[str]:
-        """The uppercase tickers of every screened **US** listing on the anchor — the CA pass's
-        interlisting index. A Canadian listing whose *base* ticker (venue suffix stripped) is in
-        this set duplicates a US-listed company (a CDR or a same-ticker dual-listing), so the
-        sync flags it ``has_us_listing`` and the search hides it by default. Read after the US
-        pass has upserted, so it reflects this run's US universe.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def screened_us_company_names(self) -> frozenset[str]:
-        """The raw (unnormalized) company names of every screened **US** listing on the anchor —
-        the CA pass's *name*-based interlisting index, complementing :meth:`screened_us_tickers`.
-
-        A rebranded Cboe Canada CDR carries its US company's *name* even though its ticker
-        (``COLA`` / ``CHEV``) shares nothing with the US ticker (``KO`` / ``CVX``), so the sync
-        matches a ``.NE`` listing's normalized name against this set to catch the duplicates the
-        base-ticker match misses. Names are returned raw; normalizing both sides
-        (``normalize_company_name``) is the use case's job, keeping that domain rule out of the
-        adapter. Read after the US pass has upserted, like the ticker index.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
     def tickers_missing_classification(self, limit: int) -> tuple[str, ...]:
-        """Return up to ``limit`` tickers still missing a ``sector`` *or* an ``industry`` —
-        the enrichment pass's work-list.
+        """Return up to ``limit`` tickers still missing a ``sector``, an ``industry``, *or* a
+        ``domicile_country`` — the enrichment pass's work-list.
 
-        Either side missing keeps a ticker on the list, so a one-sided classification (the
-        source returned only industry, say) is revisited until both are filled rather than
-        left half-done — ``set_classification`` is fill-once per side, so a later run
-        completes it.
+        Any of the three missing keeps a ticker on the list, so a one-sided classification (the
+        source returned only industry, say, or filled sector/industry on an earlier run before
+        domicile was captured) is revisited until all are filled rather than left half-done —
+        ``set_classification`` is fill-once per side, so a later run completes it.
 
         Ordered **largest market cap first** (ticker as a stable tiebreak), so a capped run
         spends its budget on the biggest, most-viewed names before the long tail — a megacap
@@ -119,13 +95,13 @@ class UniverseRepository(ABC):
     def set_classification(
         self, ticker: str, classification: CompanyClassification
     ) -> None:
-        """Fill ``ticker``'s ``sector`` / ``industry`` on the anchor from ``classification``.
+        """Fill ``ticker``'s ``sector`` / ``industry`` / ``domicile_country`` on the anchor from
+        ``classification``.
 
-        Fill-once, like the other anchor facts: a side is written only when the source
-        supplies it and the column is still unset, so a settled value is never clobbered and
-        a half classification (only one side known) leaves room for the other later. A no-op
-        if the ticker has no row. Commits its own write, so a partial enrichment sweep is
-        durable.
+        Fill-once per side, like the other anchor facts: a field is written only when the source
+        supplies it and the column is still unset, so a settled value is never clobbered and a
+        partial classification (only some sides known) leaves room for the rest later. A no-op if
+        the ticker has no row. Commits its own write, so a partial enrichment sweep is durable.
         """
         raise NotImplementedError
 
