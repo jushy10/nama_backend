@@ -16,6 +16,7 @@ from app.stocks.charts.indicators import (
     SupportStrength,
     TrendDirection,
     TrendReading,
+    _combined_reading,
     assess_trend,
     build_indicator,
     build_indicators,
@@ -391,38 +392,39 @@ def test_horizon_trend_rejects_bad_parameters(kwargs):
 # --------------------------- assess_trend (assembly over candles) ---------------------------
 
 
-def test_assess_trend_rising_series_reads_uptrend():
+def test_assess_trend_rising_series_reads_strong_uptrend():
+    # All three horizons rising and aligned -> the strongest bullish read.
     result = assess_trend(
-        _candles([float(c) for c in range(10, 40)]), short_period=3, long_period=8
+        _candles([float(c) for c in range(10, 40)]),
+        short_period=3,
+        medium_period=5,
+        long_period=8,
     )
     assert result.symbol == "AAPL"
     assert result.reference_price == 39.0
     assert result.short_term.direction is TrendDirection.UP
+    assert result.medium_term.direction is TrendDirection.UP
     assert result.long_term.direction is TrendDirection.UP
-    assert result.reading is TrendReading.UPTREND
+    assert result.reading is TrendReading.STRONG_UPTREND
 
 
-def test_assess_trend_falling_series_reads_downtrend():
+def test_assess_trend_falling_series_reads_strong_downtrend():
     result = assess_trend(
-        _candles([float(c) for c in range(40, 10, -1)]), short_period=3, long_period=8
+        _candles([float(c) for c in range(40, 10, -1)]),
+        short_period=3,
+        medium_period=5,
+        long_period=8,
     )
-    assert result.reading is TrendReading.DOWNTREND
-
-
-def test_assess_trend_long_up_short_down_reads_pullback():
-    # A long steady climb, then a sharp recent drop: the long EMA is still rising
-    # while the short EMA has rolled over — the "uptrend, pulling back" case.
-    closes = [float(c) for c in range(10, 31)] + [28.0, 26.0, 24.0, 22.0]
-    result = assess_trend(_candles(closes), short_period=5, long_period=20)
-    assert result.long_term.direction is TrendDirection.UP
-    assert result.short_term.direction is TrendDirection.DOWN
-    assert result.reading is TrendReading.UPTREND_PULLBACK
+    assert result.reading is TrendReading.STRONG_DOWNTREND
 
 
 def test_assess_trend_unknown_when_a_horizon_lacks_history():
     # 6 closes can warm the short (3) but not the long (50) EMA -> long is None.
     result = assess_trend(
-        _candles([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), short_period=3, long_period=50
+        _candles([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        short_period=3,
+        medium_period=4,
+        long_period=50,
     )
     assert result.short_term is not None
     assert result.long_term is None
@@ -433,24 +435,68 @@ def test_assess_trend_empty_series_is_graceful():
     result = assess_trend(
         CandleSeries(symbol="AAPL", timeframe=Timeframe.DAY_1, candles=()),
         short_period=3,
+        medium_period=5,
         long_period=8,
     )
     assert result.reference_price == 0.0
-    assert result.short_term is None and result.long_term is None
+    assert result.short_term is None
+    assert result.medium_term is None
+    assert result.long_term is None
     assert result.reading is TrendReading.UNKNOWN
 
 
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"short_period": 1, "long_period": 8},
-        {"short_period": 8, "long_period": 8},  # short must be < long
-        {"short_period": 20, "long_period": 5},  # short must be < long
+        {"short_period": 1, "medium_period": 4, "long_period": 8},  # period < 2
+        {"short_period": 4, "medium_period": 4, "long_period": 8},  # not increasing
+        {"short_period": 4, "medium_period": 8, "long_period": 8},  # not increasing
+        {"short_period": 20, "medium_period": 10, "long_period": 5},  # descending
     ],
 )
 def test_assess_trend_rejects_bad_periods(kwargs):
     with pytest.raises(ValueError):
         assess_trend(_candles([1.0, 2.0, 3.0, 4.0, 5.0]), **kwargs)
+
+
+# ------------------- _combined_reading (the 3-horizon classifier) -------------------
+
+_UP = TrendDirection.UP
+_DOWN = TrendDirection.DOWN
+_FLAT = TrendDirection.SIDEWAYS
+
+
+@pytest.mark.parametrize(
+    "long_dir, medium_dir, short_dir, expected",
+    [
+        # Long up: medium is the main qualifier, short confirms strength.
+        (_UP, _UP, _UP, TrendReading.STRONG_UPTREND),
+        (_UP, _UP, _FLAT, TrendReading.UPTREND),
+        (_UP, _FLAT, _UP, TrendReading.UPTREND),
+        (_UP, _UP, _DOWN, TrendReading.UPTREND_PULLBACK),  # only near-term dip
+        (_UP, _FLAT, _DOWN, TrendReading.UPTREND_PULLBACK),
+        (_UP, _DOWN, _UP, TrendReading.UPTREND_WEAKENING),  # mid-term rolled over
+        (_UP, _DOWN, _DOWN, TrendReading.UPTREND_WEAKENING),
+        # Long down: the mirror image.
+        (_DOWN, _DOWN, _DOWN, TrendReading.STRONG_DOWNTREND),
+        (_DOWN, _DOWN, _FLAT, TrendReading.DOWNTREND),
+        (_DOWN, _DOWN, _UP, TrendReading.DOWNTREND_BOUNCE),  # only near-term bounce
+        (_DOWN, _FLAT, _UP, TrendReading.DOWNTREND_BOUNCE),
+        (_DOWN, _UP, _DOWN, TrendReading.DOWNTREND_RECOVERING),  # mid-term turned up
+        (_DOWN, _UP, _UP, TrendReading.DOWNTREND_RECOVERING),
+        # Long flat: a range. Medium leads the break/turn; short breaks ties.
+        (_FLAT, _FLAT, _FLAT, TrendReading.RANGE_BOUND),
+        (_FLAT, _UP, _UP, TrendReading.RANGE_BREAKING_UP),
+        (_FLAT, _DOWN, _DOWN, TrendReading.RANGE_BREAKING_DOWN),
+        (_FLAT, _UP, _FLAT, TrendReading.RANGE_TURNING_UP),
+        (_FLAT, _UP, _DOWN, TrendReading.RANGE_TURNING_UP),  # medium leads
+        (_FLAT, _DOWN, _UP, TrendReading.RANGE_TURNING_DOWN),  # medium leads
+        (_FLAT, _FLAT, _UP, TrendReading.RANGE_TURNING_UP),  # short breaks the tie
+        (_FLAT, _FLAT, _DOWN, TrendReading.RANGE_TURNING_DOWN),
+    ],
+)
+def test_combined_reading_taxonomy(long_dir, medium_dir, short_dir, expected):
+    assert _combined_reading(long_dir, medium_dir, short_dir) is expected
 
 
 # =============================== Technical-indicator bundle ===============================

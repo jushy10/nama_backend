@@ -116,18 +116,20 @@ class HorizonTrendResponse(BaseModel):
 
 
 class TrendResponse(BaseModel):
-    """A stock's trend at a short and a long horizon, plus their combined reading.
+    """A stock's trend at three horizons (short / medium / long), plus their combined
+    reading.
 
-    `reading` folds the two horizons into one headline (e.g. "uptrend_pullback" =
-    long-term up but short-term down); it's "unknown" when either horizon lacks the
-    history to warm its EMA. `short_term` / `long_term` are null in that same case.
-    `reference_price` is the latest close the read was taken at."""
+    `reading` folds the three horizons into one headline (e.g. "uptrend_weakening" =
+    long-term up but mid-term rolling over); it's "unknown" when any horizon lacks the
+    history to warm its EMA. `short_term` / `medium_term` / `long_term` are null in
+    that same case. `reference_price` is the latest close the read was taken at."""
 
     symbol: str
     timeframe: str
     reference_price: float
     reading: str
     short_term: HorizonTrendResponse | None = None
+    medium_term: HorizonTrendResponse | None = None
     long_term: HorizonTrendResponse | None = None
 
 

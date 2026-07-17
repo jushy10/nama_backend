@@ -174,11 +174,12 @@ class GetStockSupportLevels:
         )
 
 
-# Trend read defaults: a short and a long horizon, in candles. 20/50 is the common
-# short-vs-intermediate pair on daily bars; pass 50/200 for the classic long-term
-# read. The long period sets how much warmup history to reach back for.
+# Trend read defaults: a short, a medium and a long horizon, in candles. 20/50/200 is
+# the classic moving-average trio on daily bars — near-term, intermediate, and primary
+# trend. The long period sets how much warmup history to reach back for.
 _DEFAULT_SHORT_PERIOD = 20
-_DEFAULT_LONG_PERIOD = 50
+_DEFAULT_MEDIUM_PERIOD = 50
+_DEFAULT_LONG_PERIOD = 200
 
 
 class GetStockTrend:
@@ -195,10 +196,11 @@ class GetStockTrend:
     needs roughly ``2 × long_period`` closes to exist. Like ``GetStockEma`` the fetch
     reaches an extra ``long_period`` bars *before* ``start`` so the read is
     well-formed even when the requested window is short — the trend as of ``end``
-    shouldn't depend on the chart's zoom (the same reasoning support levels use).
-    A ``start`` of ``None`` (MAX) already pulls all history, so there's nothing to
-    reach back for. Unlike EMA there's no trim: trend is a single point-in-time read,
-    not a line drawn across the visible window.
+    shouldn't depend on the chart's zoom (the same reasoning support levels use). The
+    long period is the deepest of the three, so warming it warms the medium and short
+    horizons too. A ``start`` of ``None`` (MAX) already pulls all history, so there's
+    nothing to reach back for. Unlike EMA there's no trim: trend is a single
+    point-in-time read, not a line drawn across the visible window.
     """
 
     def __init__(self, provider: CandleProvider) -> None:
@@ -210,6 +212,7 @@ class GetStockTrend:
         timeframe: Timeframe,
         *,
         short_period: int = _DEFAULT_SHORT_PERIOD,
+        medium_period: int = _DEFAULT_MEDIUM_PERIOD,
         long_period: int = _DEFAULT_LONG_PERIOD,
         deadband_percent: float = _DEFAULT_FLAT_THRESHOLD_PERCENT,
         start: datetime | None = None,
@@ -217,11 +220,13 @@ class GetStockTrend:
     ) -> TrendAssessment:
         if start is not None and end is not None and start >= end:
             raise ValueError("'start' must be earlier than 'end'.")
-        if short_period < 2 or long_period < 2:
+        if short_period < 2 or medium_period < 2 or long_period < 2:
             raise ValueError("trend periods must be at least 2.")
-        if short_period >= long_period:
-            raise ValueError("short_period must be less than long_period.")
-        # Reach back a warmup so the long EMA is warm by `start`.
+        if not short_period < medium_period < long_period:
+            raise ValueError(
+                "short_period < medium_period < long_period is required."
+            )
+        # Reach back a warmup so the long EMA (the deepest horizon) is warm by `start`.
         fetch_start = start
         if start is not None:
             fetch_start = start - _warmup_span(timeframe, long_period)
@@ -231,6 +236,7 @@ class GetStockTrend:
         return assess_trend(
             series,
             short_period=short_period,
+            medium_period=medium_period,
             long_period=long_period,
             deadband_percent=deadband_percent,
         )
