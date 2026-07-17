@@ -15,6 +15,7 @@ shares the ``/stocks/ticker`` resource:
   the ValueError → 400 mapping, and the cache headers.
 """
 
+from dataclasses import replace
 from datetime import date, datetime, timezone
 
 import pytest
@@ -180,7 +181,44 @@ def test_presents_the_core_card_with_null_optin_blocks_by_default():
     assert body["performance"] is None
     assert body["metrics"] is None
     assert body["options_metrics"] is None
+    # The default card's quote carries no regular close (and its timestamp is out of session),
+    # so the extended-hours split is absent.
+    assert body["extended_hours"] is None
     assert fake.calls == [("MU", None)]
+
+
+def test_presents_the_extended_hours_split_outside_the_regular_session():
+    # A quote whose latest print is after-hours (16:33 ET Friday) with a regular close to
+    # anchor against: the presenter emits the two-part split so the FE can show the day's move
+    # and the after-bell move apart, while the top-level price/change stay the blended figures.
+    card = replace(
+        _a_card(),
+        quote=Quote(
+            symbol="MU",
+            price=980.00,
+            previous_close=963.26,
+            bid=None,
+            ask=None,
+            as_of=datetime(2026, 7, 17, 20, 33, tzinfo=timezone.utc),
+            regular_close=975.56,
+        ),
+    )
+    resp = _client(_FakeUseCase(result=card)).get("/stocks/ticker/MU")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Top-level stays the latest (extended) print and its blended move — unchanged contract.
+    assert body["price"] == 980.0
+    assert body["change"] == 16.74  # 980 - 963.26, off the after-hours print
+    eh = body["extended_hours"]
+    assert eh is not None
+    assert eh["session"] == "after_hours"
+    assert eh["price"] == 980.0
+    assert eh["change"] == 4.44  # the after-bell move: print vs the regular close
+    assert eh["change_percent"] == 0.46
+    assert eh["regular_price"] == 975.56  # the anchor a client shows as the primary number
+    assert eh["regular_change"] == 12.3  # the day's move: regular close vs previous close
+    assert eh["regular_change_percent"] == 1.28
+    assert eh["as_of"].startswith("2026-07-17T20:33")
 
 
 def test_asset_type_is_etf_for_a_fund():

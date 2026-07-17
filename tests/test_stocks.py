@@ -98,10 +98,12 @@ from app.stocks.entities import (
     CandleSeries,
     GrowthMetrics,
     KeyMetrics,
+    MarketSession,
     Quote,
     Stock,
     StockPerformance,
     Timeframe,
+    market_session_at,
     normalize_symbol,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
@@ -858,6 +860,62 @@ def test_quote_entity_mirrors_stock_change_rules():
     assert a_quote(previous_close=None).change is None
     assert a_quote(previous_close=0).change_percent is None
     assert a_quote(bid=None).spread is None
+
+
+def test_market_session_at_buckets_by_eastern_time():
+    # 2026-07-17 is a Friday; UTC runs 4h ahead of ET (EDT) that week.
+    at = lambda h, m=0, d=17: datetime(2026, 7, d, h, m, tzinfo=timezone.utc)
+    assert market_session_at(at(12)) is MarketSession.PRE_MARKET  # 08:00 ET
+    assert market_session_at(at(18)) is MarketSession.REGULAR  # 14:00 ET
+    assert market_session_at(at(20, 33)) is MarketSession.AFTER_HOURS  # 16:33 ET
+    assert market_session_at(at(2)) is MarketSession.CLOSED  # 22:00 ET Thursday (overnight)
+    # The boundaries are half-open: 09:30 opens regular, 16:00 opens after-hours.
+    assert market_session_at(at(13, 30)) is MarketSession.REGULAR  # 09:30 ET sharp
+    assert market_session_at(at(20)) is MarketSession.AFTER_HOURS  # 16:00 ET sharp
+    # The weekend is closed regardless of time of day (Saturday the 18th).
+    assert market_session_at(at(18, d=18)) is MarketSession.CLOSED
+    # A naive timestamp is read as UTC (the feed stamps trades in UTC).
+    assert market_session_at(datetime(2026, 7, 17, 20, 33)) is MarketSession.AFTER_HOURS
+
+
+def test_quote_extended_hours_splits_an_after_hours_print():
+    # 16:33 ET Friday: the latest print is an after-hours one, so the quote splits into
+    # the regular close (the anchor) and the extended print measured against it.
+    q = a_quote(
+        price=333.75,
+        previous_close=333.10,
+        regular_close=333.23,
+        as_of=datetime(2026, 7, 17, 20, 33, tzinfo=timezone.utc),
+    )
+    eh = q.extended_hours
+    assert eh is not None
+    assert eh.session is MarketSession.AFTER_HOURS
+    assert eh.price == 333.75
+    assert eh.regular_close == 333.23
+    assert eh.change == 0.52  # the after-bell move: print vs the regular close
+    assert eh.change_percent == 0.16
+    # The day's move stays separate, off the regular close (not the extended print).
+    assert q.regular_change == 0.13
+    assert q.regular_change_percent == 0.04
+    # And the top-level change is still the blended latest-print move (yesterday → after-hours).
+    assert q.change == 0.65
+
+
+def test_quote_extended_hours_none_during_the_regular_session():
+    # A regular-session print carries no split — price/change already tell the story.
+    q = a_quote(regular_close=297.9, as_of=datetime(2026, 7, 17, 18, tzinfo=timezone.utc))
+    assert q.extended_hours is None
+
+
+def test_quote_extended_hours_none_without_a_regular_close():
+    # The Canadian (Yahoo) feed carries no regular close, so there's nothing to anchor an
+    # extended split against — no block, even on an after-hours timestamp.
+    q = a_quote(
+        regular_close=None, as_of=datetime(2026, 7, 17, 20, 33, tzinfo=timezone.utc)
+    )
+    assert q.extended_hours is None
+    assert q.regular_change is None
+    assert q.regular_change_percent is None
 
 
 def test_key_metrics_peg_divides_pe_by_growth():

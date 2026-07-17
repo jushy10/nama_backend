@@ -66,7 +66,7 @@ from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     get_quarterly_earnings_provider,
 )
-from app.stocks.entities import StockPerformance
+from app.stocks.entities import Quote, StockPerformance
 from app.stocks.etfs.db_repository import SqlEtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import AnalystEstimatesProvider, StockPerformanceProvider
@@ -84,6 +84,7 @@ from app.stocks.ticker.entities import PeHistory, PeHistoryStats, TickerOptionsM
 from app.stocks.ticker.ports import OptionChainProvider
 from app.stocks.ticker.schemas import (
     DividendResponse,
+    ExtendedHoursResponse,
     OptionsMetricsResponse,
     PeHistoryPointResponse,
     PeHistoryResponse,
@@ -214,6 +215,27 @@ def _present_options_metrics(
     )
 
 
+def _present_extended_hours(quote: Quote) -> ExtendedHoursResponse | None:
+    """Presenter: the quote's extended-hours split -> DTO, or ``None`` during the regular
+    session (the entity's ``extended_hours`` is ``None`` then). Serves the same raw
+    price / entity-rounded change treatment as the top-level card fields, so the primary
+    and extended numbers format identically on the client. The *day* move
+    (``regular_change``) lives on the quote, not the split, so it's read from there."""
+    ext = quote.extended_hours
+    if ext is None:
+        return None
+    return ExtendedHoursResponse(
+        session=ext.session.value,
+        price=ext.price,
+        change=ext.change,
+        change_percent=ext.change_percent,
+        regular_price=ext.regular_close,
+        regular_change=quote.regular_change,
+        regular_change_percent=quote.regular_change_percent,
+        as_of=ext.as_of,
+    )
+
+
 def _present(card: TickerCard) -> TickerCardResponse:
     """Presenter: ticker-card composition -> HTTP response DTO.
 
@@ -282,6 +304,7 @@ def _present(card: TickerCard) -> TickerCardResponse:
         price=card.quote.price,
         change=card.quote.change,
         change_percent=card.quote.change_percent,
+        extended_hours=_present_extended_hours(card.quote),
         market_cap=card.market_cap,
         sector=card.sector,
         industry=card.industry,

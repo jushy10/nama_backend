@@ -434,7 +434,16 @@ Naming: `<vendor>_<concern>_adapter.py` under `app/stocks/adapters/` — and a v
 
 > **The ticker sub-slice — `app/stocks/ticker/`.** A stock's **ticker card** at
 > `GET /stocks/ticker/{ticker}`. Always served: the live quote
-> (`price`/`change`/`change_percent`, same rules as every other price view), the two
+> (`price`/`change`/`change_percent`, same rules as every other price view; plus an
+> `extended_hours` block outside the regular session — the pre/after-hours split so a
+> client shows the regular 16:00 close with its *day* move as the primary number and the
+> after-bell print with its *own* move on a secondary line, rather than the single
+> blended figure. Derived purely on the shared-kernel `Quote` from the Alpaca snapshot's
+> daily-bar close + the latest trade's timestamp — `MarketSession`/`market_session_at` +
+> `Quote.extended_hours` in `entities.py`, no clock call — so it's `null` during the
+> regular session and on the Canadian Yahoo feed, which carries no regular close to
+> anchor against; US equities only, and best-effort like the IEX feed's thin after-hours
+> coverage), the two
 > **DB-first identity facts** — `name` (from the Finnhub profile) and `exchange` (from
 > the Alpaca full snapshot) — each lazily filled **once** per symbol into the `stocks`
 > anchor (`name` was always on it; `exchange` came with migration 0009) and served from
