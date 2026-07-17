@@ -948,7 +948,30 @@ class GetSectorAnalysis:
             for s in board
         ]
         self._attach_headlines(contexts)
+        self._log_attribution(contexts)
         return contexts
+
+    def _log_attribution(self, contexts: list[SectorContext]) -> None:
+        """One diagnostic line decomposing the best-effort attribution actually gathered.
+
+        Answers "why did this read carry (or not carry) movers and headlines" without a
+        live debugger. A headline-less read is *expected* when the news cron hasn't seeded
+        a sector's movers — this line is how we tell that apart from a quote-feed outage
+        (no movers at all) or an unwired leg (``news=off``). ``sectors_with_headlines``
+        going to 0 while ``movers`` is healthy points at news coverage, not the model."""
+        total_movers = sum(len(c.movers) for c in contexts)
+        sectors_with_headlines = sum(1 for c in contexts if c.headlines)
+        total_headlines = sum(len(c.headlines) for c in contexts)
+        logger.info(
+            "sector analysis attribution: sectors=%d total_movers=%d "
+            "sectors_with_headlines=%d total_headlines=%d (quotes=%s news=%s)",
+            len(contexts),
+            total_movers,
+            sectors_with_headlines,
+            total_headlines,
+            "on" if self._quotes is not None else "off",
+            "on" if self._news is not None else "off",
+        )
 
     def _movers_by_slug(self) -> dict[str, list[SectorMover]]:
         """Read the S&P 500 constituents and their live day-change, grouped by sector slug.
