@@ -219,6 +219,10 @@ def test_trend_endpoint_still_serves():
     assert body["short_term"] is not None
     assert body["medium_term"] is not None
     assert body["long_term"] is not None
+    # Each horizon carries both the raw slope and the price-folded effective read;
+    # a clean rising series has them agree.
+    assert body["long_term"]["direction"] == "up"
+    assert body["long_term"]["effective_direction"] == "up"
 
 
 def test_trend_endpoint_unknown_when_long_horizon_lacks_history():
