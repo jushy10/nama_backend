@@ -17,6 +17,7 @@ from app.stocks.charts.indicators import (
     SupportLevelSeries,
     TrendAssessment,
     _DEFAULT_FLAT_THRESHOLD_PERCENT,
+    _DEFAULT_PRICE_FLAT_THRESHOLD_PERCENT,
     assess_trend,
     build_indicators,
     ema_series,
@@ -215,6 +216,7 @@ class GetStockTrend:
         medium_period: int = _DEFAULT_MEDIUM_PERIOD,
         long_period: int = _DEFAULT_LONG_PERIOD,
         deadband_percent: float = _DEFAULT_FLAT_THRESHOLD_PERCENT,
+        price_deadband_percent: float = _DEFAULT_PRICE_FLAT_THRESHOLD_PERCENT,
         start: datetime | None = None,
         end: datetime | None = None,
     ) -> TrendAssessment:
@@ -239,6 +241,7 @@ class GetStockTrend:
             medium_period=medium_period,
             long_period=long_period,
             deadband_percent=deadband_percent,
+            price_deadband_percent=price_deadband_percent,
         )
 
 

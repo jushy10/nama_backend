@@ -97,18 +97,23 @@ class SupportLevelsResponse(BaseModel):
 
 
 class HorizonTrendResponse(BaseModel):
-    """One horizon's trend read, from the slope of its EMA.
+    """One horizon's trend read, from the slope of its EMA and price's side of it.
 
-    `direction` ("up"/"down"/"sideways") is read off the EMA's slope over its own
-    timescale. `slope_percent` is that slope averaged *per bar* (the figure the
-    sideways deadband is applied to); `change_percent` is the same move totalled
-    across the `lookback` bars it was measured over. `price_vs_ema_percent` is where
-    the latest close sits relative to the EMA (positive = above) — context the
-    direction does not fold in."""
+    `direction` ("up"/"down"/"sideways") is the EMA's slope over its own timescale.
+    `effective_direction` folds that slope together with which side of the line the
+    latest close sits on: a line still rising while price has broken decisively below
+    it reads "sideways" (a horizon in transition), not "up". The combined `reading`
+    aggregates the three `effective_direction`s, so the headline tracks what the chart
+    shows; `direction` stays the pure slope for a detail view. `slope_percent` is that
+    slope averaged *per bar* (the figure the sideways deadband is applied to);
+    `change_percent` is the same move totalled across the `lookback` bars it was
+    measured over. `price_vs_ema_percent` is where the latest close sits relative to
+    the EMA (positive = above)."""
 
     period: int
     lookback: int
-    direction: str  # "up" | "down" | "sideways"
+    direction: str  # "up" | "down" | "sideways" (EMA slope)
+    effective_direction: str  # "up" | "down" | "sideways" (slope folded with price side)
     slope_percent: float
     change_percent: float
     price_vs_ema_percent: float

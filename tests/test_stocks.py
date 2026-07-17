@@ -3034,8 +3034,10 @@ def test_get_trend_returns_200_with_all_three_horizons(make_client):
     assert body["short_term"]["direction"] == "up"
     assert body["medium_term"]["direction"] == "up"
     assert body["long_term"]["direction"] == "up"
+    # Rising series: price leads each line, so the effective read matches the slope.
+    assert body["short_term"]["effective_direction"] == "up"
     assert set(body["short_term"]) == {
-        "period", "lookback", "direction", "slope_percent",
+        "period", "lookback", "direction", "effective_direction", "slope_percent",
         "change_percent", "price_vs_ema_percent", "ema",
     }
 

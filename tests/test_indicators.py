@@ -12,11 +12,14 @@ import pytest
 
 from app.stocks.entities import Candle, CandleSeries, Timeframe
 from app.stocks.charts.indicators import (
+    HorizonTrend,
     IndicatorSpec,
     SupportStrength,
+    TrendAssessment,
     TrendDirection,
     TrendReading,
     _combined_reading,
+    _effective_direction,
     assess_trend,
     build_indicator,
     build_indicators,
@@ -363,6 +366,26 @@ def test_horizon_trend_flat_series_is_sideways():
     assert trend.change_percent == 0.0
 
 
+def test_horizon_trend_rising_series_effective_matches_slope():
+    # Price leads a rising line, so slope and price agree -> effective is up too.
+    trend = horizon_trend([float(c) for c in range(10, 25)], period=3)
+    assert trend.direction is TrendDirection.UP
+    assert trend.price_vs_ema_percent > 0
+    assert trend.effective_direction is TrendDirection.UP
+
+
+def test_horizon_trend_price_broken_below_rising_line_is_not_up():
+    # A long steady climb, then a sharp final break far below the (slow, lagging)
+    # line: the slope over its lookback is still up, but price now sits well below
+    # the EMA, so the effective direction is no longer a clean up.
+    closes = [float(c) for c in range(100, 260)]  # steady climb
+    closes += [215.0, 205.0, 200.0]  # a decisive break below the line
+    trend = horizon_trend(closes, period=50)
+    assert trend.direction is TrendDirection.UP  # the line still slopes up
+    assert trend.price_vs_ema_percent < -1.0  # price is below its own line
+    assert trend.effective_direction is TrendDirection.SIDEWAYS
+
+
 def test_horizon_trend_gentle_drift_reads_sideways_under_deadband():
     # A slope well inside the deadband is flat; a tiny deadband lets it read up.
     closes = [100.0 + i * 0.01 for i in range(12)]  # ~0.01/bar drift
@@ -383,7 +406,14 @@ def test_horizon_trend_lookback_capped_to_available_history():
     assert short.lookback == 1
 
 
-@pytest.mark.parametrize("kwargs", [{"period": 1}, {"deadband_percent": -0.1}])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"period": 1},
+        {"deadband_percent": -0.1},
+        {"price_deadband_percent": -0.1},
+    ],
+)
 def test_horizon_trend_rejects_bad_parameters(kwargs):
     with pytest.raises(ValueError):
         horizon_trend([1.0, 2.0, 3.0, 4.0], **{"period": 3, **kwargs})
@@ -497,6 +527,83 @@ _FLAT = TrendDirection.SIDEWAYS
 )
 def test_combined_reading_taxonomy(long_dir, medium_dir, short_dir, expected):
     assert _combined_reading(long_dir, medium_dir, short_dir) is expected
+
+
+# --------------- _effective_direction (slope folded with price's side) ---------------
+
+
+@pytest.mark.parametrize(
+    "slope_dir, price_vs_ema, expected",
+    [
+        # Slope and price agree -> that direction (a clean leg).
+        (_UP, 5.0, _UP),
+        (_DOWN, -5.0, _DOWN),
+        # Price within the 1% band abstains -> the slope decides.
+        (_UP, 0.5, _UP),
+        (_DOWN, -0.5, _DOWN),
+        (_UP, 1.0, _UP),  # boundary: exactly 1% is still "on the line"
+        (_UP, -1.0, _UP),
+        # Slope flat -> price breaks the tie.
+        (_FLAT, 5.0, _UP),
+        (_FLAT, -5.0, _DOWN),
+        (_FLAT, 0.5, _FLAT),  # both flat
+        # Genuine conflict: line one way, price decisively the other -> in transition.
+        (_UP, -5.0, _FLAT),  # rising line, price broken below it (the chart's case)
+        (_DOWN, 5.0, _FLAT),  # falling line, price jumped above it
+    ],
+)
+def test_effective_direction(slope_dir, price_vs_ema, expected):
+    assert _effective_direction(slope_dir, price_vs_ema, 1.0) is expected
+
+
+def test_assess_trend_price_below_rising_line_diverges_from_slope():
+    # The chart's case: a long climb then a late selloff off the highs. The medium
+    # EMA's lookback still spans the advance, so its *line* slopes up — but price has
+    # broken below it, so its effective vote is no longer "up". The long line is slow
+    # enough that price is still above it, so the primary uptrend stands and the
+    # folded headline reads as a pullback, not a clean uptrend.
+    closes = [float(c) for c in range(100, 300)]  # long steady climb
+    closes += [290.0, 282.0, 276.0, 272.0, 270.0]  # a drop off the highs
+    result = assess_trend(
+        _candles(closes), short_period=10, medium_period=30, long_period=100
+    )
+    # Medium: line up, price broken below it -> effective is no longer a clean up.
+    assert result.medium_term.direction is TrendDirection.UP
+    assert result.medium_term.price_vs_ema_percent < -1.0
+    assert result.medium_term.effective_direction is TrendDirection.SIDEWAYS
+    # Long: price is still above its slow line -> the primary uptrend holds.
+    assert result.long_term.effective_direction is TrendDirection.UP
+    assert result.reading is TrendReading.UPTREND_PULLBACK
+
+
+def test_reading_is_built_from_effective_directions_not_raw_slope():
+    # Deterministic proof that the fold reaches the headline: raw slopes that read a
+    # clean UPTREND, but with price having broken below the faster lines the effective
+    # directions read a PULLBACK.
+    def _horizon(direction, effective):
+        return HorizonTrend(
+            period=1,
+            lookback=1,
+            direction=direction,
+            effective_direction=effective,
+            slope_percent=0.0,
+            change_percent=0.0,
+            price_vs_ema_percent=0.0,
+            ema=0.0,
+        )
+
+    assessment = TrendAssessment(
+        symbol="AAPL",
+        timeframe=Timeframe.DAY_1,
+        reference_price=0.0,
+        long_term=_horizon(_UP, _UP),  # up and price above
+        medium_term=_horizon(_UP, _FLAT),  # line up, price broke below -> flat
+        short_term=_horizon(_FLAT, _DOWN),  # line flat, price below -> down
+    )
+    # Raw slopes alone (up, up, flat) would be a clean uptrend...
+    assert _combined_reading(_UP, _UP, _FLAT) is TrendReading.UPTREND
+    # ...but the reading folds price in and steps down to a pullback.
+    assert assessment.reading is TrendReading.UPTREND_PULLBACK
 
 
 # =============================== Technical-indicator bundle ===============================

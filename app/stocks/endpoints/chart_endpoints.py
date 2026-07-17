@@ -206,6 +206,7 @@ def _present_horizon(horizon: HorizonTrend | None) -> HorizonTrendResponse | Non
         period=horizon.period,
         lookback=horizon.lookback,
         direction=horizon.direction.value,
+        effective_direction=horizon.effective_direction.value,
         slope_percent=horizon.slope_percent,
         change_percent=horizon.change_percent,
         price_vs_ema_percent=horizon.price_vs_ema_percent,
@@ -462,6 +463,16 @@ def get_stock_trend_endpoint(
             "rather than a weak up/down. Larger = more tolerant of drift."
         ),
     ),
+    price_threshold: float = Query(
+        1.0,
+        ge=0.0,
+        le=50.0,
+        description=(
+            "How far (percent) the close must sit from a horizon's EMA before its "
+            "position overrides the line's slope in that horizon's effective "
+            "direction. Larger = price must break further from the line to count."
+        ),
+    ),
     start: datetime | None = Query(
         None, description="Explicit window start (ISO 8601, UTC). Overrides `range`."
     ),
@@ -479,6 +490,7 @@ def get_stock_trend_endpoint(
             medium_period=medium_period,
             long_period=long_period,
             deadband_percent=flat_threshold,
+            price_deadband_percent=price_threshold,
             start=start,
             end=end,
         )
