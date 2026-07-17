@@ -36,6 +36,7 @@ offline test suite, which injects a stub client) imports cleanly without the
 Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 """
 
+import logging
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
@@ -51,6 +52,8 @@ from app.stocks.exceptions import StockDataUnavailable
 # The key the adapter reports failures under — there is no single symbol here, so
 # the board as a whole is named, the same convention the Alpaca sector adapter uses.
 _SECTORS_KEY = "sectors"
+
+logger = logging.getLogger(__name__)
 
 # A single forced tool pins the model to structured output: Claude must call
 # submit_sector_analysis, so the response comes back as validated JSON arguments
@@ -224,6 +227,10 @@ class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
 
     def analyze(self, contexts: list[SectorContext]) -> SectorAnalysis:
         prompt = _render_prompt(contexts)
+        # The exact text the model reasons over — the ground truth for "did a headline
+        # even reach the model". At DEBUG so it stays off in normal INFO logging (it's
+        # multi-line); crank the app log level to see per-call what was sent.
+        logger.debug("sector analysis prompt:\n%s", prompt)
         # One cost line per endpoint call: the retry loop below may make several model
         # calls, so their token usage is summed and logged once (in a finally, so a
         # mid-retry failure still records what was spent).
