@@ -158,6 +158,9 @@ def test_to_quote_maps_snapshot_fields():
     assert quote.previous_close == 296.07
     assert quote.bid == 283.52 and quote.ask == 313.43
     assert quote.change == 1.79  # entity rule, same as Stock's
+    # The daily bar's close rides along as the regular-session anchor for the
+    # extended-hours split (the entity decides whether to surface it).
+    assert quote.regular_close == 297.86
     assert quote.as_of == datetime(2026, 6, 18, tzinfo=timezone.utc)
 
 

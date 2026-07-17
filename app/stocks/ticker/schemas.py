@@ -13,11 +13,36 @@ requested — and for the best-effort ones, ``null`` also when requested but una
 ``options_metrics`` is likewise card-only: no other endpoint reads the options market.
 """
 
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
 from app.stocks.schemas import StockPerformanceResponse
+
+
+class ExtendedHoursResponse(BaseModel):
+    """The after-hours / pre-market split of the quote, present only when the latest
+    trade is an extended-hours print (``null`` during the regular session).
+
+    Lets the FE show the "proper" two-part price a broker shows outside the bell: the
+    regular-session close as the primary number with its *day* move, and the extended
+    print as a secondary "After hours"/"Pre-market" line with its *own* move. ``session``
+    is ``"after_hours"`` or ``"pre_market"``. ``price`` is the latest extended print, and
+    ``change``/``change_percent`` are it against ``regular_price`` (the after-bell move).
+    ``regular_price`` is the 16:00 ET close and ``regular_change``/``regular_change_percent``
+    its move vs the previous close (the day's official move). ``as_of`` is the extended
+    trade's timestamp. Overnight/weekends this carries the prior session's last extended
+    print; the client's live clock decides how prominently to surface it. US equities only —
+    the Canadian (Yahoo) feed doesn't split the day, so it's always ``null`` there."""
+
+    session: str  # "pre_market" | "after_hours"
+    price: float  # the latest extended-hours print
+    change: float | None = None  # extended move: price vs the regular close
+    change_percent: float | None = None
+    regular_price: float  # the regular-session (16:00 ET) close — the primary number
+    regular_change: float | None = None  # the day's move: regular close vs previous close
+    regular_change_percent: float | None = None
+    as_of: datetime | None = None  # the extended trade's timestamp
 
 
 class DividendResponse(BaseModel):
@@ -145,6 +170,10 @@ class TickerCardResponse(BaseModel):
     price: float
     change: float | None = None  # absolute move vs the previous close
     change_percent: float | None = None  # percent move vs the previous close
+    # The extended-hours split (regular close + latest pre/after print), present only outside
+    # the regular session; null during it and on the Canadian feed. Lets the FE show the day's
+    # move and the after-bell move apart rather than blended into price/change above.
+    extended_hours: ExtendedHoursResponse | None = None
     market_cap: float | None = None  # raw USD; from the stocks anchor (universe screen)
     sector: str | None = None  # classification slug; from the stocks anchor
     industry: str | None = None  # classification slug; from the stocks anchor

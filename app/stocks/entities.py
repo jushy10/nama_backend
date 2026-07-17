@@ -6,8 +6,9 @@ calculations intrinsic to it.
 """
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
+from zoneinfo import ZoneInfo
 
 # Canadian venue suffixes, in Yahoo's convention — the marker that a ticker is a Canadian
 # listing (TSX ``.TO`` / TSX Venture ``.V`` / Cboe Canada ``.NE`` / CSE ``.CN``), the form the
@@ -423,6 +424,95 @@ class Stock:
         return GrowthMetrics.build(self.metrics, self.analyst_estimates)
 
 
+# US market-session windows in Eastern Time — the business rule for labelling *which
+# session a trade printed in*, so a regular-session close can be told apart from an
+# extended-hours (pre/after) print when splitting a quote. Deliberately coarse: the
+# standard extended-hours window (04:00 pre, 20:00 after), no half-day/holiday nuance —
+# that "is the market open right now" judgement belongs to the client's own live clock
+# (the frontend's market.ts), which this only feeds a labelled *price* to complement.
+_MARKET_TZ = ZoneInfo("America/New_York")
+_PRE_OPEN_MIN = 4 * 60  # 04:00 ET
+_REGULAR_OPEN_MIN = 9 * 60 + 30  # 09:30 ET
+_REGULAR_CLOSE_MIN = 16 * 60  # 16:00 ET
+_AFTER_CLOSE_MIN = 20 * 60  # 20:00 ET
+
+
+class MarketSession(str, Enum):
+    """Which part of the US trading day a timestamp falls in, by Eastern Time.
+
+    A ``str`` enum so the presenter serializes the value directly. Only the two
+    *extended* sessions ever reach a client (a regular-session print needs no
+    special treatment, and "closed" carries no price of its own) — the label
+    exists to say a shown price is a pre-market or after-hours one.
+    """
+
+    PRE_MARKET = "pre_market"
+    REGULAR = "regular"
+    AFTER_HOURS = "after_hours"
+    CLOSED = "closed"
+
+
+def market_session_at(moment: datetime) -> MarketSession:
+    """The US market session ``moment`` falls in, by its Eastern-Time wall clock.
+
+    Weekend → ``CLOSED``; otherwise bucketed by ET time-of-day into pre-market /
+    regular / after-hours / closed. A naive datetime is read as UTC (the price feed
+    stamps trades in UTC). Coarse by design — see the module note above; it exists to
+    tell a regular close from an extended-hours print, not to be an exact tradable
+    calendar (holidays/half-days are the client clock's job).
+    """
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    et = moment.astimezone(_MARKET_TZ)
+    if et.weekday() >= 5:  # Saturday / Sunday
+        return MarketSession.CLOSED
+    minutes = et.hour * 60 + et.minute
+    if _PRE_OPEN_MIN <= minutes < _REGULAR_OPEN_MIN:
+        return MarketSession.PRE_MARKET
+    if _REGULAR_OPEN_MIN <= minutes < _REGULAR_CLOSE_MIN:
+        return MarketSession.REGULAR
+    if _REGULAR_CLOSE_MIN <= minutes < _AFTER_CLOSE_MIN:
+        return MarketSession.AFTER_HOURS
+    return MarketSession.CLOSED
+
+
+@dataclass(frozen=True)
+class ExtendedHours:
+    """A quote's extended-hours split: the regular-session close beside the most
+    recent pre/after-hours print.
+
+    The "proper" after-hours read — a client shows ``regular_close`` (with its
+    *day* move, ``Quote.regular_change``) as the primary price and this extended
+    ``price`` as a secondary "After hours / Pre-market" line, so the two moves stay
+    separate rather than blended into one number. ``change`` / ``change_percent``
+    are the *extended* move — the print measured against the regular close, i.e.
+    what happened after the bell, not since yesterday.
+
+    Only ever built for a genuine extended print (see ``Quote.extended_hours``), so
+    ``session`` is always ``PRE_MARKET`` or ``AFTER_HOURS``.
+    """
+
+    session: MarketSession  # PRE_MARKET or AFTER_HOURS — the window the print occurred in
+    price: float  # the latest extended-hours trade price
+    regular_close: float  # the regular-session (16:00 ET) close, the anchor to show as primary
+    as_of: datetime | None  # the extended trade's timestamp
+
+    @property
+    def change(self) -> float | None:
+        """The extended move in price: the print less the regular close (``None`` if
+        no close to measure against)."""
+        if not self.regular_close:
+            return None
+        return round(self.price - self.regular_close, 4)
+
+    @property
+    def change_percent(self) -> float | None:
+        """The extended move as a percent of the regular close."""
+        if not self.regular_close:  # None or 0 -> undefined
+            return None
+        return round((self.price - self.regular_close) / self.regular_close * 100, 2)
+
+
 @dataclass(frozen=True)
 class Quote:
     """A minimal live quote: just enough to redraw a ticking price.
@@ -436,25 +526,75 @@ class Quote:
     """
 
     symbol: str
-    price: float  # latest trade price
+    price: float  # latest trade price (an extended-hours print when one is more recent)
     previous_close: float | None
     bid: float | None
     ask: float | None
     as_of: datetime | None
+    # The regular-session (16:00 ET) close, when the feed carries it. Distinct from
+    # ``price`` in pre/after-hours (where ``price`` is the extended print): it's the anchor
+    # the extended move is measured against. ``None`` for feeds that don't split the day
+    # (the Canadian Yahoo feed) — those simply never surface an extended-hours block.
+    regular_close: float | None = None
 
     @property
     def change(self) -> float | None:
-        """Absolute price change since the previous close."""
+        """Absolute price change since the previous close.
+
+        Measured off ``price`` (the latest print), so in extended hours this is the
+        *blended* move — yesterday's close to the after-hours print. The day-only move
+        is ``regular_change``; the after-hours-only move is ``extended_hours.change``.
+        """
         if self.previous_close is None:
             return None
         return round(self.price - self.previous_close, 4)
 
     @property
     def change_percent(self) -> float | None:
-        """Percent price change since the previous close."""
+        """Percent price change since the previous close (off ``price``; see ``change``)."""
         if not self.previous_close:  # None or 0 -> undefined
             return None
         return round((self.price - self.previous_close) / self.previous_close * 100, 2)
+
+    @property
+    def regular_change(self) -> float | None:
+        """The regular session's move: the regular close less the previous close.
+
+        The "day" change to show beside the regular price during extended hours — as
+        opposed to ``change``, which is measured off the latest (possibly extended)
+        print. ``None`` until both closes are known."""
+        if self.regular_close is None or self.previous_close is None:
+            return None
+        return round(self.regular_close - self.previous_close, 4)
+
+    @property
+    def regular_change_percent(self) -> float | None:
+        """The regular session's move as a percent of the previous close."""
+        if self.regular_close is None or not self.previous_close:
+            return None
+        return round((self.regular_close - self.previous_close) / self.previous_close * 100, 2)
+
+    @property
+    def extended_hours(self) -> "ExtendedHours | None":
+        """The extended-hours split, when the latest print is a pre/after-hours one.
+
+        ``None`` during the regular session (``price``/``change`` already tell the
+        story) or when the feed carries no regular close to anchor against. Overnight
+        and at the weekend the latest print is still the prior session's after-hours
+        trade, so this stays populated — the last-known extended price — and the
+        client's own clock decides how prominently to surface it.
+        """
+        if self.regular_close is None or self.as_of is None:
+            return None
+        session = market_session_at(self.as_of)
+        if session not in (MarketSession.PRE_MARKET, MarketSession.AFTER_HOURS):
+            return None
+        return ExtendedHours(
+            session=session,
+            price=self.price,
+            regular_close=self.regular_close,
+            as_of=self.as_of,
+        )
 
     @property
     def spread(self) -> float | None:

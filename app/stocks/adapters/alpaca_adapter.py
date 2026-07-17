@@ -536,14 +536,21 @@ class AlpacaStockDataProvider(
     @staticmethod
     def _to_quote(symbol, snapshot) -> Quote:
         # Same fields the Stock mapping reads, minus everything that needs a
-        # second call (name/exchange) or the daily bar (open/high/low/volume).
+        # second call (name/exchange) or the rest of the daily bar (open/high/low/volume).
+        # The daily bar's *close* is kept, though: outside the regular session it's the
+        # 16:00 ET close, the anchor the extended-hours split measures its print against
+        # (the entity decides whether the latest trade is an extended print at all, off its
+        # timestamp — here we just carry the raw close). During the regular session it's the
+        # running close, which the entity's session check keeps from surfacing as "extended".
         trade = snapshot.latest_trade
         quote = snapshot.latest_quote
         prev = snapshot.previous_daily_bar
+        daily = snapshot.daily_bar
         return Quote(
             symbol=symbol,
             price=trade.price,
             previous_close=prev.close if prev else None,
+            regular_close=daily.close if daily else None,
             bid=quote.bid_price if quote else None,
             ask=quote.ask_price if quote else None,
             as_of=trade.timestamp,
