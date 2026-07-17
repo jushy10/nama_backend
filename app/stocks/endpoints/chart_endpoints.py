@@ -221,6 +221,7 @@ def _present_trend(assessment: TrendAssessment) -> TrendResponse:
         reference_price=assessment.reference_price,
         reading=assessment.reading.value,
         short_term=_present_horizon(assessment.short_term),
+        medium_term=_present_horizon(assessment.medium_term),
         long_term=_present_horizon(assessment.long_term),
     )
 
@@ -329,10 +330,11 @@ def get_stock_ema_endpoint(
         description="How far back to fetch closes. Ignored when `start`/`end` is given.",
     ),
     period: list[int] = Query(
-        [9, 21, 50],
+        [9, 21, 50, 200],
         description=(
             "EMA lookback(s) in candles; repeat the param for multiple overlay "
-            "lines (e.g. period=9&period=21&period=50). Defaults to 9/21/50."
+            "lines (e.g. period=9&period=21&period=50). Defaults to 9/21/50/200 "
+            "(the 200 is the long-term overlay)."
         ),
     ),
     start: datetime | None = Query(
@@ -433,13 +435,22 @@ def get_stock_trend_endpoint(
         le=_TREND_MAX_PERIOD,
         description="Short-horizon EMA lookback in candles (the near-term trend).",
     ),
-    long_period: int = Query(
+    medium_period: int = Query(
         50,
         ge=_TREND_MIN_PERIOD,
         le=_TREND_MAX_PERIOD,
         description=(
+            "Medium-horizon EMA lookback in candles (the intermediate trend). Must sit "
+            "between `short_period` and `long_period`."
+        ),
+    ),
+    long_period: int = Query(
+        200,
+        ge=_TREND_MIN_PERIOD,
+        le=_TREND_MAX_PERIOD,
+        description=(
             "Long-horizon EMA lookback in candles (the primary trend). Must exceed "
-            "`short_period`. Try 50 (short) / 200 (long) for the classic long-term read."
+            "`medium_period`. 20 / 50 / 200 is the classic short/medium/long trio."
         ),
     ),
     flat_threshold: float = Query(
@@ -465,6 +476,7 @@ def get_stock_trend_endpoint(
             ticker,
             timeframe,
             short_period=short_period,
+            medium_period=medium_period,
             long_period=long_period,
             deadband_percent=flat_threshold,
             start=start,

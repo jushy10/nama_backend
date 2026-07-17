@@ -209,10 +209,36 @@ def test_support_levels_endpoint_still_serves():
 
 
 def test_trend_endpoint_still_serves():
-    fake = _FakeCandleProvider(series=_rising_series())
+    # Enough history to warm the 200-bar long horizon (the new default trio is
+    # 20/50/200); a steadily rising series reads as all three horizons aligned.
+    fake = _FakeCandleProvider(series=_rising_series(250))
     resp = _client(fake).get("/stocks/ticker/AAPL/trend?range=MAX")
     assert resp.status_code == 200, resp.text
-    assert resp.json()["reading"] == "uptrend"
+    body = resp.json()
+    assert body["reading"] == "strong_uptrend"
+    assert body["short_term"] is not None
+    assert body["medium_term"] is not None
+    assert body["long_term"] is not None
+
+
+def test_trend_endpoint_unknown_when_long_horizon_lacks_history():
+    # 60 bars can't warm the 200-bar long horizon -> reading falls back to unknown.
+    fake = _FakeCandleProvider(series=_rising_series(60))
+    resp = _client(fake).get("/stocks/ticker/AAPL/trend?range=MAX")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["reading"] == "unknown"
+    assert body["long_term"] is None
+    assert body["short_term"] is not None
+
+
+def test_trend_endpoint_rejects_non_increasing_periods():
+    fake = _FakeCandleProvider(series=_rising_series(250))
+    resp = _client(fake).get(
+        "/stocks/ticker/AAPL/trend?range=MAX"
+        "&short_period=50&medium_period=50&long_period=200"
+    )
+    assert resp.status_code == 400, resp.text
 
 
 def test_bad_symbol_maps_to_400_on_a_pre_existing_endpoint():

@@ -1365,7 +1365,13 @@ def test_trend_use_case_normalizes_symbol_and_warms_up_before_the_window():
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     end = datetime(2026, 6, 1, tzinfo=timezone.utc)
     GetStockTrend(fake).execute(
-        "  aapl ", Timeframe.HOUR_1, short_period=3, long_period=8, start=start, end=end
+        "  aapl ",
+        Timeframe.HOUR_1,
+        short_period=3,
+        medium_period=5,
+        long_period=8,
+        start=start,
+        end=end,
     )
     # Symbol normalized; the fetch reaches back a warmup before `start` (long
     # period 8 × 1-hour bars × the 3× factor = 24h) so the long EMA is warm.
@@ -1385,8 +1391,13 @@ def test_trend_use_case_rejects_invalid_symbols(bad):
 
 
 @pytest.mark.parametrize(
-    "periods", [{"short_period": 1}, {"short_period": 50, "long_period": 50},
-                {"short_period": 60, "long_period": 20}]
+    "periods",
+    [
+        {"short_period": 1, "medium_period": 5, "long_period": 8},  # period < 2
+        {"short_period": 50, "medium_period": 50, "long_period": 200},  # not increasing
+        {"short_period": 20, "medium_period": 200, "long_period": 50},  # medium > long
+        {"short_period": 60, "medium_period": 100, "long_period": 20},  # descending
+    ],
 )
 def test_trend_use_case_rejects_bad_periods(periods):
     fake = FakeCandleProvider(series=a_rising_series(n=20))
@@ -1411,13 +1422,14 @@ def test_trend_use_case_propagates_not_found():
 
 
 def test_trend_use_case_classifies_from_fetched_candles():
-    # A strictly rising series -> both horizons up -> uptrend.
+    # A strictly rising series -> all three horizons up and aligned -> strong uptrend.
     result = GetStockTrend(FakeCandleProvider(series=a_rising_series(n=20))).execute(
-        "AAPL", Timeframe.DAY_1, short_period=3, long_period=8
+        "AAPL", Timeframe.DAY_1, short_period=3, medium_period=5, long_period=8
     )
     assert result.short_term.direction is TrendDirection.UP
+    assert result.medium_term.direction is TrendDirection.UP
     assert result.long_term.direction is TrendDirection.UP
-    assert result.reading is TrendReading.UPTREND
+    assert result.reading is TrendReading.STRONG_UPTREND
 
 
 # --------------------------- sector use case ---------------------------
@@ -2780,7 +2792,7 @@ def test_get_ema_returns_200_with_one_line_per_period(make_client):
     assert set(line["points"][0]) == {"time", "timestamp", "value"}
 
 
-def test_get_ema_defaults_to_9_21_50_over_6m_daily(make_client):
+def test_get_ema_defaults_to_9_21_50_200_over_6m_daily(make_client):
     fake = FakeCandleProvider(a_series())           # a single candle
     client = make_client(ema_provider=fake)
     r = client.get("/stocks/ticker/AAPL/ema")
@@ -2788,10 +2800,11 @@ def test_get_ema_defaults_to_9_21_50_over_6m_daily(make_client):
     symbol, timeframe, start, end = fake.received[0]
     assert symbol == "AAPL"
     assert timeframe is Timeframe.DAY_1
-    # 6M visible window (183d) plus the EMA warmup reach-back before it.
+    # 6M visible window (183d) plus the EMA warmup reach-back before it (now sized to
+    # the deepest default line, the 200-EMA, so a deeper reach-back).
     assert (end - start).days > 183
     body = r.json()
-    assert [line["period"] for line in body["lines"]] == [9, 21, 50]
+    assert [line["period"] for line in body["lines"]] == [9, 21, 50, 200]
     # One candle can't warm any of them: graceful empty lines, not an error.
     assert all(line["count"] == 0 and line["latest"] is None for line in body["lines"])
 
@@ -2949,18 +2962,19 @@ def test_get_support_levels_upstream_failure_502(make_client):
 
 # --------------------------- trend endpoint ---------------------------
 
-def test_get_trend_returns_200_with_both_horizons(make_client):
+def test_get_trend_returns_200_with_all_three_horizons(make_client):
     client = make_client(trend_provider=FakeCandleProvider(a_rising_series(n=20)))
     r = client.get(
         "/stocks/ticker/AAPL/trend",
-        params={"short_period": 3, "long_period": 8},
+        params={"short_period": 3, "medium_period": 5, "long_period": 8},
     )
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["symbol"] == "AAPL"
     assert body["timeframe"] == "1Day"
-    assert body["reading"] == "uptrend"                 # rising series
+    assert body["reading"] == "strong_uptrend"          # rising series, all aligned
     assert body["short_term"]["direction"] == "up"
+    assert body["medium_term"]["direction"] == "up"
     assert body["long_term"]["direction"] == "up"
     assert set(body["short_term"]) == {
         "period", "lookback", "direction", "slope_percent",
@@ -2968,7 +2982,7 @@ def test_get_trend_returns_200_with_both_horizons(make_client):
     }
 
 
-def test_get_trend_defaults_to_20_50_over_1y_daily(make_client):
+def test_get_trend_defaults_to_20_50_200_over_1y_daily(make_client):
     fake = FakeCandleProvider(a_series())               # a single candle
     client = make_client(trend_provider=fake)
     r = client.get("/stocks/ticker/AAPL/trend")
@@ -2976,12 +2990,15 @@ def test_get_trend_defaults_to_20_50_over_1y_daily(make_client):
     symbol, timeframe, start, end = fake.received[0]
     assert symbol == "AAPL"
     assert timeframe is Timeframe.DAY_1
-    # 1Y visible window (366d) plus the warmup reach-back before it.
+    # 1Y visible window (366d) plus the warmup reach-back before it (now sized to the
+    # 200-bar long horizon, so an even deeper reach-back).
     assert (end - start).days > 366
     body = r.json()
-    # One candle can't warm either horizon: graceful unknown, not an error.
+    # One candle can't warm any horizon: graceful unknown, not an error.
     assert body["reading"] == "unknown"
-    assert body["short_term"] is None and body["long_term"] is None
+    assert body["short_term"] is None
+    assert body["medium_term"] is None
+    assert body["long_term"] is None
 
 
 def test_get_trend_honors_timeframe_and_range(make_client):
@@ -2989,7 +3006,10 @@ def test_get_trend_honors_timeframe_and_range(make_client):
     client = make_client(trend_provider=fake)
     r = client.get(
         "/stocks/ticker/AAPL/trend",
-        params={"timeframe": "1Hour", "range": "7D", "short_period": 3, "long_period": 8},
+        params={
+            "timeframe": "1Hour", "range": "7D",
+            "short_period": 3, "medium_period": 5, "long_period": 8,
+        },
     )
     assert r.status_code == 200, r.text
     _, timeframe, start, end = fake.received[0]
@@ -3008,12 +3028,18 @@ def test_get_trend_flat_threshold_widens_the_sideways_band(make_client):
     client = make_client(trend_provider=FakeCandleProvider(a_series(candles)))
     tight = client.get(
         "/stocks/ticker/AAPL/trend",
-        params={"short_period": 3, "long_period": 8, "flat_threshold": 0.0},
+        params={
+            "short_period": 3, "medium_period": 5, "long_period": 8,
+            "flat_threshold": 0.0,
+        },
     ).json()
     assert tight["long_term"]["direction"] == "up"
     loose = client.get(
         "/stocks/ticker/AAPL/trend",
-        params={"short_period": 3, "long_period": 8, "flat_threshold": 5.0},
+        params={
+            "short_period": 3, "medium_period": 5, "long_period": 8,
+            "flat_threshold": 5.0,
+        },
     ).json()
     assert loose["long_term"]["direction"] == "sideways"
 
@@ -3023,6 +3049,8 @@ def test_get_trend_flat_threshold_widens_the_sideways_band(make_client):
     [
         {"short_period": 1},
         {"short_period": 401},
+        {"medium_period": 1},
+        {"medium_period": 401},
         {"long_period": 1},
         {"long_period": 401},
         {"flat_threshold": -0.1},
@@ -3035,11 +3063,19 @@ def test_get_trend_invalid_params_422(make_client, params):
     assert client.get("/stocks/ticker/AAPL/trend", params=params).status_code == 422
 
 
-def test_get_trend_short_not_less_than_long_400(make_client):
-    # Both in range but short >= long — a domain rule, so a 400 from the use case.
+def test_get_trend_periods_not_strictly_increasing_400(make_client):
+    # All in range but not short < medium < long — a domain rule, so a 400 from the
+    # use case (not a 422 Query-bound rejection).
     client = make_client(trend_provider=FakeCandleProvider(a_rising_series(n=20)))
     r = client.get(
-        "/stocks/ticker/AAPL/trend", params={"short_period": 50, "long_period": 20}
+        "/stocks/ticker/AAPL/trend",
+        params={"short_period": 50, "medium_period": 30, "long_period": 20},
+    )
+    assert r.status_code == 400
+    # Medium out of order (short < long but medium above long) is a 400 too.
+    r = client.get(
+        "/stocks/ticker/AAPL/trend",
+        params={"short_period": 10, "medium_period": 300, "long_period": 200},
     )
     assert r.status_code == 400
 

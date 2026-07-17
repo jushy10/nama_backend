@@ -383,35 +383,71 @@ class TrendDirection(str, Enum):
 
 
 class TrendReading(str, Enum):
-    """The short- and long-term horizons combined into one plain reading — the
-    whole point of the endpoint (e.g. "long-term up but short-term down"). The long
-    horizon sets the primary trend; the short one qualifies it. String values
-    double as the API's JSON values."""
+    """The three horizons (short / medium / long) combined into one plain reading —
+    the whole point of the endpoint (e.g. "long-term up but mid-term rolling over").
+    The long horizon sets the primary trend; the medium horizon is the main qualifier
+    (its turn against the primary trend is the early warning), and the short horizon
+    adds near-term nuance and confirms strength. String values double as the API's
+    JSON values."""
 
-    UPTREND = "uptrend"  # both up
-    UPTREND_PULLBACK = "uptrend_pullback"  # long up, short down
-    UPTREND_CONSOLIDATING = "uptrend_consolidating"  # long up, short flat
-    DOWNTREND = "downtrend"  # both down
-    DOWNTREND_BOUNCE = "downtrend_bounce"  # long down, short up
-    DOWNTREND_STALLING = "downtrend_stalling"  # long down, short flat
-    RANGE_BOUND = "range_bound"  # both flat
-    RANGE_TURNING_UP = "range_turning_up"  # long flat, short up
-    RANGE_TURNING_DOWN = "range_turning_down"  # long flat, short down
-    UNKNOWN = "unknown"  # not enough history on one or both horizons
+    STRONG_UPTREND = "strong_uptrend"  # long up, medium up, short up (all aligned)
+    UPTREND = "uptrend"  # long up, faster horizons mildly confirming
+    UPTREND_PULLBACK = "uptrend_pullback"  # long up, medium not down, short down
+    UPTREND_WEAKENING = "uptrend_weakening"  # long up but medium down (mid-term rolling over)
+    STRONG_DOWNTREND = "strong_downtrend"  # long down, medium down, short down
+    DOWNTREND = "downtrend"  # long down, faster horizons mildly confirming
+    DOWNTREND_BOUNCE = "downtrend_bounce"  # long down, medium not up, short up
+    DOWNTREND_RECOVERING = "downtrend_recovering"  # long down but medium up (mid-term turning up)
+    RANGE_BOUND = "range_bound"  # long flat, no clear tilt on the faster horizons
+    RANGE_BREAKING_UP = "range_breaking_up"  # long flat, medium + short both up
+    RANGE_BREAKING_DOWN = "range_breaking_down"  # long flat, medium + short both down
+    RANGE_TURNING_UP = "range_turning_up"  # long flat, upward tilt on the faster horizons
+    RANGE_TURNING_DOWN = "range_turning_down"  # long flat, downward tilt on the faster horizons
+    UNKNOWN = "unknown"  # not enough history on one or more horizons
 
 
-# The 3×3 map from (long direction, short direction) to the combined reading.
-_READINGS: dict[tuple[TrendDirection, TrendDirection], TrendReading] = {
-    (TrendDirection.UP, TrendDirection.UP): TrendReading.UPTREND,
-    (TrendDirection.UP, TrendDirection.DOWN): TrendReading.UPTREND_PULLBACK,
-    (TrendDirection.UP, TrendDirection.SIDEWAYS): TrendReading.UPTREND_CONSOLIDATING,
-    (TrendDirection.DOWN, TrendDirection.DOWN): TrendReading.DOWNTREND,
-    (TrendDirection.DOWN, TrendDirection.UP): TrendReading.DOWNTREND_BOUNCE,
-    (TrendDirection.DOWN, TrendDirection.SIDEWAYS): TrendReading.DOWNTREND_STALLING,
-    (TrendDirection.SIDEWAYS, TrendDirection.UP): TrendReading.RANGE_TURNING_UP,
-    (TrendDirection.SIDEWAYS, TrendDirection.DOWN): TrendReading.RANGE_TURNING_DOWN,
-    (TrendDirection.SIDEWAYS, TrendDirection.SIDEWAYS): TrendReading.RANGE_BOUND,
-}
+def _combined_reading(
+    long_dir: TrendDirection,
+    medium_dir: TrendDirection,
+    short_dir: TrendDirection,
+) -> TrendReading:
+    """Fold the three horizons' directions into one plain-language reading.
+
+    The long horizon sets the *primary* trend (uptrend / downtrend / range). The
+    medium horizon is the main qualifier — a mid-term turn *against* the primary
+    trend is the strongest warning it's tiring (``*_weakening`` / ``*_recovering``),
+    stronger than a mere short-term wobble (``*_pullback`` / ``*_bounce``). The short
+    horizon confirms strength: all three aligned is the ``strong_*`` read. In a range
+    (long flat) the medium horizon leads the break/turn and the short horizon breaks
+    ties when the medium one is flat too.
+    """
+    up, down = TrendDirection.UP, TrendDirection.DOWN
+    if long_dir is up:
+        if medium_dir is down:
+            return TrendReading.UPTREND_WEAKENING
+        if medium_dir is up and short_dir is up:
+            return TrendReading.STRONG_UPTREND
+        if short_dir is down:
+            return TrendReading.UPTREND_PULLBACK
+        return TrendReading.UPTREND
+    if long_dir is down:
+        if medium_dir is up:
+            return TrendReading.DOWNTREND_RECOVERING
+        if medium_dir is down and short_dir is down:
+            return TrendReading.STRONG_DOWNTREND
+        if short_dir is up:
+            return TrendReading.DOWNTREND_BOUNCE
+        return TrendReading.DOWNTREND
+    # long_dir is SIDEWAYS — a range; medium leads the break/turn, short breaks ties.
+    if medium_dir is up and short_dir is up:
+        return TrendReading.RANGE_BREAKING_UP
+    if medium_dir is down and short_dir is down:
+        return TrendReading.RANGE_BREAKING_DOWN
+    if medium_dir is up or (medium_dir is not down and short_dir is up):
+        return TrendReading.RANGE_TURNING_UP
+    if medium_dir is down or (medium_dir is not up and short_dir is down):
+        return TrendReading.RANGE_TURNING_DOWN
+    return TrendReading.RANGE_BOUND
 
 
 @dataclass(frozen=True)
@@ -439,28 +475,39 @@ class HorizonTrend:
 
 @dataclass(frozen=True)
 class TrendAssessment:
-    """A stock's trend at two horizons plus their combined reading.
+    """A stock's trend at three horizons (short / medium / long) plus their combined
+    reading.
 
-    ``short_term`` / ``long_term`` are each ``None`` when there isn't enough history
-    to warm that horizon's EMA and measure its slope (a young listing, or a deep
-    ``long_period`` over a short window). ``reference_price`` is the latest close the
-    read was taken at.
+    ``short_term`` / ``medium_term`` / ``long_term`` are each ``None`` when there
+    isn't enough history to warm that horizon's EMA and measure its slope (a young
+    listing, or a deep ``long_period`` over a short window). ``reference_price`` is the
+    latest close the read was taken at.
     """
 
     symbol: str
     timeframe: Timeframe
     reference_price: float
     short_term: HorizonTrend | None
+    medium_term: HorizonTrend | None
     long_term: HorizonTrend | None
 
     @property
     def reading(self) -> TrendReading:
-        """The two horizons combined into one plain reading (the headline). The long
-        horizon sets the primary trend; the short one qualifies it (aligned, pulling
-        back, bouncing, …). ``UNKNOWN`` when either horizon is missing."""
-        if self.long_term is None or self.short_term is None:
+        """The three horizons combined into one plain reading (the headline). The long
+        horizon sets the primary trend, the medium horizon qualifies it (pulling back,
+        weakening, …), and the short horizon confirms strength. ``UNKNOWN`` when any
+        horizon is missing — the primary read isn't trustworthy without all three."""
+        if (
+            self.long_term is None
+            or self.medium_term is None
+            or self.short_term is None
+        ):
             return TrendReading.UNKNOWN
-        return _READINGS[(self.long_term.direction, self.short_term.direction)]
+        return _combined_reading(
+            self.long_term.direction,
+            self.medium_term.direction,
+            self.short_term.direction,
+        )
 
 
 def _classify_direction(slope_percent_per_bar: float, deadband: float) -> TrendDirection:
@@ -520,25 +567,31 @@ def assess_trend(
     series: CandleSeries,
     *,
     short_period: int = 20,
-    long_period: int = 50,
+    medium_period: int = 50,
+    long_period: int = 200,
     deadband_percent: float = _DEFAULT_FLAT_THRESHOLD_PERCENT,
 ) -> TrendAssessment:
-    """Assess a candle series' trend at a short and a long horizon.
+    """Assess a candle series' trend at a short, a medium and a long horizon.
 
-    Both horizons are read from the same closes via ``horizon_trend`` (the slope of
-    a short and a long EMA); their directions combine into ``TrendAssessment.reading``
-    — the "long-term up but short-term down" headline. A horizon with too little
-    history to warm its EMA comes back ``None`` (and the reading is ``UNKNOWN``).
-    Pure: given the same series it always returns the same result.
+    All three horizons are read from the same closes via ``horizon_trend`` (the slope
+    of a short, a medium and a long EMA); their directions combine into
+    ``TrendAssessment.reading`` — the "long-term up but mid-term rolling over"
+    headline. A horizon with too little history to warm its EMA comes back ``None``
+    (and the reading is ``UNKNOWN``). Pure: given the same series it always returns the
+    same result.
 
     Raises:
-        ValueError: ``short_period`` or ``long_period`` below 2,
-            ``short_period >= long_period``, or ``deadband_percent < 0``.
+        ValueError: any period below 2, the periods not strictly increasing
+            (``short_period < medium_period < long_period``), or
+            ``deadband_percent < 0``.
     """
-    if short_period < 2 or long_period < 2:
+    if short_period < 2 or medium_period < 2 or long_period < 2:
         raise ValueError("trend periods must be at least 2.")
-    if short_period >= long_period:
-        raise ValueError("short_period must be less than long_period.")
+    if not short_period < medium_period < long_period:
+        raise ValueError(
+            "trend periods must be strictly increasing: "
+            "short_period < medium_period < long_period."
+        )
     closes = [candle.close for candle in series.candles]
     reference_price = closes[-1] if closes else 0.0
     return TrendAssessment(
@@ -546,6 +599,7 @@ def assess_trend(
         timeframe=series.timeframe,
         reference_price=round(reference_price, 2),
         short_term=horizon_trend(closes, short_period, deadband_percent=deadband_percent),
+        medium_term=horizon_trend(closes, medium_period, deadband_percent=deadband_percent),
         long_term=horizon_trend(closes, long_period, deadband_percent=deadband_percent),
     )
 
