@@ -30,9 +30,10 @@ def session():
         yield db
 
 
-def _stock(session, ticker, name, sector):
+def _stock(session, ticker, name, sector, market_cap=None):
     stock = get_or_create_stock(session, ticker, name)
     stock.sector = sector
+    stock.market_cap = market_cap
     session.flush()
     return stock
 
@@ -63,7 +64,7 @@ def _quarter(
 
 
 def _seed(session):
-    aapl = _stock(session, "AAPL", "Apple", "technology")
+    aapl = _stock(session, "AAPL", "Apple", "technology", market_cap=3.4e12)
     msft = _stock(session, "MSFT", "Microsoft", "technology")
     nvda = _stock(session, "NVDA", "NVIDIA", "technology")
     # In-window upcoming reports (eps_actual is None).
@@ -110,6 +111,15 @@ def test_joins_name_and_sector(session):
     aapl = next(i for i in items if i.ticker == "AAPL")
     assert aapl.name == "Apple"
     assert aapl.sector == "technology"
+
+
+def test_joins_market_cap(session):
+    _seed(session)
+    items = repo(session).upcoming(date(2026, 7, 15), date(2026, 7, 31), 100)
+    by_ticker = {i.ticker: i.market_cap for i in items}
+    assert by_ticker["AAPL"] == 3.4e12
+    # A not-yet-screened symbol has no market cap → None (no highlight downstream).
+    assert by_ticker["NVDA"] is None
 
 
 def test_maps_the_report_session(session):

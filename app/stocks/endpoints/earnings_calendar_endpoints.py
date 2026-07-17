@@ -61,6 +61,7 @@ def _present(calendar: EarningsCalendar) -> EarningsCalendarResponse:
                         sector=item.sector,
                         when=item.report_date,
                         session=item.session.value,
+                        market_cap=item.market_cap,
                     )
                     for item in day.items
                 ],

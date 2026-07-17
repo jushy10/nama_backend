@@ -53,7 +53,7 @@ def _a_calendar() -> EarningsCalendar:
                 items=(
                     EarningsCalendarItem(
                         "AAPL", "Apple", "technology", date(2026, 7, 20),
-                        EarningsSession.AMC,
+                        EarningsSession.AMC, market_cap=3.4e12,
                     ),
                     EarningsCalendarItem(
                         "MSFT", "Microsoft", "technology", date(2026, 7, 20),
@@ -84,8 +84,11 @@ def test_returns_the_expected_shape():
             "sector": "technology",
             "when": "2026-07-20",  # the item's scheduled report date
             "session": "amc",  # after market close
+            "market_cap": 3.4e12,
         }
         assert day["items"][1]["session"] == "bmo"  # before market open
+        # A not-yet-screened symbol has no market cap.
+        assert day["items"][1]["market_cap"] is None
         assert "not financial advice" in body["disclaimer"]
         assert resp.headers["cache-control"] == "public, max-age=1800"
     finally:

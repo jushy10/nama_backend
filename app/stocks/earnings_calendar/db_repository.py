@@ -50,6 +50,7 @@ class SqlEarningsCalendarRepository(EarningsCalendarRepository):
                 StockRecord.ticker,
                 StockRecord.name,
                 StockRecord.sector,
+                StockRecord.market_cap,
                 StockQuarterlyEarningsRecord.report_date,
                 StockQuarterlyEarningsRecord.report_session,
             )
@@ -78,6 +79,7 @@ class SqlEarningsCalendarRepository(EarningsCalendarRepository):
                 sector=sector,
                 report_date=report_date,
                 session=_session_from_str(report_session),
+                market_cap=market_cap,
             )
-            for ticker, name, sector, report_date, report_session in rows
+            for ticker, name, sector, market_cap, report_date, report_session in rows
         ]
