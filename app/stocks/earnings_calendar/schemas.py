@@ -15,14 +15,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class EarningsCalendarItemResponse(BaseModel):
-    """One scheduled report: the company, the date it's expected to report (``when``), and its
-    market timing (``session``: bmo / amc / during / unknown)."""
+    """One scheduled report: the company, the date it's expected to report (``when``), its
+    market timing (``session``: bmo / amc / during / unknown), and its ``market_cap`` (whole
+    units of the listing's currency; ``None`` for a not-yet-screened symbol) so a client can
+    surface the large-cap names."""
 
     ticker: str
     name: str | None = None
     sector: str | None = None
     when: date
     session: str
+    market_cap: float | None = None
 
 
 class EarningsCalendarDayResponse(BaseModel):

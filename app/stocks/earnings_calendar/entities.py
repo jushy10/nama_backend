@@ -30,8 +30,10 @@ class EarningsCalendarItem:
     date the quarterly slice stores for its not-yet-reported quarters — and ``session`` is its
     market timing (before open / after close / intraday / unknown), carried through from the
     quarterly row. Together they're the timing signal; the presenter surfaces the date per item
-    as ``when`` and the session as ``session``. ``name`` and ``sector`` come from the ``stocks``
-    anchor and may be ``None`` for a thinly-known symbol.
+    as ``when`` and the session as ``session``. ``name``, ``sector`` and ``market_cap`` come
+    from the ``stocks`` anchor and may be ``None`` for a thinly-known / not-yet-screened symbol.
+    ``market_cap`` is whole units of the listing's own currency (the screen's ≥$1B floor is
+    applied natively per market), enough for a client to flag the large-cap names.
     """
 
     ticker: str
@@ -39,6 +41,7 @@ class EarningsCalendarItem:
     sector: str | None
     report_date: date
     session: EarningsSession = EarningsSession.UNKNOWN
+    market_cap: float | None = None
 
 
 @dataclass(frozen=True)
