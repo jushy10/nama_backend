@@ -373,11 +373,11 @@ def support_levels(
 _DEFAULT_FLAT_THRESHOLD_PERCENT = 0.05
 
 # How far (percent) the latest close must sit from a horizon's EMA before its
-# position counts as a vote. Within this band the price is "on the line" and only
-# the slope speaks; beyond it, price above/below the line is folded into the
-# horizon's effective direction. Wider than the slope deadband because a price
-# hugging its EMA whipsaws across it — 1% keeps a routine touch from flipping the
-# read while a decisive break (the chart's 17-22% breach) clears it easily.
+# position takes over the horizon's effective direction. Within this band the price
+# is "on the line" and only the slope speaks; beyond it, price's side of the line
+# *leads* (see ``_effective_direction``). Wider than the slope deadband because a
+# price hugging its EMA whipsaws across it — 1% keeps a routine touch from flipping
+# the read while a decisive break (the chart's 17-22% breach) clears it easily.
 _DEFAULT_PRICE_FLAT_THRESHOLD_PERCENT = 1.0
 
 
@@ -470,12 +470,13 @@ class HorizonTrend:
     "the trend line is up X%"). ``price_vs_ema_percent`` says where the latest close
     sits relative to the EMA — above (positive) or below.
 
-    ``effective_direction`` folds those two together: the slope *and* which side of
-    the line price is on (see ``_effective_direction``). It's what the combined
-    reading aggregates, so a horizon whose line still slopes up while price has
-    broken decisively below it reads as neither a clean up nor down — matching what
-    the chart shows. ``direction`` stays the pure slope for the detail view; a card
-    can show the line's heading and the price gap side by side.
+    ``effective_direction`` folds those two together, with **price leading** (see
+    ``_effective_direction``): a horizon whose line still slopes up while price has
+    broken decisively below it reads DOWN, because the slope is a trailing average
+    and price's side of the line is now. It's the horizon's read for display *and*
+    what the combined reading aggregates, so both track what the chart shows.
+    ``direction`` stays the pure slope, for a detail view that wants to show the
+    line's own heading beside the price gap.
     """
 
     period: int
@@ -511,10 +512,10 @@ class TrendAssessment:
         """The three horizons combined into one plain reading (the headline). The long
         horizon sets the primary trend, the medium horizon qualifies it (pulling back,
         weakening, …), and the short horizon confirms strength. Each horizon speaks
-        through its ``effective_direction`` — slope *and* price's side of the line —
-        so a rising line that price has dropped below no longer votes as a clean up.
-        ``UNKNOWN`` when any horizon is missing — the primary read isn't trustworthy
-        without all three."""
+        through its ``effective_direction`` — price's side of the line leading, the
+        slope speaking only when price sits on it — so a rising line that price has
+        dropped below votes down, not up. ``UNKNOWN`` when any horizon is missing —
+        the primary read isn't trustworthy without all three."""
         if (
             self.long_term is None
             or self.medium_term is None
@@ -546,28 +547,23 @@ def _effective_direction(
     """Fold a horizon's EMA-slope direction with where price sits on that same EMA
     into one effective direction — the horizon's true tilt, not just its line's.
 
-    Price more than ``price_deadband`` percent above the line votes UP, more than
-    that below votes DOWN; within the band it's "on the line" and abstains. Then:
-    slope and price agreeing keeps the shared direction; if one abstains (SIDEWAYS)
-    the other decides; and a genuine conflict — a line still rising while price has
-    broken decisively below it (or falling while price has jumped above) — reads
-    SIDEWAYS, a horizon in transition that's neither a clean up nor a clean down.
-    That conflict is exactly the divergence the eye catches on the chart and the
-    pure-slope read used to miss."""
-    up, down, flat = TrendDirection.UP, TrendDirection.DOWN, TrendDirection.SIDEWAYS
+    **Price leads.** More than ``price_deadband`` percent above the line reads UP,
+    more than that below reads DOWN — regardless of which way the line is sloping.
+    Within the band price is "on the line" and abstains, and the slope decides.
+
+    Price wins a conflict because the two speak about different moments: an EMA's
+    slope is a trailing average over ``lookback`` bars (it keeps pointing up for a
+    while after a top), whereas price's side of the line is *now*. A rising line
+    price has broken decisively below is a horizon that has already turned — the
+    divergence the eye catches on the chart, which the pure-slope read called an
+    uptrend. The cost is symmetric and accepted: a brief dip through a strongly
+    rising line flips the horizon down until price recovers, which is why the band
+    exists — a routine touch of the line doesn't clear it."""
     if price_vs_ema_percent > price_deadband:
-        price_direction = up
-    elif price_vs_ema_percent < -price_deadband:
-        price_direction = down
-    else:
-        price_direction = flat
-    if slope_direction is price_direction:
-        return slope_direction
-    if slope_direction is flat:
-        return price_direction
-    if price_direction is flat:
-        return slope_direction
-    return flat
+        return TrendDirection.UP
+    if price_vs_ema_percent < -price_deadband:
+        return TrendDirection.DOWN
+    return slope_direction
 
 
 def horizon_trend(
@@ -583,9 +579,9 @@ def horizon_trend(
     slope from ``lookback = min(period, len(ema) - 1)`` bars ago to its latest
     value. The per-bar slope (percent) is classified UP / DOWN / SIDEWAYS against a
     ``deadband_percent`` flat band, so a gently drifting or choppy market reads
-    SIDEWAYS rather than as a weak trend. The ``effective_direction`` additionally
-    folds in where the latest close sits relative to the line (``_effective_direction``,
-    with its own ``price_deadband_percent`` band). Returns ``None`` when there isn't
+    SIDEWAYS rather than as a weak trend. The ``effective_direction`` then lets the
+    latest close's side of that line lead (``_effective_direction``, with its own
+    ``price_deadband_percent`` band). Returns ``None`` when there isn't
     enough history to form at least two EMA points — nothing to measure a slope from.
 
     Raises:
