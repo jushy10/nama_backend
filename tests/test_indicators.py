@@ -374,16 +374,16 @@ def test_horizon_trend_rising_series_effective_matches_slope():
     assert trend.effective_direction is TrendDirection.UP
 
 
-def test_horizon_trend_price_broken_below_rising_line_is_not_up():
+def test_horizon_trend_price_broken_below_rising_line_reads_down():
     # A long steady climb, then a sharp final break far below the (slow, lagging)
     # line: the slope over its lookback is still up, but price now sits well below
-    # the EMA, so the effective direction is no longer a clean up.
+    # the EMA, and price leads -> the horizon has effectively turned down.
     closes = [float(c) for c in range(100, 260)]  # steady climb
     closes += [215.0, 205.0, 200.0]  # a decisive break below the line
     trend = horizon_trend(closes, period=50)
     assert trend.direction is TrendDirection.UP  # the line still slopes up
     assert trend.price_vs_ema_percent < -1.0  # price is below its own line
-    assert trend.effective_direction is TrendDirection.SIDEWAYS
+    assert trend.effective_direction is TrendDirection.DOWN
 
 
 def test_horizon_trend_gentle_drift_reads_sideways_under_deadband():
@@ -547,9 +547,9 @@ def test_combined_reading_taxonomy(long_dir, medium_dir, short_dir, expected):
         (_FLAT, 5.0, _UP),
         (_FLAT, -5.0, _DOWN),
         (_FLAT, 0.5, _FLAT),  # both flat
-        # Genuine conflict: line one way, price decisively the other -> in transition.
-        (_UP, -5.0, _FLAT),  # rising line, price broken below it (the chart's case)
-        (_DOWN, 5.0, _FLAT),  # falling line, price jumped above it
+        # Conflict: price leads, because the slope is trailing and price is now.
+        (_UP, -5.0, _DOWN),  # rising line, price broken below it (the chart's case)
+        (_DOWN, 5.0, _UP),  # falling line, price jumped above it
     ],
 )
 def test_effective_direction(slope_dir, price_vs_ema, expected):
@@ -559,21 +559,23 @@ def test_effective_direction(slope_dir, price_vs_ema, expected):
 def test_assess_trend_price_below_rising_line_diverges_from_slope():
     # The chart's case: a long climb then a late selloff off the highs. The medium
     # EMA's lookback still spans the advance, so its *line* slopes up — but price has
-    # broken below it, so its effective vote is no longer "up". The long line is slow
-    # enough that price is still above it, so the primary uptrend stands and the
-    # folded headline reads as a pullback, not a clean uptrend.
+    # broken below it, and price leads, so its effective vote is down. The long line
+    # is slow enough that price is still above it, so the primary uptrend stands and
+    # the folded headline reads as weakening, not a clean uptrend.
     closes = [float(c) for c in range(100, 300)]  # long steady climb
     closes += [290.0, 282.0, 276.0, 272.0, 270.0]  # a drop off the highs
     result = assess_trend(
         _candles(closes), short_period=10, medium_period=30, long_period=100
     )
-    # Medium: line up, price broken below it -> effective is no longer a clean up.
+    # Medium: line up, price broken below it -> effective turns down.
     assert result.medium_term.direction is TrendDirection.UP
     assert result.medium_term.price_vs_ema_percent < -1.0
-    assert result.medium_term.effective_direction is TrendDirection.SIDEWAYS
+    assert result.medium_term.effective_direction is TrendDirection.DOWN
+    # Short: price is below its fast line too -> down.
+    assert result.short_term.effective_direction is TrendDirection.DOWN
     # Long: price is still above its slow line -> the primary uptrend holds.
     assert result.long_term.effective_direction is TrendDirection.UP
-    assert result.reading is TrendReading.UPTREND_PULLBACK
+    assert result.reading is TrendReading.UPTREND_WEAKENING
 
 
 def test_reading_is_built_from_effective_directions_not_raw_slope():

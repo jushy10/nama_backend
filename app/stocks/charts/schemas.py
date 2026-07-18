@@ -101,9 +101,10 @@ class HorizonTrendResponse(BaseModel):
 
     `direction` ("up"/"down"/"sideways") is the EMA's slope over its own timescale.
     `effective_direction` folds that slope together with which side of the line the
-    latest close sits on: a line still rising while price has broken decisively below
-    it reads "sideways" (a horizon in transition), not "up". The combined `reading`
-    aggregates the three `effective_direction`s, so the headline tracks what the chart
+    latest close sits on, **price leading**: a line still rising while price has broken
+    decisively below it reads "down", because the slope is a trailing average while
+    price's side of the line is now. It's the horizon's read to display, and the
+    combined `reading` aggregates the three of them, so both track what the chart
     shows; `direction` stays the pure slope for a detail view. `slope_percent` is that
     slope averaged *per bar* (the figure the sideways deadband is applied to);
     `change_percent` is the same move totalled across the `lookback` bars it was
