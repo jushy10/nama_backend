@@ -11,8 +11,9 @@
 # nothing about it becomes publicly reachable.
 
 # Amazon Linux 2023 (arm64). The SSM agent ships preinstalled, so the instance is
-# Session-Manager-ready the moment it finishes booting. most_recent keeps it on a
-# patched image at apply time.
+# Session-Manager-ready the moment it finishes booting. most_recent resolves to a
+# patched image, but only at *create* time — the instance's lifecycle block below
+# ignores later AMI releases so routine applies don't churn the bastion.
 data "aws_ami" "al2023" {
   most_recent = true
   owners      = ["amazon"]
@@ -131,6 +132,22 @@ resource "aws_instance" "this" {
     volume_size = 8
     volume_type = "gp3"
     encrypted   = true
+  }
+
+  # Pin the running instance to the AMI it was created with. most_recent means a
+  # new AL2023 release makes every subsequent apply — however unrelated — plan
+  # "must be replaced", churning the bastion and re-tripping the t4g.nano
+  # first-boot OOM (see the swapfile note above). ignore_changes only suppresses
+  # the in-place diff: a deliberate refresh (terraform taint, or toggling
+  # bastion_enabled off and on) still creates from config and picks up the
+  # then-latest image, so that's the patch path.
+  #
+  # associate_public_ip_address is ignored for the same reason: a parked
+  # (stopped) bastion releases its public IP, so state refreshes to false and
+  # every plan shows false -> true replacement drift. The config value still
+  # applies on (re)create, which is when it matters.
+  lifecycle {
+    ignore_changes = [ami, associate_public_ip_address]
   }
 
   tags = merge(var.tags, { Name = var.name })
