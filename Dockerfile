@@ -1,4 +1,5 @@
 # Container image for the FastAPI app, run on ECS Fargate.
+# Bumping the interpreter? Bump .github/workflows/tests.yml's python-version with it.
 FROM python:3.12-slim
 
 WORKDIR /app
