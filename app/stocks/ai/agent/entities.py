@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 
@@ -69,4 +69,4 @@ class ResearchResult:
     answer: str
     model: str
     generated_at: datetime
-    steps: tuple[AgentStep, ...] = field(default_factory=tuple)
+    steps: tuple[AgentStep, ...] = ()

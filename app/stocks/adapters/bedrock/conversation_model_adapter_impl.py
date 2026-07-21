@@ -108,28 +108,23 @@ def _to_anthropic_tool(spec: ToolSpec) -> dict:
 
 
 def _to_turn(message, model_id: str) -> ModelTurn:
-    text_parts: list[str] = []
-    tool_calls: list[ToolCall] = []
+    texts: list[str] = []
+    calls: list[ToolCall] = []
     for block in getattr(message, "content", None) or []:
         kind = getattr(block, "type", None)
-        if kind == "text":
-            piece = getattr(block, "text", None)
-            if isinstance(piece, str):
-                text_parts.append(piece)
-        elif kind == "tool_use":
-            name = getattr(block, "name", None)
-            call_id = getattr(block, "id", None)
+        if kind == "text" and isinstance(getattr(block, "text", None), str):
+            texts.append(block.text)
+        elif kind == "tool_use" and isinstance(getattr(block, "id", None), str):
             arguments = getattr(block, "input", None)
-            if isinstance(name, str) and isinstance(call_id, str):
-                tool_calls.append(
-                    ToolCall(
-                        id=call_id,
-                        name=name,
-                        arguments=arguments if isinstance(arguments, dict) else {},
-                    )
+            calls.append(
+                ToolCall(
+                    id=block.id,
+                    name=str(getattr(block, "name", "")),
+                    arguments=arguments if isinstance(arguments, dict) else {},
                 )
+            )
     return ModelTurn(
-        text="".join(text_parts).strip(),
-        tool_calls=tuple(tool_calls),
+        text="".join(texts).strip(),
+        tool_calls=tuple(calls),
         model=model_id,
     )

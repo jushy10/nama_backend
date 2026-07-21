@@ -82,7 +82,11 @@ class RunResearch:
                 return self._result(question, turn.text, steps, model_id)
 
             messages.append(AssistantMessage(turn.text, turn.tool_calls))
-            outcomes = [self._run_tool(call, steps) for call in turn.tool_calls]
+            outcomes = []
+            for call in turn.tool_calls:
+                step = self._run_tool(call)
+                steps.append(step)
+                outcomes.append(ToolOutcome(call.id, step.output, step.is_error))
             messages.append(ToolResultsMessage(tuple(outcomes)))
 
         # Budget spent while the model still wants tools: force one tool-free turn so the read
@@ -94,23 +98,18 @@ class RunResearch:
         answer = final.text.strip() or _EMPTY_ANSWER_FALLBACK
         return self._result(question, answer, steps, model_id)
 
-    def _run_tool(self, call: ToolCall, steps: list[AgentStep]) -> ToolOutcome:
+    def _run_tool(self, call: ToolCall) -> AgentStep:
         tool = self._tools.get(call.name)
         if tool is None:
-            content = f"Unknown tool '{call.name}'. Available tools: {', '.join(self._tools)}."
-            steps.append(AgentStep(call.name, call.arguments, content, is_error=True))
-            return ToolOutcome(call.id, content, is_error=True)
+            known = ", ".join(self._tools)
+            message = f"Unknown tool '{call.name}'. Available tools: {known}."
+            return AgentStep(call.name, call.arguments, message, is_error=True)
         try:
-            output = tool.run(call.arguments)
-            is_error = False
-        except (
-            Exception
-        ) as exc:  # a tool should not raise, but never let one stall the loop
+            return AgentStep(call.name, call.arguments, tool.run(call.arguments))
+        except Exception as exc:  # a tool should not raise, but never let one stall the loop
             logger.warning("research tool %s raised: %s", call.name, exc)
-            output = f"Tool '{call.name}' failed: {exc}"
-            is_error = True
-        steps.append(AgentStep(call.name, call.arguments, output, is_error))
-        return ToolOutcome(call.id, output, is_error)
+            message = f"Tool '{call.name}' failed: {exc}"
+            return AgentStep(call.name, call.arguments, message, is_error=True)
 
     @staticmethod
     def _result(
