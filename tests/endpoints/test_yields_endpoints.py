@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import yields_endpoints as endpoints
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.yields.entities import (
+from app.stocks.market.yields.entities import (
     YieldCurve,
     YieldHistory,
     YieldObservation,

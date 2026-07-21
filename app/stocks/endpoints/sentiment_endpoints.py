@@ -2,21 +2,21 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
-from app.stocks.adapters.cnn_fear_greed_adapter import CnnFearGreedProvider
-from app.stocks.adapters.fred_vix_adapter import FredVixProvider
+from app.stocks.adapters.cnn.fear_greed_adapter import CnnFearGreedProvider
+from app.stocks.adapters.fred.vix_adapter import FredVixProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.sentiment.entities import (
+from app.stocks.market.sentiment.entities import (
     FearGreedSnapshot,
     MarketSentiment,
     VixSnapshot,
 )
-from app.stocks.sentiment.ports import FearGreedProvider, VixProvider
-from app.stocks.sentiment.schemas import (
+from app.stocks.market.sentiment.ports import FearGreedProvider, VixProvider
+from app.stocks.market.sentiment.schemas import (
     FearGreedResponse,
     MarketSentimentResponse,
     VixResponse,
 )
-from app.stocks.sentiment.use_cases import GetMarketSentiment
+from app.stocks.market.sentiment.use_cases import GetMarketSentiment
 
 router = APIRouter(tags=["market"])
 

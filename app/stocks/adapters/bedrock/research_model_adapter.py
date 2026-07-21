@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 
 from app.stocks.adapters.bedrock.cost import log_model_cost
-from app.stocks.agent.entities import (
+from app.stocks.ai.agent.entities import (
     AssistantMessage,
     Message,
     ModelTurn,
@@ -9,7 +9,7 @@ from app.stocks.agent.entities import (
     ToolSpec,
     UserMessage,
 )
-from app.stocks.agent.ports import ConversationModel
+from app.stocks.ai.agent.ports import ConversationModel
 from app.stocks.exceptions import StockDataUnavailable
 
 

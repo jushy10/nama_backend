@@ -17,8 +17,8 @@ from app.stocks.adapters.bedrock.market_summary_adapter import (
 from app.stocks.adapters.bedrock.sector_analysis_adapter import (
     BedrockSectorAnalysisProvider,
 )
-from app.stocks.charts.chart_window import ChartRange, resolve_window
-from app.stocks.analysis.entities import (
+from app.stocks.company.charts.chart_window import ChartRange, resolve_window
+from app.stocks.ai.analysis.entities import (
     Confidence,
     EarningsAnalysis,
     EarningsTrend,
@@ -38,7 +38,7 @@ from app.stocks.analysis.entities import (
     SectorMover,
     StockScorecard,
 )
-from app.stocks.analysis.ports import (
+from app.stocks.ai.analysis.ports import (
     AiAnalysisCache,
     EarningsAnalysisProvider,
     MarketSummaryProvider,
@@ -46,31 +46,31 @@ from app.stocks.analysis.ports import (
     StockScorecardCache,
     StockScorecardProvider,
 )
-from app.stocks.analysis.use_cases import (
+from app.stocks.ai.analysis.use_cases import (
     GetEarningsAnalysis,
     GetMarketSummary,
     GetSectorAnalysis,
     GetStockAnalysis,
     GetStockInfo,
 )
-from app.stocks.charts.indicators import TrendDirection, TrendReading
-from app.stocks.charts.ports import CandleProvider
-from app.stocks.charts.use_cases import (
+from app.stocks.company.charts.indicators import TrendDirection, TrendReading
+from app.stocks.company.charts.ports import CandleProvider
+from app.stocks.company.charts.use_cases import (
     GetStockCandles,
     GetStockEma,
     GetStockSupportLevels,
     GetStockTrend,
 )
-from app.stocks.earnings.annual.entities import (
+from app.stocks.company.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.stocks.earnings.annual.ports import AnnualEarningsProvider
-from app.stocks.earnings.quarterly.entities import (
+from app.stocks.company.earnings.annual.ports import AnnualEarningsProvider
+from app.stocks.company.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.endpoints.analysis_endpoints import (
     get_market_summary,
     get_sector_analysis,
@@ -100,26 +100,26 @@ from app.stocks.entities import (
     normalize_symbol,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.logo.entities import Logo
-from app.stocks.logo.ports import LogoProvider
-from app.stocks.logo.use_cases import GetStockLogo
-from app.stocks.market.entities import MarketIndexPerformance, SectorPerformance
-from app.stocks.market.ports import MarketOverviewProvider, SectorPerformanceProvider
-from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
+from app.stocks.company.logo.entities import Logo
+from app.stocks.company.logo.ports import LogoProvider
+from app.stocks.company.logo.use_cases import GetStockLogo
+from app.stocks.market.boards.entities import MarketIndexPerformance, SectorPerformance
+from app.stocks.market.boards.ports import MarketOverviewProvider, SectorPerformanceProvider
+from app.stocks.market.boards.use_cases import GetMarketOverview, GetSectorPerformance
 from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
     StockDataProvider,
     StockPerformanceProvider,
 )
-from app.stocks.recommendations.entities import (
+from app.stocks.company.recommendations.entities import (
     AnalystRecommendations,
     RecommendationTrend,
 )
-from app.stocks.recommendations.ports import RecommendationProvider
-from app.stocks.news.entities import NewsArticle, StockNews
-from app.stocks.news.repository import NewsRepository
-from app.stocks.universe.entities import (
+from app.stocks.company.recommendations.ports import RecommendationProvider
+from app.stocks.company.news.entities import NewsArticle, StockNews
+from app.stocks.company.news.repository import NewsRepository
+from app.stocks.catalog.universe.entities import (
     AnchorMetrics,
     IndustryValuation,
     MarketCapTier,
@@ -129,7 +129,7 @@ from app.stocks.universe.entities import (
     StockSearchResult,
     StockSort,
 )
-from app.stocks.universe.repository import StockSearchRepository
+from app.stocks.catalog.universe.repository import StockSearchRepository
 from app.stocks.wiring import analysis_cache_ttl
 
 

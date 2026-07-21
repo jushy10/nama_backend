@@ -5,8 +5,8 @@ from datetime import date
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.earnings.quarterly.entities import EarningsSession
-from app.stocks.earnings_calendar.entities import (
+from app.stocks.company.earnings.quarterly.entities import EarningsSession
+from app.stocks.market.earnings_calendar.entities import (
     EarningsCalendar,
     EarningsCalendarDay,
     EarningsCalendarItem,

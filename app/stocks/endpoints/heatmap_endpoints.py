@@ -4,16 +4,16 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.heatmap.entities import HeatMap, HeatMapScope
-from app.stocks.heatmap.schemas import (
+from app.stocks.market.heatmap.entities import HeatMap, HeatMapScope
+from app.stocks.market.heatmap.schemas import (
     HeatMapIndustryResponse,
     HeatMapResponse,
     HeatMapSectorResponse,
     HeatMapStockResponse,
 )
-from app.stocks.heatmap.use_cases import GetStockHeatMap
+from app.stocks.market.heatmap.use_cases import GetStockHeatMap
 from app.stocks.schemas import StockPerformanceResponse
-from app.stocks.universe.db_repository import SqlStockSearchRepository
+from app.stocks.catalog.universe.db_repository import SqlStockSearchRepository
 from app.stocks.wiring import get_provider
 
 router = APIRouter(tags=["heatmap"])

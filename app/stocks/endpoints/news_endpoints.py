@@ -4,14 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db_cached_news_adapter import DbCachedNewsProvider
-from app.stocks.adapters.yfinance_news_adapter import YfinanceNewsProvider
+from app.stocks.adapters.db.db_cached_news_adapter import DbCachedNewsProvider
+from app.stocks.adapters.yfinance.news_adapter import YfinanceNewsProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.news.db_repository import SqlNewsRepository
-from app.stocks.news.entities import NewsArticle, StockNews
-from app.stocks.news.ports import NewsProvider
-from app.stocks.news.schemas import NewsArticleResponse, StockNewsResponse
-from app.stocks.news.use_cases import GetStockNews
+from app.stocks.company.news.db_repository import SqlNewsRepository
+from app.stocks.company.news.entities import NewsArticle, StockNews
+from app.stocks.company.news.ports import NewsProvider
+from app.stocks.company.news.schemas import NewsArticleResponse, StockNewsResponse
+from app.stocks.company.news.use_cases import GetStockNews
 
 router = APIRouter(tags=["news"])
 

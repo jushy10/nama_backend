@@ -1,8 +1,8 @@
 from collections.abc import Sequence
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
-from app.stocks.etfs.entities import EtfScreenIntent, EtfSort, SortDirection
-from app.stocks.etfs.ports import EtfScreenerQueryTranslator
+from app.stocks.catalog.etfs.entities import EtfScreenIntent, EtfSort, SortDirection
+from app.stocks.catalog.etfs.ports import EtfScreenerQueryTranslator
 from app.stocks.exceptions import StockDataUnavailable
 
 _SYSTEM_PROMPT = (

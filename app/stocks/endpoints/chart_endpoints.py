@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.stocks.charts.chart_window import ChartRange, resolve_window
-from app.stocks.charts.indicators import (
+from app.stocks.company.charts.chart_window import ChartRange, resolve_window
+from app.stocks.company.charts.indicators import (
     EmaSeries,
     HorizonTrend,
     INDICATOR_NAMES,
@@ -14,7 +14,7 @@ from app.stocks.charts.indicators import (
     SupportLevelSeries,
     TrendAssessment,
 )
-from app.stocks.charts.schemas import (
+from app.stocks.company.charts.schemas import (
     CandleResponse,
     CandleSeriesResponse,
     EmaLineResponse,
@@ -29,14 +29,14 @@ from app.stocks.charts.schemas import (
     SupportLevelsResponse,
     TrendResponse,
 )
-from app.stocks.charts.use_cases import (
+from app.stocks.company.charts.use_cases import (
     GetStockCandles,
     GetStockEma,
     GetStockIndicators,
     GetStockSupportLevels,
     GetStockTrend,
 )
-from app.stocks.charts.ports import CandleProvider
+from app.stocks.company.charts.ports import CandleProvider
 from app.stocks.entities import CandleSeries, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.wiring import get_price_provider

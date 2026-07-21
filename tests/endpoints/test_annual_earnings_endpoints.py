@@ -3,7 +3,7 @@ from datetime import date
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.earnings.annual.entities import (
+from app.stocks.company.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )

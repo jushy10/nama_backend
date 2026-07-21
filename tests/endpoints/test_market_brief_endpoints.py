@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.brief.entities import BriefTone, MarketBrief, MarketBriefSection
+from app.stocks.ai.brief.entities import BriefTone, MarketBrief, MarketBriefSection
 from app.stocks.endpoints import market_brief_endpoints as endpoints
 
 

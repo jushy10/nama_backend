@@ -2,13 +2,13 @@ import logging
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
-from app.stocks.analysis.entities import (
+from app.stocks.ai.analysis.entities import (
     MarketTone,
     SectorAnalysis,
     SectorContext,
     SectorHighlight,
 )
-from app.stocks.analysis.ports import SectorAnalysisProvider
+from app.stocks.ai.analysis.ports import SectorAnalysisProvider
 from app.stocks.exceptions import StockDataUnavailable
 
 # The key the adapter reports failures under — there is no single symbol here, so

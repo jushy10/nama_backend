@@ -4,35 +4,35 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db_cached_rating_changes_adapter import (
+from app.stocks.adapters.db.db_cached_rating_changes_adapter import (
     DbCachedRatingChangeProvider,
 )
-from app.stocks.adapters.db_cached_recommendations_adapter import (
+from app.stocks.adapters.db.db_cached_recommendations_adapter import (
     DbCachedRecommendationProvider,
 )
-from app.stocks.adapters.yfinance_rating_changes_adapter import (
+from app.stocks.adapters.yfinance.rating_changes_adapter import (
     YfinanceRatingChangeProvider,
 )
-from app.stocks.adapters.yfinance_recommendations_adapter import (
+from app.stocks.adapters.yfinance.recommendations_adapter import (
     YfinanceRecommendationProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.recommendations.db_repository import (
+from app.stocks.company.recommendations.db_repository import (
     SqlRatingChangesRepository,
     SqlRecommendationsRepository,
 )
-from app.stocks.recommendations.entities import (
+from app.stocks.company.recommendations.entities import (
     AnalystPriceTargets,
     AnalystRecommendations,
     FirmRating,
     RatingChange,
     RecommendationTrend,
 )
-from app.stocks.recommendations.ports import (
+from app.stocks.company.recommendations.ports import (
     RatingChangeProvider,
     RecommendationProvider,
 )
-from app.stocks.recommendations.schemas import (
+from app.stocks.company.recommendations.schemas import (
     AnalystInfoResponse,
     AnalystPriceTargetsResponse,
     AnalystRecommendationsBlock,
@@ -40,7 +40,7 @@ from app.stocks.recommendations.schemas import (
     RecommendationTrendResponse,
     TopFirmRatingResponse,
 )
-from app.stocks.recommendations.use_cases import AnalystInfo, GetStockAnalystInfo
+from app.stocks.company.recommendations.use_cases import AnalystInfo, GetStockAnalystInfo
 
 router = APIRouter(tags=["analyst-info"])
 

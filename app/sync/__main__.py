@@ -4,32 +4,32 @@ import logging
 import sys
 from collections.abc import Callable, Sequence
 
-from app.stocks.endpoints.cron_annual_earnings_endpoints import run_annual_earnings_sync
-from app.stocks.endpoints.cron_etf_endpoints import run_etf_sync
-from app.stocks.endpoints.cron_fundamentals_endpoints import run_fundamentals_sync
-from app.stocks.endpoints.cron_index_membership_endpoints import (
+from app.stocks.endpoints.cron.annual_earnings_endpoints import run_annual_earnings_sync
+from app.stocks.endpoints.cron.etf_endpoints import run_etf_sync
+from app.stocks.endpoints.cron.fundamentals_endpoints import run_fundamentals_sync
+from app.stocks.endpoints.cron.index_membership_endpoints import (
     run_index_membership_sync,
 )
-from app.stocks.endpoints.cron_congress_endpoints import run_congress_sync
-from app.stocks.endpoints.cron_market_brief_endpoints import run_market_brief_sync
-from app.stocks.endpoints.cron_insider_transactions_endpoints import (
+from app.stocks.endpoints.cron.congress_endpoints import run_congress_sync
+from app.stocks.endpoints.cron.market_brief_endpoints import run_market_brief_sync
+from app.stocks.endpoints.cron.insider_transactions_endpoints import (
     run_insider_transactions_sync,
 )
-from app.stocks.endpoints.cron_institutional_ownership_endpoints import (
+from app.stocks.endpoints.cron.institutional_ownership_endpoints import (
     run_institutional_ownership_sync,
 )
-from app.stocks.endpoints.cron_news_endpoints import run_news_sync
-from app.stocks.endpoints.cron_performance_endpoints import (
+from app.stocks.endpoints.cron.news_endpoints import run_news_sync
+from app.stocks.endpoints.cron.performance_endpoints import (
     run_stock_performance_sync,
 )
-from app.stocks.endpoints.cron_quarterly_earnings_endpoints import (
+from app.stocks.endpoints.cron.quarterly_earnings_endpoints import (
     run_quarterly_earnings_sync,
 )
-from app.stocks.endpoints.cron_recommendations_endpoints import run_recommendations_sync
-from app.stocks.endpoints.cron_revenue_segments_endpoints import (
+from app.stocks.endpoints.cron.recommendations_endpoints import run_recommendations_sync
+from app.stocks.endpoints.cron.revenue_segments_endpoints import (
     run_revenue_segments_sync,
 )
-from app.stocks.endpoints.cron_universe_endpoints import run_universe_sync
+from app.stocks.endpoints.cron.universe_endpoints import run_universe_sync
 
 logger = logging.getLogger("app.sync")
 

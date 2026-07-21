@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
-from app.stocks.brief.entities import (
+from app.stocks.ai.brief.entities import (
     BriefHeadline,
     BriefIndexMove,
     BriefMover,
@@ -13,7 +13,7 @@ from app.stocks.brief.entities import (
     MarketBriefContext,
     MarketBriefSection,
 )
-from app.stocks.brief.ports import MarketBriefProvider
+from app.stocks.ai.brief.ports import MarketBriefProvider
 from app.stocks.exceptions import StockDataUnavailable
 
 # The key the adapter reports failures under — there is no single symbol here, so the market

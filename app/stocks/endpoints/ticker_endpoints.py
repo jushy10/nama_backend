@@ -5,13 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.yfinance_eps_history_adapter import YfinanceEpsHistoryProvider
-from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.adapters.yfinance.eps_history_adapter import YfinanceEpsHistoryProvider
+from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     get_quarterly_earnings_provider,
 )
 from app.stocks.entities import Quote, StockPerformance
-from app.stocks.etfs.db_repository import SqlEtfLookupRepository
+from app.stocks.catalog.etfs.db_repository import SqlEtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import AnalystEstimatesProvider, StockPerformanceProvider
 from app.stocks.adapters.bedrock.screener_query_adapter import (
@@ -23,10 +23,10 @@ from app.stocks.wiring import (
     get_price_provider,
 )
 from app.stocks.schemas import StockPerformanceResponse
-from app.stocks.ticker.db_repository import SqlTickerRepository
-from app.stocks.ticker.entities import PeHistory, PeHistoryStats, TickerOptionsMetrics
-from app.stocks.ticker.ports import OptionChainProvider
-from app.stocks.ticker.schemas import (
+from app.stocks.company.ticker.db_repository import SqlTickerRepository
+from app.stocks.company.ticker.entities import PeHistory, PeHistoryStats, TickerOptionsMetrics
+from app.stocks.company.ticker.ports import OptionChainProvider
+from app.stocks.company.ticker.schemas import (
     DividendResponse,
     ExtendedHoursResponse,
     OptionsMetricsResponse,
@@ -37,14 +37,14 @@ from app.stocks.ticker.schemas import (
     TickerMetricsResponse,
     TickerTypeResponse,
 )
-from app.stocks.ticker.use_cases import (
+from app.stocks.company.ticker.use_cases import (
     ClassifyTicker,
     GetStockPeHistory,
     GetTickerCard,
     TickerCard,
 )
-from app.stocks.universe.db_repository import SqlStockSearchRepository
-from app.stocks.universe.entities import (
+from app.stocks.catalog.universe.db_repository import SqlStockSearchRepository
+from app.stocks.catalog.universe.entities import (
     Classifications,
     IndustryValuation,
     MarketCapTier,
@@ -55,8 +55,8 @@ from app.stocks.universe.entities import (
     StockSearchPage,
     StockSort,
 )
-from app.stocks.universe.ports import ScreenerQueryTranslator
-from app.stocks.universe.schemas import (
+from app.stocks.catalog.universe.ports import ScreenerQueryTranslator
+from app.stocks.catalog.universe.schemas import (
     AiScreenInterpretationResponse,
     AiScreenResponse,
     ClassificationsResponse,
@@ -67,7 +67,7 @@ from app.stocks.universe.schemas import (
     StockSearchItemResponse,
     StockSearchResponse,
 )
-from app.stocks.universe.use_cases import (
+from app.stocks.catalog.universe.use_cases import (
     AiScreenStocks,
     GetIndustryValuation,
     GetPeerComparison,

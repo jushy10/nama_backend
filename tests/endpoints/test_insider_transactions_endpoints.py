@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import insider_transactions_endpoints as endpoints
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.insider_transactions.entities import (
+from app.stocks.company.insider_transactions.entities import (
     InsiderActivity,
     InsiderTransaction,
 )

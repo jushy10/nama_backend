@@ -4,23 +4,23 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db_cached_annual_earnings_adapter import (
+from app.stocks.adapters.db.db_cached_annual_earnings_adapter import (
     DbCachedAnnualEarningsProvider,
 )
-from app.stocks.adapters.yfinance_annual_earnings_adapter import (
+from app.stocks.adapters.yfinance.annual_earnings_adapter import (
     YfinanceAnnualEarningsProvider,
 )
-from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
-from app.stocks.earnings.annual.entities import (
+from app.stocks.company.earnings.annual.db_repository import SqlAnnualEarningsRepository
+from app.stocks.company.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.stocks.earnings.annual.ports import AnnualEarningsProvider
-from app.stocks.earnings.annual.schemas import (
+from app.stocks.company.earnings.annual.ports import AnnualEarningsProvider
+from app.stocks.company.earnings.annual.schemas import (
     AnnualEarningsResponse,
     AnnualEarningsYearResponse,
 )
-from app.stocks.earnings.annual.use_cases import GetAnnualEarnings
+from app.stocks.company.earnings.annual.use_cases import GetAnnualEarnings
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 
 router = APIRouter(tags=["annual-earnings"])

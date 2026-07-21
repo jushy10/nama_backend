@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import analyst_endpoints as endpoints
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.recommendations.entities import (
+from app.stocks.company.recommendations.entities import (
     AnalystPriceTargets,
     AnalystRatingChanges,
     AnalystRecommendations,
@@ -13,7 +13,7 @@ from app.stocks.recommendations.entities import (
     RatingChange,
     RecommendationTrend,
 )
-from app.stocks.recommendations.use_cases import AnalystInfo
+from app.stocks.company.recommendations.use_cases import AnalystInfo
 
 
 class _FakeUseCase:

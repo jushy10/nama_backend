@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import chart_endpoints as endpoints
-from app.stocks.charts.ports import CandleProvider
+from app.stocks.company.charts.ports import CandleProvider
 from app.stocks.entities import Candle, CandleSeries, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.wiring import get_price_provider

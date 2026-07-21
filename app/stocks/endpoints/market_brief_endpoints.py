@@ -6,10 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.brief.db_repository import SqlMarketBriefRepository
-from app.stocks.brief.entities import MarketBrief
-from app.stocks.brief.schemas import MarketBriefResponse, MarketBriefSectionResponse
-from app.stocks.brief.use_cases import GetDailyBrief
+from app.stocks.ai.brief.db_repository import SqlMarketBriefRepository
+from app.stocks.ai.brief.entities import MarketBrief
+from app.stocks.ai.brief.schemas import MarketBriefResponse, MarketBriefSectionResponse
+from app.stocks.ai.brief.use_cases import GetDailyBrief
 
 router = APIRouter(tags=["market-brief"])
 

@@ -137,7 +137,7 @@ module "logodev_token" {
 }
 
 # Shared bearer token guarding the /internal/*/sync cron endpoints (require_cron_token in
-# app/stocks/endpoints/cron_auth.py). The guard is fail-closed, so until the real value is set
+# app/stocks/endpoints/cron/auth.py). The guard is fail-closed, so until the real value is set
 # out of band the module's placeholder is the accepted token — overwrite it with a long random
 # string (the endpoints stay locked to whatever this holds). The sync workflows do NOT use these
 # HTTP endpoints (they run one-off ECS tasks via `python -m app.sync`), so this only gates a
@@ -205,7 +205,7 @@ module "app" {
   apigw_throttle_burst_limit = 200
 
   # Injected as the env vars the app reads (app/stocks/router.py, plus the cron
-  # guard in app/stocks/endpoints/cron_auth.py): the Alpaca keys (required), the
+  # guard in app/stocks/endpoints/cron/auth.py): the Alpaca keys (required), the
   # Logo.dev token (required for the logo endpoint), and the cron sync token (guards
   # the /internal/*/sync endpoints). These ride onto BOTH task defs; the CLI sync
   # task ignores the cron token (it calls the runners directly, not over HTTP), which

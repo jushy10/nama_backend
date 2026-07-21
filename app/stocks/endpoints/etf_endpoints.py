@@ -6,16 +6,16 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.stocks.adapters.bedrock.etf_analysis_adapter import BedrockEtfAnalysisProvider
-from app.stocks.adapters.yfinance_etf_profile_adapter import (
+from app.stocks.adapters.yfinance.etf_profile_adapter import (
     YfinanceEtfProfileProvider,
 )
-from app.stocks.analysis.db_repository import SqlInvestmentAnalysisCache
-from app.stocks.analysis.entities import InvestmentAnalysis
-from app.stocks.etfs.db_repository import (
+from app.stocks.ai.analysis.db_repository import SqlInvestmentAnalysisCache
+from app.stocks.ai.analysis.entities import InvestmentAnalysis
+from app.stocks.catalog.etfs.db_repository import (
     SqlEtfLookupRepository,
     SqlEtfSearchRepository,
 )
-from app.stocks.etfs.entities import (
+from app.stocks.catalog.etfs.entities import (
     EtfCategories,
     EtfDetail,
     EtfScreenIntent,
@@ -23,8 +23,8 @@ from app.stocks.etfs.entities import (
     EtfSort,
     SortDirection,
 )
-from app.stocks.etfs.ports import EtfAnalysisProvider, EtfScreenerQueryTranslator
-from app.stocks.etfs.schemas import (
+from app.stocks.catalog.etfs.ports import EtfAnalysisProvider, EtfScreenerQueryTranslator
+from app.stocks.catalog.etfs.schemas import (
     AiEtfScreenInterpretationResponse,
     AiEtfScreenResponse,
     EtfAnalysisResponse,
@@ -38,7 +38,7 @@ from app.stocks.etfs.schemas import (
     EtfSearchResponse,
     EtfSectorWeightResponse,
 )
-from app.stocks.etfs.use_cases import (
+from app.stocks.catalog.etfs.use_cases import (
     AiScreenEtfs,
     GetEtfAnalysis,
     GetEtfDetail,
@@ -46,7 +46,7 @@ from app.stocks.etfs.use_cases import (
     SearchEtfs,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.analysis.ports import InvestmentAnalysisCache
+from app.stocks.ai.analysis.ports import InvestmentAnalysisCache
 from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,

@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
-from app.stocks.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
-from app.stocks.etfs.entities import EtfDetail
-from app.stocks.etfs.ports import EtfAnalysisProvider
+from app.stocks.ai.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
+from app.stocks.catalog.etfs.entities import EtfDetail
+from app.stocks.catalog.etfs.ports import EtfAnalysisProvider
 from app.stocks.exceptions import StockDataUnavailable
 
 # A single forced tool is how the model is pinned to structured output: Claude must call

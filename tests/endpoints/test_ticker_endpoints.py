@@ -11,9 +11,9 @@ from app.stocks.entities import (
     StockPerformance,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ticker.entities import TickerOptionsMetrics, TickerValuation
-from app.stocks.ticker.use_cases import TickerCard, TickerClassification
-from app.stocks.universe.entities import (
+from app.stocks.company.ticker.entities import TickerOptionsMetrics, TickerValuation
+from app.stocks.company.ticker.use_cases import TickerCard, TickerClassification
+from app.stocks.catalog.universe.entities import (
     Classifications,
     IndustryValuation,
     MarketCapTier,

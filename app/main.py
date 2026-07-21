@@ -12,20 +12,20 @@ from app.rate_limit import limiter
 from app.stocks.endpoints.annual_earnings_endpoints import (
     router as annual_earnings_router,
 )
-from app.stocks.endpoints.cron_annual_earnings_endpoints import (
+from app.stocks.endpoints.cron.annual_earnings_endpoints import (
     router as annual_earnings_cron_router,
 )
-from app.stocks.endpoints.cron_quarterly_earnings_endpoints import (
+from app.stocks.endpoints.cron.quarterly_earnings_endpoints import (
     router as quarterly_earnings_cron_router,
 )
-from app.stocks.endpoints.cron_recommendations_endpoints import (
+from app.stocks.endpoints.cron.recommendations_endpoints import (
     router as recommendations_cron_router,
 )
-from app.stocks.endpoints.cron_news_endpoints import router as news_cron_router
-from app.stocks.endpoints.cron_fundamentals_endpoints import (
+from app.stocks.endpoints.cron.news_endpoints import router as news_cron_router
+from app.stocks.endpoints.cron.fundamentals_endpoints import (
     router as fundamentals_cron_router,
 )
-from app.stocks.endpoints.cron_performance_endpoints import (
+from app.stocks.endpoints.cron.performance_endpoints import (
     router as stock_performance_cron_router,
 )
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
@@ -33,34 +33,34 @@ from app.stocks.endpoints.quarterly_earnings_endpoints import (
 )
 from app.stocks.endpoints.analyst_endpoints import router as analyst_router
 from app.stocks.endpoints.news_endpoints import router as news_router
-from app.stocks.endpoints.cron_universe_endpoints import (
+from app.stocks.endpoints.cron.universe_endpoints import (
     router as universe_cron_router,
 )
-from app.stocks.endpoints.cron_index_membership_endpoints import (
+from app.stocks.endpoints.cron.index_membership_endpoints import (
     router as index_membership_cron_router,
 )
-from app.stocks.endpoints.cron_etf_endpoints import router as etf_cron_router
+from app.stocks.endpoints.cron.etf_endpoints import router as etf_cron_router
 from app.stocks.endpoints.etf_endpoints import router as etf_router
 from app.stocks.endpoints.revenue_segments_endpoints import (
     router as revenue_segments_router,
 )
-from app.stocks.endpoints.cron_revenue_segments_endpoints import (
+from app.stocks.endpoints.cron.revenue_segments_endpoints import (
     router as revenue_segments_cron_router,
 )
 from app.stocks.endpoints.insider_transactions_endpoints import (
     router as insider_transactions_router,
 )
-from app.stocks.endpoints.cron_insider_transactions_endpoints import (
+from app.stocks.endpoints.cron.insider_transactions_endpoints import (
     router as insider_transactions_cron_router,
 )
 from app.stocks.endpoints.institutional_ownership_endpoints import (
     router as institutional_ownership_router,
 )
-from app.stocks.endpoints.cron_institutional_ownership_endpoints import (
+from app.stocks.endpoints.cron.institutional_ownership_endpoints import (
     router as institutional_ownership_cron_router,
 )
 from app.stocks.endpoints.congress_endpoints import router as congress_router
-from app.stocks.endpoints.cron_congress_endpoints import (
+from app.stocks.endpoints.cron.congress_endpoints import (
     router as congress_cron_router,
 )
 from app.stocks.endpoints.ticker_endpoints import router as ticker_router
@@ -73,7 +73,7 @@ from app.stocks.endpoints.market_endpoints import router as market_router
 from app.stocks.endpoints.yields_endpoints import router as yields_router
 from app.stocks.endpoints.sentiment_endpoints import router as sentiment_router
 from app.stocks.endpoints.market_brief_endpoints import router as market_brief_router
-from app.stocks.endpoints.cron_market_brief_endpoints import (
+from app.stocks.endpoints.cron.market_brief_endpoints import (
     router as market_brief_cron_router,
 )
 from app.stocks.endpoints.earnings_calendar_endpoints import (
@@ -192,11 +192,11 @@ app.include_router(insider_transactions_router)
 app.include_router(institutional_ownership_router)
 # The quarterly-earnings refresh cron endpoint (POST /internal/earnings/quarterly/sync);
 # it drives the SyncQuarterlyEarnings use case out of band. See
-# app/stocks/endpoints/cron_quarterly_earnings_endpoints.py.
+# app/stocks/endpoints/cron/quarterly_earnings_endpoints.py.
 app.include_router(quarterly_earnings_cron_router)
 # The annual-earnings refresh cron endpoint (POST /internal/earnings/annual/sync); it
 # drives the SyncAnnualEarnings use case out of band. See
-# app/stocks/endpoints/cron_annual_earnings_endpoints.py.
+# app/stocks/endpoints/cron/annual_earnings_endpoints.py.
 app.include_router(annual_earnings_cron_router)
 # The ticker endpoints (app/stocks/endpoints/ticker_endpoints.py): the card
 # GET /stocks/ticker/{ticker} — live quote + day move, name, exchange (DB-backed) and
@@ -216,27 +216,27 @@ app.include_router(ticker_router)
 app.include_router(options_router)
 # The recommendations refresh cron endpoint (POST /internal/recommendations/sync); it
 # drives the SyncRecommendations use case out of band. See
-# app/stocks/endpoints/cron_recommendations_endpoints.py.
+# app/stocks/endpoints/cron/recommendations_endpoints.py.
 app.include_router(recommendations_cron_router)
 # The news refresh cron endpoint (POST /internal/news/sync); it drives the SyncStockNews
 # use case out of band (yfinance -> DB), seeding + refreshing each stock's recent
-# headlines. See app/stocks/endpoints/cron_news_endpoints.py.
+# headlines. See app/stocks/endpoints/cron/news_endpoints.py.
 app.include_router(news_cron_router)
 # The fundamentals refresh cron endpoint (POST /internal/fundamentals/sync); it drives the
 # SyncFundamentals use case out of band (yfinance .info -> stocks anchor), seeding + refreshing
 # each stock's trailing margins/ROE/liquidity/leverage/beta + the per-share P/B / P/S / dividend
-# inputs. See app/stocks/endpoints/cron_fundamentals_endpoints.py.
+# inputs. See app/stocks/endpoints/cron/fundamentals_endpoints.py.
 app.include_router(fundamentals_cron_router)
 # The stock-performance refresh cron endpoint (POST /internal/performance/sync); it drives the
 # SyncStockPerformance use case out of band (Alpaca daily bars -> stocks anchor), materializing
 # each screened stock's trailing-window returns (1W..1Y, YTD) so the heat map reads them DB-only
 # instead of recomputing a year of bars per index on every request. See
-# app/stocks/endpoints/cron_performance_endpoints.py.
+# app/stocks/endpoints/cron/performance_endpoints.py.
 app.include_router(stock_performance_cron_router)
 # The institutional-ownership refresh cron endpoint (POST /internal/institutional-ownership/sync); it
 # drives the SyncInstitutionalOwnership use case out of band (yfinance 13F holders -> DB), seeding +
 # refreshing each stock's top institutional/mutual-fund holders and the ownership breakdown. See
-# app/stocks/endpoints/cron_institutional_ownership_endpoints.py.
+# app/stocks/endpoints/cron/institutional_ownership_endpoints.py.
 app.include_router(institutional_ownership_cron_router)
 # The Congressional-trades reads: GET /stocks/ticker/{ticker}/congress-trades (a stock's recent
 # House/Senate disclosures with a net buy-vs-sell summary) and GET /market/congress-activity (a
@@ -246,29 +246,29 @@ app.include_router(institutional_ownership_cron_router)
 app.include_router(congress_router)
 # The revenue-segments refresh cron endpoint (POST /internal/revenue-segments/sync); it drives
 # the SyncRevenueSegments use case out of band (SEC EDGAR 10-K -> DB), seeding + refreshing each
-# stock's revenue disaggregation. See app/stocks/endpoints/cron_revenue_segments_endpoints.py.
+# stock's revenue disaggregation. See app/stocks/endpoints/cron/revenue_segments_endpoints.py.
 app.include_router(revenue_segments_cron_router)
 # The insider-transactions refresh cron endpoint (POST /internal/insider-transactions/sync); it
 # drives the SyncInsiderTransactions use case out of band (SEC EDGAR Form 4 -> DB), seeding +
 # refreshing each stock's recent insider buys/sells. Weekly; the read cache is plain read-through
 # (no TTL) so a synced stock is served from the DB and never walks the filings in a user request.
-# See app/stocks/endpoints/cron_insider_transactions_endpoints.py.
+# See app/stocks/endpoints/cron/insider_transactions_endpoints.py.
 app.include_router(insider_transactions_cron_router)
 # The Congressional-trades refresh cron endpoint (POST /internal/congress/sync); it drives the
 # SyncCongressTrades use case out of band (keyless House/Senate stock-watcher feeds -> DB), fetching
 # the whole market-wide feed once and distributing it across the anchor, insert-only. Weekly. See
-# app/stocks/endpoints/cron_congress_endpoints.py.
+# app/stocks/endpoints/cron/congress_endpoints.py.
 app.include_router(congress_cron_router)
 # The universe refresh cron endpoint (POST /internal/universe/sync); it drives the
 # SyncUniverse use case out of band (yfinance screen -> stocks anchor, then per-ticker
 # sector/industry enrichment), populating the stocks table with the ≥$1B US universe.
 # Fire-and-forget like the earnings crons (202 + background thread). The read/search
-# endpoint over it is deferred. See app/stocks/endpoints/cron_universe_endpoints.py.
+# endpoint over it is deferred. See app/stocks/endpoints/cron/universe_endpoints.py.
 app.include_router(universe_cron_router)
 # The index-membership refresh cron endpoint (POST /internal/index-membership/sync); it drives
 # the SyncIndexMembership use case out of band (Finnhub -> stocks anchor), reconciling the
 # in_sp500 / in_nasdaq100 membership flags. See
-# app/stocks/endpoints/cron_index_membership_endpoints.py.
+# app/stocks/endpoints/cron/index_membership_endpoints.py.
 app.include_router(index_membership_cron_router)
 # The ETF read endpoints (GET /stocks/etfs — a paginated search/filter/sort over the screened
 # top-US-ETF set: name/ticker substring, a category/type filter, sort by net assets/AUM or
@@ -279,7 +279,7 @@ app.include_router(etf_router)
 # of band (yfinance ETF screen, US funds with AUM >= $1B -> etfs table, then per-ticker category
 # enrichment).
 # Fire-and-forget like the other crons (202 + background thread). See
-# app/stocks/endpoints/cron_etf_endpoints.py.
+# app/stocks/endpoints/cron/etf_endpoints.py.
 app.include_router(etf_cron_router)
 # The market heat map (GET /market/heatmap): a Finviz-style treemap of an index (S&P 500 /
 # Nasdaq-100) — every stock a tile sized by market cap and coloured by the day's change, grouped
@@ -294,7 +294,7 @@ app.include_router(heatmap_router)
 app.include_router(market_brief_router)
 # The market-brief generation cron (POST /internal/market-brief/sync): gathers the day's
 # whole-market reads, asks the model for a brief, and upserts today's row. Fire-and-forget like
-# the other crons. See app/stocks/endpoints/cron_market_brief_endpoints.py.
+# the other crons. See app/stocks/endpoints/cron/market_brief_endpoints.py.
 app.include_router(market_brief_cron_router)
 # The market-wide earnings calendar (GET /market/earnings-calendar?from=&to=): which companies
 # are scheduled to report on which upcoming days, aggregated across the universe from the

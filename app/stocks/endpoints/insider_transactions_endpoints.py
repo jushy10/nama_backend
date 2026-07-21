@@ -2,24 +2,24 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db_only_insider_transactions_adapter import (
+from app.stocks.adapters.db.db_only_insider_transactions_adapter import (
     DbOnlyInsiderTransactionsProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.insider_transactions.db_repository import (
+from app.stocks.company.insider_transactions.db_repository import (
     SqlInsiderTransactionsRepository,
 )
-from app.stocks.insider_transactions.entities import (
+from app.stocks.company.insider_transactions.entities import (
     InsiderActivity,
     InsiderTransaction,
 )
-from app.stocks.insider_transactions.ports import InsiderTransactionsProvider
-from app.stocks.insider_transactions.schemas import (
+from app.stocks.company.insider_transactions.ports import InsiderTransactionsProvider
+from app.stocks.company.insider_transactions.schemas import (
     InsiderActivityResponse,
     InsiderSummaryResponse,
     InsiderTransactionResponse,
 )
-from app.stocks.insider_transactions.use_cases import GetInsiderTransactions
+from app.stocks.company.insider_transactions.use_cases import GetInsiderTransactions
 
 router = APIRouter(tags=["insider-transactions"])
 

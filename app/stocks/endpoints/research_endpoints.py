@@ -7,21 +7,21 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.rate_limit import limiter
 from app.stocks.adapters.bedrock.research_model_adapter import BedrockConversationModel
-from app.stocks.adapters.cnn_fear_greed_adapter import CnnFearGreedProvider
-from app.stocks.adapters.fred_vix_adapter import FredVixProvider
-from app.stocks.agent.entities import ResearchResult
-from app.stocks.agent.ports import ConversationModel
-from app.stocks.agent.schemas import (
+from app.stocks.adapters.cnn.fear_greed_adapter import CnnFearGreedProvider
+from app.stocks.adapters.fred.vix_adapter import FredVixProvider
+from app.stocks.ai.agent.entities import ResearchResult
+from app.stocks.ai.agent.ports import ConversationModel
+from app.stocks.ai.agent.schemas import (
     AgentStepResponse,
     ResearchRequest,
     ResearchResponse,
 )
-from app.stocks.agent.tools import MarketSentimentTool, SearchStocksTool
-from app.stocks.agent.use_cases import RunResearch
+from app.stocks.ai.agent.tools import MarketSentimentTool, SearchStocksTool
+from app.stocks.ai.agent.use_cases import RunResearch
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.sentiment.use_cases import GetMarketSentiment
-from app.stocks.universe.db_repository import SqlStockSearchRepository
-from app.stocks.universe.use_cases import SearchStocks
+from app.stocks.market.sentiment.use_cases import GetMarketSentiment
+from app.stocks.catalog.universe.db_repository import SqlStockSearchRepository
+from app.stocks.catalog.universe.use_cases import SearchStocks
 
 router = APIRouter(tags=["stocks"])
 
@@ -70,7 +70,7 @@ def get_run_research(
 ) -> RunResearch:
     # Build the agent's tools from the app's own read use cases: the universe screen (a pure DB
     # read, bound to this request's session) and the live market-sentiment read. Adding a tool
-    # is one more entry in this list plus its Tool subclass in app/stocks/agent/tools.py.
+    # is one more entry in this list plus its Tool subclass in app/stocks/ai/agent/tools.py.
     tools = [
         SearchStocksTool(SearchStocks(SqlStockSearchRepository(db))),
         MarketSentimentTool(sentiment),

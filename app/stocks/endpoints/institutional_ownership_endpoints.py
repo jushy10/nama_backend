@@ -4,28 +4,28 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db_cached_institutional_holders_adapter import (
+from app.stocks.adapters.db.db_cached_institutional_holders_adapter import (
     DbCachedInstitutionalOwnershipProvider,
 )
-from app.stocks.adapters.yfinance_institutional_holders_adapter import (
+from app.stocks.adapters.yfinance.institutional_holders_adapter import (
     YfinanceInstitutionalHoldersProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.institutional_ownership.db_repository import (
+from app.stocks.company.institutional_ownership.db_repository import (
     SqlInstitutionalOwnershipRepository,
 )
-from app.stocks.institutional_ownership.entities import (
+from app.stocks.company.institutional_ownership.entities import (
     InstitutionalHolder,
     InstitutionalOwnership,
 )
-from app.stocks.institutional_ownership.ports import InstitutionalOwnershipProvider
-from app.stocks.institutional_ownership.schemas import (
+from app.stocks.company.institutional_ownership.ports import InstitutionalOwnershipProvider
+from app.stocks.company.institutional_ownership.schemas import (
     HolderFlowResponse,
     InstitutionalHolderResponse,
     InstitutionalOwnershipResponse,
     OwnershipBreakdownResponse,
 )
-from app.stocks.institutional_ownership.use_cases import GetInstitutionalOwnership
+from app.stocks.company.institutional_ownership.use_cases import GetInstitutionalOwnership
 
 router = APIRouter(tags=["institutional-ownership"])
 
