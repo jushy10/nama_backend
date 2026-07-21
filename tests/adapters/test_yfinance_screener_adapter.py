@@ -1,11 +1,3 @@
-"""Unit tests for the yfinance screener adapter (yf.screen + EquityQuery).
-
-No network: the per-page screen fetch is swapped for a fake returning canned pages. Verifies
-quotes map to ``ScreenedStock`` (exchange code -> friendly name, name fallback, sector always
-None, regular-market price kept when positive), the market-cap floor + bad rows filter,
-pagination stops at ``total``, and yfinance / payload failures become domain errors.
-"""
-
 import pytest
 
 from app.stocks.adapters.yfinance_screener_adapter import YfinanceScreenerProvider
@@ -14,9 +6,6 @@ from app.stocks.universe.entities import ScreenedStock
 
 
 class FakePages:
-    """A fake screen-page fetch: returns canned pages by offset (or a fixed payload / error),
-    and records the (min_market_cap, offset, size) of every call."""
-
     def __init__(self, pages=None, *, error=None, payload=None):
         self._pages = pages or []
         self._error = error

@@ -1,23 +1,3 @@
-"""HTTP API for reading a stock's insider (Form 4) transactions.
-
-``GET /stocks/ticker/{ticker}/insider-transactions`` — the read endpoint for the
-insider-transactions slice: a stock's recent SEC Form 4 buys and sells, newest first, each
-flagged as an open-market purchase (``P``) / sale (``S``) vs. the compensation/mechanics noise a
-Form 4 also reports, with a net buy-vs-sell ``summary``. ``?open_market_only=true`` narrows the
-feed to just the P/S conviction trades (the summary always reflects the full open-market rollup).
-Grouped under the ``/stocks/ticker/{ticker}`` resource (like the ticker card and analyst-info),
-since it's a per-ticker card the FE renders. Controller + presenter + wiring, the
-composition-root way, sitting in ``app/stocks/endpoints/``.
-
-The read is **DB-only**: it serves the stored feed straight from the database and never fetches
-live from SEC on a read. Keeping the store current is entirely the weekly
-``sync-insider-transactions`` cron's job. A symbol the cron hasn't seeded yet reads as an empty
-list — the same best-effort empty a stock with no recent insider activity yields — rather than
-paying the multi-request Form 4 walk inside a user request (that walk lives only in the cron now).
-This is the ``DbOnlyInsiderTransactionsProvider``, built per request over the request session; the
-live SEC provider backs only the cron. No credential is needed, so the endpoint is always wired.
-"""
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
@@ -81,8 +61,6 @@ def _present_transaction(txn: InsiderTransaction) -> InsiderTransactionResponse:
 def _present(
     activity: InsiderActivity, *, open_market_only: bool
 ) -> InsiderActivityResponse:
-    """Presenter: insider-activity entity -> HTTP response DTO. The ``summary`` always reflects
-    the full open-market rollup; ``open_market_only`` only narrows the transaction list."""
     summary = activity.summary
     txns = activity.open_market if open_market_only else activity.transactions
     return InsiderActivityResponse(

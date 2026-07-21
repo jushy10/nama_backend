@@ -1,12 +1,3 @@
-"""Unit tests for the yfinance recommendations adapter.
-
-No network: a fake Ticker (canned pandas frames) is injected through the factory, and
-"today" is pinned so the relative month labels resolve deterministically. Verifies the
-adapter anchors Yahoo's ``0m``/``-1m``/… labels on the current month, maps the stance
-counts, orders newest-first, treats an uncovered symbol as empty coverage (not an error),
-and turns vendor failures into domain errors.
-"""
-
 from datetime import date
 
 import pandas as pd

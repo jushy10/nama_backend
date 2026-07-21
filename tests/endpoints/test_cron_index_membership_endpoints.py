@@ -1,16 +1,3 @@
-"""Tests for the index-membership cron endpoint (POST /internal/index-membership/sync).
-
-Offline: a fake sync runner is injected through dependency_overrides, so this checks only the
-controller — it accepts a trigger, runs the reconcile in the background, and guards against
-overlapping runs — without touching Wikipedia or the database. The Wikipedia source is keyless,
-so (unlike the old Finnhub wiring) there's no key gate: the runner is always available. There's
-no stalest-N limit here, so the endpoint passes 0 to the shared helper.
-
-The reconcile runs on a daemon thread, so the test that expects it to run drains it first: the
-endpoint holds ``_sync_lock`` from acceptance until the background thread finishes, so waiting to
-re-acquire the lock is a deterministic "reconcile done" barrier.
-"""
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -19,9 +6,6 @@ from app.stocks.index_membership.use_cases import IndexMembershipSyncReport
 
 
 class _FakeRunner:
-    """Stands in for the real sync runner; records the (ignored) limit it was called with and
-    runs instantly, so the background reconcile finishes at once."""
-
     def __init__(self, report: IndexMembershipSyncReport) -> None:
         self._report = report
         self.calls: list[int] = []
@@ -55,8 +39,6 @@ def _client(fake: _FakeRunner) -> TestClient:
 
 
 def _drain() -> None:
-    """Block until the background reconcile has finished — re-acquiring the lock the endpoint
-    holds until the daemon thread releases it is a deterministic "done" barrier."""
     assert cron._sync_lock.acquire(timeout=2), "background reconcile did not finish in time"
     cron._sync_lock.release()
 

@@ -1,41 +1,3 @@
-"""Interface Adapter: AI market-sector analysis via Claude on Amazon Bedrock.
-
-The market-wide sibling of ``analysis_adapter.py`` (which reads one
-stock). The only module — alongside its stock/ETF cousins — that knows Bedrock
-(and the Anthropic SDK) exists. It takes the day's ranked sector board the use
-case already gathered — each sector's move on the day + its trailing-window
-returns (read through the SPDR sector ETFs), now **enriched with the drivers
-behind the move**: the top constituent movers, the breadth of the move, and
-recent headlines from those movers — renders it into a compact prompt, and asks
-Claude for a plain-language read of which corners of the market are leading and
-lagging today *and why*. Swap models or vendors and only this file changes.
-
-The same two choices that keep the stock adapter robust apply here:
-
-* **Auth is the runtime's job, not ours.** Bedrock authenticates through the
-  process's AWS credentials (in production, the ECS task role), so there is no
-  API key to read or pass — only ``model_id`` and ``region``.
-* **Structured output via a forced tool call.** Claude must call
-  ``submit_sector_analysis``, so the model returns validated JSON arguments that
-  map straight onto the ``SectorAnalysis`` entity — no brittle prose parsing.
-
-One sector-specific rule: the model never authors the numbers. It names the
-standout sectors (by the exact names in the prompt) and writes a note for each;
-the adapter joins those names back to the board to attach the *real*
-``change_percent`` a sector moved — **and the sector's real movers + headlines** —
-dropping any name that doesn't match. So a highlight's percentage, its driver
-chips, and its catalyst link are always true, service-supplied facts, never
-something the model recalled or invented; the model may *reference* the movers and
-headlines it was shown, but it authors only the prose note.
-
-The Anthropic SDK is imported lazily inside ``__init__`` so the app (and the
-offline test suite, which injects a stub client) imports cleanly without the
-``bedrock`` extra. Any Bedrock/SDK failure is translated to
-``StockDataUnavailable`` — the one error this port documents.
-
-Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
-"""
-
 import logging
 from datetime import datetime, timezone
 
@@ -174,17 +136,6 @@ _SYSTEM_PROMPT = (
 
 
 class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
-    """Generates a ``SectorAnalysis`` with Claude on Amazon Bedrock.
-
-    Structured exactly like ``BedrockScorecardProvider`` (its per-stock sibling):
-    defaults to the fast Haiku tier since the output is short and plain, takes
-    ``model_id``/``region`` as deploy-time config (the model id may be a
-    cross-region inference profile, env-overridable so a deploy can swap models
-    without a code change), and accepts a ``client`` injection seam so tests can
-    bypass the Anthropic SDK entirely. Otherwise the Bedrock client is built
-    lazily and authenticates through the process's AWS credentials.
-    """
-
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock
     # (unlike us.anthropic.claude-sonnet-4-6), so the short form 400s with "invalid
     # model identifier". Verified ACTIVE + invokable in us-east-1.
@@ -268,12 +219,6 @@ class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
     def _invoke(
         self, prompt: str, costs: CostAccumulator, *, model: str | None = None
     ) -> dict | None:
-        """One forced-tool call, returning the ``submit_sector_analysis`` arguments
-        (or ``None`` if the model somehow didn't call the tool). ``model`` overrides
-        which model runs (the retry escalates onto ``recovery_model_id``); defaults to
-        the primary. Any SDK/botocore failure is mapped to this port's documented
-        ``StockDataUnavailable``. The call's token usage is folded into ``costs`` under
-        the model that produced it, for the caller's single per-endpoint cost line."""
         chosen = model or self._model_id
         try:
             message = self._client.messages.create(
@@ -293,7 +238,6 @@ class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
 
 
 def _tool_payload(message) -> dict | None:
-    """Pull the submit_sector_analysis arguments out of the tool call, if any."""
     for block in getattr(message, "content", None) or []:
         if (
             getattr(block, "type", None) == "tool_use"
@@ -306,10 +250,6 @@ def _tool_payload(message) -> dict | None:
 
 
 def _missing_highlights(payload: dict | None) -> bool:
-    """True when a returned tool result is present but carries no leaders or no
-    laggards — the signal to retry. A ``None`` payload (the model didn't call the
-    tool at all) is left for the caller to surface as ``StockDataUnavailable``,
-    not retried, so the existing no-structured-result path is unchanged."""
     if payload is None:
         return False
     return not payload.get("leaders") or not payload.get("laggards")
@@ -318,15 +258,6 @@ def _missing_highlights(payload: dict | None) -> bool:
 def _to_entity(
     contexts: list[SectorContext], payload: dict, model_id: str
 ) -> SectorAnalysis:
-    """Map the validated tool arguments onto the domain entity.
-
-    The forced-tool schema constrains the shape, but a defensive guard keeps an
-    off-schema result (e.g. an unknown ``tone``) from leaking out as something
-    other than this port's documented ``StockDataUnavailable``. The leader/laggard
-    notes are joined back to the enriched board so each highlight carries the
-    sector's real day move — and its real movers + headlines — not figures the
-    model authored.
-    """
     try:
         summary = str(payload["summary"]).strip()
         tone = MarketTone(payload["tone"])
@@ -348,14 +279,6 @@ def _to_entity(
 def _highlights(
     value, by_name: dict[str, SectorContext]
 ) -> tuple[SectorHighlight, ...]:
-    """Coerce the model's highlight list into entities, joining each to its context.
-
-    A highlight is kept only when its name matches a sector on the board (so the
-    ``change_percent``, movers and headlines are all real, service-supplied facts)
-    and it carries a non-empty note; anything the model named that isn't on the board
-    — or named with no note — is dropped. The movers and headlines come from the
-    joined context, never the model, so the note's receipts can't be hallucinated.
-    """
     if not isinstance(value, list):
         return ()
     out: list[SectorHighlight] = []
@@ -380,15 +303,6 @@ def _highlights(
 
 
 def _render_prompt(contexts: list[SectorContext]) -> str:
-    """Render the enriched board into a compact, labelled block for the model.
-
-    One block per sector, best performer first (the order the use case ranks in). The
-    header line carries the sector's day move and whatever trailing windows are available
-    (only present figures are included); indented under it come the grounded drivers — the
-    top constituent movers with their own day change, the breadth of the move, and any
-    recent headlines from those movers. A sector missing attribution simply renders the
-    header line alone, so the model degrades to the old behaviour for it.
-    """
     lines = ["Market sectors today (ranked best performer first):"]
     for c in contexts:
         parts = [f"{c.sector} ({c.symbol})"]
@@ -423,15 +337,12 @@ def _render_prompt(contexts: list[SectorContext]) -> str:
 
 
 def _signed(value: object) -> str:
-    """Format a percent move with an explicit sign (``+1.20%`` / ``-0.80%``), so the
-    model reads a mover's direction at a glance. A missing value renders as ``n/a``."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return "n/a"
     return f"{value:+,.2f}%"
 
 
 def _num(value: object) -> str:
-    """Format a numeric field readably; pass non-numbers through unchanged."""
     if isinstance(value, bool):  # bool is an int subclass — keep it as-is
         return str(value)
     if isinstance(value, float):

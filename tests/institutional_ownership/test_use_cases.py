@@ -1,12 +1,3 @@
-"""Tests for the institutional-ownership use cases + the entity rules they lean on.
-
-Offline: hand-written fakes for the provider and repository ports, so this exercises only the
-orchestration — symbol normalization and pass-through on the read side; which targets are refreshed,
-failure/empty handling, and the per-run limit on the sync side — plus the entity rules the slice's
-responses derive (is_buyer/is_seller, share_change/value_change, the latest-snapshot flow rollup,
-is_empty), independent of yfinance or the DB.
-"""
-
 from datetime import date
 
 import pytest
@@ -59,9 +50,6 @@ def _ownership(*holders, symbol="AAPL", breakdown=None) -> InstitutionalOwnershi
     return InstitutionalOwnership(
         symbol=symbol, breakdown=breakdown, holders=tuple(holders)
     )
-
-
-# ───────────────────────────── entity rules ─────────────────────────────
 
 
 def test_buyer_and_seller_read_the_percent_change():
@@ -136,9 +124,6 @@ def test_breakdown_is_empty_when_every_field_is_none():
     assert OwnershipBreakdown(60.0, None, None, None).is_empty is False
 
 
-# ───────────────────────── GetInstitutionalOwnership ─────────────────────
-
-
 class _FakeReadProvider(InstitutionalOwnershipProvider):
     def __init__(self, ownership: InstitutionalOwnership) -> None:
         self._ownership = ownership
@@ -167,12 +152,7 @@ def test_get_rejects_obviously_invalid_symbols():
     assert provider.calls == []  # rejected before the provider is touched
 
 
-# ───────────────────────── SyncInstitutionalOwnership ────────────────────
-
-
 class _FakeRepo(InstitutionalOwnershipRepository):
-    """Serves a fixed target list and records what got upserted."""
-
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = list(targets)
         self.upserts: list[tuple[str, str | None]] = []
@@ -190,8 +170,6 @@ class _FakeRepo(InstitutionalOwnershipRepository):
 
 
 class _FakeSyncProvider(InstitutionalOwnershipProvider):
-    """Returns a canned ownership per symbol, an empty one, or raises."""
-
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}

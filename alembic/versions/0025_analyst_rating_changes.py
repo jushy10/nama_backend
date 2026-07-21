@@ -1,19 +1,3 @@
-"""create stock_analyst_rating_changes
-
-The sibling of ``stock_analyst_trends`` for the discrete upgrade/downgrade *events* behind
-the monthly trend — a time-series child of the ``stocks`` anchor, one row per firm action,
-unique on ``(stock_id, firm, published_at)``. Mirrors
-app.stocks.recommendations.models.StockAnalystRatingChangeRecord. Filled by the same
-recommendations sweep (yfinance → DB), insert-only (each event is a frozen fact), so it
-accumulates a longer history than Yahoo serves at once and starts empty. ``firm`` and
-``published_at`` are non-null (the identity); grades, action label, and price targets are
-nullable. The ``stocks`` anchor already exists (created in 0002), so this only adds the child.
-
-Revision ID: 0025_analyst_rating_changes
-Revises: 0024_analyst_trends
-Create Date: 2026-07-08
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

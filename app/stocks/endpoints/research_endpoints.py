@@ -1,20 +1,3 @@
-"""HTTP API for the AI research agent.
-
-``POST /research`` — a plain-English stock-research question ("How does NVDA's valuation compare
-to AMD?", "Which mega-cap tech names are growing revenue fastest?") answered by a Claude-driven
-tool-use loop. The model calls the app's own read tools (screen the universe, read market
-sentiment), reads their results, and calls more until it can answer — so every figure it states
-is grounded in a real read, never a memorized or invented one.
-
-Composition root, the same way as the analysis endpoints: the model is a Bedrock adapter
-singleton (no secret to gate on — Bedrock authenticates through the process's AWS credentials;
-a missing 'bedrock' extra is a clean 503). The tools are built per request from the slices' read
-use cases (the universe search is DB-bound; market sentiment is keyless and live). The read is
-metered (each step is a model call), so it carries the same tight per-IP limit as the analysis
-reads, and — like them — the informational-use disclaimer is attached here at the edge, never
-authored by the model.
-"""
-
 import os
 from functools import lru_cache
 
@@ -96,11 +79,6 @@ def get_run_research(
 
 
 def _present(result: ResearchResult) -> ResearchResponse:
-    """Presenter: the finished research entity -> HTTP response DTO.
-
-    The disclaimer is attached here, at the edge — it's a property of the service, not something
-    the model is trusted to author. The steps carry the tool-call transcript so a client can
-    show, and a reviewer can audit, how the answer was reached."""
     return ResearchResponse(
         question=result.question,
         answer=result.answer,

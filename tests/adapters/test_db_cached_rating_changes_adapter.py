@@ -1,13 +1,3 @@
-"""Unit tests for the read-through DB cache over a RatingChangeProvider.
-
-Offline: hand-written fakes for the inner provider and the repository. Verifies the
-read-through contract — stored events served without touching the live source, a miss
-fetched once and stored, an empty live result returned but not cached — and the
-resilience rules: a cache read failure degrades to a miss, a cache write failure never
-sinks the response, and a live failure on a miss propagates. Mirrors the recommendations
-DB-cache tests.
-"""
-
 from datetime import date
 
 import pytest

@@ -1,9 +1,3 @@
-"""Unit tests for the quarterly-earnings entities' pure domain rules.
-
-No I/O — just the ``EarningsSession`` announcement-timing classifier and the refresh
-merge's handling of it (a degraded fetch must not wipe a known session).
-"""
-
 from datetime import time
 
 import pytest

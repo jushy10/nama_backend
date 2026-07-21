@@ -1,11 +1,3 @@
-"""Unit tests for the FRED VIX adapter.
-
-No network: the httpx client is swapped for a fake returning canned CSV text (the
-``_http`` seam). Verifies the two most-recent observations parse into value +
-previous_close, ``.``-missing rows and out-of-order rows are handled, a single-row
-file yields a null previous_close, and an empty/failed fetch raises the domain error.
-"""
-
 from datetime import date
 from types import SimpleNamespace
 

@@ -1,19 +1,9 @@
-"""Tests for the batch sync CLI (``python -m app.sync <slice> [limit]``).
-
-Offline: the per-slice runners in ``RUNNERS`` are replaced with recorders, so this exercises
-only the CLI's dispatch — argument parsing, the slice -> runner mapping, the optional limit
-(omitted -> None, i.e. process every stock), and the exit codes — without opening a DB session
-or touching Yahoo.
-"""
-
 import pytest
 
 from app.sync import __main__ as cli
 
 
 class _Recorder:
-    """Stands in for a ``run_*_sync`` runner; records the limit it was called with."""
-
     def __init__(self) -> None:
         self.calls: list[int | None] = []
 

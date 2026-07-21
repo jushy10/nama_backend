@@ -1,19 +1,3 @@
-"""create stock_recommendation_trends
-
-The recommendations cache: a time-series child of the ``stocks`` anchor holding a
-stock's analyst buy/hold/sell split by month — many rows per stock, one per monthly
-snapshot, unique on ``(stock_id, period)``. Mirrors app.stocks.recommendations.models.
-Filled lazily on a miss and refreshed by the recommendations cron endpoint (yfinance ->
-DB), so it starts empty. Unlike the earnings tables a refresh *merges* (a past month's
-split is a frozen fact), so the table accumulates a longer history than the ~4 months
-Yahoo serves at once. The ``stocks`` anchor already exists (created in 0002), so this
-migration only adds the child table.
-
-Revision ID: 0007_recommendation_trends
-Revises: 0006_drop_analyst_estimates
-Create Date: 2026-07-01
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

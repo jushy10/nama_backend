@@ -1,11 +1,3 @@
-"""Tests for the AI research endpoint (POST /research).
-
-Offline: a fake RunResearch is injected through dependency_overrides + FastAPI's TestClient, so
-this checks only the controller + presenter — the response shape (answer + the tool-call step
-transcript + the service-authored disclaimer), input validation, and the error mapping —
-without touching Bedrock or the database.
-"""
-
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
@@ -17,8 +9,6 @@ from app.stocks.exceptions import StockDataUnavailable
 
 
 class _FakeUseCase:
-    """Stands in for RunResearch; returns a canned result or raises."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error

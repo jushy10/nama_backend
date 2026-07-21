@@ -1,28 +1,3 @@
-"""add ETF profile persistence
-
-Persists the per-fund profile the ETF sync now fetches (previously read live per request on the
-detail endpoint and discarded). Three parts:
-
-- New scalar columns on ``etfs``: ``fund_family`` / ``dividend_yield`` / ``description`` / ``nav``
-  (the facts the user asked for) plus the trailing-return ladder ``ytd_return`` /
-  ``three_year_return`` / ``five_year_return`` (kept so the DB-only detail read doesn't regress the
-  fields it already served) and ``profile_fetched_at`` (the profile-refresh freshness stamp, so a
-  throttled enrichment run sweeps stalest-first).
-- ``etf_sector_weightings`` — a fund's sector exposure, a child time-series of ``etfs`` (many rows
-  per fund, one per sector, unique on ``(etf_id, sector)``).
-- ``etf_top_holdings`` — a fund's largest positions, a child of ``etfs`` (unique on
-  ``(etf_id, position)`` — ``position`` is the largest-first rank, since a holding's ticker can be
-  absent).
-
-Both child tables hang off the ``etfs`` anchor (created in 0016) with ON DELETE CASCADE, and are
-rewritten per-fund by the sync (delete-then-insert). Mirrors app.stocks.etfs.models. They start
-empty; the ETF cron populates them.
-
-Revision ID: 0020_etf_profile
-Revises: 0019_etf_arca_nyse
-Create Date: 2026-07-07
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

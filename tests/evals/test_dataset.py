@@ -1,10 +1,3 @@
-"""Sanity checks on the golden eval set.
-
-Not a behavioural test — just guards that keep the dataset well-formed as it grows: unique ids,
-non-empty questions and rubrics, and at least one tag per case (so tag-filtered runs stay
-meaningful). A malformed case would otherwise fail confusingly at run time.
-"""
-
 from app.evals.dataset import GOLDEN_CASES
 
 

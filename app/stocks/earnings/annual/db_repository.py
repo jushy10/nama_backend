@@ -1,13 +1,3 @@
-"""Interface Adapter: the SQLAlchemy-backed AnnualEarningsRepository.
-
-Implements the ``repository.py`` port against the database. Its job is the mapping the use
-cases must not see: it converts the ``AnnualEarnings`` entities to and from the ORM rows,
-and delegates every query to ``models.py``. Only this layer (and models) knows the tables
-exist; the domain entities stay free of SQLAlchemy. ``upsert`` rewrites a stock's whole
-window (delete-then-insert) and commits its own write, so a successful cache fill is
-durable independent of the request.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -44,22 +34,11 @@ def _to_entity(row: StockAnnualEarningsRecord) -> AnnualEarnings:
 def _to_timeline(
     symbol: str, rows: list[StockAnnualEarningsRecord]
 ) -> AnnualEarningsTimeline:
-    """Rebuild the timeline in its canonical chronological order — ascending by
-    ``fiscal_year``, oldest reported year through furthest upcoming — the order the entity
-    documents, regardless of the row order the query returned."""
     years = sorted((_to_entity(row) for row in rows), key=lambda y: y.fiscal_year)
     return AnnualEarningsTimeline(symbol=symbol, years=tuple(years))
 
 
 class SqlAnnualEarningsRepository(AnnualEarningsRepository):
-    """Reads and writes the annual-earnings cache through a request-scoped session.
-
-    Holds the session the router injects via ``get_db``, maps rows to and from the
-    ``AnnualEarnings`` entities, and delegates every query to ``models``. ``upsert`` commits
-    its own write so a successful cache fill is durable independent of the surrounding
-    request.
-    """
-
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the fetch stamp deterministic in tests.

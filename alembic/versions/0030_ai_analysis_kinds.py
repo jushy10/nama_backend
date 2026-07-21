@@ -1,30 +1,3 @@
-"""ai analysis cache — five more kinds
-
-Extends ``investment_analysis_cache`` (migration 0022) so the earnings, ratings,
-fundamentals, sector and market AI reads share the same read-through result cache the
-stock scorecard and ETF analysis already use — instead of re-calling the model on every
-server-side miss and racking up tokens.
-
-Adds three nullable columns the newer kinds share:
-
-- ``verdict`` — their headline enum (earnings ``trend``, ratings/fundamentals
-  ``verdict``, sector/market ``tone``),
-- ``findings`` — the flat takeaway list (earnings ``highlights``, ratings/fundamentals
-  ``findings``),
-- ``details`` — the market-wide nested structure (sector ``{leaders, laggards}``,
-  market ``{periods}``).
-
-And relaxes the stock/ETF-only columns ``recommendation`` / ``confidence`` /
-``strengths`` / ``risks`` to nullable, since the newer kinds don't all carry them
-(ratings/fundamentals reuse ``confidence``; everyone else leaves them null).
-``thesis`` / ``symbol`` / ``model`` / ``generated_at`` stay NOT NULL. The market-wide
-kinds key on a sentinel ``symbol``. Existing stock/ETF rows are untouched.
-
-Revision ID: 0030_ai_analysis_kinds
-Revises: 0029_insider_txns
-Create Date: 2026-07-11
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

@@ -1,13 +1,3 @@
-"""Tests for the institutional-ownership read endpoint.
-
-(GET /stocks/ticker/{ticker}/institutional-ownership)
-
-Offline: a fake GetInstitutionalOwnership is injected through dependency_overrides + FastAPI's
-TestClient, so this checks only the controller + presenter — the JSON shape (holders, breakdown,
-flow, derived buy/sell flags, count, latest_report_date), the cache header, empty coverage as a 200
-(not a 404), and the error mapping — without touching Yahoo or the database.
-"""
-
 from datetime import date
 
 import pytest

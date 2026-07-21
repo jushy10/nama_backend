@@ -1,20 +1,3 @@
-"""Interface Adapter: a read-through database cache in front of any InstitutionalOwnershipProvider.
-
-The read path calls the database first; only on a **miss** (no stored holder rows for the symbol)
-does it hit Yahoo, store the result, and return it. A symbol that already has rows is always served
-straight from the DB — the read never re-fetches based on age. Keeping stored rows current is
-entirely the out-of-band cron's job (``SyncInstitutionalOwnership``), which merges fresh holdings in
-on its schedule. This keeps the endpoint off Yahoo, which rate-limits and blocks data-centre IPs.
-
-It implements ``InstitutionalOwnershipProvider``, so it slots into the wiring exactly where the bare
-yfinance provider would, with the use case none the wiser.
-
-Resilience mirrors the news cache: a cache *read* failure degrades to a miss (falls through to the
-live source), a cache *write* failure is swallowed (the caller still gets the fresh fetch), and an
-empty live result is not stored (a symbol with no institutional coverage re-checks the live source
-on its next view rather than being cached as empty).
-"""
-
 import logging
 
 from app.stocks.institutional_ownership.entities import InstitutionalOwnership
@@ -27,8 +10,6 @@ logger = logging.getLogger(__name__)
 
 
 class DbCachedInstitutionalOwnershipProvider(InstitutionalOwnershipProvider):
-    """A read-through DB cache: serve stored rows, else fetch from the inner provider and store."""
-
     def __init__(
         self,
         inner: InstitutionalOwnershipProvider,

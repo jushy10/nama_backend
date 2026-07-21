@@ -1,48 +1,3 @@
-"""Interface Adapter: AI investment scorecard via Claude on Amazon Bedrock.
-
-The only module that knows Bedrock (and the Anthropic SDK) exists. It takes the
-data the use case already gathered — the price snapshot, trailing performance,
-the trailing *and* forward valuation/health/growth metrics, the recent quarterly
-and annual earnings, the analyst recommendation trends, and the stock's industry
-P/E benchmark (how its valuation sits against its peers) — renders it into a
-compact prompt, and asks Claude for a five-point strong-buy…strong-sell read
-**broken into graded sections** (profitability, cash generation, growth,
-valuation, financial health, earnings, analyst view), written in plain, everyday
-language a non-expert can follow. Swap models or vendors and only this file changes.
-
-The sections are a **single registry** (``_SECTIONS``) — one entry per facet, with
-its key, title, a prompt hint, and the builder that turns gathered data into its
-numeric chips. The forced-tool schema, the recovery tool, the prompt's section list,
-and the entity assembly all derive from that one list, so adding a category is one
-entry plus one metric builder, not an edit in four places.
-
-Two deliberate choices keep it robust and on-pattern:
-
-* **Auth is the runtime's job, not ours.** Bedrock authenticates through the
-  process's AWS credentials (in production, the ECS task role), so — unlike
-  every other vendor in this slice — there is no API key to read or pass. The
-  IAM policy on the task role is what grants access.
-* **Structured output via a forced tool call.** Rather than parse free text we
-  hand Claude one ``submit_scorecard`` tool and require it, so the model returns
-  the read as validated JSON arguments that map straight onto the
-  ``StockScorecard`` entity — no brittle prose parsing. The model authors only the
-  *words* (each section's stance / label / summary + the overall verdict); every
-  supporting **number** is attached here from the figures already gathered, so a
-  chip can never carry a hallucinated value.
-
-The Anthropic SDK is imported lazily inside ``__init__`` so the app (and the
-offline test suite, which injects a fake or a stub client) imports cleanly
-without the ``bedrock`` extra installed. Any Bedrock/SDK failure is translated
-to ``StockDataUnavailable`` — the one error this port documents.
-
-Operational note: model access must be enabled for the Anthropic model in the
-target region, and the model id may need to be a cross-region inference profile
-(e.g. ``us.anthropic.claude-haiku-4-5-20251001-v1:0``). Both are deploy-time config, surfaced
-through the constructor / env (see ``router.get_analysis_provider``).
-
-Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
-"""
-
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -67,10 +22,6 @@ from app.stocks.universe.entities import IndustryValuation
 
 @dataclass(frozen=True)
 class _Facts:
-    """Everything the use case gathered, bundled so each section's metric builder
-    takes one argument. The model never sees this — it's what the *service* turns
-    into the numeric chips (so a chip can never carry a hallucinated number)."""
-
     stock: Stock
     quarterly: QuarterlyEarningsTimeline | None
     recommendations: AnalystRecommendations | None
@@ -83,7 +34,6 @@ class _Facts:
 
 
 def _profitability_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
-    """How much profit the company keeps — margins and return on equity."""
     m = f.stock.metrics
     if m is None:
         return ()
@@ -96,7 +46,6 @@ def _profitability_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
 
 
 def _cash_generation_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
-    """How much real cash the business throws off — free cash flow per share and yield."""
     m = f.stock.metrics
     if m is None:
         return ()
@@ -108,7 +57,6 @@ def _cash_generation_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
 
 
 def _growth_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
-    """Trailing revenue/EPS growth plus what analysts expect next year."""
     m = f.stock.metrics
     growth = f.stock.growth
     return _metrics(
@@ -124,7 +72,6 @@ def _growth_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
 
 
 def _valuation_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
-    """Trailing + forward multiples, plus the industry median for the peer anchor."""
     m = f.stock.metrics
     iv = f.industry_valuation
     rows = [
@@ -140,7 +87,6 @@ def _valuation_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
 
 
 def _financial_health_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
-    """Balance-sheet strength — liquidity and leverage."""
     m = f.stock.metrics
     if m is None:
         return ()
@@ -151,7 +97,6 @@ def _financial_health_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
 
 
 def _earnings_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
-    """The recent beat track record and the latest surprise."""
     out: list[SectionMetric] = []
     quarterly = f.quarterly
     if quarterly is not None and quarterly.past:
@@ -173,7 +118,6 @@ def _earnings_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
 
 
 def _analyst_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
-    """The current consensus, its analyst count, and the average 1-5 score."""
     recommendations = f.recommendations
     if recommendations is None or recommendations.is_empty:
         return ()
@@ -190,9 +134,6 @@ def _analyst_metrics(f: _Facts) -> tuple[SectionMetric, ...]:
 
 
 def _fcf_yield(fcf_per_share: float | None, price: float | None) -> float | None:
-    """Free-cash-flow yield (percent): FCF per share over the live price. Keeps its
-    sign (a negative yield is a real 'burning cash' read); ``None`` without both inputs
-    or a non-positive price."""
     if fcf_per_share is None or not price or price <= 0:
         return None
     return round(fcf_per_share / price * 100, 2)
@@ -200,11 +141,6 @@ def _fcf_yield(fcf_per_share: float | None, price: float | None) -> float | None
 
 @dataclass(frozen=True)
 class _SectionSpec:
-    """One graded facet of the scorecard — the single source of truth. ``key`` is the
-    stable id the client renders off, ``title`` its display name, ``hint`` what the
-    section is about (feeds the tool schema + the prompt's section list), and
-    ``metrics`` the builder that turns gathered data into its chips."""
-
     key: str
     title: str
     hint: str
@@ -264,8 +200,6 @@ _SECTION_LIST_TEXT = "; ".join(f"{s.title} ({s.hint})" for s in _SECTIONS)
 
 
 def _section_schema(what: str) -> dict:
-    """The forced-tool schema for one section — the model authors only these three
-    fields; the numbers are attached by the service afterwards."""
     return {
         "type": "object",
         "properties": {
@@ -298,9 +232,6 @@ def _section_schema(what: str) -> dict:
 
 
 def _scorecard_tool() -> dict:
-    """Build the forced ``submit_scorecard`` tool from the section registry — the
-    overall verdict plus one object per section, so a new section flows through
-    automatically."""
     props: dict = {
         "recommendation": {
             "type": "string",
@@ -338,8 +269,6 @@ def _scorecard_tool() -> dict:
 
 
 def _sections_tool() -> dict:
-    """Build the lighter ``submit_sections`` recovery tool — only the section reads,
-    derived from the same registry."""
     return {
         "name": "submit_sections",
         "description": (
@@ -406,17 +335,6 @@ _SECTIONS_INSTRUCTION = (
 
 
 class BedrockScorecardProvider(StockScorecardProvider):
-    """Generates a ``StockScorecard`` with Claude on Amazon Bedrock.
-
-    Defaults to the fast Haiku tier (``model_id``) since the output is short and
-    plain — speed matters more than extra reasoning here. ``model_id`` and
-    ``region`` are deploy-time config (the model id may be a cross-region inference
-    profile), so a deploy can swap in a larger model via env without a code change.
-    ``client`` is an injection seam: pass a ready-made client (e.g. a test stub) to
-    bypass the Anthropic SDK entirely; otherwise the Bedrock client is built lazily
-    and authenticates through the process's AWS credentials.
-    """
-
     # Defaults to the fast Haiku tier: this endpoint's output is short and plain by
     # design, so the extra reasoning of a larger model buys little here — and Haiku
     # generates markedly faster, the whole point of this endpoint. The id is a
@@ -526,14 +444,6 @@ class BedrockScorecardProvider(StockScorecardProvider):
         system: str = _SYSTEM_PROMPT,
         model: str | None = None,
     ) -> dict | None:
-        """One forced-tool call, returning the tool's arguments (or ``None`` if the
-        model somehow didn't call the forced tool). Defaults to the full scorecard
-        tool; the retry path passes the lighter ``submit_sections`` tool. ``model``
-        overrides which model runs (the retry escalates onto ``recovery_model_id``);
-        defaults to the primary. Any SDK/botocore failure is mapped to this port's
-        documented ``StockDataUnavailable``. The call's token usage is folded into
-        ``costs`` under the model that produced it, for the caller's single
-        per-endpoint cost line."""
         chosen = model or self._model_id
         try:
             message = self._client.messages.create(
@@ -554,15 +464,6 @@ class BedrockScorecardProvider(StockScorecardProvider):
     def _recover_sections(
         self, prompt: str, key: str, costs: CostAccumulator
     ) -> dict | None:
-        """One targeted retry that regenerates *only* the section reads
-        (stance/label/summary), grounded in the same figures the first pass saw — far
-        fewer output tokens than re-running the whole scorecard, and a narrower ask that
-        lands more reliably. Escalated onto ``recovery_model_id`` when configured (a more
-        capable model fills what the fast tier dropped). **Best-effort**: a failure on the
-        recovery call (e.g. the escalation model isn't entitled) is swallowed to ``None``,
-        so escalation can never sink an otherwise-usable read — the caller keeps the
-        first pass's payload. Returns the ``submit_sections`` arguments, or ``None`` when
-        the model didn't call the tool."""
         try:
             return self._invoke(
                 _SECTIONS_INSTRUCTION + prompt,
@@ -578,7 +479,6 @@ class BedrockScorecardProvider(StockScorecardProvider):
 
 
 def _tool_payload(message, name: str) -> dict | None:
-    """Pull the named forced tool's arguments out of the model's tool call, if any."""
     for block in getattr(message, "content", None) or []:
         if (
             getattr(block, "type", None) == "tool_use"
@@ -591,9 +491,6 @@ def _tool_payload(message, name: str) -> dict | None:
 
 
 def _section_read_complete(read: object) -> bool:
-    """Whether a section's model-authored read carries its substance — a non-empty
-    label *and* a non-empty summary (the two fields the card shows in words). The
-    stance defaults harmlessly to neutral, so it's not the completeness signal."""
     if not isinstance(read, dict):
         return False
     return bool(str(read.get("label") or "").strip()) and bool(
@@ -602,19 +499,12 @@ def _section_read_complete(read: object) -> bool:
 
 
 def _missing_sections(payload: dict | None) -> bool:
-    """True when a returned scorecard is present but any section is missing or blank —
-    the signal to retry. A ``None`` payload (the model didn't call the tool at all) is
-    left for the caller to surface as ``StockDataUnavailable``, not retried."""
     if payload is None:
         return False
     return any(not _section_read_complete(payload.get(s.key)) for s in _SECTIONS)
 
 
 def _merge_section_reads(payload: dict, recovered: dict) -> dict:
-    """Fill only the *blank* section reads from a targeted recovery call, leaving any
-    section the first pass already wrote untouched — so a retry that recovers some
-    sections never overwrites the good ones. The overall verdict and the metric chips
-    are untouched (the recovery only carries the sections' words)."""
     merged = dict(payload)
     for s in _SECTIONS:
         if not _section_read_complete(merged.get(s.key)) and _section_read_complete(
@@ -633,16 +523,6 @@ def _build_scorecard(
     recommendations: AnalystRecommendations | None,
     industry_valuation: IndustryValuation | None,
 ) -> StockScorecard:
-    """Map the validated tool arguments onto the domain entity.
-
-    The overall verdict comes from the model (with a defensive guard: an off-schema
-    recommendation surfaces as this port's documented ``StockDataUnavailable`` rather
-    than leaking out). Each section merges the model's *words* (stance / label /
-    summary) with metric chips computed here from the data already gathered (via the
-    section registry), so the numbers are always the service's, never the model's. The
-    ``confidence`` is likewise the service's — a deterministic read of data coverage
-    (see ``_confidence_for``), not a guess the model makes.
-    """
     try:
         recommendation = Recommendation(payload["recommendation"])
         thesis = str(payload["thesis"]).strip()
@@ -677,12 +557,6 @@ _MEDIUM_COVERAGE = 0.4
 
 
 def _confidence_for(sections: tuple[ScorecardSection, ...]) -> Confidence:
-    """Confidence as a deterministic read of *data coverage* — the share of sections
-    that came back with real figures (i.e. how many data sources resolved). This is the
-    'service owns the numbers' split applied to confidence: how much data we had is a
-    fact about our gather, so we compute it rather than trust the model to guess it. A
-    section with no chips is one whose source (fundamentals / earnings / analyst /
-    industry) didn't resolve for this symbol."""
     if not sections:
         return Confidence.LOW
     covered = sum(1 for s in sections if s.metrics)
@@ -697,11 +571,6 @@ def _confidence_for(sections: tuple[ScorecardSection, ...]) -> Confidence:
 def _section(
     key: str, title: str, read: object, metrics: tuple[SectionMetric, ...]
 ) -> ScorecardSection:
-    """Combine the model's read of one section with its (service-computed) chips.
-
-    A missing or malformed section, or an off-enum stance, degrades to a neutral,
-    empty-summary section rather than sinking the whole scorecard — the use case
-    won't cache an incomplete read (an empty summary), so it regenerates next view."""
     read = read if isinstance(read, dict) else {}
     try:
         stance = SectionStance(read.get("stance"))
@@ -718,9 +587,6 @@ def _section(
 
 
 def _metrics(*rows: tuple[str, object, str]) -> tuple[SectionMetric, ...]:
-    """Format a batch of ``(label, value, suffix)`` rows into chips, dropping any whose
-    value is ``None`` (a figure the gather didn't have) — so a chip is only present
-    when its number is real."""
     out: list[SectionMetric] = []
     for label, value, suffix in rows:
         if value is None:
@@ -736,16 +602,6 @@ def _render_prompt(
     recommendations: AnalystRecommendations | None = None,
     industry_valuation: IndustryValuation | None = None,
 ) -> str:
-    """Render the gathered data into a compact, labelled block for the model.
-
-    Only fields that are present are included, so the model is never handed a
-    ``None`` to reason about — thin coverage simply yields a shorter prompt. The
-    sections mirror what the app's own endpoints expose: the enriched snapshot
-    (price, dividend, performance, and the trailing *and* forward
-    valuation/health/growth metrics — the ticker card's figures) followed, when
-    available, by the quarterly and annual earnings timelines, the analyst
-    recommendation trends, and the industry P/E benchmark.
-    """
     metrics = stock.metrics
     perf = stock.performance
     fields: list[tuple[str, object]] = [
@@ -817,11 +673,6 @@ def _render_prompt(
 
 
 def _render_industry_valuation(valuation: IndustryValuation | None) -> str:
-    """Render the industry P/E benchmark as a short labelled block (or '' if none)
-    — the peer-valuation anchor that turns the stock's own trailing P/E from an
-    absolute number into a relative one ("28 against an industry that trades near
-    21"). The use case only passes a benchmark with at least one valued peer, so a
-    present block always carries a median."""
     if valuation is None or valuation.count == 0 or valuation.median_pe is None:
         return ""
     # ``cohort`` names the size slice the peers were drawn from: "industry" for the whole
@@ -849,9 +700,6 @@ def _render_industry_valuation(valuation: IndustryValuation | None) -> str:
 
 
 def _render_recommendations(recommendations: AnalystRecommendations | None) -> str:
-    """Render the analyst recommendation trend as a short labelled block (or '' if
-    none) — the sell-side's own buy/hold/sell consensus, for the model to weigh
-    against its read (agreeing or deliberately differing)."""
     if recommendations is None or recommendations.is_empty:
         return ""
     latest = recommendations.latest
@@ -875,8 +723,6 @@ def _render_recommendations(recommendations: AnalystRecommendations | None) -> s
 
 
 def _render_quarterly(quarterly: QuarterlyEarningsTimeline | None) -> str:
-    """Render the reported half of the quarterly timeline as a short labelled
-    block (or '' if none) — newest quarter first, the order the read scans in."""
     if quarterly is None or not quarterly.past:
         return ""
     reported = list(reversed(quarterly.past))  # the timeline is oldest-first
@@ -909,12 +755,6 @@ def _render_quarterly(quarterly: QuarterlyEarningsTimeline | None) -> str:
 
 
 def _render_annual(annual: AnnualEarningsTimeline | None) -> str:
-    """Render the annual timeline as a short labelled block (or '' if none) —
-    reported fiscal years newest first, then the forward (estimated) years.
-
-    Reported EPS is shown on the analyst-consensus (adjusted) basis when it's
-    available (``eps_actual_consensus``), falling back to GAAP diluted, so a
-    reported year and a forward estimate sit on the same basis."""
     if annual is None or annual.is_empty:
         return ""
     lines = ["Annual earnings (fiscal years):"]
@@ -939,7 +779,6 @@ def _render_annual(annual: AnnualEarningsTimeline | None) -> str:
 
 
 def _num(value: object) -> str:
-    """Format a numeric field readably; pass non-numbers through unchanged."""
     if isinstance(value, bool):  # bool is an int subclass — keep it as-is
         return str(value)
     if isinstance(value, float):

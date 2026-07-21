@@ -1,25 +1,3 @@
-"""Interface Adapter: analyst upgrade/downgrade events from Yahoo Finance (via ``yfinance``).
-
-``Ticker.upgrades_downgrades`` returns the sell-side's individual rating actions as a
-date-indexed frame (index ``GradeDate``; columns ``Firm``, ``ToGrade``, ``FromGrade``,
-``Action``, ``priceTargetAction``, ``currentPriceTarget``, ``priorPriceTarget``) — the
-discrete events that, aggregated by month, become the recommendation *trend*. Keyless, like
-the rest of the Yahoo slice.
-
-Yahoo serves the *full* multi-year log (hundreds of rows for a widely-covered name), so the
-adapter keeps only the ``_MAX_CHANGES`` most recent — enough for the "recent analyst activity"
-read the feature is for, and a bound on what the sync then accumulates. Each kept row becomes a
-``RatingChange`` (firm + date is its identity; grades and targets are optional). Rows with no
-firm are dropped (nothing to key on), as is a duplicate ``(firm, date)``.
-
-This is the only module (besides the recommendations adapter) that knows Yahoo serves this;
-swap it and nothing else changes. Deliberately defensive — Yahoo is an unofficial, best-effort
-feed that reshapes payloads without notice and rate-limits data-centre IPs — so any vendor
-failure becomes ``StockDataUnavailable`` and a symbol Yahoo doesn't cover yields an empty run
-rather than an error. The fetch is routed through ``yfinance_session`` so a transient crumb
-401 — which yfinance swallows into an empty frame — is retried once with a fresh crumb.
-"""
-
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -34,8 +12,6 @@ from app.stocks.recommendations.ports import RatingChangeProvider
 
 
 class YfinanceRatingChangeProvider(RatingChangeProvider):
-    """Fetches a stock's individual rating actions from Yahoo (no API key)."""
-
     # Cap on stored history per stock: Yahoo serves the full multi-year log, but the feature
     # only needs the recent window, and this bounds the table (~this many rows/stock max).
     _MAX_CHANGES = 50
@@ -61,11 +37,6 @@ class YfinanceRatingChangeProvider(RatingChangeProvider):
 
 
 def _parse_changes(frame) -> list[RatingChange]:
-    """The upgrades/downgrades frame → entities, newest action first.
-
-    Rows with no firm or no parseable date are dropped (there'd be no identity to key on),
-    as is a duplicate ``(firm, date)``. An empty/missing frame — how Yahoo presents an
-    uncovered symbol — yields an empty list, not an error. Keeps all pandas/NaN handling here."""
     if frame is None or getattr(frame, "empty", True):
         return []
     try:
@@ -103,7 +74,6 @@ def _parse_changes(frame) -> list[RatingChange]:
 
 
 def _series_get(series, key: str):
-    """One labelled value from a row Series, or ``None`` (missing column)."""
     try:
         return series.get(key)
     except Exception:  # noqa: BLE001 — a frame quirk must not escape the adapter
@@ -111,7 +81,6 @@ def _series_get(series, key: str):
 
 
 def _to_date(value) -> date | None:
-    """A pandas Timestamp / datetime / date (index or column) → a plain date, or ``None``."""
     if value is None:
         return None
     try:
@@ -133,8 +102,6 @@ def _to_date(value) -> date | None:
 
 
 def _text(value) -> str | None:
-    """A trimmed non-empty string, or ``None`` (missing / NaN / blank — Yahoo uses ``""``
-    for a missing grade on an initiation)."""
     if value is None:
         return None
     try:
@@ -147,8 +114,6 @@ def _text(value) -> str | None:
 
 
 def _target(value) -> float | None:
-    """Coerce a per-firm price target to a positive float, or ``None`` for missing/NaN/non-positive
-    (Yahoo writes ``0.0`` for "no target set")."""
     if value is None:
         return None
     try:

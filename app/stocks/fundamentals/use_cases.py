@@ -1,19 +1,3 @@
-"""Application use cases for the fundamentals slice.
-
-One action, pure orchestration over the ports so it runs offline in tests against hand-written
-fakes and knows nothing of Yahoo, HTTP, or SQLAlchemy:
-
-- ``SyncFundamentals`` — the out-of-band populator. Walks the anchor stale-first (un-synced
-  stocks first, then the oldest), fetches each stock's trailing fundamentals from the live
-  source, and lands them on the ``stocks`` anchor. Invoked by the (fire-and-forget) cron
-  endpoint / the ``python -m app.sync fundamentals`` task. Best-effort per stock: a single
-  symbol the source can't serve is counted and skipped, never aborting the sweep. A symbol
-  blocked by a *transient* Yahoo gate is re-attempted across a few passes **within the same
-  run** rather than surrendered to the next scheduled sync — which for fundamentals is a week
-  away, and (unlike earnings/news) there's no lazy-fill on read to cover it in the meantime, so
-  a gated stock would otherwise show a blank metrics block for up to a week.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -36,12 +20,6 @@ _DEFAULT_MAX_ATTEMPTS = 3
 
 @dataclass(frozen=True)
 class FundamentalsSyncReport:
-    """The outcome of one sync run. ``refreshed`` is how many stocks got their fundamentals
-    written this run; ``failed`` how many the source couldn't serve after every attempt (an
-    outage/persistent block/uncovered symbol) — those are left un-stamped so the next sweep
-    retries them. ``limit`` echoes the cap the run was invoked with (``None`` = the whole
-    anchor)."""
-
     refreshed: int
     failed: int
     limit: int | None
@@ -49,19 +27,12 @@ class FundamentalsSyncReport:
 
 @dataclass(frozen=True)
 class _PassOutcome:
-    """One pass's tally: stocks renewed, stocks that failed *finally* (a genuinely unknown
-    symbol — ``StockNotFound`` — which a retry can't fix), and the targets that failed
-    *transiently* (a raised ``StockDataUnavailable`` **or** a hollow ``.info``) and are worth
-    another pass."""
-
     refreshed: int
     final_failed: int
     retryable: list[RefreshTarget]
 
 
 class SyncFundamentals:
-    """Refresh the ``stocks`` anchor's trailing fundamentals from the live source, stale-first."""
-
     def __init__(
         self,
         provider: FundamentalsProvider,
@@ -79,16 +50,6 @@ class SyncFundamentals:
         self._retry_backoff_seconds = max(0.0, retry_backoff_seconds)
 
     def execute(self, *, limit: int | None = None) -> FundamentalsSyncReport:
-        """Fetch and store fundamentals for up to ``limit`` stocks (default: the whole anchor),
-        un-synced first then stalest.
-
-        Serial on purpose — one ``.info`` read per stock, paced by the task's
-        ``YF_MIN_REQUEST_INTERVAL_MS`` so a burst doesn't trip Yahoo's IP gate mid-sweep. A
-        single stock's failure never aborts the sweep. Symbols a *transient* failure blocked
-        (a raised ``StockDataUnavailable``, or a served-but-hollow ``.info`` — a swallowed
-        crumb-401 the adapter's own retry couldn't clear) are re-attempted across up to
-        ``max_attempts`` passes; a genuinely unknown symbol (``StockNotFound``) is final.
-        """
         effective = None if limit is None else max(1, limit)
         # refresh_targets is read once, up front: the same stalest-first batch is retried, so the
         # retries can't spill past the per-run cap into fresh symbols.
@@ -124,13 +85,6 @@ class SyncFundamentals:
         )
 
     def _run_pass(self, targets: list[RefreshTarget], *, label: str) -> _PassOutcome:
-        """Fetch and persist one serial pass over ``targets``, returning its tally.
-
-        Serial (no thread pool) is deliberate: the sweep's pacing is what keeps it under Yahoo's
-        ``.info`` IP gate, and a burst of parallel reads would trip it. Failures are split: a
-        transient ``StockDataUnavailable`` or a hollow ``.info`` is returned for a later pass; a
-        genuinely unknown symbol (``StockNotFound``) is counted final here.
-        """
         refreshed = 0
         final_failed = 0
         retryable: list[RefreshTarget] = []

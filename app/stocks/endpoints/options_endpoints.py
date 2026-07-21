@@ -1,26 +1,3 @@
-"""HTTP API for the options-flow resource — one stock's live chain and the flow over it.
-
-``GET /stocks/ticker/{ticker}/options`` — the calls and puts coming in for a stock: one
-expiration's full chain (strike ladder, volume, open interest, implied volatility, and
-the dollar premium into each contract), the day's aggregate flow (per-side volume/OI, the
-put/call lean, net premium), and the "unusual activity" standouts (contracts trading
-above their open interest — fresh positioning), most-money-first. ``?expiration=`` selects
-an expiry (default: the nearest upcoming), and the response lists every expiry so a client
-can switch without a second call.
-
-Where the ticker card's ``options_metrics`` block distils the chain into four summary
-reads, this serves the chain itself — the deeper "options-flow" view. Live per request
-(an options chain decays by the hour, so there's no table/cron behind it — the same stance
-as the card's options block); the chain is keyless via yfinance and is this endpoint's
-reason to exist, so a vendor block is a 502 while a symbol that simply lists no options is
-a 200 with an empty flow.
-
-Controller + presenter + wiring, the composition-root way, sitting in
-``app/stocks/endpoints/`` like the other slices' HTTP. It owns no vendor of its own beyond
-the keyless yfinance chain — no shared singleton to reuse — so the wiring is a small local
-factory.
-"""
-
 from datetime import date
 from functools import lru_cache
 
@@ -104,10 +81,6 @@ def _present_summary(s: OptionsFlowSummary) -> OptionsFlowSummaryResponse:
 
 
 def _present(flow: OptionsFlow) -> OptionsFlowResponse:
-    """Presenter: options-flow composition → HTTP response DTO. The domain speaks in
-    ``symbol``; renaming it ``ticker`` is a JSON-shape choice made here at the edge. A
-    symbol with no listed options carries a ``None`` chain — served as null expiry/summary
-    and empty lists rather than a 404."""
     chain: ExpiryChain | None = flow.chain
     if chain is None:
         return OptionsFlowResponse(
@@ -139,12 +112,6 @@ def get_options_flow_endpoint(
     ),
     use_case: GetOptionsFlow = Depends(get_options_flow_use_case),
 ) -> OptionsFlowResponse:
-    """A stock's options-flow read for one expiration: the full calls/puts chain, the
-    day's aggregate flow, and the unusual-activity standouts. Keyless (Yahoo via
-    yfinance) and computed live — Yahoo publishes cumulative day volume and prior-day open
-    interest, not a trade-by-trade tape, so this is a "where's the volume and money going"
-    snapshot, not a print-level flow feed. A blocked/failed fetch is a 502; a symbol with
-    no listed options is a 200 with an empty flow."""
     try:
         flow = use_case.execute(ticker, expiration=expiration)
     except ValueError as exc:

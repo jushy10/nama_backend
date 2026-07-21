@@ -1,14 +1,3 @@
-"""Interface Adapter: the SQLAlchemy-backed CongressTradesRepository.
-
-Implements the ``repository.py`` port against the database. Its job is the mapping the read path
-must not see: it converts the ``CongressTrade`` entities to and from the ORM rows, and delegates
-every query to ``models.py``. Only this layer (and models) knows the tables exist; the domain
-entities stay free of SQLAlchemy. ``upsert`` is *insert-only* (adds only trades not already stored
-— a filed disclosure is a frozen fact), refreshes the fetch stamp on the stock's whole feed, prunes
-the history back to the newest ``_MAX_STORED_TRADES``, and commits its own write, so a successful
-cache fill is durable independent of the request.
-"""
-
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
@@ -32,9 +21,6 @@ def _to_entity(
     ticker: str,
     company_name: str | None,
 ) -> CongressTrade:
-    """Map a stored row (plus the joined anchor ticker/name) onto the domain entity. The company
-    name comes from the shared ``stocks`` anchor (the canonical display name), not a verbose
-    ``asset_description`` — the read joins it in, so the table stays lean."""
     return CongressTrade(
         member=row.member,
         chamber=row.chamber,
@@ -51,13 +37,6 @@ def _to_entity(
 
 
 class SqlCongressTradesRepository(CongressTradesRepository):
-    """Reads and writes the Congressional-trades cache through a request-scoped session.
-
-    Holds the session the endpoint injects via ``get_db``, maps rows to and from the
-    ``CongressTrade`` entities, and delegates every query to ``models``. ``upsert`` commits its own
-    write so a successful cache fill is durable independent of the surrounding request.
-    """
-
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the fetch stamp deterministic in tests.

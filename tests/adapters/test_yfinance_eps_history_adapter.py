@@ -1,14 +1,3 @@
-"""Unit tests for the yfinance EPS-history adapter.
-
-No network: a fake Ticker returns the ``get_earnings_dates`` frame yfinance would, so
-this checks the mapping — the *reported* quarters only (future/unreported rows carry a
-NaN ``Reported EPS`` and drop out), oldest first, deduped by date — plus an uncovered
-symbol degrading to an empty tuple and any vendor failure becoming a domain error. The
-final group covers the foreign-ADR currency normalization: a reported (market) EPS left
-alone when it's already USD (TSM) and converted onto USD when it's in the reporting
-currency (BABA), driven by a fake FX-pair ticker.
-"""
-
 from datetime import date
 
 import pandas as pd
@@ -23,27 +12,17 @@ _NAN = float("nan")
 
 
 def _earnings_dates(rows: list[tuple[str, float]]) -> pd.DataFrame:
-    """A date-indexed frame like ``Ticker.get_earnings_dates``: rows of
-    ``(announce_date, Reported EPS)``; a NaN Reported EPS is a future/unreported date."""
     index = pd.DatetimeIndex([pd.Timestamp(d) for d, _ in rows])
     return pd.DataFrame({"Reported EPS": [eps for _, eps in rows]}, index=index)
 
 
 def _estimate_frame(avgs: dict) -> pd.DataFrame:
-    """A period-indexed estimate frame like ``earnings_estimate``: ``{"0y": 12.0}`` → rows
-    keyed by period with an ``avg`` column (the ``0y`` forward annual estimate the currency
-    normalizer detects the market-EPS currency from)."""
     return pd.DataFrame.from_dict(
         {label: {"avg": value} for label, value in avgs.items()}, orient="index"
     )
 
 
 class FakeTicker:
-    """Stands in for ``yfinance.Ticker``; serves a canned frame, or raises. Also exposes the
-    ``info`` dict and ``earnings_estimate`` frame the currency normalizer reads — both default
-    to a no-op (an empty ``info`` and no estimate → the identity normalizer), so the
-    non-currency tests are unaffected."""
-
     def __init__(
         self, *, earnings_dates=None, eps_estimate=None, info=None, error=None
     ) -> None:
@@ -144,15 +123,11 @@ def test_requests_the_configured_depth():
 
 
 class _FxTicker:
-    """A Yahoo FX-pair ticker fake: exposes a ``fast_info`` last price (empty ⇒ unavailable)."""
-
     def __init__(self, rate):
         self.fast_info = {} if rate is None else {"last_price": rate}
 
 
 def _provider_with_currency(fake: FakeTicker, *, fx_rate) -> YfinanceEpsHistoryProvider:
-    """A provider whose factory returns the issuer fake, and an FX fake for the
-    ``{reporting}{trading}=X`` pair symbol the normalizer requests."""
     fx_ticker = _FxTicker(fx_rate)
 
     def factory(symbol):
@@ -162,8 +137,6 @@ def _provider_with_currency(fake: FakeTicker, *, fx_rate) -> YfinanceEpsHistoryP
 
 
 def _adr_info(*, financial_currency, forward_eps, currency="USD"):
-    """``info`` for a foreign ADR: the trading/reporting currencies plus the trading-currency
-    ``forwardEps`` the market-EPS detection compares the ``0y`` estimate against."""
     return {
         "currency": currency,
         "financialCurrency": financial_currency,

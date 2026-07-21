@@ -1,12 +1,3 @@
-"""Tests for the Congressional-trades use cases.
-
-Offline: hand-written fakes for the source and repository ports drive the three use cases without
-touching HTTP or the database. Covers the DB-only per-ticker read (miss -> empty, symbol
-normalization, DB error -> empty), the market-wide windowed read, and the bulk sync (fetch once,
-group by ticker, distribute anchor stalest-first, seeding + skipping empties, and a total-source
-outage propagating).
-"""
-
 from datetime import date
 
 import pytest

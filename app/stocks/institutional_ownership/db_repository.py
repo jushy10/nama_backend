@@ -1,15 +1,3 @@
-"""Interface Adapter: the SQLAlchemy-backed InstitutionalOwnershipRepository.
-
-Implements the ``repository.py`` port against the database. Its job is the mapping the read path
-and the sync must not see: it converts the ``InstitutionalHolder`` / ``OwnershipBreakdown``
-entities to and from the ORM rows, and delegates every query to ``models.py``. Only this layer (and
-models) knows the tables exist; the domain entities stay free of SQLAlchemy. ``upsert`` *merges* the
-holders feed (replace-re-served-snapshots-then-insert, keeping earlier reported quarters),
-**overwrites** the single ownership-breakdown row, prunes the accumulated history back to the newest
-``_MAX_STORED_HOLDERS``, and commits its own write, so a successful cache fill is durable
-independent of the request.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -70,12 +58,6 @@ def _to_breakdown(
 
 
 class SqlInstitutionalOwnershipRepository(InstitutionalOwnershipRepository):
-    """Reads and writes the institutional-ownership cache through a request-scoped session.
-
-    Holds the session the endpoint injects via ``get_db``, maps rows to and from the entities, and
-    delegates every query to ``models``. ``upsert`` commits its own write so a successful cache fill
-    is durable independent of the surrounding request."""
-
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the fetch stamp deterministic in tests.
@@ -134,9 +116,6 @@ class SqlInstitutionalOwnershipRepository(InstitutionalOwnershipRepository):
         self._session.commit()
 
     def _upsert_summary(self, stock_id, breakdown: OwnershipBreakdown | None, now) -> None:
-        """Overwrite (or create) the stock's one breakdown row. A ``None`` breakdown clears the
-        stored figures to ``None`` but keeps the row's fetch stamp current — the current source
-        simply carried no summary this time."""
         row = models.summary_for_stock(self._session, stock_id)
         if row is None:
             row = StockOwnershipSummaryRecord(stock_id=stock_id)

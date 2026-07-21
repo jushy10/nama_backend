@@ -1,10 +1,3 @@
-"""Tests for the evals CLI (app.evals.__main__).
-
-Offline: the suite is faked (via monkeypatching the CLI's ``_build_suite``), so the CLI's own
-logic — tag selection, the threshold exit code, the JSON artifact, and the missing-extra path —
-runs with no Bedrock and no server.
-"""
-
 import json
 
 from app.evals import __main__ as cli
@@ -43,9 +36,6 @@ def _patch_suite(monkeypatch, report: EvalReport) -> None:
     )
 
 
-# --- Tag selection -----------------------------------------------------------------------------
-
-
 def test_select_cases_defaults_to_all():
     assert cli._select_cases(None) == cli.GOLDEN_CASES
 
@@ -54,9 +44,6 @@ def test_select_cases_filters_by_tag():
     selected = cli._select_cases(["guardrail"])
     assert selected  # at least one guardrail case exists in the golden set
     assert all("guardrail" in c.tags for c in selected)
-
-
-# --- Exit codes --------------------------------------------------------------------------------
 
 
 def test_passes_the_gate_with_a_zero_exit(monkeypatch, capsys):

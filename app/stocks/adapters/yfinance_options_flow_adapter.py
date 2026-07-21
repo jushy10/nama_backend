@@ -1,26 +1,3 @@
-"""Interface Adapter: a stock's options chain from Yahoo Finance (via ``yfinance``), for
-the options-flow slice.
-
-``Ticker.options`` lists the symbol's expiration dates and ``Ticker.option_chain(date)``
-returns that expiry's calls and puts as two DataFrames — strike, bid/ask, last price,
-volume, open interest, implied volatility and an in-the-money flag per contract — plus an
-``underlying`` dict carrying the spot quote, all keyless. The adapter maps those onto the
-slice's ``OptionContract`` / ``ExpiryChain`` entities; every *derived* figure (premium,
-unusual-activity, the aggregates) is domain logic on the entities, not here.
-
-This is the only module that knows Yahoo serves the chain; swap it — for a paid
-time-and-sales feed, say — and only this file changes. It is deliberately defensive:
-Yahoo is an unofficial, best-effort feed that reshapes payloads without notice and
-rate-limits data-centre IPs, so any vendor failure becomes ``StockDataUnavailable`` and a
-symbol without listed options yields empty coverage rather than an error.
-
-It is a sibling of ``yfinance_options_adapter.py`` (the ticker card's four summary
-metrics) rather than a reuse of it: that adapter returns the *ticker* slice's leaner
-contract, this one the *flow* slice's richer ``ExpiryChain`` (with the underlying spot).
-The two slices stay independent — the small amount of shared pandas plumbing is the
-per-slice-adapter tradeoff the codebase already makes everywhere.
-"""
-
 from __future__ import annotations
 
 from datetime import date
@@ -34,8 +11,6 @@ from app.stocks.options.ports import OptionsChainProvider
 
 
 class YfinanceOptionsChainProvider(OptionsChainProvider):
-    """Fetches a stock's option expirations and per-expiry chains from Yahoo (no API key)."""
-
     def __init__(self, *, ticker_factory=None) -> None:
         # Injectable so tests supply a fake Ticker (canned frames) instead of reaching
         # Yahoo; defaults to the real thing.
@@ -73,10 +48,6 @@ class YfinanceOptionsChainProvider(OptionsChainProvider):
 
 
 def _underlying_spot(underlying) -> float | None:
-    """The underlying's price from the chain's ``underlying`` dict — best-effort context
-    for the at-the-money row. Yahoo carries the live price under a couple of keys
-    depending on session; take the first present, falling back to the prior close.
-    ``None`` when the dict is missing or carries none of them."""
     if not isinstance(underlying, dict):
         return None
     for key in ("regularMarketPrice", "postMarketPrice", "regularMarketPreviousClose"):
@@ -87,11 +58,6 @@ def _underlying_spot(underlying) -> float | None:
 
 
 def _parse_side(frame, expiration: date, option_type: OptionType) -> list[OptionContract]:
-    """One side's DataFrame (calls or puts) → entities.
-
-    Rows without a usable strike are dropped (there'd be nothing to anchor the contract
-    on); every other field is optional and NaN-tolerant. An empty/missing frame yields an
-    empty list, not an error. Keeps all pandas/NaN handling here."""
     if frame is None or getattr(frame, "empty", True):
         return []
     try:
@@ -121,7 +87,6 @@ def _parse_side(frame, expiration: date, option_type: OptionType) -> list[Option
 
 
 def _series_get(series, key: str):
-    """One labelled value from a row Series, or ``None`` (missing column)."""
     try:
         return series.get(key)
     except Exception:  # noqa: BLE001 — a frame quirk must not escape the adapter
@@ -129,7 +94,6 @@ def _series_get(series, key: str):
 
 
 def _float(value) -> float | None:
-    """Coerce a price/ratio to float, treating missing/NaN/malformed as absent."""
     if value is None:
         return None
     try:
@@ -144,14 +108,11 @@ def _float(value) -> float | None:
 
 
 def _int(value) -> int | None:
-    """Coerce a count to int, treating missing/NaN/malformed as absent (a thin contract's
-    unreported volume is unknown, not zero)."""
     parsed = _float(value)
     return None if parsed is None else int(parsed)
 
 
 def _bool(value) -> bool | None:
-    """Coerce the in-the-money flag to bool, treating missing/NaN as absent."""
     if value is None:
         return None
     try:

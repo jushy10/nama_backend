@@ -1,16 +1,3 @@
-"""drop index_constituents
-
-Removes the legacy ``index_constituents`` table (created by 0001). The stock
-screener it backed has been removed, and index membership now lives on the
-``stocks`` anchor as the ``in_sp500`` / ``in_nasdaq100`` flags (0014), reconciled
-by the index-membership sync. The table is unused, so drop it. ``downgrade``
-recreates the empty table (mirroring 0001) for reversibility.
-
-Revision ID: 0015_drop_index_constituents
-Revises: 0014_index_flags_on_stocks
-Create Date: 2026-07-05
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

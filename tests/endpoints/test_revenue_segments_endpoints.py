@@ -1,11 +1,3 @@
-"""Tests for the revenue-segments read endpoint (GET /stocks/{symbol}/revenue-segments).
-
-Offline: a fake GetRevenueSegments is injected through dependency_overrides + FastAPI's
-TestClient, so this checks only the controller + presenter — the JSON shape (axis slug, derived
-label, fiscal_years, latest_fiscal_year, count), the cache header, empty coverage as a 200 (not
-a 404), and the error mapping — without touching SEC or the database.
-"""
-
 from datetime import date
 
 from fastapi import FastAPI

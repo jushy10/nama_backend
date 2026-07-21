@@ -1,12 +1,3 @@
-"""Unit tests for the yfinance news adapter.
-
-No network: a fake Ticker (a canned ``news`` list) is injected through the factory.
-Verifies the adapter unwraps Yahoo's nested ``{"id", "content"}`` items, maps the fields,
-parses the ISO-8601 publish time to aware UTC, orders newest-first, dedupes by id, drops
-un-keyable rows (no id / title / publish time), treats a symbol with no news as empty
-coverage (not an error), and turns vendor failures into domain errors.
-"""
-
 from datetime import datetime, timezone
 
 import pytest

@@ -1,11 +1,3 @@
-"""Tests for the annual-earnings-backed AnalystEstimatesProvider.
-
-Offline and DB-free: a hand-written fake repository stands in for the SQLAlchemy one, so
-this exercises only the projection policy — first upcoming year → FY1, the next → FY2,
-no stored timeline (or no upcoming years) → an empty block, and a storage failure →
-``StockDataUnavailable`` (which the snapshot's best-effort enrichment then swallows).
-"""
-
 from datetime import date
 
 import pytest

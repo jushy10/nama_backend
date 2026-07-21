@@ -1,11 +1,3 @@
-"""Tests for the market-sentiment use case.
-
-Offline: hand-written fakes implement the two ports (returning a canned snapshot
-or raising a domain error). Verifies the two legs are gathered together, that one
-source failing drops only that leg (the other survives), and that both failing is
-a real outage (``StockDataUnavailable``).
-"""
-
 from datetime import date, datetime, timezone
 
 import pytest

@@ -1,20 +1,3 @@
-"""HTTP API for the market heat map.
-
-``GET /market/heatmap`` — a Finviz-style treemap of an index (default the S&P 500): every stock
-a tile sized by market cap, coloured by the day's price change, grouped sector → industry →
-stock. Controller + presenter + wiring, the composition-root way, sitting in
-``app/stocks/endpoints/`` beside the other read endpoints.
-
-Wiring reuses the shared factories from ``wiring.py``: the universe read is a pure
-request-scoped DB read over the shared ``stocks`` anchor (no key) — it now carries the trailing
-windows too, materialized on the anchor by the ``sync-stock-performance`` cron, so the read
-path no longer recomputes a year of daily bars per index (the board's old heaviest leg). The
-batched quote feed is the same Alpaca singleton every other price view uses (so a missing key
-is the usual 503). The map's structure, tile sizes and timeframe colours come from the DB; the
-day-change colour is a best-effort live quote, so a transient feed hiccup yields an
-uncoloured-but-correct board rather than a 502.
-"""
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
@@ -50,8 +33,6 @@ def get_heatmap_use_case(
 def _present_performance(
     perf: StockPerformance | None,
 ) -> StockPerformanceResponse | None:
-    """Presenter: the shared trailing-window value object -> its HTTP DTO (``null`` when a
-    tile carried no history)."""
     if perf is None:
         return None
     return StockPerformanceResponse(
@@ -65,7 +46,6 @@ def _present_performance(
 
 
 def _present(heatmap: HeatMap) -> HeatMapResponse:
-    """Presenter: the heat-map entity tree -> HTTP response DTO."""
     return HeatMapResponse(
         scope=heatmap.scope.value,
         count=heatmap.cell_count,

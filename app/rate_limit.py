@@ -1,13 +1,3 @@
-"""The app-wide per-client (per-IP) rate limiter.
-
-Lives in its own module rather than ``app/main.py`` so endpoint modules can
-attach per-route limits with ``@limiter.limit(...)`` without importing ``main``.
-``main`` imports every endpoint router at module top, so the limiter has to sit
-*upstream* of both — importing it here keeps the dependency one-directional and
-avoids a cycle. ``main`` installs it (state + exception handler + middleware);
-the endpoint modules only decorate their routes with it.
-"""
-
 import os
 
 from slowapi import Limiter
@@ -15,21 +5,6 @@ from starlette.requests import Request
 
 
 def _client_ip(request: Request) -> str:
-    """Identify the caller for rate limiting.
-
-    Behind the API Gateway VPC link the socket peer is the gateway's ENI — the
-    same address for every caller — so keying on ``request.client.host`` would
-    lump all traffic into one bucket. The real client IP arrives in the
-    ``X-Client-IP`` header, which the gateway *overwrites* with the observed
-    source IP (see the integration's request_parameters in infra), so it's
-    trustworthy and can't be spoofed by a client-supplied header. (It's a custom
-    header rather than X-Forwarded-For because API Gateway v2 forbids mapping
-    operations on XFF.)
-
-    The X-Forwarded-For fallback covers running without the gateway in front
-    (local dev, tests); off the gateway there's nothing to overwrite the header,
-    so treat it as untrusted best-effort keying, not a security boundary.
-    """
     stamped = request.headers.get("x-client-ip")
     if stamped:
         return stamped.strip()

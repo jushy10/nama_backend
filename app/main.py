@@ -1,5 +1,3 @@
-"""A lightweight FastAPI backend backed by SQLite."""
-
 import logging
 import os
 from contextlib import asynccontextmanager

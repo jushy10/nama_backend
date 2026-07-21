@@ -1,14 +1,3 @@
-"""create index_constituents
-
-The stock screener's universe table — S&P 500 / Nasdaq-100 membership + GICS
-sector per symbol. Mirrors app.stocks.constituents.ConstituentRecord. Populated
-out of band, so it starts empty.
-
-Revision ID: 0001_index_constituents
-Revises:
-Create Date: 2026-06-26
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

@@ -1,19 +1,3 @@
-"""Application use cases for the recommendations slice.
-
-Two actions, both pure orchestration over the ports so they run offline in tests against
-hand-written fakes and know nothing of yfinance, HTTP, or SQLAlchemy:
-
-- ``GetStockAnalystInfo`` — the read path behind ``GET /stocks/ticker/{ticker}/analyst-info``.
-  Normalizes the symbol once and composes the slice's two ports into one ``AnalystInfo`` read:
-  the recommendation trends (+ price targets), primary, plus the rating-change events as
-  best-effort enrichment. Both are wired in production as the DB cache over yfinance, so each
-  hits Yahoo only on its own cold miss.
-- ``SyncRecommendations`` — the out-of-band refresh. Walks the already-stored rows
-  least-recently-refreshed first and renews them from the live provider, so users see the
-  current month's split without a request ever waiting on a vendor round-trip. Invoked by
-  the cron endpoint.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -42,24 +26,11 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_symbol(symbol: str) -> str:
-    """Trim/upper-case the ticker and reject obvious junk, once, at the edge of the use
-    case — so every layer below sees a clean symbol. Mirrors the stocks slice's guard."""
     return normalize_symbol(symbol)
 
 
 @dataclass(frozen=True)
 class AnalystInfo:
-    """A stock's full analyst coverage, bundled for the analyst-info card.
-
-    Groups the slice's two reads behind one result — the recommendation trends (+ the
-    consensus price target) and the discrete upgrade/downgrade events. Like the ticker card's
-    ``TickerCard``, it's a composite of the slice's shared entities, not a stored entity of its
-    own. ``recommendations`` is the primary content; ``rating_changes`` is best-effort, so it
-    may be an empty run even when the trends are present. ``top_firms`` is the card's headline
-    read of the events — the most credible firms covering the stock and their current stance,
-    derived from ``rating_changes`` (empty when none of the covering firms are ranked).
-    """
-
     symbol: str
     recommendations: AnalystRecommendations
     rating_changes: AnalystRatingChanges
@@ -67,21 +38,6 @@ class AnalystInfo:
 
 
 class GetStockAnalystInfo:
-    """Use case: retrieve a stock's full analyst coverage — recommendation trends (+ price
-    targets) and rating-change events — in one read, for ``GET
-    /stocks/ticker/{ticker}/analyst-info``.
-
-    Composes the slice's two ports the way the ticker card composes several. The recommendation
-    trends are **primary** — their failure propagates (an unknown symbol → 404, an upstream
-    outage → 502), exactly as the old standalone read did. The rating-change events are
-    **best-effort enrichment**: a leg the source can't serve (``StockNotFound`` /
-    ``StockDataUnavailable``) degrades to an empty run rather than sinking the card, so the
-    events can never take down the trends the user came for. "No coverage" is not an error for
-    either — an uncovered symbol is an empty run, presented as a 200. In production both
-    providers are the read-through DB cache over yfinance, so each hits Yahoo only on its own
-    cold miss.
-    """
-
     def __init__(
         self,
         recommendations: RecommendationProvider,
@@ -110,8 +66,6 @@ class GetStockAnalystInfo:
         )
 
     def _read_rating_changes(self, symbol: str) -> AnalystRatingChanges:
-        """Best-effort: the rating-change events, or an empty run when the source can't serve
-        them — enrichment must never sink the primary trends."""
         try:
             return self._rating_changes.get_rating_changes(symbol)
         except (StockNotFound, StockDataUnavailable):
@@ -120,11 +74,6 @@ class GetStockAnalystInfo:
 
 @dataclass(frozen=True)
 class RecommendationsSyncReport:
-    """The outcome of one refresh run: how many stocks had their trends renewed, how many
-    also had rating changes stored (a best-effort subset of the renewed ones), how many the
-    provider couldn't serve this run (or returned empty for), and the per-run cap (``None``
-    when the run was uncapped)."""
-
     refreshed: int
     failed: int
     limit: int | None
@@ -132,17 +81,6 @@ class RecommendationsSyncReport:
 
 
 class SyncRecommendations:
-    """Renew stored analyst coverage from the live source, most-stale stocks first — and
-    **seed** stocks not yet cached (never-fetched anchor stocks come first).
-
-    Primarily the recommendation trends (+ price target). When a rating-change provider and
-    repository are also wired, the same one-pass walk stores each renewed stock's
-    upgrade/downgrade events too — folded into this sweep rather than a second pass over the
-    whole anchor, since that would double the (rate-limited) Yahoo round-trips. The
-    rating-change leg is **best-effort enrichment**: it runs only after a stock's trends
-    refresh succeeds, and its own failure is swallowed so it can never sink the sweep.
-    """
-
     def __init__(
         self,
         provider: RecommendationProvider,
@@ -157,10 +95,6 @@ class SyncRecommendations:
         self._rating_change_repository = rating_change_repository
 
     def execute(self, *, limit: int | None = None) -> RecommendationsSyncReport:
-        """Refresh up to ``limit`` stocks most in need of it (un-cached first, then stalest);
-        ``limit=None`` (the default) processes every stock in the anchor. Returns a summary.
-        Never raises for a single symbol's failure — the run continues and the failure is
-        counted, so one bad symbol doesn't abort the whole sweep."""
         effective = None if limit is None else max(1, limit)
         refreshed = 0
         failed = 0
@@ -195,9 +129,6 @@ class SyncRecommendations:
         )
 
     def _sync_rating_changes(self, target: RefreshTarget) -> int:
-        """Best-effort: store the stock's upgrade/downgrade events, returning 1 when any were
-        stored (0 otherwise). No-op when the rating-change ports aren't wired. A live failure
-        or an empty feed is swallowed — this leg must never fail the recommendations sweep."""
         provider = self._rating_change_provider
         repository = self._rating_change_repository
         if provider is None or repository is None:

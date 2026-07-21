@@ -1,13 +1,3 @@
-"""Interface Adapter: the SQLAlchemy-backed QuarterlyEarningsRepository.
-
-Implements the ``repository.py`` port against the database. Its job is the mapping the
-use cases must not see: it converts the ``QuarterlyEarnings`` entities to and from the
-ORM rows, and delegates every query to ``models.py``. Only this layer (and models) knows
-the tables exist; the domain entities stay free of SQLAlchemy. ``upsert`` rewrites a
-stock's whole window (delete-then-insert) and commits its own write, so a successful
-cache fill is durable independent of the request.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -32,8 +22,6 @@ def _quarter_key(quarter: QuarterlyEarnings) -> tuple[int, int]:
 
 
 def _session_from_str(value: str | None) -> EarningsSession:
-    """A stored ``report_session`` string → the enum; ``NULL`` (a pre-column row) or any
-    unrecognized value degrades to ``UNKNOWN`` rather than raising on a bad read."""
     if value is None:
         return EarningsSession.UNKNOWN
     try:
@@ -61,22 +49,11 @@ def _to_entity(row: StockQuarterlyEarningsRecord) -> QuarterlyEarnings:
 def _to_timeline(
     symbol: str, rows: list[StockQuarterlyEarningsRecord]
 ) -> QuarterlyEarningsTimeline:
-    """Rebuild the timeline in its canonical chronological order — ascending by
-    ``(fiscal_year, fiscal_quarter)``, oldest reported quarter through furthest upcoming
-    — the order the entity documents, regardless of the row order the query returned."""
     quarters = sorted((_to_entity(row) for row in rows), key=_quarter_key)
     return QuarterlyEarningsTimeline(symbol=symbol, quarters=tuple(quarters))
 
 
 class SqlQuarterlyEarningsRepository(QuarterlyEarningsRepository):
-    """Reads and writes the quarterly-earnings cache through a request-scoped session.
-
-    Holds the session the router injects via ``get_db``, maps rows to and from the
-    ``QuarterlyEarnings`` entities, and delegates every query to ``models``. ``upsert``
-    commits its own write so a successful cache fill is durable independent of the
-    surrounding request.
-    """
-
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the fetch stamp deterministic in tests.

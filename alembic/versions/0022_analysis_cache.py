@@ -1,19 +1,3 @@
-"""analysis cache
-
-Creates ``investment_analysis_cache`` — the read-through result cache behind the AI
-analysis endpoints (``GET /stocks/{symbol}/analysis`` and
-``GET /stocks/etf/{ticker}/analysis``). One row per ``(kind, symbol)`` holds the most
-recent generated read so a repeat view — and a burst of viewers — skips the expensive
-data gather + model call. It is a cache, not a source of record: rows are regenerated
-once they age past the endpoint's TTL, and it deliberately does not hang off the
-``stocks`` anchor (an analysis is served for any valid ticker; forcing an anchor row
-would leak arbitrary tickers into the screened universe).
-
-Revision ID: 0022_analysis_cache
-Revises: 0021_drop_etf_returns
-Create Date: 2026-07-08 15:22:19.482834
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

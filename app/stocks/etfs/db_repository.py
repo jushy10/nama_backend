@@ -1,21 +1,3 @@
-"""Interface Adapters: the SQLAlchemy-backed ETF repositories.
-
-All implement ``repository.py`` against the slice's own ``etfs`` table (and its
-``etf_sector_weightings`` / ``etf_top_holdings`` children) and are the only layer that touches
-SQLAlchemy:
-
-- ``SqlEtfRepository`` (write side): ``upsert_screen`` writes the screen into ``etfs`` — filling
-  ticker/name/exchange fill-once, refreshing the ``net_assets``/``expense_ratio`` figures + the
-  screen stamp on every run (additive; an absent fund is kept, never deleted). ``upsert_profile``
-  is the per-fund enrichment write (the profile scalars onto the row + the two child sets),
-  merge-preserving so a partial Yahoo response never wipes good stored data. Each commits its own
-  write so a successful — or partial — sync is durable independent of the request.
-- ``SqlEtfSearchRepository`` (read side): the ``GET /stocks/etfs`` search + the
-  ``.../categories`` menu, reading those same columns back. Read-only.
-- ``SqlEtfLookupRepository`` (read side): the per-ticker membership check + the detail card's
-  stored facts and profile. Read-only.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -51,10 +33,6 @@ from app.stocks.etfs.repository import (
 
 
 class SqlEtfRepository(EtfRepository):
-    """Writes the screened ETF set + each fund's profile through a request-scoped session, into the
-    ``etfs`` table and its children. ``upsert_screen`` / ``upsert_profile`` each commit their own
-    write so a successful (or partial) sync is durable independent of the surrounding request."""
-
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the screen stamp deterministic in tests.
@@ -152,14 +130,10 @@ _SORT_COLUMNS = {
 
 
 def _escape_like(term: str) -> str:
-    """Escape the LIKE metacharacters in a user's search term so a literal ``%`` / ``_`` matches
-    itself instead of acting as a wildcard. Paired with ``escape="\\"`` on the ``.ilike`` calls
-    below (backslash is escaped first so it doesn't double-escape the rest)."""
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _to_result(row: EtfRecord) -> EtfSearchResult:
-    """Map an ``etfs`` row onto the slice's read entity (DB facts only, no live price)."""
     return EtfSearchResult(
         ticker=row.ticker,
         name=row.name,
@@ -172,9 +146,6 @@ def _to_result(row: EtfRecord) -> EtfSearchResult:
 
 
 class SqlEtfSearchRepository(EtfSearchRepository):
-    """Reads the stored ETF set off the ``etfs`` table through a request-scoped session.
-    Read-only — the search never writes."""
-
     def __init__(self, session: Session) -> None:
         self._session = session
 
@@ -223,9 +194,6 @@ class SqlEtfSearchRepository(EtfSearchRepository):
         return EtfCategories(categories=tuple(rows))
 
     def _conditions(self, criteria: EtfSearchCriteria) -> list:
-        """The WHERE terms shared by the count and the page query — whichever filters the
-        criteria carries (a term is added only when its field is set). There's no 'screened'
-        gate: every row in ``etfs`` came from the screen."""
         conditions: list = []
         if criteria.query:
             like = f"%{_escape_like(criteria.query)}%"
@@ -245,9 +213,6 @@ class SqlEtfSearchRepository(EtfSearchRepository):
 
 
 class SqlEtfLookupRepository(EtfLookupRepository):
-    """Reads a single stored fund off the ``etfs`` table by its unique ``ticker``, through a
-    request-scoped session. Read-only — like the search repository, it never writes."""
-
     def __init__(self, session: Session) -> None:
         self._session = session
 

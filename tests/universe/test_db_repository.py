@@ -1,19 +1,3 @@
-"""Tests for the database-backed universe repositories.
-
-Offline: an in-memory SQLite database stands in for the real ``stocks`` table (the universe
-has no table of its own). Two suites:
-
-- ``SqlUniverseRepository`` (write side): the additive upsert (insert new / refresh in place /
-  never remove an absent member), the fill-but-don't-clobber rule for the anchor's
-  name/exchange/sector, the screen stamp, added-vs-updated counting, the enrichment pass's
-  read/write of the sector/industry classification, and the valuation pass's overwriting
-  ``set_pe_ratios``.
-- ``SqlStockSearchRepository`` (read side): the name-or-ticker substring match, the
-  sector/industry/index-membership filters, the sorts (market cap, trailing growth, and
-  trailing P/E — nulls last, stable ticker tiebreak), limit/offset paging with a total count,
-  the screened-only gate, and the distinct sector/industry menus.
-"""
-
 from datetime import datetime, timezone
 
 import pytest
@@ -81,7 +65,6 @@ def _row(session, ticker) -> StockRecord:
 
 
 def _screened_count(session) -> int:
-    """Anchors marked as screened members (a ``market_cap`` is set)."""
     return session.execute(
         select(func.count())
         .select_from(StockRecord)
@@ -523,9 +506,6 @@ def _seed(
     domicile_country=None,
     has_us_listing=False,
 ):
-    """Insert a ``stocks`` anchor row directly — the search reads whatever the sync/annual
-    slices would have written (a ``market_cap`` marks the row as screened; ``None`` leaves it an
-    incidental, non-searchable ticker)."""
     session.add(
         StockRecord(
             ticker=ticker,

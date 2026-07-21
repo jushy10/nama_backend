@@ -1,27 +1,3 @@
-"""HTTP API for invoking the Congressional-trades refresh — the cron entrypoint.
-
-The refresh is a use case (``SyncCongressTrades``) driven over HTTP: a scheduler (the sync-congress
-GitHub workflow, or any cron) POSTs here to kick it off.
-
-The sweep is **fire-and-forget**. It downloads the whole market-wide feed (several megabytes) and
-distributes it across the anchor, which takes longer than the API Gateway's hard 30s integration
-timeout allows — a synchronous run would 504 at the gateway while the app kept working. So the
-endpoint schedules the sweep on a background thread and returns ``202`` at once; the shared
-``background_sync`` helper owns the threading, the single-flight guard, and the exception handling.
-A partial run is safe: ``upsert`` commits per stock and the sweep is stalest-first, so an
-interrupted run just resumes on the next trigger.
-
-Wiring lives here, the composition-root way: ``run_congress_sync`` opens a fresh session and builds
-the live stock-watcher adapter + the SQL repository for the use case. The source is keyless public
-JSON, so there's no credential to gate on; the sync is always constructable. ``get_sync_runner`` is
-the DI seam tests override with a fake.
-
-Security: the trigger is guarded by a shared bearer token (``require_cron_token``) — fail-closed, a
-``503`` when the token is unset and a ``401`` on a missing/wrong one. The sync workflow no longer
-POSTs here (it runs the sweep as a one-off ECS task via ``python -m app.sync``), so this guard only
-gates the manual / HTTP trigger.
-"""
-
 import logging
 import threading
 
@@ -53,8 +29,6 @@ _FEED_MIN_REQUEST_INTERVAL = 0.5
 
 
 def run_congress_sync(limit: int | None) -> CongressSyncReport:
-    """Perform one full refresh run with its **own** DB session (the request-scoped ``get_db`` one
-    is closed by the time the background thread runs)."""
     db = SessionLocal()
     try:
         report = SyncCongressTrades(
@@ -76,7 +50,6 @@ def run_congress_sync(limit: int | None) -> CongressSyncReport:
 
 
 def get_sync_runner() -> SyncRunner:
-    """DI seam for the sweep's unit of work; tests override it with a fake."""
     return run_congress_sync
 
 

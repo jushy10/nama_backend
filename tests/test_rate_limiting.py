@@ -1,13 +1,3 @@
-"""The app-wide per-client (per-IP) rate limiter wired in ``app/main.py``.
-
-The autouse fixture in ``conftest`` disables the limiter for the rest of the
-suite (every ``TestClient`` request otherwise shares one client key and would
-pool the whole run into a single bucket). These tests re-enable it in-body and
-drive it through the real middleware, giving each client a distinct IP via
-``X-Client-IP`` — the header the key function reads and the gateway overwrites
-with the true source in production.
-"""
-
 from datetime import datetime, timezone
 
 from starlette.testclient import TestClient
@@ -66,10 +56,6 @@ def test_each_client_ip_gets_its_own_allowance():
 
 
 class _FakeUseCase:
-    """Stands in for a GetMarketSummary / GetSectorAnalysis use case: ``execute``
-    just returns a ready entity, so the endpoint reaches the presenter without any
-    Bedrock or DB call and every un-throttled request is a clean 200."""
-
     def __init__(self, result):
         self._result = result
 

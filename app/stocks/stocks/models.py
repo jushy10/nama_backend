@@ -1,25 +1,3 @@
-"""Database model + queries for the shared ``stocks`` anchor.
-
-The ``stocks`` table is the single row every per-feature table (the earnings
-timelines, …) points at, so the same stock is one thing everyone references rather than
-a symbol string copied around. It's owned by no single feature, so it gets its own slice
-here. Feature slices import ``StockRecord`` + ``get_or_create_stock`` and add their own
-child tables beside it. The schema is created by migration 0002 (the since-removed
-analyst-estimates feature was the first to need the anchor); migration 0009 added
-``exchange``, 0010 renamed the ``symbol`` column to ``ticker`` (the domain layers
-still say "symbol" — the rename is a table-vocabulary choice), 0011 added the trailing
-year-over-year growth columns, 0012 the three universe-screen columns, 0013 the
-``industry`` column, 0014 the ``in_sp500`` / ``in_nasdaq100`` index-membership flags,
-0017 the ``pe_ratio`` column, 0018 the forward year-over-year growth columns, 0027 the
-free-cash-flow columns (``fcf_per_share`` / ``ocf_per_share`` / ``fcf_growth_yoy`` /
-``fcf_yield``), 0031 the trailing fundamentals columns, 0033 the trailing-performance
-window columns (``perf_*`` / ``performance_synced_at``), 0037 the enterprise-value inputs +
-materialized ``ev_to_ebitda``, 0038 the ``country`` / ``currency`` screen facts (the
-multi-market universe), 0039 the ``has_us_listing`` interlisted flag, and 0040 the
-``domicile_country`` issuer-home-country column (which supersedes ``has_us_listing`` for the
-US / Canadian screener split) — all below.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -33,154 +11,6 @@ from app.db import Base
 
 
 class StockRecord(Base):
-    """A stock as stored in the database — the anchor per-feature tables reference.
-
-    ``id`` is a surrogate UUID so child rows have a stable foreign key; ``ticker`` is
-    what everything is looked up by (unique); ``name`` is the company display name and
-    ``exchange`` the listing venue (e.g. "NASDAQ") — both nullable so a lazily-stored
-    ticker (which arrives alone) still gets a row until whichever feature first learns
-    them fills them in.
-
-    ``revenue_growth_yoy`` / ``eps_growth_yoy`` are the stock's *latest trailing*
-    year-over-year growth (percent) — the newest reported fiscal year over the one
-    before it, written by the annual-earnings slice from its stored timeline. Unlike
-    ``name``/``exchange`` (fill-once identity facts) these are a moving snapshot:
-    they're **overwritten** on every annual refresh as the latest reported year rolls
-    forward, so a stock carries exactly one pair (the current one), not a history. The
-    EPS figure is on the analyst-consensus (adjusted) basis, matching the annual
-    slice's ``eps_actual_consensus``. Nullable — unset until the annual slice has two
-    reported years cached (and EPS best-effort, since the consensus basis often isn't).
-
-    ``forward_revenue_growth_yoy`` / ``forward_eps_growth_yoy`` are the *forward* mirror
-    of that pair — the analyst-consensus FY1 -> FY2 change (percent), feeding the universe
-    search's forward-growth sorts and the AI analysis context. Written the same way (the
-    annual slice overwrites both on every refresh from its stored forward years), and both
-    legs sit on
-    the consensus basis so neither carries a basis caveat. Nullable and more often unset
-    than the trailing pair: they need *two* upcoming years and Yahoo frequently publishes
-    only FY1 (0018).
-
-    ``sector`` / ``industry`` / ``market_cap`` / ``screened_at`` are the universe screen's
-    facts, filled by the universe sync (the ≥$1B US screen) and deliberately denormalized
-    onto the anchor so search is a single-table read. All four are nullable: a ticker that
-    reached the table some other way (a ticker-card lookup, an earnings refresh) has never
-    been screened, so they stay null — which is exactly how search tells a screened company
-    apart from an incidentally-known symbol (it filters on ``market_cap IS NOT NULL``).
-    ``market_cap`` is whole dollars **in the row's trading ``currency``** (see below);
-    ``screened_at`` is when the last screen that included the stock ran (the freshness
-    stamp). ``sector`` and ``industry`` are the company's
-    classification as snake_case slugs (e.g. ``technology`` / ``consumer_electronics``),
-    filled once by the sync's enrichment pass from Yahoo's per-ticker ``.info`` — the bulk
-    screen carries neither, so they lag the other screen facts until enrichment reaches the
-    stock (and stay null for a symbol Yahoo doesn't classify).
-
-    ``country`` / ``currency`` are the other two screen facts, added once the universe spans
-    more than one market (the US screen plus the Canadian TSX/TSXV screen). ``country`` is the
-    listing country as an ISO-2 code (``US`` / ``CA``) — what a client filters the universe by
-    market on, and what routes a stock's price feed (US → Alpaca, CA → Yahoo). ``currency`` is
-    the ISO-3 trading currency (``USD`` / ``CAD``) the row's ``market_cap`` and every
-    price-derived figure is quoted in: the ≥$1B floor is applied in each market's **native**
-    currency (Yahoo screens a quote in its own currency), so a CAD row's ``market_cap`` is whole
-    CAD — a mixed-currency ``market_cap`` sort is therefore nominal, and this column is the unit
-    the FE labels/converts against. Both are set by the sync's screen upsert (fill-once, like
-    ``exchange``), nullable for an incidentally-known ticker that's never been screened (0038).
-
-    ``domicile_country`` is the ISO-2 country the *company* is domiciled in (``US`` / ``CA`` /
-    ``CH`` / ``JP`` / …), read from Yahoo's per-ticker ``.info['country']`` by the enrichment pass
-    (the same call that fills ``sector`` / ``industry``) and mapped to ISO-2. It's **distinct from
-    ``country``** — which is the *listing* market — and the two diverge exactly where the universe
-    overlaps: a Canadian company dual-listed in the US (``CNI`` is listing ``US`` but domicile
-    ``CA``) and a Canadian Depositary Receipt (``ZCVX.NE``, a Chevron CDR, is listing ``CA`` but
-    domicile ``US``). The universe search splits the screeners by *home market* on it — the US
-    screen shows US-listed rows whose domicile isn't ``CA`` (so ``CNI`` drops, foreign ADRs stay),
-    the Canadian screen shows Canadian-listed rows whose domicile isn't a known *foreign* country
-    (so CDRs drop, Canadian companies stay); an **unknown (null)** domicile is treated leniently —
-    shown in its listing market — so the screeners improve as the backfill fills rather than
-    emptying. Fill-once like ``sector`` (a company doesn't change domicile), nullable until the
-    enrichment pass reaches the stock (0040).
-
-    ``has_us_listing`` (0039) is **superseded by ``domicile_country``** and no longer read by the
-    search or written by the sync — a vestigial column kept only to avoid a destructive drop here
-    (a later migration removes it). It was the base-ticker interlisting heuristic, which couldn't
-    tell a US company's Canadian CDR (hide the Canadian one) from a Canadian company's US
-    dual-listing (hide the US one) and so wrongly hid names like ``CP.TO`` / ``CNR.TO``; domicile
-    resolves both directions. ``NOT NULL``, default ``False``.
-
-    ``pe_ratio`` is the stock's trailing P/E on the analyst-consensus (adjusted) EPS basis —
-    the same figure the ticker card computes live (``TickerValuation.trailing_pe``): a market
-    price over the quarterly slice's TTM consensus EPS. It's written by the universe sync on
-    the same sweep as ``market_cap`` (from the screen-time price the screen already carries),
-    and like ``market_cap`` it's a *drifting, price-derived snapshot* — overwritten every run,
-    not a fill-once fact. Nullable and null until the quarterly cache holds four reported
-    quarters, and whenever the trailing year is a loss (a P/E off negative earnings is
-    meaningless). It exists to make the universe *sortable* by valuation; the card still serves
-    its own live P/E off the quote, so the two share a basis but not a freshness.
-
-    ``fcf_per_share`` / ``ocf_per_share`` are the newest reported fiscal year's free- and
-    operating-cash-flow *per share* (trading currency), written by the annual-earnings slice
-    from its stored timeline alongside the growth pair — a moving snapshot, **overwritten**
-    every refresh (each drops to null when no reported year carries it). They're quasi-static
-    inputs (they move once a year on a filing), stored so the ticker card can price them against
-    its *live* quote into ``price_to_fcf`` / ``fcf_yield`` / an OCF yield — the same split
-    ``pe_ratio`` uses (store the input, price it live), so the card never needs a live cash-flow
-    fetch. ``fcf_growth_yoy`` is the trailing YoY growth of ``fcf_per_share`` (percent, newest
-    reported year over the prior), the cash-flow sibling of ``revenue_growth_yoy`` / served
-    directly. ``fcf_yield`` is the *materialized* free-cash-flow yield (percent) — the universe
-    sync's valuation pass divides ``fcf_per_share`` into the screen-time price the same way it
-    derives ``pe_ratio``, so the search list is sortable by cash cheapness; a *drifting,
-    price-derived snapshot* (overwritten every run, null until ``fcf_per_share`` is filled), and
-    unlike the card's live ``fcf_yield`` it keeps its sign (a cash-burner reads negative). All
-    four nullable, all written by their sync (0027).
-
-    ``gross_margin`` / ``operating_margin`` / ``net_margin`` / ``return_on_equity`` (percent),
-    ``current_ratio``, ``debt_to_equity`` (a ratio) and ``beta`` are the stock's trailing
-    profitability / liquidity / leverage / volatility fundamentals, materialized here by the
-    fundamentals sync (Yahoo ``.info``) so the ticker card and AI analysis read them DB-only
-    rather than live from Finnhub. ``book_value_per_share`` / ``sales_per_share`` /
-    ``dividend_per_share`` are the per-share *inputs* the readers price against the live quote
-    (book value → P/B, sales → P/S, dividend → yield — the same "store the input, price it
-    live" split ``fcf_per_share`` and the quarterly TTM EPS use), all in the trading currency
-    (a foreign ADR's reporting-currency figures are normalized in the adapter). Like the growth
-    and cash-flow snapshots these are **overwritten** every refresh (each drops to ``None`` when
-    Yahoo doesn't carry it); all nullable, unset until the fundamentals sync reaches the stock.
-    ``fundamentals_synced_at`` is that sweep's freshness stamp — the cron orders its stale-first
-    batch by it (un-synced rows first, then the oldest) — the anchor-column analogue of the
-    earnings slices' per-row ``fetched_at`` (0031).
-
-    ``ebitda`` / ``total_debt`` / ``cash_and_equivalents`` / ``shares_outstanding`` are the
-    enterprise-value *inputs*, also landed by the fundamentals sweep (Yahoo ``.info``). The
-    first three are absolute figures in the trading currency (a foreign ADR's reporting-currency
-    values normalized in the adapter, like the per-share inputs); ``shares_outstanding`` is a
-    share count. The ticker card prices them against its *live* quote — enterprise value =
-    price × ``shares_outstanding`` + ``total_debt`` − ``cash_and_equivalents``, and EV/EBITDA
-    over ``ebitda`` — the same "store the input, price it live" split ``pe_ratio`` and the
-    per-share inputs use, so the multiple stays fresh without materializing a snapshot that
-    drifts. ``ev_to_ebitda`` is the *materialized* EV/EBITDA snapshot for the sortable search
-    column and the peer comparison — the universe sync's valuation pass computes it from the
-    screen-time ``market_cap`` + ``total_debt`` − ``cash_and_equivalents`` over ``ebitda`` and
-    **overwrites** it every run (a drifting, price-derived snapshot like ``pe_ratio`` /
-    ``fcf_yield``), null until both syncs have reached the stock or on a non-positive EBITDA
-    (0037). All five nullable.
-
-    ``perf_one_week`` / ``perf_one_month`` / ``perf_three_month`` / ``perf_six_month`` /
-    ``perf_ytd`` / ``perf_one_year`` are the stock's trailing price-return over the standard
-    windows (percent) — the six fields of the shared ``StockPerformance`` value object,
-    materialized here by the performance sync (Alpaca daily bars) so the heat map reads them
-    DB-only instead of recomputing a year of bars for a whole index on every request (its
-    heaviest read). Like the growth/cash-flow snapshots these are **overwritten** every refresh
-    (each drops to ``None`` when there isn't enough history — a newly listed name). All nullable,
-    unset until the performance sync reaches the stock. ``performance_synced_at`` is that sweep's
-    freshness stamp, the sibling of ``fundamentals_synced_at`` — the cron orders its stale-first
-    batch by it (un-synced rows first, then the oldest) (0033).
-
-    ``in_sp500`` / ``in_nasdaq100`` are index-membership flags, reconciled by the
-    index-membership sync (Finnhub → this anchor). Unlike the screen facts these are
-    ``NOT NULL`` (default ``False``): membership is a known yes/no — absent from the
-    source list means "not a member", not "unknown" — so every row carries a definite
-    answer. The reconcile both *marks* current members and *clears* companies that dropped
-    out of an index, so a stale flag never lingers.
-    """
-
     __tablename__ = "stocks"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -246,13 +76,6 @@ class StockRecord(Base):
 def get_or_create_stock(
     session: Session, ticker: str, name: str | None
 ) -> StockRecord:
-    """Return the ``stocks`` row for ``ticker``, creating it if absent.
-
-    Fills a missing name when one is supplied, but never clobbers a known name with
-    ``None`` — so whichever feature first learns the company name sets it, and a later
-    nameless write (e.g. an earnings refresh) leaves it intact. The new row is flushed
-    so its ``id`` is available for a child row in the same unit of work.
-    """
     stock = session.execute(
         select(StockRecord).where(StockRecord.ticker == ticker)
     ).scalar_one_or_none()
@@ -266,25 +89,6 @@ def get_or_create_stock(
 
 
 def anchor_facts(session: Session, ticker: str) -> Row | None:
-    """The stored anchor columns the ticker card serves DB-first, in one query —
-    ``None`` when the row doesn't exist yet.
-
-    Returns a ``Row`` with named columns (``name``, ``exchange``, ``market_cap``,
-    ``sector``, ``industry``, ``revenue_growth_yoy``, ``eps_growth_yoy``,
-    ``forward_revenue_growth_yoy``, ``forward_eps_growth_yoy``, ``fcf_per_share``,
-    ``ocf_per_share``, ``fcf_growth_yoy``, ``gross_margin``, ``operating_margin``,
-    ``net_margin``, ``return_on_equity``, ``current_ratio``, ``debt_to_equity``,
-    ``beta``, ``book_value_per_share``, ``sales_per_share``, ``dividend_per_share``,
-    ``ebitda``, ``total_debt``, ``cash_and_equivalents``, ``shares_outstanding``);
-    per-field ``None`` for whatever the row hasn't learned. Widened past name/exchange
-    because the card also serves the universe-screen facts, the annual slice's trailing
-    + forward growth and cash-flow per share, and the fundamentals slice's full trailing
-    ratios (margins / ROE / liquidity / leverage / beta) plus the per-share inputs it
-    prices live (book value → P/B, sales → P/S, dividend → yield) and the enterprise-value
-    inputs it prices live (shares / debt / cash → enterprise value, ÷ EBITDA → EV/EBITDA)
-    straight off the anchor — the caller maps it into ``StoredTickerFacts``. The same set
-    the AI analysis reads via ``AnchorMetrics``, so card and scorecard show one canonical
-    figure."""
     return session.execute(
         select(
             StockRecord.name,
@@ -318,11 +122,6 @@ def anchor_facts(session: Session, ticker: str) -> Row | None:
 
 
 def fill_exchange(session: Session, ticker: str, exchange: str) -> None:
-    """Record ``ticker``'s listing exchange, creating the anchor row if absent.
-
-    Same semantics as the name on ``get_or_create_stock``: fill when missing, never
-    clobber a known value — an exchange effectively never changes, so the first
-    feature to learn it settles it."""
     stock = get_or_create_stock(session, ticker, None)
     if not stock.exchange:
         stock.exchange = exchange

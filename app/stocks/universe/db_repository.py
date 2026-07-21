@@ -1,19 +1,3 @@
-"""Interface Adapters: the SQLAlchemy-backed universe repositories.
-
-Both implement ``repository.py`` against the shared ``stocks`` anchor — the universe has no
-table of its own — and are the only layer that touches SQLAlchemy:
-
-- ``SqlUniverseRepository`` (write side): the screen is written straight onto ``stocks``
-  (ticker/name/exchange plus the denormalized ``sector``/``industry``/``market_cap``/
-  ``screened_at`` columns). Maps ``ScreenedStock`` / ``CompanyClassification`` entities onto
-  anchor rows; ``upsert_screen`` (the screen) and ``set_classification`` (the per-ticker
-  enrichment) each commit their own write, so a successful — or partial — sync is durable
-  independent of the request.
-- ``SqlStockSearchRepository`` (read side): the ``GET /stocks/ticker`` search + the
-  ``GET /stocks/classifications`` filter menus, reading those same columns back off the
-  anchor. Read-only, and scoped to **screened** rows (``market_cap IS NOT NULL``).
-"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -45,11 +29,6 @@ from app.stocks.universe.repository import (
 
 
 class SqlUniverseRepository(UniverseRepository):
-    """Writes the universe through a request-scoped session, onto the ``stocks`` anchor.
-    ``upsert_screen`` commits its own write so a successful sync is durable independent of
-    the surrounding request.
-    """
-
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the screen stamp deterministic in tests.
@@ -294,9 +273,6 @@ _TIER_BOUNDS = {
 
 
 def _tier_range(tier: MarketCapTier):
-    """One market-cap tier as a SQL predicate over its half-open bounds — ``>= low`` always
-    (every tier is bounded below), plus ``< high`` unless the tier is open-ended above (MEGA).
-    OR several of these together for a multi-tier filter (see ``_conditions``)."""
     low, high = _TIER_BOUNDS[tier]
     bounds = [StockRecord.market_cap >= low]
     if high is not None:
@@ -305,10 +281,6 @@ def _tier_range(tier: MarketCapTier):
 
 
 def _tier_for_market_cap(market_cap: float | None) -> MarketCapTier | None:
-    """Bucket a dollar market cap into its ``MarketCapTier`` — the in-Python inverse of
-    ``_tier_range``, over the same ``_TIER_BOUNDS``. ``None`` for a null cap or one below the
-    smallest tier's floor (nothing to compare it as). Keeps the tier ⇄ dollars mapping in the
-    adapter, so the entity's cohort logic works on tiers alone."""
     if market_cap is None:
         return None
     for tier, (low, high) in _TIER_BOUNDS.items():
@@ -318,17 +290,10 @@ def _tier_for_market_cap(market_cap: float | None) -> MarketCapTier | None:
 
 
 def _escape_like(term: str) -> str:
-    """Escape the LIKE metacharacters in a user's search term so a literal ``%`` / ``_``
-    matches itself instead of acting as a wildcard. Paired with ``escape="\\"`` on the
-    ``.ilike`` calls below (backslash is escaped first so it doesn't double-escape the rest)."""
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _performance(row: StockRecord) -> StockPerformance | None:
-    """The row's trailing-window returns as a ``StockPerformance``, or ``None`` when the
-    performance sync hasn't reached it — every window null means "not synced" (a blank tile),
-    which the heat map serializes as ``null`` rather than an all-null block. A partially-filled
-    row (some windows null for want of history) still yields a block, its blanks preserved."""
     windows = (
         row.perf_one_week,
         row.perf_one_month,
@@ -343,7 +308,6 @@ def _performance(row: StockRecord) -> StockPerformance | None:
 
 
 def _to_result(row: StockRecord) -> StockSearchResult:
-    """Map an anchor row onto the slice's read entity (no live price — DB facts only)."""
     return StockSearchResult(
         ticker=row.ticker,
         name=row.name,
@@ -368,12 +332,6 @@ def _to_result(row: StockRecord) -> StockSearchResult:
 
 
 class SqlStockSearchRepository(StockSearchRepository):
-    """Reads the screened universe off the ``stocks`` anchor through a request-scoped session.
-
-    Read-only — the search never writes. Only screened rows (``market_cap IS NOT NULL``) are
-    visible, the gate that keeps incidentally-known, ticker-only rows out of the results.
-    """
-
     def __init__(self, session: Session) -> None:
         self._session = session
 
@@ -403,14 +361,6 @@ class SqlStockSearchRepository(StockSearchRepository):
 
     @staticmethod
     def _ordering(criteria: StockSearchCriteria) -> list:
-        """The ORDER BY terms for a search.
-
-        With no sort chosen (``criteria.sort is None``) the page is ordered by ticker alone — a
-        neutral, stable A→Z, the same tiebreak every metric sort already ends on — so an unsorted
-        browse still pages deterministically (``direction`` doesn't apply). With a sort, order by
-        its column/expression wrapped in ``nulls_last`` (a stock still missing the figure sinks to
-        the bottom in either direction), then ticker as the stable tiebreak so offset paging over
-        equal values never skips or repeats a row."""
         if criteria.sort is None:
             return [StockRecord.ticker.asc()]
         expression = _SORT_EXPRESSIONS[criteria.sort]
@@ -581,8 +531,6 @@ class SqlStockSearchRepository(StockSearchRepository):
         )
 
     def _conditions(self, criteria: StockSearchCriteria) -> list:
-        """The WHERE terms shared by the count and the page query — the screened gate plus
-        whichever filters the criteria carries (a term is added only when its field is set)."""
         conditions = [StockRecord.market_cap.is_not(None)]  # screened-only
         if criteria.query:
             like = f"%{_escape_like(criteria.query)}%"
@@ -655,7 +603,6 @@ class SqlStockSearchRepository(StockSearchRepository):
         return conditions
 
     def _distinct(self, column) -> tuple[str, ...]:
-        """The distinct non-null values of an anchor column, sorted — a filter menu."""
         rows = (
             self._session.execute(
                 select(column).where(column.is_not(None)).distinct().order_by(column)

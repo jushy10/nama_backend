@@ -1,33 +1,3 @@
-"""Interface Adapter: AI earnings summary via Claude on Amazon Bedrock.
-
-The earnings-focused sibling of ``analysis_adapter.py`` (the full
-buy/hold/sell read) and ``market_summary_adapter.py`` (the whole-market
-read). The only module — alongside its stock/ETF/sector/market cousins — that
-knows Bedrock (and the Anthropic SDK) exists. It takes the quarterly and annual
-earnings timelines the use case gathered, renders them into a compact prompt,
-and asks Claude for a plain-language read of the company's earnings story: how
-consistently it beats, where EPS and revenue are trending, and what the forward
-consensus expects. Swap models or vendors and only this file changes.
-
-The same two choices that keep the market-summary adapter robust apply here:
-
-* **Auth is the runtime's job, not ours.** Bedrock authenticates through the
-  process's AWS credentials (in production, the ECS task role), so there is no
-  API key to read or pass — only ``model_id`` and ``region``.
-* **Structured output via a forced tool call.** Claude must call
-  ``submit_earnings_analysis``, so the model returns validated JSON arguments
-  that map straight onto the ``EarningsAnalysis`` entity — no prose parsing.
-
-The prompt carries the *real* figures (beats, EPS, revenue, forward consensus)
-and the model writes only plain prose over them — it never authors a number that
-reaches the card. The Anthropic SDK is imported lazily inside ``__init__`` so the
-app (and the offline test suite, which injects a stub client) imports cleanly
-without the ``bedrock`` extra. Any Bedrock/SDK failure is translated to
-``StockDataUnavailable`` — the one error this port documents.
-
-Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
-"""
-
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
@@ -167,17 +137,6 @@ _KEY = "earnings-analysis"
 
 
 class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
-    """Generates an ``EarningsAnalysis`` with Claude on Amazon Bedrock.
-
-    Structured exactly like ``BedrockMarketSummaryProvider`` (its market sibling):
-    defaults to the fast Haiku tier since the output is short and plain, takes
-    ``model_id``/``region`` as deploy-time config (the model id may be a
-    cross-region inference profile, env-overridable so a deploy can swap models
-    without a code change), and accepts a ``client`` injection seam so tests can
-    bypass the Anthropic SDK entirely. Otherwise the Bedrock client is built
-    lazily and authenticates through the process's AWS credentials.
-    """
-
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on
     # Bedrock, so the short form 400s. Same default as the market/sector reads.
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -263,13 +222,6 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
         system: str = _SYSTEM_PROMPT,
         model: str | None = None,
     ) -> dict | None:
-        """One forced-tool call, returning the tool's arguments (or ``None`` if the
-        model somehow didn't call the forced tool). Defaults to the full earnings
-        tool; the retry path passes the lighter ``submit_highlights`` tool. ``model``
-        overrides which model runs (the retry escalates onto ``recovery_model_id``);
-        defaults to the primary. Any SDK/botocore failure is mapped to this port's
-        ``StockDataUnavailable``. The call's token usage is folded into ``costs`` under
-        the model that produced it, for the caller's single per-endpoint cost line."""
         chosen = model or self._model_id
         try:
             message = self._client.messages.create(
@@ -290,12 +242,6 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
     def _recover_highlights(
         self, prompt: str, key: str, costs: CostAccumulator
     ) -> dict | None:
-        """One targeted retry that regenerates *only* the highlights, grounded in the
-        same figures the first pass saw — far fewer output tokens than re-running the
-        whole analysis. Escalated onto ``recovery_model_id`` when configured. **Best-
-        effort**: a failure on the recovery call is swallowed to ``None`` so escalation
-        can never sink an otherwise-usable read. Returns the ``submit_highlights``
-        arguments, or ``None`` when the model didn't call the tool."""
         try:
             return self._invoke(
                 _HIGHLIGHTS_INSTRUCTION + prompt,
@@ -311,7 +257,6 @@ class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
 
 
 def _tool_payload(message, name: str) -> dict | None:
-    """Pull the named forced tool's arguments out of the tool call, if any."""
     for block in getattr(message, "content", None) or []:
         if (
             getattr(block, "type", None) == "tool_use"
@@ -324,8 +269,6 @@ def _tool_payload(message, name: str) -> dict | None:
 
 
 def _merge_highlights(payload: dict, recovered: dict) -> dict:
-    """Fill the highlights list from a targeted recovery call only when the first pass
-    left it empty — a recovery that itself came back empty leaves the payload as-is."""
     if _string_tuple(payload.get("highlights")):
         return payload
     if not _string_tuple(recovered.get("highlights")):
@@ -336,12 +279,6 @@ def _merge_highlights(payload: dict, recovered: dict) -> dict:
 
 
 def _to_entity(symbol: str, payload: dict, model_id: str) -> EarningsAnalysis:
-    """Map the validated tool arguments onto the domain entity.
-
-    The forced-tool schema constrains the shape, but a defensive guard keeps an
-    off-schema result (e.g. an unknown ``trend``) from leaking out as something
-    other than this port's documented ``StockDataUnavailable``.
-    """
     try:
         summary = str(payload["summary"]).strip()
         trend = EarningsTrend(payload["trend"])
@@ -361,37 +298,22 @@ def _to_entity(symbol: str, payload: dict, model_id: str) -> EarningsAnalysis:
 
 
 def _string_tuple(value) -> tuple[str, ...]:
-    """Coerce the model's ``highlights`` field into non-empty, stripped strings.
-
-    Guards against a non-list: the forced tool constrains the schema, but Bedrock
-    does not strictly enforce it, and Haiku occasionally returns ``highlights`` as
-    a single string (e.g. a leaked ``<parameter name="highlights">[...]`` value).
-    Iterating a ``str`` would split it into characters — a wall of one-character
-    "notes" — so anything that isn't a list yields no highlights instead. Mirrors
-    ``analysis_adapter._string_tuple``.
-    """
     if not isinstance(value, list):
         return ()
     return tuple(text for item in value if (text := str(item).strip()))
 
 
 def _missing_highlights(payload: dict | None) -> bool:
-    """True when a returned tool result is present but carries no usable highlights
-    — the signal to retry. A ``None`` payload (the model didn't call the tool at
-    all) is left for the caller to surface as ``StockDataUnavailable``, not
-    retried, so the existing no-structured-result path is unchanged."""
     if payload is None:
         return False
     return not _string_tuple(payload.get("highlights"))
 
 
 def _fmt_eps(value: float | None) -> str:
-    """A per-share dollar figure, or a dash when missing."""
     return "n/a" if value is None else f"${value:,.2f}"
 
 
 def _fmt_money(value: float | None) -> str:
-    """A raw revenue/income figure compacted to billions/millions."""
     if value is None:
         return "n/a"
     magnitude = abs(value)
@@ -403,7 +325,6 @@ def _fmt_money(value: float | None) -> str:
 
 
 def _fmt_pct(value: float | None) -> str:
-    """A signed percent, or a dash when missing."""
     return "n/a" if value is None else f"{value:+.1f}%"
 
 
@@ -416,12 +337,6 @@ def _render_prompt(
     quarterly: QuarterlyEarningsTimeline | None,
     annual: AnnualEarningsTimeline | None,
 ) -> str:
-    """Render the earnings timelines into a compact, labelled block for the model.
-
-    Reported quarters/years lead with their real figures; a short beat tally and
-    the forward consensus follow. Only present figures are included, so a sparse
-    timeline renders a shorter block — the read stands on whatever it's handed.
-    """
     lines = [f"Earnings for {symbol.upper()} (most recent first):", ""]
 
     reported_q = list((quarterly.past if quarterly else ()))[-_MAX_REPORTED:]

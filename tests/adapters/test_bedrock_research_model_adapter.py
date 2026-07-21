@@ -1,12 +1,3 @@
-"""Tests for the Bedrock research-agent ConversationModel adapter.
-
-Offline: a stub client (matching the Anthropic SDK's ``message.content`` → blocks with
-``.type/.text`` or ``.type/.id/.name/.input``) is injected through the constructor seam, so the
-real adapter's message/tool translation and its block parsing run with no ``anthropic`` package
-and no network. Asserts both directions of the translation — our conversation entities → the SDK
-request, and the SDK response → a ``ModelTurn`` — plus the no-tools case and failure mapping.
-"""
-
 import pytest
 
 from app.stocks.adapters.bedrock.research_model_adapter import BedrockConversationModel
@@ -146,9 +137,6 @@ def test_omits_the_tools_parameter_when_none_are_offered():
     model, client = _model(_Message([_Block("text", text="final")]))
     model.respond(system="sys", messages=[UserMessage("q")], tools=[])
     assert "tools" not in client.calls[0]
-
-
-# --- Failure translation -----------------------------------------------------------------------
 
 
 def test_vendor_failure_becomes_stock_data_unavailable():

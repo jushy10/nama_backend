@@ -1,10 +1,3 @@
-"""Tests for the earnings-calendar use case (GetEarningsCalendar).
-
-Offline: a hand-written fake repository records the window it was asked for and returns canned
-items. Verifies the defaults (today → two weeks), the window clamp, the inverted-window error,
-and the per-day grouping/ordering.
-"""
-
 from datetime import date, timedelta
 
 import pytest

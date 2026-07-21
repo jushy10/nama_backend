@@ -1,58 +1,3 @@
-"""Interface Adapter: per-quarter earnings from Yahoo Finance (via ``yfinance``).
-
-Builds a stock's earnings timeline — the recent reported quarters and the upcoming ones —
-from three yfinance surfaces:
-
-- ``Ticker.earnings_dates`` — a date-indexed frame of announcements: each row's *EPS
-  Estimate* and, once reported, its *Reported EPS*. The rows with a reported EPS are the
-  **past** quarters; we keep the most recent ``_PAST`` of them, and the surprise is computed
-  here from actual vs. estimate (so the result doesn't depend on Yahoo's own ``Surprise(%)``
-  column or its scale).
-- ``Ticker.earnings_estimate`` / ``Ticker.revenue_estimate`` — period-indexed frames whose
-  ``0q`` (current quarter) and ``+1q`` (the next one) rows carry the forward consensus EPS
-  and revenue. These are the source of the **upcoming** quarters: Yahoo publishes structured
-  forward estimates only two quarters out, so this yields *at most two* upcoming quarters —
-  and it yields both even when ``earnings_dates`` lists only a single scheduled future date
-  (which is common). A scheduled date from ``earnings_dates`` is attached as the report date
-  when one lines up with the quarter.
-- ``Ticker.quarterly_income_stmt`` — the reported ``Total Revenue`` per quarter, supplying
-  the past quarters' ``revenue_actual``. Its columns carry the *true* fiscal period-end
-  dates, so each quarter's revenue is the column most recently preceding its announcement
-  date — never the calendar-derived fiscal label, which for an off-calendar filer (e.g. MU,
-  quarters ending late Feb/May/Aug/Nov) names a different fiscal quarter than the one the
-  EPS was reported for. Best-effort enrichment: a failure fetching it drops the reported
-  revenue but never sinks the timeline.
-
-Fiscal alignment is best-effort: ``earnings_dates`` carries only the announcement date, not
-a fiscal label, so a quarter's ``period_end`` (and hence ``fiscal_year`` / ``fiscal_quarter``)
-is derived as the most recent calendar quarter-end before the announcement; the upcoming
-quarters are anchored one quarter past the latest reported one. That's exact for
-calendar-fiscal-year companies and off-by-a-label for others (e.g. a company whose fiscal Q1
-ends in December) — a documented limitation of a source that doesn't report fiscal periods.
-The offset is cosmetic only: within a row, the EPS and the revenue always belong to the same
-fiscal quarter, because revenue is matched by real period proximity, not by that label.
-
-Currency: a foreign ADR reports in one currency but trades in another, and Yahoo mixes them
-across these surfaces — ``quarterly_income_stmt`` revenue reliably in the *reporting* currency,
-but the *market* EPS surfaces (``earnings_dates`` — the reported actual and its preceding
-estimate — and the forward ``earnings_estimate``) in either currency depending on the issuer
-(USD for TSM, CNY for BABA). A shared ``yfinance_currency`` normalizer (built from ``info``'s
-``financialCurrency`` vs ``currency``, with the market-EPS currency detected once from the
-``0y`` estimate against ``info['forwardEps']``) converts everything onto the trading currency.
-Both EPS legs of a reported quarter ride the same market rate, so the surprise stays coherent.
-The identity for a domestic issuer, so US names are untouched.
-
-This is the only module that knows ``yfinance``/Yahoo exists; swap it and nothing else
-changes. It is deliberately defensive — Yahoo is an unofficial, best-effort feed that
-reshapes payloads without notice and rate-limits data-centre IPs — so any vendor failure
-becomes ``StockDataUnavailable`` and a symbol Yahoo doesn't cover yields an empty timeline
-rather than an error. Behind the persistent DB cache, a blocked live call just serves the
-stored rows. Every Yahoo read is routed through ``yfinance_session`` (pacing + a one-shot
-fresh-crumb retry on a 401); ``earnings_dates`` (the reported source) and
-``quarterly_income_stmt`` additionally retry on an *empty* result, since a swallowed crumb
-401 surfaces that way.
-"""
-
 from __future__ import annotations
 
 import math
@@ -89,8 +34,6 @@ _EASTERN = ZoneInfo("America/New_York")
 
 
 class YfinanceQuarterlyEarningsProvider(QuarterlyEarningsProvider):
-    """Fetches a stock's recent and upcoming quarterly earnings from Yahoo (no API key)."""
-
     _PAST = 4  # most recent reported quarters to keep (upcoming is capped at two: 0q, +1q)
 
     def __init__(self, *, ticker_factory=None) -> None:
@@ -193,19 +136,6 @@ def _upcoming_quarters(
     revenue_estimate,
     normalizer: CurrencyNormalizer,
 ) -> list[QuarterlyEarnings]:
-    """The next one or two upcoming quarters, from Yahoo's ``0q`` / ``+1q`` forward estimate
-    rows (EPS + revenue) — the reliable source of *two* forward quarters, unlike
-    ``earnings_dates``, which often lists only the single next scheduled date.
-
-    ``0q`` is the quarter after the most recently reported one (yfinance's "current
-    quarter"), which anchors the pair; if nothing has been reported yet, the nearest
-    scheduled date's quarter is used instead. A scheduled ``earnings_dates`` date (and its
-    before-open / after-close session) is attached when one lines up with the quarter's
-    period. A quarter is emitted only when Yahoo actually has an estimate (or a date) for it,
-    so the result is at most two and may be one or none.
-
-    Currency: ``revenue_estimate`` is reliably reporting-currency (converted outright); the
-    EPS estimate is a market-EPS figure on the detected market-EPS currency."""
     future_dates = [r["report_date"] for r in future_rows]
     if reported:
         q0_end = _next_quarter_end(_period_end_before(reported[0]["report_date"]))
@@ -244,13 +174,6 @@ def _build_reported(
     revenue_by_period_end: dict[date, float],
     normalizer: CurrencyNormalizer,
 ) -> QuarterlyEarnings:
-    """One reported quarter from an ``earnings_dates`` row: the reported EPS against the
-    estimate that preceded it (surprise computed here, not read from Yahoo's own
-    ``Surprise(%)`` column), plus the reported revenue matched from the income statement.
-
-    Both EPS figures are market EPS (from ``earnings_dates``), so they ride the detected
-    market-EPS currency; converting both by the same rate leaves ``eps_surprise_percent``
-    unchanged and the absolute surprise on the trading-currency basis."""
     report_date: date = row["report_date"]
     period_end = _period_end_before(report_date)
     fiscal_year = period_end.year
@@ -289,9 +212,6 @@ def _build_upcoming(
     revenue_estimate: float | None,
     report_session: EarningsSession = EarningsSession.UNKNOWN,
 ) -> QuarterlyEarnings:
-    """One upcoming quarter from the forward estimates: a consensus EPS and revenue, no
-    actual yet. ``report_date`` (and ``report_session``) are set only when Yahoo has
-    scheduled the announcement; otherwise the session stays ``UNKNOWN``."""
     return QuarterlyEarnings(
         fiscal_year=period_end.year,
         fiscal_quarter=_quarter_of(period_end),
@@ -307,16 +227,10 @@ def _build_upcoming(
 
 
 def _quarter_of(period_end: date) -> int:
-    """The calendar quarter (1–4) a quarter-end date falls in."""
     return (period_end.month - 1) // 3 + 1
 
 
 def _period_end_before(report: date) -> date:
-    """The most recent calendar quarter-end strictly before an announcement date.
-
-    Earnings are announced after the quarter closes, so the quarter being reported is the
-    one that most recently ended. Exact for calendar fiscal years; a label offset for
-    off-calendar ones (see the module docstring)."""
     ends = [
         date(report.year, 3, 31),
         date(report.year, 6, 30),
@@ -328,7 +242,6 @@ def _period_end_before(report: date) -> date:
 
 
 def _next_quarter_end(period_end: date) -> date:
-    """The calendar quarter-end one quarter after ``period_end`` (Dec 31 wraps to Mar 31)."""
     ends = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
     quarter = _quarter_of(period_end)
     if quarter == 4:
@@ -338,14 +251,6 @@ def _next_quarter_end(period_end: date) -> date:
 
 
 def _revenue_actuals(frame, normalizer: CurrencyNormalizer) -> dict[date, float]:
-    """``quarterly_income_stmt`` → reported ``Total Revenue`` keyed by the column's *true*
-    fiscal period-end date, matched to the reported quarters by announcement-date proximity
-    (``_revenue_for``). Never keyed by the calendar fiscal label: for an off-calendar filer
-    the label names a different fiscal quarter than the one the EPS was reported for, so a
-    label match would pair one quarter's EPS with another quarter's revenue.
-
-    The income statement is in the reporting currency, so each revenue is put through
-    ``normalizer.to_trading`` (a no-op for a domestic issuer)."""
     out: dict[date, float] = {}
     if frame is None or getattr(frame, "empty", True):
         return out
@@ -365,12 +270,6 @@ def _revenue_actuals(frame, normalizer: CurrencyNormalizer) -> dict[date, float]
 
 
 def _revenue_for(report_date: date, revenue_by_period_end: dict[date, float]) -> float | None:
-    """The reported revenue for the quarter announced on ``report_date``: the income
-    statement's most recent period end preceding the announcement — earnings are announced
-    weeks after the quarter closes, so that column is the quarter being reported. If the
-    nearest preceding column is older than a plausible announcement lag, the statement
-    doesn't carry this quarter yet; return nothing rather than the previous quarter's
-    revenue."""
     preceding = [end for end in revenue_by_period_end if end < report_date]
     if not preceding:
         return None
@@ -381,13 +280,6 @@ def _revenue_for(report_date: date, revenue_by_period_end: dict[date, float]) ->
 
 
 def _parse_rows(frame) -> list[dict]:
-    """``earnings_dates`` → a list of ``{report_date, report_session, eps_estimate,
-    eps_actual}`` dicts.
-
-    Rows without a usable announcement date are dropped (there'd be no quarter to key on).
-    ``report_session`` is classified from the index timestamp's *time-of-day* (before the
-    date is collapsed away) — the whole point of reading the frame here rather than a bare
-    date. Keeps all pandas/NaN handling in the adapter."""
     if frame is None or getattr(frame, "empty", True):
         return []
     rows: list[dict] = []
@@ -411,7 +303,6 @@ def _parse_rows(frame) -> list[dict]:
 
 
 def _series_get(series, key: str):
-    """One labelled value from a row Series, or ``None`` (missing column)."""
     try:
         return series.get(key)
     except Exception:  # noqa: BLE001 — a frame quirk must not escape the adapter
@@ -419,8 +310,6 @@ def _series_get(series, key: str):
 
 
 def _cell(frame, period: str, column: str) -> float | None:
-    """One numeric cell of a period-indexed estimate frame as a float, or ``None``
-    (missing row/column, NaN, or non-numeric)."""
     try:
         if frame is None or getattr(frame, "empty", True):
             return None
@@ -432,7 +321,6 @@ def _cell(frame, period: str, column: str) -> float | None:
 
 
 def _num(value) -> float | None:
-    """A pandas/NumPy/Python scalar → float, or ``None`` (missing, NaN/NaT, non-numeric)."""
     if value is None:
         return None
     try:
@@ -448,11 +336,6 @@ def _num(value) -> float | None:
 
 
 def _to_session(value) -> EarningsSession:
-    """The announcement session (BMO/AMC/…) from an ``earnings_dates`` index timestamp.
-
-    Normalizes a tz-aware stamp to US Eastern before reading its wall-clock time; a naive
-    stamp is taken as already Eastern (yfinance localizes the frame to the exchange tz).
-    Any pandas/tz quirk — or a missing time — degrades to ``UNKNOWN``, never an error."""
     try:
         if pd.isna(value):
             return EarningsSession.UNKNOWN
@@ -473,8 +356,6 @@ def _to_session(value) -> EarningsSession:
 
 
 def _to_date(value) -> date | None:
-    """A pandas ``Timestamp`` / ``datetime`` (the ``earnings_dates`` index) → a ``date``;
-    ``None`` for ``NaT`` or an unrecognized index value."""
     try:
         if pd.isna(value):
             return None

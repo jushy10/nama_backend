@@ -1,14 +1,3 @@
-"""add revenue_actual to stock_quarterly_earnings
-
-Adds the reported-revenue column to the quarterly-earnings cache. Like the rest of the row
-it's sourced from yfinance (the quarterly income statement's Total Revenue) and is nullable
-— only reported quarters carry it. Batch mode so the ADD/DROP works on SQLite too.
-
-Revision ID: 0004_quarterly_revenue_actual
-Revises: 0003_stock_quarterly_earnings
-Create Date: 2026-07-01
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

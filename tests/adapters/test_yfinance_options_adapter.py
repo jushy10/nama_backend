@@ -1,12 +1,3 @@
-"""Unit tests for the yfinance options adapter.
-
-No network: a fake Ticker (canned pandas frames) is injected through the factory.
-Verifies the adapter parses Yahoo's expiration labels and per-expiry call/put frames
-into ``OptionContract`` entities, tolerates NaN/missing fields, treats a symbol
-without listed options as empty coverage (not an error), and turns vendor failures
-into domain errors.
-"""
-
 from datetime import date
 from types import SimpleNamespace
 

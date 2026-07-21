@@ -1,12 +1,3 @@
-"""Tests for the database-backed EarningsCalendarRepository.
-
-Offline: an in-memory SQLite database seeded with a few ``stocks`` anchors + their
-``stock_quarterly_earnings`` rows. Verifies the cross-table read: only *upcoming* quarters
-(``eps_actual IS NULL``) with a scheduled ``report_date`` inside the window, joined to
-name + sector, ordered by date then ticker, capped by ``limit``. A reported quarter, a
-dateless upcoming quarter, and an out-of-window one are all excluded.
-"""
-
 from datetime import date, datetime, timezone
 
 import pytest

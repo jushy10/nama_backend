@@ -1,13 +1,3 @@
-"""Interface Adapter: the SQLAlchemy-backed MarketBriefRepository.
-
-Implements the ``repository.py`` port against the ``stock_market_brief`` table. Its job is
-the mapping the use cases must not see: it converts the ``MarketBrief`` entity to and from
-the ORM row (the ``sections`` tuple ⇄ the JSON list of ``{"heading", "body"}`` objects) and
-delegates every query to ``models.py``. ``upsert`` writes one row per date — replacing the
-day's row if it already exists — and commits its own write, so a successful generation is
-durable independent of the request/task.
-"""
-
 from __future__ import annotations
 
 from datetime import date
@@ -25,9 +15,6 @@ from app.stocks.brief.repository import MarketBriefRepository
 
 
 def _to_entity(row: MarketBriefRecord) -> MarketBrief:
-    """Row -> entity. Defensive on the JSON ``sections`` (skip any malformed element) and the
-    ``tone`` slug (fall back to ``mixed`` if an unknown value ever reached the row), so a
-    read never raises on stored data."""
     sections = tuple(
         MarketBriefSection(heading=str(s["heading"]), body=str(s["body"]))
         for s in (row.sections or [])
@@ -48,8 +35,6 @@ def _to_entity(row: MarketBriefRecord) -> MarketBrief:
 
 
 class SqlMarketBriefRepository(MarketBriefRepository):
-    """Reads and writes the daily briefs through a request/task-scoped session."""
-
     def __init__(self, session: Session) -> None:
         self._session = session
 

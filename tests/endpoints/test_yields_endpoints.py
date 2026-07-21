@@ -1,13 +1,3 @@
-"""Tests for the Treasury-yields read endpoints.
-
-``GET /market/yield-curve`` (the par-yield snapshot) and
-``GET /market/yield-history`` (the 2Y/10Y series). Offline: fake use cases are
-injected through dependency_overrides + FastAPI's TestClient, so this checks
-only the controller + presenter — the derived spread/inversion reads surfaced
-top-level, the tenor ordering, the derived spread series, and the error mapping
-— without touching Treasury.gov, FRED, or the database.
-"""
-
 from datetime import date
 
 from fastapi import FastAPI
@@ -25,8 +15,6 @@ from app.stocks.yields.entities import (
 
 
 class _FakeUseCase:
-    """Stands in for a yields use case; returns a canned entity or raises."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error
@@ -64,9 +52,6 @@ def _a_curve() -> YieldCurve:
     )
 
 
-# --------------------------- yield curve ---------------------------
-
-
 def test_get_yield_curve_returns_200_with_derived_reads():
     client = _curve_client(_FakeUseCase(result=_a_curve()))
     r = client.get("/market/yield-curve")
@@ -95,9 +80,6 @@ def test_get_yield_curve_upstream_failure_502():
 def test_get_yield_curve_not_found_404():
     fake = _FakeUseCase(error=StockNotFound("*"))
     assert _curve_client(fake).get("/market/yield-curve").status_code == 404
-
-
-# --------------------------- yield history ---------------------------
 
 
 def _a_history() -> YieldHistory:

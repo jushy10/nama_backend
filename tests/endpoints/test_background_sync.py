@@ -1,14 +1,3 @@
-"""Tests for the shared cron-sync background helper (app/stocks/endpoints/background_sync.py).
-
-Drives ``trigger_sync`` directly with fake runners and a bare ``Response``, so it covers the
-threading contract the three cron endpoints share: single-flight guarding, the 202/200
-outcome, and — the part awkward to reach through an endpoint — that a runner that raises
-still releases the guard and never lets the exception escape the thread.
-
-Determinism: ``trigger_sync`` holds the lock until the daemon thread releases it, so
-re-acquiring the lock is a "sweep done" barrier — no sleeps.
-"""
-
 import threading
 
 from fastapi import Response
@@ -17,8 +6,6 @@ from app.stocks.endpoints import background_sync
 
 
 class _FakeRunner:
-    """Records the limit it was called with; optionally raises to exercise the failure path."""
-
     def __init__(self, *, boom: bool = False) -> None:
         self.calls: list[int] = []
         self._boom = boom

@@ -1,10 +1,3 @@
-"""Tests for the database-backed MarketBriefRepository.
-
-Offline: an in-memory SQLite database stands in for the real table. Verifies the round-trip
-(entity -> row -> entity, including the sections JSON), the clean miss, the ``latest`` ordering
-by date, and the by-date overwrite on a re-run.
-"""
-
 from datetime import date, datetime, timezone
 
 import pytest

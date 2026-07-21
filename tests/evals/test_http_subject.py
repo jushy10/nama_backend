@@ -1,11 +1,3 @@
-"""Tests for the HTTP subject-under-test adapter.
-
-Offline: an ``httpx.MockTransport`` stands in for the network, so the adapter's request shape and
-its response/error handling run without a real server. Checks the happy path (answer extracted
-from the JSON), the field it posts, and that transport / shape failures become
-``SubjectUnavailable`` rather than leaking an httpx error.
-"""
-
 import httpx
 import pytest
 

@@ -1,17 +1,3 @@
-"""drop stock_analyst_estimates
-
-The dedicated analyst-estimates cache is gone: the stock snapshot's forward
-consensus (forward P/E / P/S, FY1→FY2 growth) is now projected from the
-annual-earnings slice's stored forward years (``stock_annual_earnings``), which
-carry the same Yahoo consensus — so the one-row-per-stock estimates table, its
-fetch, and its cron were removed. The ``stocks`` anchor created alongside it in
-0002 stays: the quarterly/annual earnings tables hang off it.
-
-Revision ID: 0006_drop_analyst_estimates
-Revises: 0005_stock_annual_earnings
-Create Date: 2026-07-01
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

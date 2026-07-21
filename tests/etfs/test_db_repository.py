@@ -1,21 +1,3 @@
-"""Tests for the database-backed ETF repositories.
-
-Offline: an in-memory SQLite database stands in for the real ``etfs`` table + its children. Three
-suites:
-
-- ``SqlEtfRepository`` (write side): the additive screen upsert (insert new / refresh in place /
-  never remove an absent fund), the fill-but-don't-clobber rule for name/exchange, the screen
-  stamp, added-vs-updated counting, and the profile enrichment pass's work-list + merge-preserving
-  ``upsert_profile`` (scalars onto the row, the two child sets, don't-clobber-with-null,
-  don't-wipe-on-empty).
-- ``SqlEtfSearchRepository`` (read side): the name-or-ticker substring match, the category filter,
-  the sorts (net assets / expense ratio, nulls last, stable ticker tiebreak), limit/offset paging
-  with a total count, and the distinct category menu.
-- ``SqlEtfLookupRepository`` (single-fund read side): the ``is_etf`` membership probe (the ticker
-  card's asset_type), the ``get`` full-row read (the ETF detail endpoint's stored facts), and
-  ``get_stored_profile`` (the detail endpoint's stored profile — scalars + children).
-"""
-
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -173,7 +155,6 @@ def test_upsert_counts_a_preexisting_unscreened_row_as_added(session):
 
 
 def _full_profile() -> EtfProfile:
-    """A fully-populated profile — the shape a healthy Yahoo fetch produces."""
     return EtfProfile(
         category="large_blend",
         fund_family="State Street",
@@ -325,7 +306,6 @@ def _seed(
     category=None,
     dividend_yield=None,
 ):
-    """Insert an ``etfs`` row directly — whatever the sync would have written."""
     session.add(
         EtfRecord(
             ticker=ticker,

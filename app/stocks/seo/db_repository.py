@@ -1,11 +1,3 @@
-"""Interface Adapter: the SQLAlchemy-backed SeoReadRepository.
-
-Implements ``repository.py`` against the shared ``stocks`` anchor. The slice owns no
-table — a content page is a projection of columns other slices' syncs already wrote
-onto the anchor — so this is a single indexed read, no joins, no vendor, no key. That's
-the whole point: a crawler hitting the page pays one DB round-trip, never a live fetch.
-"""
-
 from __future__ import annotations
 
 from datetime import date
@@ -37,9 +29,6 @@ _SCREEN_SORT_COLUMNS = {
 
 
 class SqlSeoReadRepository(SeoReadRepository):
-    """Reads the content-page facts off the ``stocks`` anchor through a request-scoped
-    session. Read-only; a page never writes."""
-
     def __init__(self, session: Session) -> None:
         self._session = session
 

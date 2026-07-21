@@ -1,11 +1,3 @@
-"""Tests for the DB-only read view of the insider-transactions cache.
-
-Offline and DB-free: a hand-written fake repository stands in for the real one, so this exercises
-only the adapter's policy — serve the stored feed, return *empty* on a miss, degrade to empty on a
-read error, and (the whole point) NEVER fetch live. There is no inner provider to fall through to;
-the weekly cron is the sole populator.
-"""
-
 from datetime import date
 
 from app.stocks.adapters.db_only_insider_transactions_adapter import (

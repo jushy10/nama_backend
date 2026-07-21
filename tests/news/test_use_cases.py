@@ -1,12 +1,3 @@
-"""Tests for the news use cases: GetStockNews + SyncStockNews.
-
-Offline: hand-written fakes for the provider and repository ports, so this exercises only
-the orchestration — symbol normalization and pass-through on the read side; which targets
-are refreshed, failure/empty handling, and the per-run limit on the sync side — plus the
-entity rules the slice's responses lean on (is_video, latest, is_empty), independent of
-yfinance or the DB.
-"""
-
 from datetime import datetime, timezone
 
 import pytest
@@ -32,9 +23,6 @@ def _a_run(symbol: str) -> StockNews:
     return StockNews(symbol, (_an_article(),))
 
 
-# ───────────────────────────── entity rules ─────────────────────────────
-
-
 def test_is_video_reads_the_content_type():
     assert _an_article(content_type="VIDEO").is_video is True
     assert _an_article(content_type="video").is_video is True  # case-insensitive
@@ -54,9 +42,6 @@ def test_empty_run_has_no_latest():
     news = StockNews("ZZZZ", ())
     assert news.is_empty
     assert news.latest is None
-
-
-# ───────────────────────────── GetStockNews ─────────────────────────────
 
 
 class _FakeReadProvider(NewsProvider):
@@ -94,12 +79,7 @@ def test_get_rejects_obviously_invalid_symbols():
     assert provider.calls == []
 
 
-# ───────────────────────────── SyncStockNews ─────────────────────────────
-
-
 class _FakeRepo(NewsRepository):
-    """Serves a fixed target list and records what got upserted."""
-
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = list(targets)
         self.upserts: list[tuple[str, str | None]] = []
@@ -117,8 +97,6 @@ class _FakeRepo(NewsRepository):
 
 
 class _FakeSyncProvider(NewsProvider):
-    """Returns a canned run per symbol, an empty one, or raises."""
-
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}

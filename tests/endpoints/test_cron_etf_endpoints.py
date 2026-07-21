@@ -1,14 +1,3 @@
-"""Tests for the ETF cron endpoint (POST /internal/etfs/sync).
-
-Offline: a fake sync runner is injected through dependency_overrides, so this checks only the
-controller — that it accepts a trigger, runs the sweep in the background with the requested limit,
-guards against overlapping runs, and validates the limit — without touching Yahoo or the database.
-
-The sweep runs on a daemon thread, so the tests that expect it to run drain it first: the endpoint
-holds ``_sync_lock`` from acceptance until the background thread finishes, so waiting to re-acquire
-the lock is a deterministic "sweep done" barrier.
-"""
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -17,9 +6,6 @@ from app.stocks.etfs.use_cases import EtfSyncReport
 
 
 class _FakeRunner:
-    """Stands in for the real sync runner; records the limit it was called with and runs
-    instantly, so the background sweep finishes at once."""
-
     def __init__(self, report: EtfSyncReport) -> None:
         self._report = report
         self.calls: list[int | None] = []
@@ -52,8 +38,6 @@ def _client(fake: _FakeRunner) -> TestClient:
 
 
 def _drain() -> None:
-    """Block until the background sweep has finished (re-acquiring the guard the endpoint holds
-    until the daemon thread releases it)."""
     assert cron._sync_lock.acquire(timeout=2), "background sweep did not finish in time"
     cron._sync_lock.release()
 

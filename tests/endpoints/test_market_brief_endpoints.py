@@ -1,10 +1,3 @@
-"""Endpoint tests for GET /market/brief and /market/brief/{date}.
-
-Offline: a fake use case injected through dependency_overrides + FastAPI's TestClient, so the
-route's controller/presenter/validation are exercised with no DB or model. The use case itself
-is unit-tested in tests/brief/test_use_cases.py.
-"""
-
 from __future__ import annotations
 
 from datetime import date, datetime, timezone

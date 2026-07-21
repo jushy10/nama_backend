@@ -1,11 +1,3 @@
-"""Interface Adapter: the SQLAlchemy-backed IndexMembershipRepository.
-
-Implements ``repository.py`` against the shared ``stocks`` anchor — membership has no table of
-its own, so the flags are written straight onto ``stocks`` (the ``in_sp500`` / ``in_nasdaq100``
-columns). Only this layer touches SQLAlchemy. ``reconcile`` commits its own write, so a
-successful sync is durable independent of the request.
-"""
-
 from __future__ import annotations
 
 from sqlalchemy import update
@@ -20,10 +12,6 @@ from app.stocks.stocks.models import StockRecord, get_or_create_stock
 
 
 class SqlIndexMembershipRepository(IndexMembershipRepository):
-    """Writes index-membership flags through a request-scoped session, onto the ``stocks``
-    anchor. ``reconcile`` commits its own write so a successful sync is durable independent of
-    the surrounding request."""
-
     def __init__(self, session: Session) -> None:
         self._session = session
 
@@ -55,13 +43,6 @@ class SqlIndexMembershipRepository(IndexMembershipRepository):
     def _reconcile_index(
         self, column: InstrumentedAttribute, members: frozenset[str]
     ) -> tuple[int, int]:
-        """Reconcile one index's flag: clear stocks that dropped out, mark current members.
-
-        Returns ``(marked, cleared)``. Does not commit — the caller commits once for the whole
-        reconcile so both indices land atomically. Only ever called with a plausibly-complete
-        ``members`` set (the use case's floor guard), so the "clear everyone not in the set"
-        step can't wipe a live index from a truncated fetch.
-        """
         # Clear ex-members: rows flagged True whose ticker isn't in the fresh set.
         cleared = self._session.execute(
             update(StockRecord)

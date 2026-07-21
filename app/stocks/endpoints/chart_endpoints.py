@@ -1,15 +1,3 @@
-"""HTTP API for the chart reads: candles, EMA overlays, support levels, trend, and
-the technical-indicator bundle.
-
-``GET /stocks/ticker/{ticker}/candles`` / ``.../ema`` / ``.../support-levels`` /
-``.../trend`` / ``.../indicators`` — controller + presenter + wiring, the
-composition-root way, sitting in ``app/stocks/endpoints/`` beside the other read
-endpoints. All ride the same market-routing ``CandleProvider`` (the per-symbol
-price provider from ``wiring.py``): a US symbol reads Alpaca bars (behind its
-missing-keys 503 gate), a Canadian-suffixed one (``.TO``/``.V``/…) reads keyless
-Yahoo bars.
-"""
-
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -97,8 +85,6 @@ def get_stock_indicators(
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
-    """Coerce a (possibly naive) query datetime to UTC so window arithmetic and
-    comparisons never mix naive and aware values."""
     if dt is None:
         return None
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
@@ -107,9 +93,6 @@ def _as_utc(dt: datetime | None) -> datetime | None:
 def _resolve_request_window(
     range_: ChartRange, start: datetime | None, end: datetime | None
 ) -> tuple[datetime | None, datetime]:
-    """Resolve the visible ``(start, end)`` window for a chart read: an explicit
-    ``start``/``end`` wins; otherwise it's derived from the ``range`` preset. Both
-    inputs are coerced to UTC first. Shared by every chart endpoint."""
     start, end = _as_utc(start), _as_utc(end)
     if start is None and end is None:
         return resolve_window(range_, now=datetime.now(timezone.utc))
@@ -120,8 +103,6 @@ def _resolve_request_window(
 
 @contextmanager
 def _translate_domain_errors():
-    """Map the chart use cases' domain errors onto HTTP status codes, uniformly:
-    bad input → 400, unknown symbol → 404, upstream failure → 502."""
     try:
         yield
     except ValueError as exc:
@@ -133,7 +114,6 @@ def _translate_domain_errors():
 
 
 def _present_candles(series: CandleSeries) -> CandleSeriesResponse:
-    """Presenter: candle series entity -> HTTP response DTO."""
     return CandleSeriesResponse(
         symbol=series.symbol,
         timeframe=series.timeframe.value,
@@ -155,7 +135,6 @@ def _present_candles(series: CandleSeries) -> CandleSeriesResponse:
 
 
 def _present_ema(series: EmaSeries) -> EmaResponse:
-    """Presenter: EMA series entity -> HTTP response DTO (one line per period)."""
     return EmaResponse(
         symbol=series.symbol,
         timeframe=series.timeframe.value,
@@ -179,7 +158,6 @@ def _present_ema(series: EmaSeries) -> EmaResponse:
 
 
 def _present_support_levels(series: SupportLevelSeries) -> SupportLevelsResponse:
-    """Presenter: support-level series entity -> HTTP response DTO."""
     return SupportLevelsResponse(
         symbol=series.symbol,
         timeframe=series.timeframe.value,
@@ -199,7 +177,6 @@ def _present_support_levels(series: SupportLevelSeries) -> SupportLevelsResponse
 
 
 def _present_horizon(horizon: HorizonTrend | None) -> HorizonTrendResponse | None:
-    """Presenter: one horizon's trend entity -> DTO (None passes through)."""
     if horizon is None:
         return None
     return HorizonTrendResponse(
@@ -215,7 +192,6 @@ def _present_horizon(horizon: HorizonTrend | None) -> HorizonTrendResponse | Non
 
 
 def _present_trend(assessment: TrendAssessment) -> TrendResponse:
-    """Presenter: trend assessment entity -> HTTP response DTO."""
     return TrendResponse(
         symbol=assessment.symbol,
         timeframe=assessment.timeframe.value,
@@ -228,7 +204,6 @@ def _present_trend(assessment: TrendAssessment) -> TrendResponse:
 
 
 def _present_indicator(indicator: Indicator) -> IndicatorResponse:
-    """Presenter: one indicator entity -> DTO (its line(s), each a time/value series)."""
     return IndicatorResponse(
         name=indicator.name,
         label=indicator.label,
@@ -253,7 +228,6 @@ def _present_indicator(indicator: Indicator) -> IndicatorResponse:
 
 
 def _present_indicators(result: IndicatorSet) -> IndicatorsResponse:
-    """Presenter: indicator set entity -> HTTP response DTO (one entry per indicator)."""
     return IndicatorsResponse(
         symbol=result.symbol,
         timeframe=result.timeframe.value,
@@ -296,11 +270,6 @@ _EMA_MAX_LINES = 5
 
 
 def _normalize_ema_periods(periods: list[int]) -> list[int]:
-    """Validate + de-duplicate the requested EMA periods, preserving request order.
-
-    Rejects an out-of-range period, an empty set, or more lines than a chart
-    should carry — a 400, since these are client inputs.
-    """
     seen: dict[int, None] = {}
     for period in periods:
         if not _EMA_MIN_PERIOD <= period <= _EMA_MAX_PERIOD:
@@ -505,15 +474,6 @@ _INDICATOR_MAX_COUNT = 12
 
 
 def _parse_indicator_specs(raw: str) -> list[IndicatorSpec]:
-    """Parse the ``indicator`` query value — a comma-separated list of indicator
-    names, each optionally carrying a ``:period`` override (e.g.
-    ``rsi,macd,sma:200,rsi:21``) — into validated, de-duplicated specs in request
-    order.
-
-    Rejects (400) an empty list, an unknown name, a non-integer or out-of-range
-    period, a period on an indicator that takes none, or more indicators than a chart
-    should carry.
-    """
     tokens = [tok.strip() for tok in raw.split(",")]
     tokens = [tok for tok in tokens if tok]
     if not tokens:

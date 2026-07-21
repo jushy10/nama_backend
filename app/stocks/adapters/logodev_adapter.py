@@ -1,24 +1,3 @@
-"""Interface Adapter: a fresh, ticker-keyed logo source.
-
-Alpaca's logo endpoint is paywalled, so logos come from a separate vendor.
-Logo.dev serves company logos by ticker at a public CDN URL and resolves to the
-*current* logo through mergers, rebrands, and symbol changes — so the image
-stays up to date instead of going stale (the reason we moved off the previous
-source). This is the only module that knows that source exists; swap it and
-nothing else changes.
-
-Needs a free *publishable* token (https://logo.dev — 500k requests/month). The
-token is publishable by design — it rides in the request URL, not a header — so
-it isn't a secret the way the Alpaca keys are, but it's still injected from the
-environment rather than hard-coded.
-
-Two request params pin the behaviour:
-  * ``format=png`` — the endpoint defaults to ``jpg``; we want PNG bytes.
-  * ``fallback=404`` — by default an unknown ticker yields a monogram placeholder
-    at HTTP 200; forcing 404 lets us raise StockNotFound, keeping the endpoint
-    contract identical to the old source (missing logo -> HTTP 404).
-"""
-
 import httpx
 
 from app.stocks.logo.entities import Logo
@@ -27,8 +6,6 @@ from app.stocks.logo.ports import LogoProvider
 
 
 class LogoDevProvider(LogoProvider):
-    """Fetches company logos from Logo.dev (free tier, publishable token)."""
-
     _DEFAULT_BASE_URL = "https://img.logo.dev"
 
     def __init__(self, token: str, base_url: str = _DEFAULT_BASE_URL) -> None:

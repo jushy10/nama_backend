@@ -1,11 +1,3 @@
-"""Tests for the brief use cases — GenerateDailyBrief and GetDailyBrief.
-
-Offline: the gather legs are duck-typed fakes with ``.execute()`` (standing in for the two
-Alpaca boards + the heat map), and the model port + store are hand-written fakes. So the
-orchestration — best-effort gathering, mover/breadth derivation, the complete-only upsert, and
-the read path — runs with no vendor, model, or DB.
-"""
-
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -30,13 +22,7 @@ _TODAY = date(2026, 7, 14)
 _NOON = datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc)
 
 
-# --- Fakes -------------------------------------------------------------------------------------
-
-
 class _FakeExec:
-    """A stand-in for a read use case: returns a canned result or raises. ``execute`` accepts
-    an optional arg so it stands in for both the no-arg boards and the heat map (scope)."""
-
     def __init__(self, result=None, error=None):
         self._result = result
         self._error = error
@@ -118,9 +104,6 @@ def _complete_brief() -> MarketBrief:
 
 
 class _FakeNews(NewsRepository):
-    """A DB-only news reader stand-in: returns canned stored news per ticker, or raises for a
-    ticker in ``errors`` (to exercise the per-ticker best-effort path)."""
-
     def __init__(self, by_ticker=None, errors=()):
         self._by_ticker = by_ticker or {}
         self._errors = set(errors)
@@ -156,9 +139,6 @@ def _generator(overview, sectors, heatmap, provider, repository, movers=5, news=
         overview, sectors, heatmap, provider, repository,
         news=news, movers=movers, today=lambda: _TODAY,
     )
-
-
-# --- GenerateDailyBrief ------------------------------------------------------------------------
 
 
 def test_generates_and_stores_a_complete_brief():
@@ -204,7 +184,6 @@ def test_derives_movers_and_breadth_from_the_heatmap():
 
 
 def _gen_with_news(provider, news):
-    """A generator wired with the standard board/heatmap fixtures + a news reader."""
     return _generator(
         _FakeExec(result=[_index("S&P 500", "SPY", 100, 99)]),
         _FakeExec(result=[_sector("Technology", "XLK", 50, 49)]),
@@ -372,9 +351,6 @@ def test_generates_for_an_explicit_date():
 
     gen.execute(date(2026, 1, 2))
     assert provider.brief_date == date(2026, 1, 2)
-
-
-# --- GetDailyBrief -----------------------------------------------------------------------------
 
 
 def test_read_returns_the_latest_when_no_date():

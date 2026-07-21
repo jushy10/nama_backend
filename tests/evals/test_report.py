@@ -1,9 +1,3 @@
-"""Tests for the eval-report presenters (to_dict + render_summary).
-
-Offline: builds an ``EvalReport`` from canned results and checks both renderings — the JSON dict
-a run writes and the text summary the CLI prints — without a subject or a judge.
-"""
-
 from app.evals.entities import CaseResult, EvalCase, EvalReport, Grade
 from app.evals.report import render_summary, to_dict
 

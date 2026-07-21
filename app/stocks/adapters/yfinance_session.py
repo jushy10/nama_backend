@@ -1,29 +1,3 @@
-"""Shared yfinance resilience: pace calls, and retry once past a transient crumb 401.
-
-Every yfinance JSON call (``.info``, ``income_stmt``, ``recommendations``, option chains,
-``yf.screen``) hits ``query1/2.finance.yahoo.com``, which gates each request behind a cached
-**cookie + crumb** pair. From a data-centre IP that handshake intermittently comes back
-**HTTP 401 "Invalid Crumb"**, and two things make it sticky:
-
-- yfinance caches the crumb on a **process-global singleton** (``YfData``) and, on a 401,
-  does *not* invalidate it — with the default ``hide_exceptions`` it merely logs the 401 and
-  hands back empty data. So every later call reuses the same poisoned crumb and keeps
-  failing, and the empty result is indistinguishable from "Yahoo genuinely has no data".
-
-This helper closes that gap. It runs a yfinance access and, on a failure that looks like a
-crumb rejection — a **raised** 401, or (when ``is_empty`` is supplied) an **empty result**
-that signals a *swallowed* 401 — it drops the singleton's cached cookie/crumb so the next
-attempt re-establishes them, waits an optional backoff, and retries once.
-
-It deliberately does **not** paper over Yahoo's harder gate ("User is unable to access this
-feature"), an IP-reputation block a fresh crumb can't clear: that isn't classified as a
-crumb 401, so it exhausts the (single) retry and surfaces to the caller unchanged.
-
-Adapter-layer infrastructure — importing yfinance here is fine (only adapters know the
-vendor). The retry backoff and the inter-call pacing are env-tunable and default to *off*,
-so local runs and the offline tests add no latency; the deployed app can dial them in.
-"""
-
 from __future__ import annotations
 
 import os
@@ -47,8 +21,6 @@ _last_call_at = 0.0
 
 
 def _pace() -> None:
-    """Block until at least ``_MIN_INTERVAL_SECONDS`` has elapsed since the previous call, so
-    concurrent sync loops don't burst Yahoo from one IP. A no-op when pacing is off."""
     if _MIN_INTERVAL_SECONDS <= 0:
         return
     global _last_call_at
@@ -60,13 +32,6 @@ def _pace() -> None:
 
 
 def reset_crumb() -> None:
-    """Drop yfinance's process-global cached cookie + crumb so the next call re-acquires them.
-
-    yfinance reuses a cached crumb and never invalidates it on a 401, so without this a
-    poisoned crumb sticks for the whole process. Best-effort and version-guarded: reaching
-    into the ``YfData`` singleton's private state is the only way to force a refresh, and an
-    upstream layout change must degrade to a no-op, never a crash.
-    """
     try:
         from yfinance import data as yf_data
 
@@ -84,21 +49,10 @@ def reset_crumb() -> None:
 
 
 def frame_is_empty(frame) -> bool:
-    """True for a missing or empty pandas frame — the shape yfinance hands back when a crumb
-    401 is *swallowed* on a DataFrame endpoint (``income_stmt``, ``earnings_dates``,
-    ``recommendations``, …). A ready-made ``is_empty`` for those adapters, so a blocked read
-    is retried with a fresh crumb; it also matches genuine no-coverage, so the retry then just
-    returns empty. Avoids importing pandas here — ``.empty`` is duck-typed."""
     return frame is None or bool(getattr(frame, "empty", True))
 
 
 def _is_crumb_401(exc: Exception) -> bool:
-    """Whether ``exc`` looks like a recoverable Yahoo crumb/401 (worth a fresh-crumb retry).
-
-    Matches a 401 status or the crumb/unauthorized wording. Deliberately excludes a 429
-    rate-limit (retrying immediately would only add load) and Yahoo's hard "unable to access
-    this feature" IP gate (a fresh crumb can't clear it), so neither is retried.
-    """
     response = getattr(exc, "response", None)
     if getattr(response, "status_code", None) == 401:
         return True
@@ -114,14 +68,6 @@ def call(
     is_empty: Optional[Callable[[T], bool]] = None,
     retries: int = 1,
 ) -> T:
-    """Run a yfinance access ``fn`` with pacing and a single crumb-refresh retry.
-
-    ``fn`` is the raw access, e.g. ``lambda: yf.Ticker(sym).info``. On a crumb 401 — either
-    raised, or (with ``is_empty`` supplied) surfaced as an empty result, the swallowed case —
-    the cached crumb is dropped and ``fn`` is retried once. Any non-crumb exception propagates
-    at once; a genuinely non-empty result (or an empty one with no ``is_empty`` predicate) is
-    returned as-is.
-    """
     attempt = 0
     while True:
         _pace()

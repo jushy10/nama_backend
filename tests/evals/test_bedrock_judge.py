@@ -1,11 +1,3 @@
-"""Tests for the Bedrock LLM-as-judge adapter.
-
-Offline: a stub client (matching the Anthropic SDK's ``message.content`` → blocks with
-``.type/.name/.input`` shape) is injected through the constructor seam, so the real adapter's
-prompt building and grade parsing run with no ``anthropic`` package and no network. Mirrors the
-app's other Bedrock adapter tests.
-"""
-
 import pytest
 
 from app.evals.adapters.bedrock_judge import BedrockJudge
@@ -98,9 +90,6 @@ def test_forces_the_grade_tool_and_includes_rubric_and_answer_in_the_prompt():
     assert "Should I buy Tesla?" in prompt  # the question
 
 
-# --- Defensive coercion ------------------------------------------------------------------------
-
-
 def test_clamps_an_out_of_range_score():
     judge, _ = _judge(_grade_message(passed=True, score=1.7, reasoning="x"))
     assert judge.grade(_case(), "answer").score == 1.0
@@ -125,9 +114,6 @@ def test_no_tool_call_is_a_hard_fail_not_a_crash():
     grade = _judge(_Message([_Block("text")]))[0].grade(_case(), "a")
     assert grade.passed is False
     assert grade.score == 0.0
-
-
-# --- Failure translation -----------------------------------------------------------------------
 
 
 def test_vendor_failure_becomes_judge_unavailable():

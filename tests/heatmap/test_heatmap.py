@@ -1,12 +1,3 @@
-"""Offline tests for the heat-map slice — the entity grouping rules and the use case.
-
-The entity build is pure, so it's tested directly. The use case is driven through hand-written
-fakes for its two ports (the universe read repository and the batched day-change quote feed),
-so nothing touches SQLAlchemy or Alpaca. The trailing-window performance is no longer a live
-port: it rides on each universe search result (materialized on the anchor by the performance
-sync), so a result carries its own ``performance`` block and the use case just folds it in.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -23,9 +14,6 @@ from app.stocks.universe.entities import (
     StockSort,
 )
 from app.stocks.universe.repository import StockSearchRepository
-
-
-# --- fixtures ------------------------------------------------------------------------------
 
 
 def _row(ticker, sector, industry, cap, *, name=None):
@@ -69,7 +57,6 @@ def _quote(symbol, price, previous_close):
 
 
 def _perf(one_year=None, **windows):
-    """A StockPerformance with the named windows set (the rest None)."""
     return StockPerformance(
         one_week=windows.get("one_week"),
         one_month=windows.get("one_month"),
@@ -81,8 +68,6 @@ def _perf(one_year=None, **windows):
 
 
 class FakeSearchRepo(StockSearchRepository):
-    """Serves a fixed page and records the criteria it was called with."""
-
     def __init__(self, results):
         self._results = tuple(results)
         self.criteria: StockSearchCriteria | None = None
@@ -126,9 +111,6 @@ class FakeBulkQuotes:
         if self._error is not None:
             raise self._error
         return dict(self._quotes)
-
-
-# --- entity: HeatMap.build -----------------------------------------------------------------
 
 
 def test_build_groups_sector_then_industry_and_colours_from_changes():
@@ -201,9 +183,6 @@ def test_build_without_a_performance_map_leaves_every_block_blank():
     rows = (_row("NVDA", "technology", "semiconductors", 3e12),)
     heatmap = HeatMap.build(HeatMapScope.SP500, rows, {})  # day-move-only board
     assert heatmap.sectors[0].industries[0].cells[0].performance is None
-
-
-# --- use case: GetStockHeatMap -------------------------------------------------------------
 
 
 def test_execute_filters_sp500_and_builds_coloured_map():

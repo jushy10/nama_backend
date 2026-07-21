@@ -1,36 +1,3 @@
-"""Interface Adapter: live price data from Yahoo Finance (via ``yfinance``), keyless.
-
-The price-feed counterpart to the Alpaca adapter, for the markets Alpaca doesn't cover —
-the Canadian listings (TSX/TSXV, suffixed ``.TO`` / ``.V``). It implements the same shared
-price ports off Yahoo:
-
-- ``StockQuoteProvider.get_quote`` — ``Ticker.fast_info`` (last price + previous close).
-- ``CandleProvider.get_candles`` — ``Ticker.history(interval=…)`` → OHLC bars.
-- ``StockPerformanceProvider.get_performance`` — a year of daily ``history`` → trailing windows.
-- ``AllTimeHighProvider.get_all_time_high`` — the full daily ``history`` → the highest high +
-  when + the earliest date covered (the analysis context's drawdown-from-high input).
-- ``StockDataProvider.get_stock`` — ``fast_info`` price fields + a best-effort ``.info`` for
-  the name/exchange.
-
-It's the only module besides the other yfinance adapters that knows Yahoo backs a price view;
-swap it and only this file changes. Two deliberate properties of the source, surfaced honestly
-rather than hidden:
-
-- **Delayed & thin.** Yahoo's quote is an ~15-minute-delayed last price with **no bid/ask** and
-  **no reliable trade timestamp**, so ``Quote.bid`` / ``ask`` / ``as_of`` come back ``None`` (a
-  fabricated ``now()`` would misrepresent a delayed print). The card treats this feed's quote as
-  the primary read for a CA symbol, but the FE should label it delayed.
-- **Best-effort transport.** Yahoo intermittently rate-limits data-centre IPs; every access goes
-  through the shared ``yfinance_session`` crumb-401 retry, and any hard failure becomes
-  ``StockDataUnavailable`` (a symbol with no data → ``StockNotFound``), so a routing caller can
-  fall back or leave the block null.
-
-Yahoo has **no 4-hour granularity**, so a ``Timeframe.HOUR_4`` candle request raises
-``StockDataUnavailable`` rather than silently returning a different bar size. The window math
-mirrors the Alpaca adapter's ``_compute_performance`` (a pure calc over ``(date, close)`` pairs);
-it's duplicated here rather than shared to avoid one adapter importing another.
-"""
-
 from __future__ import annotations
 
 import bisect
@@ -92,14 +59,10 @@ class YahooPriceProvider(
     AllTimeHighProvider,
     CandleProvider,
 ):
-    """Live price data from Yahoo (``yfinance``) for the markets Alpaca doesn't serve."""
-
     def __init__(self, *, ticker_factory=None) -> None:
         # Injectable so tests supply a fake Ticker (canned fast_info / history) instead of
         # reaching Yahoo; defaults to the real thing.
         self._ticker_factory = ticker_factory or yf.Ticker
-
-    # --- StockQuoteProvider ---
 
     def get_quote(self, symbol: str) -> Quote:
         fast = self._fast_info(symbol)
@@ -114,8 +77,6 @@ class YahooPriceProvider(
             ask=None,
             as_of=None,  # no reliable trade timestamp — a delayed print, not "now"
         )
-
-    # --- StockDataProvider ---
 
     def get_stock(self, symbol: str) -> Stock:
         fast = self._fast_info(symbol)
@@ -139,14 +100,10 @@ class YahooPriceProvider(
             market_cap=_float(_fast_get(fast, "market_cap", "marketCap")),
         )
 
-    # --- StockPerformanceProvider ---
-
     def get_performance(self, symbol: str) -> StockPerformance:
         start = datetime.now(timezone.utc) - timedelta(days=_PERFORMANCE_LOOKBACK_DAYS)
         frame = self._history(symbol, interval="1d", start=start)
         return _compute_performance(_close_series(frame))
-
-    # --- AllTimeHighProvider ---
 
     def get_all_time_high(self, symbol: str) -> AllTimeHigh:
         # The full daily history Yahoo carries (split/dividend-adjusted, so old highs stay
@@ -156,8 +113,6 @@ class YahooPriceProvider(
         if high is None:
             raise StockNotFound(symbol)  # no history — the best-effort wrapper omits the field
         return high
-
-    # --- CandleProvider ---
 
     def get_candles(
         self,
@@ -182,8 +137,6 @@ class YahooPriceProvider(
     # --- Yahoo calls (thin and isolated, through the shared crumb-retry seam) ---
 
     def _fast_info(self, symbol: str):
-        """The symbol's ``fast_info``, with the price fetch forced inside the crumb-retry seam
-        (a raised or swallowed 401 drops the cached crumb and retries once)."""
         ticker = self._ticker_factory(symbol)
 
         def read():
@@ -200,9 +153,6 @@ class YahooPriceProvider(
             raise StockDataUnavailable(symbol, f"yfinance fast_info failed ({exc})") from exc
 
     def _history(self, symbol, *, interval, start=None, end=None, period=None):
-        """A history DataFrame over the window (or ``period`` — e.g. ``"max"`` for the all-time
-        high), through the crumb-retry seam (an empty frame is the swallowed-401 signature).
-        Split/dividend-adjusted for a continuous line."""
         ticker = self._ticker_factory(symbol)
 
         def read():
@@ -227,9 +177,6 @@ class YahooPriceProvider(
             raise StockDataUnavailable(symbol, f"yfinance history failed ({exc})") from exc
 
     def _name_and_exchange(self, symbol: str) -> tuple[str | None, str | None]:
-        """Company name + listing exchange from ``.info`` — best-effort, never fatal (the
-        gated, heavier read); a failure just leaves both ``None`` so a CA card falls back to
-        the exchange the screen already stamped."""
         try:
             info = yfinance_session.call(lambda: self._ticker_factory(symbol).info)
         except Exception:  # noqa: BLE001 — best-effort enrichment
@@ -245,8 +192,6 @@ class YahooPriceProvider(
 
 
 def _to_candles(frame):
-    """A history DataFrame → chronological ``Candle``s (oldest first, the order yfinance
-    already returns). Rows without a usable close are dropped."""
     if frame is None or getattr(frame, "empty", True):
         return
     for ts, row in frame.iterrows():
@@ -267,8 +212,6 @@ def _to_candles(frame):
 
 
 def _close_series(frame) -> list[tuple[object, float]]:
-    """A history DataFrame → ``(date, close)`` pairs (ascending), the input to the window calc.
-    Rows without a usable close are dropped."""
     if frame is None or getattr(frame, "empty", True):
         return []
     series: list[tuple[object, float]] = []
@@ -280,9 +223,6 @@ def _close_series(frame) -> list[tuple[object, float]]:
 
 
 def _to_all_time_high(frame) -> AllTimeHigh | None:
-    """A daily-history DataFrame → the highest intraday high, the day it was reached, and the
-    earliest date the history covers (the "all-time" bound). ``None`` when the frame is empty
-    or carries no usable high — the same shape the Alpaca adapter derives from its bars."""
     if frame is None or getattr(frame, "empty", True):
         return None
     peak_price: float | None = None
@@ -304,8 +244,6 @@ def _to_all_time_high(frame) -> AllTimeHigh | None:
 
 
 def _compute_performance(points: list[tuple[object, float]]) -> StockPerformance:
-    """Percent change of the latest close vs the close starting each window — the same
-    algorithm the Alpaca adapter uses, over ``(date, close)`` pairs. All-``None`` when empty."""
     if not points:
         return StockPerformance(None, None, None, None, None, None)
     points = sorted(points, key=lambda p: p[0])  # ascending by date; defensive
@@ -332,7 +270,6 @@ def _compute_performance(points: list[tuple[object, float]]) -> StockPerformance
 
 
 def _ytd(dates, closes, current, anchor_year) -> float | None:
-    """Percent change vs the previous year's final close."""
     for i in range(len(dates) - 1, -1, -1):
         if dates[i].year < anchor_year:  # most recent bar before this year
             base = closes[i]
@@ -341,8 +278,6 @@ def _ytd(dates, closes, current, anchor_year) -> float | None:
 
 
 def _to_utc(ts) -> datetime:
-    """A pandas Timestamp (tz-aware or naive) → a UTC ``datetime``. A naive daily index is
-    treated as a UTC midnight; a tz-aware intraday index is converted."""
     dt = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
@@ -350,8 +285,6 @@ def _to_utc(ts) -> datetime:
 
 
 def _fast_get(fast, *names):
-    """Read the first present value from a ``fast_info`` by attribute (its stable snake_case
-    API) then mapping key — tolerant of the FastInfo object, a plain dict, or a test double."""
     for name in names:
         value = None
         try:
@@ -369,7 +302,6 @@ def _fast_get(fast, *names):
 
 
 def _float(value) -> float | None:
-    """A finite float, or ``None`` (NaN / non-numeric / missing)."""
     if value is None:
         return None
     try:
@@ -380,6 +312,5 @@ def _float(value) -> float | None:
 
 
 def _int(value) -> int | None:
-    """A non-negative int, or ``None`` (NaN / non-numeric / missing)."""
     number = _float(value)
     return None if number is None else int(number)

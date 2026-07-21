@@ -1,12 +1,3 @@
-"""Tests for the Bedrock ratings-analysis adapter.
-
-Offline: a stub client (matching the Anthropic SDK's ``message.content`` → blocks with
-``.type/.name/.input`` shape) is injected through the constructor seam, so the real adapter's
-prompt-building and parse/translate logic runs with no ``anthropic`` package and no network.
-Mirrors ``tests/adapters/test_bedrock_etf_analysis_adapter.py``, but over the analyst-coverage
-context (recommendation consensus + top credible firms) instead of an ``EtfDetail``.
-"""
-
 from datetime import date
 
 import pytest
@@ -114,9 +105,6 @@ def _top_firms() -> tuple[FirmRating, ...]:
             published_at=date(2026, 5, 21),
         ),
     )
-
-
-# --- Tests -------------------------------------------------------------------------------------
 
 
 def test_parses_tool_call_into_entity():

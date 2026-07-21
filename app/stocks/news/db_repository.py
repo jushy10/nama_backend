@@ -1,14 +1,3 @@
-"""Interface Adapter: the SQLAlchemy-backed NewsRepository.
-
-Implements the ``repository.py`` port against the database. Its job is the mapping the
-use cases must not see: it converts the ``NewsArticle`` entities to and from the ORM
-rows, and delegates every query to ``models.py``. Only this layer (and models) knows the
-tables exist; the domain entities stay free of SQLAlchemy. ``upsert`` *merges* the
-fetched articles into the store (replace-matching-by-id-then-insert, keeping earlier
-articles), prunes the feed back to the newest ``_MAX_STORED_ARTICLES`` per stock, and
-commits its own write, so a successful cache fill is durable independent of the request.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -40,9 +29,6 @@ def _to_entity(row: StockNewsRecord) -> NewsArticle:
 
 
 def _to_news(symbol: str, rows: list[StockNewsRecord]) -> StockNews:
-    """Rebuild the run in its canonical order — newest article first, the order the
-    entity documents (``latest`` reads the front) — regardless of the row order the query
-    returned."""
     articles = sorted(
         (_to_entity(row) for row in rows),
         key=lambda a: a.published_at,
@@ -52,14 +38,6 @@ def _to_news(symbol: str, rows: list[StockNewsRecord]) -> StockNews:
 
 
 class SqlNewsRepository(NewsRepository):
-    """Reads and writes the news cache through a request-scoped session.
-
-    Holds the session the endpoint injects via ``get_db``, maps rows to and from the
-    ``NewsArticle`` entities, and delegates every query to ``models``. ``upsert`` commits
-    its own write so a successful cache fill is durable independent of the surrounding
-    request.
-    """
-
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the fetch stamp deterministic in tests.

@@ -1,13 +1,3 @@
-"""Tests for the analyst-info read endpoint (GET /stocks/ticker/{ticker}/analyst-info).
-
-Offline: a fake GetStockAnalystInfo is injected through dependency_overrides + FastAPI's
-TestClient, so this checks only the controller + presenter — the combined JSON shape (the
-recommendations block with consensus / score / direction / price-targets beside the
-rating-change event feed with its derived is_upgrade / is_downgrade flags), the cache header,
-empty coverage as a 200 (not a 404), and the error mapping — without touching Yahoo or the
-database.
-"""
-
 from datetime import date
 
 from fastapi import FastAPI
@@ -27,8 +17,6 @@ from app.stocks.recommendations.use_cases import AnalystInfo
 
 
 class _FakeUseCase:
-    """Stands in for GetStockAnalystInfo; returns a canned composite or raises."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error

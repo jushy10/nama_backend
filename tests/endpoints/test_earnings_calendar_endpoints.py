@@ -1,10 +1,3 @@
-"""Endpoint tests for GET /market/earnings-calendar.
-
-Offline: a fake use case injected through dependency_overrides + FastAPI's TestClient, so the
-route's controller/presenter/validation are exercised with no DB. The use case itself is
-unit-tested in tests/earnings_calendar/test_use_cases.py.
-"""
-
 from __future__ import annotations
 
 from datetime import date

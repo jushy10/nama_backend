@@ -1,19 +1,3 @@
-"""index-membership flags on stocks
-
-Adds two boolean membership flags to the ``stocks`` anchor: ``in_sp500`` and
-``in_nasdaq100``. Which index a company belongs to is slow-moving reference data (it only
-changes on the quarterly index rebalances), so it's folded straight onto the anchor every
-feature already references rather than a separate table — the same call 0012 made for the
-universe screen facts. Both are ``NOT NULL`` with a ``false`` server default: membership is
-known (absent from the source list == not a member), and the default backfills the rows that
-already exist. The reconcile cron (``/internal/index-membership/sync``) keeps them current.
-The ``stocks`` table already exists (created in 0002), so this only alters it.
-
-Revision ID: 0014_index_flags_on_stocks
-Revises: 0013_stocks_industry
-Create Date: 2026-07-04
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

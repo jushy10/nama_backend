@@ -1,28 +1,3 @@
-"""HTTP API for reading a stock's full analyst coverage in one payload.
-
-``GET /stocks/ticker/{ticker}/analyst-info`` — the read endpoint for the analyst-info card:
-the sell-side recommendation trends (buy/hold/sell by month), the current consensus price
-target, and the discrete upgrade/downgrade events, all served from the DB cache over
-yfinance. It consolidates what the two older reads served separately —
-``/stocks/{symbol}/recommendations`` (trends + targets) and ``/stocks/{symbol}/rating-changes``
-(the events) — into the single payload the frontend's Analysts view consumes. Controller +
-presenter + wiring, the composition-root way, sitting in ``app/stocks/endpoints/`` beside the
-slice's cron entrypoint (``cron_recommendations_endpoints``) so all of the slice's HTTP lives
-in one place. (The path is grouped under the ``/stocks/ticker/{ticker}`` resource — the same
-prefix the ticker card and its ``pe-history`` sub-read use — because it's a per-ticker card the
-FE renders on the stock screen; the data still comes from this slice.)
-
-Primary vs. enrichment: the recommendation trends are primary (their failure maps to a 404/502
-like the old standalone read), the rating-change events are best-effort enrichment folded in by
-the use case (``GetStockAnalystInfo``), so a rating-change outage can never sink the trends.
-
-Wiring convention: the process-singleton live providers are memoized with ``@lru_cache`` while
-the DB caches are built per request (they need the request session). A persistent DB cache in
-front of each source — filled lazily on a cold miss, refreshed out of band by the recommendations
-cron, which folds the rating-change refresh into its sweep — keeps the endpoint off Yahoo, which
-rate-limits data-centre IPs. yfinance needs no credential, so the endpoint is always wired.
-"""
-
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -173,9 +148,6 @@ def _present_recommendations(
 
 
 def _present(info: AnalystInfo) -> AnalystInfoResponse:
-    """Presenter: analyst-info composite -> HTTP response DTO. The domain speaks in
-    ``symbol``; renaming it ``ticker`` is a JSON-shape choice made here at the edge, like
-    the ticker card's."""
     return AnalystInfoResponse(
         ticker=info.symbol,
         recommendations=_present_recommendations(info.recommendations),

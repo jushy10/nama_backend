@@ -1,14 +1,3 @@
-"""Tests for the ETF use cases: SyncEtfs (write side) + SearchEtfs / ListEtfCategories /
-GetEtfDetail (read).
-
-Offline: hand-written fakes for the screener, profile source, quote, and repository ports, so this
-exercises only the orchestration — the upsert-vs-skip decision and the profile enrichment pass for
-the sync, the edge normalization (trim/slug/clamp) and criteria pass-through for the search, and for
-the detail: the membership gate (404 before any upstream call), the quote-primary propagation, the
-DB-read stored profile, and the live-Yahoo overlay of the 3y/5y returns for the performance block —
-independent of Yahoo, Alpaca, or the DB.
-"""
-
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -58,13 +47,10 @@ def _etf(ticker, *, net_assets=1e10):
 
 
 def _a_screen(n: int) -> tuple[ScreenedEtf, ...]:
-    """A plausible screen of ``n`` distinct funds."""
     return tuple(_etf(f"E{i:04d}", net_assets=1e9 + i) for i in range(n))
 
 
 class _FakeScreener(EtfScreener):
-    """Returns a canned screen, or raises the given error; records the AUM floor it was asked for."""
-
     def __init__(self, etfs=(), *, error=None) -> None:
         self._etfs = tuple(etfs)
         self._error = error
@@ -83,9 +69,6 @@ _NOT_CALLED = object()  # sentinel: the enrichment work-list query was never iss
 
 
 class _FakeProfileProvider(EtfProfileProvider):
-    """Maps ticker -> profile; raises StockDataUnavailable for tickers in ``errors``. A ticker with
-    no mapping yields an empty profile (a reachable-but-sparse fund)."""
-
     def __init__(self, mapping=None, *, errors=()) -> None:
         self._mapping = dict(mapping or {})
         self._errors = set(errors)
@@ -99,9 +82,6 @@ class _FakeProfileProvider(EtfProfileProvider):
 
 
 class _FakeRepo(EtfRepository):
-    """Records the screen upsert input, the enrichment work-list limit, and the profiles written;
-    serves a canned work-list."""
-
     def __init__(self, *, counts=EtfSyncCounts(0, 0), targets=()) -> None:
         self._counts = counts
         self._targets = tuple(targets)
@@ -270,8 +250,6 @@ _RESULT = EtfSearchResult(
 
 
 class _FakeSearchRepo(EtfSearchRepository):
-    """Records the criteria it was handed and returns a canned page / categories."""
-
     def __init__(self, *, page=None, categories=None) -> None:
         self._page = page or EtfSearchPage(results=(), total=0, limit=0, offset=0)
         self._categories = categories or EtfCategories(())
@@ -375,8 +353,6 @@ def test_list_categories_passes_through():
 
 
 class _FakeEtfTranslator(EtfScreenerQueryTranslator):
-    """Records the query + allowed vocabulary it was handed; returns a canned intent (or raises)."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result if result is not None else EtfScreenIntent()
         self._error = error
@@ -418,9 +394,6 @@ def test_ai_screen_propagates_a_translation_failure():
     with pytest.raises(StockDataUnavailable):
         AiScreenEtfs(translator, repo).execute(query="tech funds")
     assert repo.categories_calls == 1
-
-
-# --- GetEtfDetail -------------------------------------------------------------------------
 
 
 def _facts(ticker="VOO", **overrides) -> EtfSearchResult:
@@ -468,10 +441,6 @@ def _live_returns_profile() -> EtfProfile:
 
 
 class _FakeLookup(EtfLookupRepository):
-    """In-memory single-fund lookup; records the get / get_stored_profile calls. Serves canned
-    stored facts + a canned stored profile (the 3y/5y returns are overlaid separately from the live
-    profile provider, not served here)."""
-
     def __init__(self, facts: EtfSearchResult | None, profile: EtfProfile | None = None) -> None:
         self._facts = facts
         self._profile = profile if profile is not None else EtfProfile.empty()
@@ -769,8 +738,6 @@ def test_detail_rejects_an_unknown_include_before_the_lookup():
 
 
 class _FakeEtfAnalysisProvider(EtfAnalysisProvider):
-    """Returns/raises whatever the test configured; records the EtfDetail snapshots it was handed."""
-
     def __init__(self, analysis: InvestmentAnalysis | None = None, *, raises=None) -> None:
         self._analysis = analysis
         self._raises = raises
@@ -865,8 +832,6 @@ def test_analysis_propagates_a_model_failure():
 
 
 class _FakeAnalysisCache(InvestmentAnalysisCache):
-    """In-memory stand-in for the result cache; records puts."""
-
     def __init__(self, stored: InvestmentAnalysis | None = None) -> None:
         self._store = {stored.symbol: stored} if stored is not None else {}
         self.puts: list[InvestmentAnalysis] = []

@@ -1,11 +1,3 @@
-"""Unit tests for the Yahoo price adapter (fast_info / history via yfinance).
-
-No network: a fake Ticker returns a canned ``fast_info`` namespace and canned ``history``
-DataFrames (built with real pandas, so the parsing is exercised for real). Verifies the quote /
-candle / performance / snapshot mappings, the delayed-feed nulls (bid/ask/as_of), the
-unsupported-4h and empty-history rules, and vendor-failure → domain-error translation.
-"""
-
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -56,9 +48,6 @@ def _fast(**kw) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
-# --------------------------- get_quote ---------------------------
-
-
 def test_quote_maps_fast_info_and_nulls_the_delayed_fields():
     ticker = _FakeTicker(fast=_fast(last_price=52.4, previous_close=50.0))
     quote = _provider(ticker).get_quote("SHOP.TO")
@@ -87,9 +76,6 @@ def test_quote_fast_info_failure_is_data_unavailable():
     ticker = _FakeTicker(fast_error=RuntimeError("yahoo blocked"))
     with pytest.raises(StockDataUnavailable):
         _provider(ticker).get_quote("SHOP.TO")
-
-
-# --------------------------- get_stock ---------------------------
 
 
 def test_stock_maps_fast_info_and_best_effort_name_exchange():
@@ -122,11 +108,7 @@ def test_stock_name_exchange_are_best_effort_when_info_fails():
     assert stock.price == 52.4
 
 
-# --------------------------- get_candles ---------------------------
-
-
 def _frame(rows) -> pd.DataFrame:
-    """rows: list of (iso_date, open, high, low, close, volume)."""
     index = pd.to_datetime([r[0] for r in rows])
     return pd.DataFrame(
         {
@@ -186,9 +168,6 @@ def test_candles_map_the_timeframe_to_a_yfinance_interval():
     assert ticker.history_calls[-1]["interval"] == "1wk"
 
 
-# --------------------------- get_performance ---------------------------
-
-
 def test_performance_computes_windows_from_daily_closes():
     # 15 consecutive daily bars, all close 100 except the last (110). The one-week window's
     # base is the bar 7 days back (still 100) -> +10%; the longer windows have no base in this
@@ -214,9 +193,6 @@ def test_performance_history_failure_is_data_unavailable():
     ticker = _FakeTicker(history_error=RuntimeError("yahoo blocked"))
     with pytest.raises(StockDataUnavailable):
         _provider(ticker).get_performance("SHOP.TO")
-
-
-# --------------------------- get_all_time_high ---------------------------
 
 
 def test_all_time_high_from_full_history():

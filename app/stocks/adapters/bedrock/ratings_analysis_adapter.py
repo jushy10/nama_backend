@@ -1,35 +1,3 @@
-"""Interface Adapter: AI analyst-coverage read via Claude on Amazon Bedrock.
-
-The analyst-ratings sibling of ``earnings_analysis_adapter.py`` (the
-earnings read) and ``analysis_adapter.py`` (the full buy/hold/sell
-read). The only module — alongside its earnings/stock/ETF/sector/market cousins
-— that knows Bedrock (and the Anthropic SDK) exists. It takes the recommendation
-consensus and the most credible covering firms the use case gathered, renders
-them into a compact prompt, and asks Claude for a plain-language read of what
-Wall Street thinks: how bullish or cautious the coverage is, how much analysts
-agree, and where they see the price going. Swap models or vendors and only this
-file changes.
-
-The same two choices that keep the earnings adapter robust apply here:
-
-* **Auth is the runtime's job, not ours.** Bedrock authenticates through the
-  process's AWS credentials (in production, the ECS task role), so there is no
-  API key to read or pass — only ``model_id`` and ``region``.
-* **Structured output via a forced tool call.** Claude must call
-  ``submit_ratings_findings``, so the model returns validated JSON arguments
-  that map straight onto the ``RatingsAnalysis`` entity — no prose parsing.
-
-The prompt carries the *real* figures (the buy/hold/sell split, the consensus
-target, the top firms' stances) and the model writes only plain prose over them
-— it never authors a number that reaches the card. The Anthropic SDK is imported
-lazily inside ``__init__`` so the app (and the offline test suite, which injects
-a stub client) imports cleanly without the ``bedrock`` extra. Any Bedrock/SDK
-failure is translated to ``StockDataUnavailable`` — the one error this port
-documents.
-
-Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
-"""
-
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import log_model_cost
@@ -125,17 +93,6 @@ _KEY = "ratings-analysis"
 
 
 class BedrockRatingsAnalysisProvider(RatingsAnalysisProvider):
-    """Generates a ``RatingsAnalysis`` with Claude on Amazon Bedrock.
-
-    Structured exactly like ``BedrockEarningsAnalysisProvider`` (its earnings sibling):
-    defaults to the fast Haiku tier since the output is short and plain, takes
-    ``model_id``/``region`` as deploy-time config (the model id may be a cross-region
-    inference profile, env-overridable so a deploy can swap models without a code change),
-    and accepts a ``client`` injection seam so tests can bypass the Anthropic SDK entirely.
-    Otherwise the Bedrock client is built lazily and authenticates through the process's AWS
-    credentials.
-    """
-
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock, so the
     # short form 400s. Same default as the earnings/market/sector reads.
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -197,7 +154,6 @@ class BedrockRatingsAnalysisProvider(RatingsAnalysisProvider):
 
 
 def _tool_payload(message) -> dict | None:
-    """Pull the submit_ratings_findings arguments out of the tool call, if any."""
     for block in getattr(message, "content", None) or []:
         if (
             getattr(block, "type", None) == "tool_use"
@@ -210,12 +166,6 @@ def _tool_payload(message) -> dict | None:
 
 
 def _to_entity(symbol: str, payload: dict, model_id: str) -> RatingsAnalysis:
-    """Map the validated tool arguments onto the domain entity.
-
-    The forced-tool schema constrains the shape, but a defensive guard keeps an off-schema
-    result (e.g. an unknown ``verdict``) from leaking out as something other than this port's
-    documented ``StockDataUnavailable``.
-    """
     try:
         verdict = RatingsVerdict(payload["verdict"])
         confidence = Confidence(payload["confidence"])
@@ -237,26 +187,16 @@ def _to_entity(symbol: str, payload: dict, model_id: str) -> RatingsAnalysis:
 
 
 def _string_tuple(value) -> tuple[str, ...]:
-    """Coerce the model's ``findings`` field into non-empty, stripped strings.
-
-    Guards against a non-list: the forced tool constrains the schema, but Bedrock does not
-    strictly enforce it, and Haiku occasionally returns a list field as a single string.
-    Iterating a ``str`` would split it into characters — a wall of one-character "findings" —
-    so anything that isn't a list yields none instead. Mirrors
-    ``earnings_analysis_adapter._string_tuple``.
-    """
     if not isinstance(value, list):
         return ()
     return tuple(text for item in value if (text := str(item).strip()))
 
 
 def _money(value: float | None) -> str:
-    """A per-share dollar figure, or a dash when missing."""
     return "n/a" if value is None else f"${value:,.2f}"
 
 
 def _num(value: float | None) -> str:
-    """A plain 2dp number, or a dash when missing."""
     return "n/a" if value is None else f"{value:.2f}"
 
 
@@ -265,12 +205,6 @@ def _render_prompt(
     recommendations: AnalystRecommendations | None,
     top_firms: tuple[FirmRating, ...],
 ) -> str:
-    """Render the analyst coverage into a compact, labelled block for the model.
-
-    The current buy/hold/sell split leads, then the consensus target range, then the most
-    credible firms' stances. Only present figures are included, so sparse coverage renders a
-    shorter block — the read stands on whatever it's handed.
-    """
     lines = [f"Analyst coverage for {symbol.upper()}:", ""]
 
     latest = recommendations.latest if recommendations else None

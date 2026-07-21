@@ -1,16 +1,3 @@
-"""Unit tests for the SEC EDGAR insider-transactions (Form 4) adapter.
-
-No network: the httpx client is swapped for a fake returning canned per-URL bodies (the same
-``_http`` seam the revenue-segments/Wikipedia adapters use), and ``_parse_form4`` is exercised
-directly on a hand-built ownership document.
-
-The parser tests pin the important behaviours: the open-market P/S codes vs. the
-grant/exercise/tax noise, comma-stripped share counts, a footnote-only price (no ``<value>``)
-degrading to ``None``, the reporting owner's relationship, and dropping a code-less line. The
-walk tests pin ticker->CIK->recent-Form-4s->per-filing-XML, the raw-XML URL (stripping the XSL
-render prefix), best-effort per-filing (an unreadable filing is skipped), and the error mapping.
-"""
-
 import httpx
 import pytest
 
@@ -184,8 +171,6 @@ class _Resp:
 
 
 class FakeHttp:
-    """Fake httpx client: canned response per URL, optional transport errors. Records requests."""
-
     def __init__(self, responses, *, errors=()):
         self._responses = responses
         self._errors = set(errors)

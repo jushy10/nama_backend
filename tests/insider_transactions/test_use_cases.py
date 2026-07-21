@@ -1,11 +1,3 @@
-"""Tests for the insider-transactions use cases: GetInsiderTransactions + SyncInsiderTransactions.
-
-Offline: hand-written fakes for the provider and repository ports, so this exercises only the
-orchestration — symbol normalization and pass-through on the read side; which targets are
-refreshed, in what order, failure/empty handling, and the per-run limit on the sync side —
-without touching SEC or the database.
-"""
-
 from datetime import date
 
 import pytest
@@ -52,9 +44,6 @@ def _activity(symbol: str) -> InsiderActivity:
     )
 
 
-# ───────────────────────────── GetInsiderTransactions ─────────────────────────────
-
-
 class _FakeProvider(InsiderTransactionsProvider):
     def __init__(self, result: InsiderActivity) -> None:
         self.result = result
@@ -84,9 +73,6 @@ def test_rejects_a_bad_symbol_with_value_error(bad):
     assert fake.calls == []  # never reached the provider
 
 
-# ───────────────────────────── SyncInsiderTransactions ─────────────────────────────
-
-
 class _FakeRepo(InsiderTransactionsRepository):
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = list(targets)
@@ -105,8 +91,6 @@ class _FakeRepo(InsiderTransactionsRepository):
 
 
 class _FakeSyncProvider(InsiderTransactionsProvider):
-    """Returns a canned activity per symbol, an empty one, or raises."""
-
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}

@@ -1,13 +1,3 @@
-"""Interface Adapter: the SQLAlchemy-backed FundamentalsRepository.
-
-Implements ``repository.py`` against the shared ``stocks`` anchor — fundamentals have no table
-of their own, so the figures are written straight onto ``stocks`` (the profitability / health
-columns plus the per-share inputs and the ``fundamentals_synced_at`` stamp). Only this layer
-touches SQLAlchemy. ``upsert`` commits its own write, so a successful refresh is durable
-independent of the surrounding request; ``refresh_targets`` is the stale-first read the sweep
-drives off.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -21,10 +11,6 @@ from app.stocks.stocks.models import StockRecord, get_or_create_stock
 
 
 class SqlFundamentalsRepository(FundamentalsRepository):
-    """Reads the stale-first work-list and writes fundamentals onto the ``stocks`` anchor
-    through a request-scoped session. ``upsert`` commits its own write so a successful refresh
-    is durable independent of the surrounding request."""
-
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the sync stamp deterministic in tests.

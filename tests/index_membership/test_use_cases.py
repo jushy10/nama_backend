@@ -1,11 +1,3 @@
-"""Tests for the index-membership sync use case.
-
-Offline against hand-written fakes (a source + a repository), so the orchestration is exercised
-with no Finnhub, HTTP, or SQLAlchemy. Verifies the per-index plausibility floor: a
-plausibly-complete list is reconciled; a truncated (too-short) one is skipped so it can't clear
-a live index; and a hard source failure propagates without touching the repository.
-"""
-
 import pytest
 
 from app.stocks.exceptions import StockDataUnavailable
@@ -32,8 +24,6 @@ class FakeSource:
 
 
 class FakeRepo:
-    """Records the (sync_sp500, sync_nasdaq100) flags and echoes the members it would mark."""
-
     def __init__(self) -> None:
         self.calls: list[tuple[bool, bool]] = []
 

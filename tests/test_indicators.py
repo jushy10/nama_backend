@@ -1,11 +1,3 @@
-"""Unit tests for the pure price-series indicators (no I/O, no framework).
-
-These are enterprise business logic, so they're tested directly on close prices
-and candle series. Values here are hand-verifiable: EMA runs are worked out by
-hand against the smoothing multiplier, and support levels are read off small
-hand-drawn swing-low shapes.
-"""
-
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -130,7 +122,6 @@ W_LOWS = [5.0, 4.0, 3.0, 4.0, 5.0, 4.0, 3.0, 4.0, 5.0]
 
 
 def _times(n: int) -> list[datetime]:
-    """n consecutive daily UTC timestamps — the bars the lows fall on."""
     base = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return [base + timedelta(days=i) for i in range(n)]
 
@@ -257,8 +248,6 @@ def test_support_rejects_length_mismatch():
 
 
 def _series_with_lows(lows: list[float], last_close: float | None = None) -> CandleSeries:
-    """A daily series whose bars carry the given lows; the final close (defaulting
-    to the last low) is the reference price the levels are measured against."""
     base = datetime(2026, 6, 1, tzinfo=timezone.utc)
     candles = tuple(
         Candle(
@@ -285,8 +274,6 @@ def test_support_levels_uses_the_latest_close_as_reference():
 
 
 def _series_with_lows_and_closes(bars: list[tuple[float, float]]) -> CandleSeries:
-    """A daily series from explicit (low, close) pairs — for asserting the break
-    rule, where a bar's close diverges from its low (a wick vs. a close-below)."""
     base = datetime(2026, 6, 1, tzinfo=timezone.utc)
     candles = tuple(
         Candle(
@@ -608,12 +595,7 @@ def test_reading_is_built_from_effective_directions_not_raw_slope():
     assert assessment.reading is TrendReading.UPTREND_PULLBACK
 
 
-# =============================== Technical-indicator bundle ===============================
-
-
 def _ohlcv(bars: list[tuple], timeframe: Timeframe = Timeframe.DAY_1) -> CandleSeries:
-    """Build a candle series from (high, low, close[, volume]) tuples; the open is
-    set to the close (irrelevant to these indicators)."""
     base = datetime(2026, 6, 1, tzinfo=timezone.utc)
     candles = tuple(
         Candle(
@@ -629,9 +611,6 @@ def _ohlcv(bars: list[tuple], timeframe: Timeframe = Timeframe.DAY_1) -> CandleS
     return CandleSeries(symbol="AAPL", timeframe=timeframe, candles=candles)
 
 
-# --------------------------- compute_sma ---------------------------
-
-
 def test_compute_sma_matches_hand_computation():
     # windows of 2: (2+4)/2, (4+6)/2, (6+8)/2
     assert compute_sma([2.0, 4.0, 6.0, 8.0], period=2) == [3.0, 5.0, 7.0]
@@ -639,9 +618,6 @@ def test_compute_sma_matches_hand_computation():
 
 def test_compute_sma_empty_when_not_enough_history():
     assert compute_sma([5.0], period=2) == []
-
-
-# --------------------------- compute_rsi ---------------------------
 
 
 def test_compute_rsi_all_gains_is_100():
@@ -666,9 +642,6 @@ def test_compute_rsi_empty_when_not_enough_history():
     assert compute_rsi([1.0, 2.0, 3.0], period=14) == []
 
 
-# --------------------------- compute_macd ---------------------------
-
-
 def test_compute_macd_rising_series_is_positive_and_aligned():
     closes = [float(x) for x in range(1, 60)]
     macd_line, signal_line, histogram = compute_macd(closes)  # 12/26/9
@@ -687,9 +660,6 @@ def test_compute_macd_rejects_fast_not_shorter_than_slow():
         compute_macd([1.0, 2.0, 3.0], fast=26, slow=12)
 
 
-# --------------------------- compute_bollinger ---------------------------
-
-
 def test_compute_bollinger_flat_series_collapses_the_bands():
     upper, middle, lower = compute_bollinger([5.0] * 5, period=3)
     assert middle == [5.0, 5.0, 5.0]
@@ -701,9 +671,6 @@ def test_compute_bollinger_orders_bands_and_centres_on_the_sma():
     upper, middle, lower = compute_bollinger(closes, period=3, num_std=2)
     assert middle == compute_sma(closes, 3)  # centre line is the SMA
     assert all(u > m > lo for u, m, lo in zip(upper, middle, lower))
-
-
-# --------------------------- compute_atr ---------------------------
 
 
 def test_compute_atr_matches_hand_computation():
@@ -718,9 +685,6 @@ def test_compute_atr_empty_when_history_too_short():
     assert compute_atr([1.0, 2.0], [1.0, 2.0], [1.0, 2.0], period=14) == []
 
 
-# --------------------------- compute_stochastic ---------------------------
-
-
 def test_compute_stochastic_close_at_range_top_reads_high():
     # Close pinned to the high of a rising range -> %K near 100.
     bars = [(float(h), float(h) - 5, float(h)) for h in range(10, 30)]
@@ -733,9 +697,6 @@ def test_compute_stochastic_close_at_range_top_reads_high():
     assert all(0.0 <= v <= 100.0 for v in k_line)
 
 
-# --------------------------- compute_adx ---------------------------
-
-
 def test_compute_adx_uptrend_has_plus_di_above_minus_di():
     bars = [(float(h) + 1, float(h) - 1, float(h)) for h in range(10, 50)]
     highs = [b[0] for b in bars]
@@ -744,9 +705,6 @@ def test_compute_adx_uptrend_has_plus_di_above_minus_di():
     adx, plus_di, minus_di = compute_adx(highs, lows, closes, period=14)
     assert plus_di and minus_di and adx
     assert plus_di[-1] > minus_di[-1]  # a clean climb: upward pressure dominates
-
-
-# --------------------------- compute_obv ---------------------------
 
 
 def test_compute_obv_matches_hand_computation():
@@ -760,15 +718,9 @@ def test_compute_obv_treats_missing_volume_as_zero():
     assert compute_obv([10.0, 11.0], [None, None]) == [0.0, 0.0]
 
 
-# --------------------------- compute_vwap ---------------------------
-
-
 def test_compute_vwap_is_the_running_volume_weighted_average():
     # Equal volumes -> cumulative mean of the typical prices (h=l=c here).
     assert compute_vwap([10.0, 20.0], [10.0, 20.0], [10.0, 20.0], [10, 10]) == [10.0, 15.0]
-
-
-# --------------------------- compute_williams_r ---------------------------
 
 
 def test_compute_williams_r_close_at_low_is_minus_100():
@@ -777,15 +729,9 @@ def test_compute_williams_r_close_at_low_is_minus_100():
     assert values == [-100.0]
 
 
-# --------------------------- compute_cci ---------------------------
-
-
 def test_compute_cci_flat_series_is_zero():
     flat = [5.0] * 5
     assert compute_cci(flat, flat, flat, period=3) == [0.0, 0.0, 0.0]
-
-
-# --------------------------- compute_roc ---------------------------
 
 
 def test_compute_roc_matches_hand_computation():
@@ -793,9 +739,6 @@ def test_compute_roc_matches_hand_computation():
     # compute_* return full precision; the 4dp rounding happens at the line boundary.
     result = compute_roc([10.0, 11.0, 12.0, 13.0, 14.0], period=2)
     assert result == pytest.approx([20.0, 100 * 2 / 11, 100 * 2 / 12])
-
-
-# --------------------------- compute_mfi ---------------------------
 
 
 def test_compute_mfi_all_positive_flow_is_100():
@@ -864,9 +807,6 @@ def test_build_indicators_preserves_request_order():
     result = build_indicators(series, [IndicatorSpec("macd"), IndicatorSpec("rsi")])
     assert result.symbol == "AAPL"
     assert [ind.name for ind in result.indicators] == ["macd", "rsi"]
-
-
-# --------------------------- indicator_warmup_bars ---------------------------
 
 
 @pytest.mark.parametrize(

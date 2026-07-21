@@ -1,14 +1,3 @@
-"""Tests for the chart read endpoints (candles / ema / support-levels / trend /
-indicators).
-
-Offline: a fake CandleProvider is injected through dependency_overrides on the
-market-routing ``get_price_provider`` factory, so these exercise the *real* use cases and the pure
-indicator math end-to-end — only the vendor fetch is faked. They cover the new
-unified ``/indicators`` endpoint (spec parsing, the JSON shape, overlay flags,
-window trimming, error mapping) and smoke-test that the four pre-existing endpoints
-still serve after the shared window/error-translation refactor.
-"""
-
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
@@ -22,8 +11,6 @@ from app.stocks.wiring import get_price_provider
 
 
 class _FakeCandleProvider(CandleProvider):
-    """Returns a canned candle series (ignoring the window) or raises."""
-
     def __init__(self, *, series: CandleSeries | None = None, error=None) -> None:
         self._series = series
         self._error = error
@@ -37,8 +24,6 @@ class _FakeCandleProvider(CandleProvider):
 
 
 def _rising_series(count: int = 60) -> CandleSeries:
-    """A daily series of steadily rising bars — enough history to compute every
-    indicator (the deepest default lookback is MACD's 26 + 9)."""
     base = datetime(2026, 6, 1, tzinfo=timezone.utc)
     candles = tuple(
         Candle(
@@ -61,9 +46,6 @@ def _client(fake: _FakeCandleProvider) -> TestClient:
     # CandleProvider (the router slot accepts any CandleProvider), so these stay offline.
     app.dependency_overrides[get_price_provider] = lambda: fake
     return TestClient(app)
-
-
-# --------------------------- /indicators: shape ---------------------------
 
 
 def test_indicators_returns_requested_set_in_order():
@@ -117,9 +99,6 @@ def test_indicators_single_fetch_for_the_whole_set():
     assert len(fake.calls) == 1
 
 
-# --------------------------- /indicators: window trimming ---------------------------
-
-
 def test_indicators_trims_points_to_the_visible_window():
     fake = _FakeCandleProvider(series=_rising_series())
     # Explicit window starting mid-series (the fake spans 2026-06-01 .. ~2026-07-30).
@@ -132,9 +111,6 @@ def test_indicators_trims_points_to_the_visible_window():
     assert points  # some survive the trim
     cutoff = datetime(2026, 7, 1, tzinfo=timezone.utc)
     assert all(datetime.fromisoformat(p["timestamp"]) >= cutoff for p in points)
-
-
-# --------------------------- /indicators: validation / errors ---------------------------
 
 
 def test_indicators_unknown_name_is_a_400():

@@ -1,12 +1,3 @@
-"""HTTP API for the market boards.
-
-``GET /sectors`` — the day's ranked sector board. Controller + presenter +
-wiring, the composition-root way, sitting in ``app/stocks/endpoints/`` beside
-the other read endpoints. The AI reads over the boards (``/sectors/analysis``,
-``/market/summary``) live in ``analysis_endpoints.py``; the index board itself
-has no standalone endpoint — it only feeds the market summary.
-"""
-
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.stocks.adapters.alpaca_adapter import AlpacaStockDataProvider
@@ -56,7 +47,6 @@ def _present_performance(
 
 
 def _present_sectors(sectors: list[SectorPerformance]) -> SectorBoardResponse:
-    """Presenter: ranked sector entities -> HTTP response DTO."""
     return SectorBoardResponse(
         count=len(sectors),
         sectors=[

@@ -1,14 +1,3 @@
-"""Tests for the DB-backed stock-scorecard result cache (``SqlStockScorecardCache``).
-
-Offline: an in-memory SQLite database stands in for the shared
-``investment_analysis_cache`` table. Verifies the round-trip (entity -> row ->
-entity) including the sectioned JSON (stance / label / summary + metric chips) and
-UTC re-attachment on read; the ``(kind, symbol)`` isolation from the ETF analysis
-cache that shares the table; upsert-overwrite (one row per key); and the
-best-effort contract — a clean miss, a corrupt row treated as a miss, a null/blank
-``sections`` column tolerated, and a write that never raises.
-"""
-
 from datetime import datetime, timezone
 
 import pytest

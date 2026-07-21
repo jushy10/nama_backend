@@ -1,13 +1,3 @@
-"""Tests for the database-backed NewsRepository.
-
-Offline: an in-memory SQLite database stands in for the real table. Verifies the
-round-trip (entities -> rows -> entities) including the canonical newest-first order, the
-*merge* on upsert (fetched articles replaced by id, earlier ones kept), the retention
-*cap* that bounds the accumulated feed, the parent ``stocks`` row + name
-fill-but-don't-clobber, a clean miss, and the last-refresh (max fetch stamp) ordering of
-refresh targets.
-"""
-
 from datetime import datetime, timedelta, timezone
 
 import pytest

@@ -1,28 +1,3 @@
-"""Application use cases for the universe slice.
-
-Pure orchestration over the ports so each runs offline in tests against hand-written fakes
-and knows nothing of Yahoo, HTTP, or SQLAlchemy:
-
-- ``SyncUniverse`` — the out-of-band populator. Three passes in one run: (1) screen the US
-  market at/above the floor and upsert the result onto the ``stocks`` anchor (additive: it
-  never removes a stock); (2) enrich up to ``limit`` stored stocks that still lack a
-  ``sector`` or ``industry``, classifying each through a per-ticker call and writing its
-  sector/industry slugs; (3) value every screened stock — its trailing P/E from the
-  screen-time price over the quarterly slice's stored TTM consensus EPS — overwriting the
-  anchor's ``pe_ratio``. Invoked by the (fire-and-forget) cron endpoint. Guarded so a
-  blocked/truncated screen (empty or implausibly small) skips *all* passes rather than
-  churning a partial set or hammering the same blocked vendor with per-ticker calls.
-- ``SearchStocks`` — the read side (``GET /stocks/ticker``): normalize a search request at the
-  edge and hand the read repository a clean ``StockSearchCriteria``, returning the matched
-  page. No live feed — the universe is already on the anchor.
-- ``AiScreenStocks`` — the AI-driven read side (``GET /stocks/ai-search``): a translator turns
-  a plain-English request into a ``ScreenIntent`` and that's all it returns. The client applies
-  those filters to the ordinary ``GET /stocks/ticker`` search to fetch the rows, so the AI only
-  ever picks the filters — the querying stays the manual path's job.
-- ``ListClassifications`` — the filter-menu read (``GET /stocks/classifications``): the
-  distinct sector/industry slugs the FE offers, straight from the repository.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -59,19 +34,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class UniverseSyncReport:
-    """The outcome of one sync run.
-
-    ``screened`` is the screen size and ``added`` / ``updated`` the anchors the screen upsert
-    inserted / refreshed. ``enriched`` is how many stocks the enrichment pass classified this
-    run (wrote a sector/industry for) and ``enrich_failed`` how many per-ticker lookups the
-    source couldn't serve (an outage or block). ``valued`` is how many screened stocks the
-    valuation pass wrote a non-null trailing P/E for (a stock with no cached TTM or a trailing
-    loss is recomputed to ``None`` and not counted) — all three zero when the screen was
-    skipped. ``skipped`` is ``True`` when the screen came back empty or implausibly small (a
-    truncated or blocked fetch) so *nothing* was written; the counts are then all zero. There
-    is no ``removed`` count: the sync is additive (a shared anchor is never deleted).
-    """
-
     screened: int
     added: int
     updated: int
@@ -82,20 +44,12 @@ class UniverseSyncReport:
 
 
 def _slugged(values: Sequence[str] | None) -> tuple[str, ...]:
-    """Slug each label to the stored convention, dropping blanks/non-strings and de-duplicating
-    while preserving order — the multi-select edge for the ``sector`` / ``industry`` filters. Each
-    value may be the slug or the raw label (``slugify`` normalizes both), and the param repeats to
-    OR several at once (``?sector=technology&sector=energy``)."""
     if not values:
         return ()
     return tuple(dict.fromkeys(s for v in values if (s := slugify(v)) is not None))
 
 
 def _upper_codes(values: Sequence[str] | None) -> tuple[str, ...]:
-    """Upper-case each ISO-2 country code to the stored convention, dropping blanks/non-strings
-    and de-duplicating while preserving order — the multi-select edge for the ``country`` filter
-    (``?country=us&country=ca``). An off-vocabulary code simply matches no rows, like a stray
-    sector slug."""
     if not values:
         return ()
     return tuple(
@@ -106,27 +60,12 @@ def _upper_codes(values: Sequence[str] | None) -> tuple[str, ...]:
 
 
 def _pe_ratio(price: float | None, ttm_eps: float | None) -> float | None:
-    """The ticker card's trailing P/E, materialized for the sortable anchor column.
-
-    The exact figure ``TickerValuation.trailing_pe`` serves — a market price over the quarterly
-    slice's consensus-basis TTM EPS — with the same positive-legs guard: ``None`` off a loss
-    (``ttm_eps <= 0``), a missing/degenerate price, or fewer than four cached quarters (``ttm_eps``
-    is then ``None``). Kept in lockstep with the card by definition, so the sort column and the
-    card read the same P/E on the same basis."""
     if price is None or ttm_eps is None or price <= 0 or ttm_eps <= 0:
         return None
     return round(price / ttm_eps, 2)
 
 
 def _fcf_yield(price: float | None, fcf_per_share: float | None) -> float | None:
-    """The ticker card's free-cash-flow yield, materialized for the sortable anchor column.
-
-    The exact figure ``TickerValuation.fcf_yield`` serves — free cash flow per share over the
-    price, as a signed percent — off the screen-time price and the annual slice's stored
-    ``fcf_per_share``. Unlike ``_pe_ratio`` it keeps its **sign** (only a live price is
-    required): a negative yield is a real "burning cash" reading, so a cash-burner ranks below
-    zero rather than dropping out. ``None`` only when a leg is missing or the price is
-    degenerate."""
     if price is None or fcf_per_share is None or price <= 0:
         return None
     return round(fcf_per_share / price * 100, 2)
@@ -136,18 +75,6 @@ def _ev_ebitda(
     market_cap: float | None,
     components: tuple[float, float | None, float | None] | None,
 ) -> float | None:
-    """The ticker card's EV/EBITDA, materialized for the sortable anchor column.
-
-    The screen-time analogue of ``TickerValuation.ev_to_ebitda``: enterprise value = the
-    screen's ``market_cap`` + total debt − cash, over trailing EBITDA. ``components`` is
-    ``(ebitda, total_debt, cash)`` off the anchor (``None`` when the fundamentals slice hasn't
-    reached the stock); a missing debt/cash leg counts as ``0``. ``None`` when the market cap or
-    EBITDA is missing, or EBITDA is non-positive (the same guard the card's property uses — a
-    multiple off a non-positive EBITDA is meaningless). Keeps its **sign** like ``_fcf_yield``:
-    a net-cash company worth less than its cash reads negative, a real "valued below net cash"
-    signal rather than a dropout. Where the card prices EV off the live quote × shares, this
-    uses the screen-time market cap — a drifting snapshot for the search, exactly as ``_pe_ratio``
-    uses the screen price while the card serves a live P/E."""
     if market_cap is None or components is None:
         return None
     ebitda, total_debt, cash = components
@@ -158,14 +85,6 @@ def _ev_ebitda(
 
 
 class SyncUniverse:
-    """Populate/refresh the searchable universe from a live market screen, classify the stocks
-    that still lack a sector/industry, and value each screened stock with a trailing P/E.
-
-    Runs one market per instance (``region``): the US screen by default, or the Canadian
-    (TSX/TSXV) screen with ``region="ca"``. The two passes are independent — each an additive
-    upsert onto the shared anchor — so the cron runs one after the other, and a bad day for one
-    market never touches the other's stored rows."""
-
     # The market-cap floor that defines the universe: companies worth at least $1B **in the
     # screened market's own currency** (Yahoo screens each quote natively, so this is $1B USD
     # for the US pass and $1B CAD for the CA pass — the floor is the same number, applied per
@@ -214,28 +133,6 @@ class SyncUniverse:
         )
 
     def execute(self, *, limit: int | None = None) -> UniverseSyncReport:
-        """Screen the market, upsert the result onto the anchor, classify up to ``limit``
-        (default ``DEFAULT_LIMIT``) still-unclassified stocks, then value every screened stock.
-
-        A hard screen failure (``StockDataUnavailable``) propagates to the caller (the
-        background runner logs it). A *degraded* screen — fewer than the market's plausibility
-        floor (``_MIN_PLAUSIBLE_BY_REGION``) — is skipped so a partial/blocked fetch isn't
-        written, and the enrichment and valuation passes are skipped too (if the one bulk screen
-        call was blocked, the per-ticker calls would be as well). Otherwise the whole screen is
-        upserted (additive), the enrichment pass runs, and the valuation pass recomputes each
-        screened stock's trailing P/E from the screen-time price over the quarterly slice's
-        stored TTM EPS. A single symbol's classification failure never aborts the run — it's
-        counted and the sweep continues.
-
-        Cboe Canada (``.NE``) listings are dropped from the screen up front: they're Canadian
-        Depositary Receipts (wrappers of US / foreign companies), so they're never written onto
-        the anchor in the first place — not merely hidden at read time. (No-op for the US pass,
-        whose exchange-scoped screen returns no ``.NE``.) The CA pass also drops — and purges from
-        the anchor — any Canadian listing that duplicates a **US-domiciled** company by name (a
-        ``.TO`` CDR / cross-listing like ``AAPL.TO`` / ``MSFT.TO``), while keeping a genuinely
-        Canadian company dual-listed in the US (``SHOP.TO`` / ``CP.TO``); see
-        :meth:`_drop_and_purge_us_company_cdrs`.
-        """
         capped = self.DEFAULT_LIMIT if limit is None else max(1, limit)
         screened = tuple(
             stock
@@ -276,19 +173,6 @@ class SyncUniverse:
     def _drop_and_purge_us_company_cdrs(
         self, screened: tuple[ScreenedStock, ...]
     ) -> tuple[ScreenedStock, ...]:
-        """Drop from ``screened`` — and delete from the anchor — every Canadian listing that
-        duplicates a **US-domiciled** company by normalized name (a ``.TO`` CDR / cross-listing of
-        a US company, e.g. ``AAPL.TO`` / ``MSFT.TO`` / ``META.TO``), returning the rest.
-
-        The US pass has already run, so the US-domiciled company names are on the anchor. Matching
-        on the **name** (not the base ticker) against **US-domiciled** rows is what makes this
-        precise: a genuinely Canadian company dual-listed in the US (``SHOP`` / ``CP`` / ``RY`` —
-        all *CA*-domiciled) isn't in the set, so its ``.TO`` listing is kept; and a ticker
-        collision (``CNR.TO`` Canadian National vs US ``CNR`` Core Natural Resources) can't misfire
-        because the names differ. Using the **US sibling's** domicile also sidesteps the fact that
-        Yahoo sometimes can't be trusted for the CDR's *own* domicile — the US row's is reliable
-        and, for these mega-cap underlyings, backfilled early. When the US-domiciled index is empty
-        (the backfill hasn't run yet) nothing is dropped."""
         us_names = frozenset(
             normalized
             for name in self._repository.us_domiciled_company_names()
@@ -311,11 +195,6 @@ class SyncUniverse:
         return screened
 
     def _enrich_missing_classifications(self, limit: int) -> tuple[int, int]:
-        """Classify up to ``limit`` stored stocks still missing a sector, industry, or issuer
-        domicile, writing each from one per-ticker ``.info`` call. Returns ``(enriched, failed)``:
-        ``enriched`` wrote at least one field, ``failed`` couldn't reach the source. A symbol the
-        source reaches but can't classify at all (every side ``None``) is neither — it's left for a
-        later run rather than counted, since nothing was written and nothing went wrong."""
         enriched = 0
         failed = 0
         tickers = self._repository.tickers_missing_classification(limit)
@@ -340,24 +219,6 @@ class SyncUniverse:
         return enriched, failed
 
     def _value_screened(self, screened: tuple[ScreenedStock, ...]) -> int:
-        """Recompute and persist every screened stock's trailing P/E **and** materialized FCF
-        yield, returning how many got a non-null P/E.
-
-        Values the *whole* screened set every run — it's cheap: the price already rode in on
-        the screen, the TTM read is DB-only (no Yahoo call), and ``fcf_per_share`` is one
-        batched anchor read. For each stock it pairs the screen-time price with the quarterly
-        slice's stored TTM consensus EPS (the card's :func:`_pe_ratio`) and with the annual
-        slice's stored ``fcf_per_share`` (:func:`_fcf_yield`), overwriting the anchor's
-        ``pe_ratio`` / ``fcf_yield``. A stock with no price this sweep is skipped, so a rare
-        missing price never nulls a good prior figure; a stock with a price but no cached TTM
-        (or a trailing loss) is written a ``None`` P/E, and one with no stored ``fcf_per_share``
-        a ``None`` yield — genuinely no figure. The P/E leg is a no-op when no quarterly cache
-        was wired (best-effort enrichment); the FCF yield and the EV/EBITDA need only anchor
-        reads, so they materialize regardless. The **EV/EBITDA** rides the same loop — the
-        screen-time market cap + the anchor's stored EV components (EBITDA/debt/cash) — a
-        sortable snapshot like the P/E, materialized whenever the fundamentals slice has landed
-        the EBITDA. The returned count stays the P/E tally (the report's ``valued``); the FCF
-        yield and EV/EBITDA ride along as silent enrichments like the growth pair."""
         pe_by_ticker: dict[str, float | None] = {}
         fcf_yield_by_ticker: dict[str, float | None] = {}
         ev_ebitda_by_ticker: dict[str, float | None] = {}
@@ -384,13 +245,6 @@ class SyncUniverse:
 
 
 class SearchStocks:
-    """Search/filter/sort the screened universe for the ``GET /stocks/ticker`` list.
-
-    Pure orchestration over the read repository: normalize the request once at the edge, hand
-    the repository a clean ``StockSearchCriteria``, return the page it matches. No live feed,
-    no vendor — the universe is already stored on the anchor by the sync.
-    """
-
     # The default page size, and the ceiling a client can ask for. The endpoint enforces the
     # same bounds on its query param; the use case clamps too, so a direct caller (or a test)
     # can't ask for an unbounded or zero page.
@@ -416,23 +270,6 @@ class SearchStocks:
         countries: Sequence[str] | None = None,
         include_interlisted: bool = False,
     ) -> StockSearchPage:
-        """Normalize the inputs once, at the edge, then run the search.
-
-        ``query`` is trimmed (blank → no text filter); ``sectors`` / ``industries`` are each
-        slugged to the stored convention with :func:`slugify` (so both the raw label and the
-        stored slug match), blanks dropped and duplicates collapsed — an empty result means "don't
-        filter", otherwise the search matches *any* of the slugs (an OR set, so several sectors or
-        industries can be screened at once). ``market_cap_tiers`` is deduplicated to the union of
-        the given cap buckets (empty = every size). ``countries`` is upper-cased to ISO-2 codes,
-        blanks dropped and duplicates collapsed — the union of markets to include (empty = every
-        market). ``include_interlisted`` (default ``False``) passes through: left ``False`` the
-        search hides a Canadian listing that duplicates a US company. ``limit`` defaults to
-        ``DEFAULT_LIMIT`` and is clamped to ``[1, MAX_LIMIT]``,
-        ``offset`` floored at 0. The index flags pass through as-is (tri-state booleans, ``None`` =
-        don't filter). ``sort`` defaults to ``None`` — an unsorted browse the repository orders by
-        ticker (A→Z); a ``StockSort`` value sorts by that column, ``direction`` (default
-        descending) then applying. The repository does the rest.
-        """
         text = (query or "").strip()
         capped = self.DEFAULT_LIMIT if limit is None else min(max(1, limit), self.MAX_LIMIT)
         criteria = StockSearchCriteria(
@@ -455,20 +292,6 @@ class SearchStocks:
 
 
 class AiScreenStocks:
-    """Translate a plain-English request into screen filters (``GET /stocks/ai-search``).
-
-    The AI-driven counterpart to ``SearchStocks`` — but it does **not** run the search. It
-    turns the request into a ``ScreenIntent`` (which filters to set) and returns just that; the
-    client applies those filters to the ordinary search (``GET /stocks/ticker``) to fetch the
-    rows. So the AI leg only ever *chooses filters* — it can't reach a stock outside the
-    screened universe or invent a ticker — and the querying/paging stays the manual path's job.
-
-    The translator is fed the universe's current sector/industry slugs as its allowed
-    vocabulary, so the model maps "semiconductor stocks" onto a slug the search can match
-    rather than an invented one. The intent is advisory anyway: the search re-normalizes every
-    field (slug, clamp, dedupe), so an off-vocabulary value simply matches nothing.
-    """
-
     def __init__(
         self,
         translator: ScreenerQueryTranslator,
@@ -479,13 +302,6 @@ class AiScreenStocks:
         self._repository = repository
 
     def execute(self, *, query: str) -> ScreenIntent:
-        """Translate ``query`` into a ``ScreenIntent`` of filters.
-
-        ``query`` is required (a blank request is a ``ValueError`` → 400 at the edge — there is
-        nothing to translate). A translator failure (``StockDataUnavailable``) propagates — the
-        request couldn't be understood — distinct from an understood request that simply maps to
-        filters matching no stocks (which the client discovers when it runs the search).
-        """
         text = (query or "").strip()
         if not text:
             raise ValueError("A search request is required.")
@@ -496,14 +312,6 @@ class AiScreenStocks:
 
 
 class ListClassifications:
-    """The distinct sector + industry slugs for the FE's filter menus
-    (``GET /stocks/classifications``).
-
-    A thin read — the repository owns the distinct query; this is its own use case only to keep
-    the one-class-per-action convention (and so the endpoint depends on a use case, not the
-    repository directly).
-    """
-
     def __init__(self, repository: StockSearchRepository) -> None:
         self._repository = repository
 
@@ -512,24 +320,10 @@ class ListClassifications:
 
 
 class GetIndustryValuation:
-    """The per-industry trailing-P/E benchmark for ``GET /stocks/industries/{industry}/pe``.
-
-    Normalizes the industry to the stored slug at the edge (so the client can send either the
-    slug or the raw label, like the search's filters), reads its screened peers' positive P/Es
-    from the repository, and summarizes them into an ``IndustryValuation`` (median + the
-    interquartile range + the peer count). Pure orchestration over the read repository — no
-    live feed; the P/Es are already on the anchor, materialized by the universe sync.
-    """
-
     def __init__(self, repository: StockSearchRepository) -> None:
         self._repository = repository
 
     def execute(self, industry: str) -> IndustryValuation:
-        """Slug the industry, read its peers' P/Es, and summarize.
-
-        A blank or non-alphanumeric industry (nothing to slug) is a ``ValueError`` (a 400 at
-        the edge); an *unknown but well-formed* industry simply has no peers, so the result is
-        a valid benchmark with ``count`` 0 and null stats — "no coverage", not an error."""
         slug = slugify(industry)
         if slug is None:
             raise ValueError("An industry is required.")
@@ -538,10 +332,6 @@ class GetIndustryValuation:
 
 
 def _normalize_ticker(ticker: str) -> str:
-    """Trim/upper-case a ticker at the edge of a read use case, rejecting an empty one — so the
-    repository looks up the stored (upper-case) symbol. A light guard: unlike a live-quote path
-    this only reads the anchor, so an unknown-but-well-formed ticker simply finds no row (an empty
-    result), not an error."""
     normalized = (ticker or "").strip().upper()
     if not normalized:
         raise ValueError("A ticker is required.")
@@ -549,28 +339,10 @@ def _normalize_ticker(ticker: str) -> str:
 
 
 class GetPeerComparison:
-    """A stock's valuation compared side-by-side with its industry, cap-tier-scoped peers
-    (``GET /stocks/ticker/{ticker}/peers``).
-
-    Resolves the anchor's industry (and its size tier, implicitly via the peer rows), reads every
-    screened company in that industry, and hands them to :meth:`PeerComparison.build`, which
-    scopes the cohort to the anchor's tier and medians every metric. Pure orchestration over the
-    read repository — no live feed; every figure is already materialized on the anchor by the
-    universe / fundamentals / annual syncs.
-
-    Best-effort, never a 404: a ticker the universe hasn't classified (no stored industry) yields
-    an empty comparison — the same "no coverage is a 200" stance the industry-P/E benchmark takes.
-    """
-
     def __init__(self, repository: StockSearchRepository) -> None:
         self._repository = repository
 
     def execute(self, ticker: str) -> PeerComparison:
-        """Read the anchor's industry, its peers, and build the comparison.
-
-        A malformed ticker is a ``ValueError`` (400 at the edge). An anchor with no stored
-        industry (unclassified or unknown) has no peer set to build, so it returns an empty
-        comparison (``industry`` None, no anchor row, no peers) rather than erroring."""
         normalized = _normalize_ticker(ticker)
         industry = self._repository.industry_for_ticker(normalized)
         if industry is None:

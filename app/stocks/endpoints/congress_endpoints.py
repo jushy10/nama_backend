@@ -1,23 +1,3 @@
-"""HTTP API for reading Congressional stock trades — per-ticker and market-wide.
-
-Two reads:
-
-- ``GET /stocks/ticker/{ticker}/congress-trades`` — a stock's recent Congressional trades, newest
-  first, with a net buy-vs-sell ``summary``. Grouped under the ``/stocks/ticker/{ticker}`` resource
-  (like the ticker card, analyst-info, and insider-transactions), since it's a per-ticker card the
-  FE renders.
-- ``GET /market/congress-activity`` — a window of the *whole market's* recent Congressional trades,
-  newest first (the market board). Grouped under ``/market/`` beside the heat map.
-
-Both reads are **DB-only**: they serve the stored feed straight from the database and never fetch
-the multi-megabyte source on a read. Keeping the store current is entirely the weekly
-``sync-congress`` cron's job. Best-effort throughout — a stock (or a window) with no activity is a
-``200`` with an empty ``items`` list, never a 404. No credential is needed, so the endpoints are
-always wired.
-
-Controller + presenter + wiring, the composition-root way, sitting in ``app/stocks/endpoints/``.
-"""
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
@@ -63,9 +43,6 @@ def get_congress_leaderboard_use_case(
     db: Session = Depends(get_db),
 ) -> GetCongressLeaderboard:
     return GetCongressLeaderboard(SqlCongressTradesRepository(db))
-
-
-# --- Presenters --------------------------------------------------------------------------
 
 
 def _present_trade(trade: CongressTrade) -> CongressTradeResponse:
@@ -115,9 +92,6 @@ def _present_leaderboard_entry(
     )
 
 
-# --- Per-ticker read ---------------------------------------------------------------------
-
-
 @router.get(
     "/stocks/ticker/{ticker}/congress-trades",
     response_model=CongressActivityResponse,
@@ -150,9 +124,6 @@ def get_congress_trades_endpoint(
         summary=_present_summary(activity.summary),
         items=[_present_trade(t) for t in page],
     )
-
-
-# --- Market-wide board -------------------------------------------------------------------
 
 
 @router.get(
@@ -188,9 +159,6 @@ def get_congress_activity_endpoint(
         summary=_present_summary(activity.summary),
         items=[_present_trade(t) for t in activity.trades],
     )
-
-
-# --- Market-wide attention leaderboard ---------------------------------------------------
 
 
 @router.get(

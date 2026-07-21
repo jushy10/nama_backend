@@ -1,20 +1,3 @@
-"""drop the ETF trailing-return ladder columns
-
-Removes ``ytd_return`` / ``three_year_return`` / ``five_year_return`` from ``etfs`` (added by
-0020). These annualized trailing returns are no longer persisted: only the detail card's opt-in
-``performance`` block surfaces the 3y/5y figures, so the read path now fetches them **live** from
-Yahoo (the same ``.info`` blob the enrichment pass already reads) rather than storing a snapshot
-that drifts between syncs. The rest of the per-fund profile (fund family, NAV, dividend yield,
-description, holdings, sector weightings) stays on the row and its child tables.
-
-``downgrade`` re-adds the three nullable Float columns (empty — a later profile sync would refill
-them if the read path went back to storing them).
-
-Revision ID: 0021_drop_etf_returns
-Revises: 0020_etf_profile
-Create Date: 2026-07-08
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

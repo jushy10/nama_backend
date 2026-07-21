@@ -1,11 +1,3 @@
-"""Tests for the SQL-backed TickerRepository.
-
-Offline, against in-memory SQLite: exercises the name/exchange read/fill round-trips
-over the shared ``stocks`` anchor — a miss reads as per-field None, a save creates the
-row and is committed, and a stored value is never clobbered — independent of HTTP and
-vendors.
-"""
-
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session

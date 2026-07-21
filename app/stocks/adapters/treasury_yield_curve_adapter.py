@@ -1,24 +1,3 @@
-"""Interface Adapter: the US Treasury par-yield curve from Treasury.gov.
-
-The US Treasury publishes the **Daily Treasury Par Yield Curve Rates** as a
-per-year CSV — one row per business day, one column per maturity (1 Mo … 30 Yr).
-We fetch the current year's file and read the most recent row into a
-``YieldCurve`` across every quoted maturity. It's the only module that knows
-Treasury.gov backs the curve; swap it for another ``YieldCurveProvider`` and
-only this file changes.
-
-**Keyless**, and — like SEC EDGAR — the Treasury welcomes programmatic reads
-from data-centre IPs (it works from Fargate where the Yahoo endpoints block us),
-so there's no IP-block retry machinery; we send a descriptive ``User-Agent`` as
-a courtesy. One CSV call returns the whole curve, which is why the curve is read
-live per request with no table or cron.
-
-At the very start of a calendar year the current-year file can be briefly empty
-(no business day has printed yet), so a blank current year falls back to the
-prior year's file. ``_http`` is the fake seam the offline tests swap; ``_today``
-is injectable so the tests pin the year without touching the clock.
-"""
-
 from __future__ import annotations
 
 import csv
@@ -69,8 +48,6 @@ _COLUMNS: dict[str, tuple[str, float]] = {
 
 
 class TreasuryYieldCurveProvider(YieldCurveProvider):
-    """Reads the current US Treasury par-yield curve from Treasury.gov (keyless)."""
-
     def __init__(self) -> None:
         self._http = httpx.Client(
             timeout=15.0,
@@ -93,12 +70,6 @@ class TreasuryYieldCurveProvider(YieldCurveProvider):
         return curve
 
     def _fetch_year(self, year: int) -> YieldCurve | None:
-        """Fetch and parse one year's CSV, returning the latest row's curve.
-
-        Returns ``None`` when the file has no data rows (so the caller can fall
-        back to the prior year); raises ``StockDataUnavailable`` on a transport
-        or non-200 failure, which is a real outage, not an empty year.
-        """
         url = (_BASE_URL + _QUERY).format(year=year)
         try:
             resp = self._http.get(url)
@@ -114,12 +85,6 @@ class TreasuryYieldCurveProvider(YieldCurveProvider):
 
 
 def _parse_latest_curve(text: str) -> YieldCurve | None:
-    """Parse a Treasury year CSV and return the most recent day's curve.
-
-    Pure function (the tested seam): the rows can arrive newest- or oldest-first,
-    so we scan for the row with the maximum date rather than trusting order.
-    Returns ``None`` if there are no parseable data rows.
-    """
     reader = csv.DictReader(StringIO(text))
     if reader.fieldnames is None:
         return None
@@ -157,7 +122,6 @@ def _parse_latest_curve(text: str) -> YieldCurve | None:
 
 
 def _parse_date(value: str) -> datetime.date | None:
-    """Parse Treasury's ``MM/DD/YYYY`` date, or ``None`` if it isn't one."""
     try:
         return datetime.datetime.strptime(value, "%m/%d/%Y").date()
     except (ValueError, TypeError):
@@ -165,7 +129,6 @@ def _parse_date(value: str) -> datetime.date | None:
 
 
 def _parse_rate(value: str | None) -> float | None:
-    """Parse a yield cell to a float percent, or ``None`` if blank/non-numeric."""
     if value is None:
         return None
     text = value.strip()

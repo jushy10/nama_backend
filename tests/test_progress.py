@@ -1,20 +1,3 @@
-"""Unit tests for the cron progress logger (pure stdlib logging, no I/O).
-
-``iter_with_progress`` wraps a sweep's work-list and emits INFO progress lines as the run
-crosses each step boundary, so the minutes-long ``/internal/**/sync`` sweeps show up on
-CloudWatch instead of going dark between "started" and "… sync done". The behaviour is
-hand-verifiable: it must yield every item unchanged and in order (so it drops transparently
-around a ``for`` loop), size the run up front, mark ~each step once, always land a 100% line,
-and say so plainly when there is nothing to do.
-
-These attach their own handler to a private, non-propagating logger rather than leaning on
-pytest's root-propagating ``caplog``: the suite runs Alembic's ``fileConfig`` (in
-``test_migrations``), whose ``disable_existing_loggers`` disables loggers created before it, and
-``caplog`` can't re-enable a disabled logger — so a shared ``caplog`` assertion here fails or
-passes purely on suite order. Capturing on our own logger (``disabled`` cleared, ``propagate``
-off) is immune to whatever global logging config an earlier test left behind.
-"""
-
 import logging
 
 import pytest
@@ -24,12 +7,6 @@ from app.stocks.progress import iter_with_progress
 
 @pytest.fixture
 def progress_log():
-    """A private INFO logger plus the list its records land in — hermetic capture.
-
-    Yields ``(logger, messages)``. ``disabled`` is cleared and ``propagate`` turned off so the
-    capture ignores any global logging state a prior test installed; a fresh handler is attached
-    each time so messages never bleed between tests.
-    """
     logger = logging.getLogger("tests.progress")
     logger.disabled = False
     logger.propagate = False

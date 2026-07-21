@@ -1,10 +1,3 @@
-"""The Alembic migrations build the schema the ORM models expect.
-
-Runs the real migration chain against a throwaway SQLite database: upgrade to
-head builds the tables/columns the models expect, downgrade to base tears them
-down. Catches a migration that won't apply or has drifted from the model.
-"""
-
 from pathlib import Path
 
 import pytest

@@ -1,23 +1,3 @@
-"""Application use cases for the Congressional-trades slice.
-
-Three actions, all pure orchestration over the ports so they run offline in tests against
-hand-written fakes and know nothing of the stock-watcher datasets, HTTP, or SQLAlchemy:
-
-- ``GetCongressTrades`` — the per-ticker read path. Normalizes the symbol and serves the stored
-  activity **DB-only** through the repository (a miss reads empty; a DB hiccup degrades to empty).
-- ``GetCongressActivity`` — the market-wide read path. Serves a windowed page of the whole market's
-  recent trades, also DB-only and best-effort.
-- ``SyncCongressTrades`` — the out-of-band refresh. Fetches the whole market-wide feed **once**,
-  groups it by ticker, then walks the anchor least-recently-refreshed first (un-cached first, so it
-  also *seeds* new coverage) and stores each stock's trades. Invoked by the weekly cron.
-
-The read is deliberately DB-only (no live fall-through) — the feed is a multi-megabyte download, so
-a user request must never trigger it; keeping the store current is entirely the cron's job. The
-sync is *bulk* (one fetch covers every ticker), unlike the per-symbol earnings/insider syncs, so
-there are no per-symbol network round-trips — the stalest-first walk just decides the order stocks
-are distributed to (and bounds a partial ``limit`` run).
-"""
-
 from __future__ import annotations
 
 import logging
@@ -48,9 +28,6 @@ _TICKER_RE = re.compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
 
 
 def _normalize_symbol(symbol: str) -> str:
-    """Trim/upper-case the ticker, fold a dotted class suffix onto the stored hyphen form, and
-    reject obvious junk — once, at the edge of the use case, so every layer below sees a clean
-    symbol."""
     normalized = (symbol or "").strip().upper().replace(".", "-")
     if not normalized:
         raise ValueError("A stock symbol is required.")
@@ -64,14 +41,6 @@ def _clamp_offset(offset: int | None) -> int:
 
 
 class GetCongressTrades:
-    """Use case: a stock's recent Congressional trades by its symbol — DB-only, best-effort.
-
-    A stock Congress hasn't traded (or the cron hasn't seeded yet) yields an empty activity rather
-    than an error, so the endpoint can present an empty result instead of a 404. ``limit`` /
-    ``offset`` page the trade list; the ``summary`` always reflects the *full* stored set, not the
-    page, so a client sees the true net buy-vs-sell regardless of where it is in the list.
-    """
-
     def __init__(self, repository: CongressTradesRepository) -> None:
         self._repository = repository
 
@@ -100,8 +69,6 @@ _DEFAULT_WINDOW = "30d"
 
 
 def parse_window(window: str | None) -> int | None:
-    """Map a window token (``"30d"``, ``"1y"``, ``"all"``) to a number of days (``None`` = all
-    history). An unknown token is a ``ValueError`` the endpoint maps to a 400."""
     token = (window or _DEFAULT_WINDOW).strip().lower()
     if token not in _WINDOWS:
         allowed = ", ".join(_WINDOWS)
@@ -110,13 +77,6 @@ def parse_window(window: str | None) -> int | None:
 
 
 class GetCongressActivity:
-    """Use case: a window of the whole market's recent Congressional trades — DB-only, best-effort.
-
-    The market board. Serves a paginated, newest-first page of trades across every stock, windowed
-    to the last ``window_days`` (``None`` = all history). Best-effort: a DB hiccup reads as an empty
-    board, never a 500.
-    """
-
     def __init__(self, repository: CongressTradesRepository, *, today=None) -> None:
         self._repository = repository
         # Injectable clock keeps the window's cutoff deterministic in tests.
@@ -146,8 +106,6 @@ _DEFAULT_METRIC: CongressMetric = "members"
 
 
 def parse_metric(metric: str | None) -> CongressMetric:
-    """Validate the leaderboard ranking metric token (``"members"`` / ``"trades"`` / ``"value"``),
-    defaulting to ``members``. An unknown token is a ``ValueError`` the endpoint maps to a 400."""
     token = (metric or _DEFAULT_METRIC).strip().lower()
     if token not in _METRICS:
         allowed = ", ".join(_METRICS)
@@ -156,15 +114,6 @@ def parse_metric(metric: str | None) -> CongressMetric:
 
 
 class GetCongressLeaderboard:
-    """Use case: the stocks getting the most Congressional attention over a window — DB-only,
-    best-effort.
-
-    Reads the whole window of market-wide trades once, folds it by ticker into a ranked board (by
-    distinct members, disclosure count, or estimated dollars moved) and cuts the top ``limit``. Like
-    the other reads it's DB-only — the weekly cron keeps the store warm — and best-effort: a DB
-    hiccup reads as an empty board, never a 500.
-    """
-
     def __init__(self, repository: CongressTradesRepository, *, today=None) -> None:
         self._repository = repository
         # Injectable clock keeps the window's cutoff deterministic in tests.
@@ -193,10 +142,6 @@ class GetCongressLeaderboard:
 
 @dataclass(frozen=True)
 class CongressSyncReport:
-    """The outcome of one refresh run: how many trades were fetched from the source, how many stocks
-    were stored (seeded/refreshed), how many failed a store, and the per-run cap (``None`` when the
-    run was uncapped)."""
-
     fetched: int
     stored: int
     failed: int
@@ -204,10 +149,6 @@ class CongressSyncReport:
 
 
 class SyncCongressTrades:
-    """Refresh stored Congressional trades from the live source, distributing one bulk fetch across
-    the anchor most-stale-first — and **seed** stocks not yet cached (never-fetched anchor stocks
-    come first)."""
-
     def __init__(
         self,
         source: CongressTradesSource,
@@ -217,14 +158,6 @@ class SyncCongressTrades:
         self._repository = repository
 
     def execute(self, *, limit: int | None = None) -> CongressSyncReport:
-        """Fetch the whole market-wide feed once, group it by ticker, then store each anchor stock's
-        trades most-stale-first. ``limit`` caps how many anchor stocks are visited this run;
-        ``None`` (the default) visits every stock. A total source outage propagates (the task exits
-        non-zero); a single stock's store failure is counted and the run continues.
-
-        Raises:
-            StockDataUnavailable: every underlying feed failed — nothing to distribute this run.
-        """
         effective = None if limit is None else max(1, limit)
         all_trades = self._source.fetch_recent_trades()  # raises only on a total-source outage
         by_ticker: dict[str, list[CongressTrade]] = defaultdict(list)

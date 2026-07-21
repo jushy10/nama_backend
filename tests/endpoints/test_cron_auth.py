@@ -1,15 +1,3 @@
-"""Tests for the shared cron bearer-token guard (require_cron_token).
-
-Mounts a real cron router — the quarterly-earnings one, chosen arbitrarily; every
-``/internal/*/sync`` route wires the *same* guard the same way — and exercises the token
-through the environment: an unset ``CRON_SYNC_TOKEN`` is fail-closed (503, nothing runs), a
-missing or wrong bearer is 401, and the right one lets the trigger through (202). The sync
-runner is faked so nothing touches Yahoo or the database, and the guard itself is NOT
-overridden here (unlike the per-endpoint controller tests) — it's the thing under test.
-
-The env var is set/cleared per test via monkeypatch since the guard reads it at request time.
-"""
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -21,10 +9,6 @@ _URL = "/internal/earnings/quarterly/sync"
 
 
 class _FakeRunner:
-    """Records the limit it was called with and returns instantly, so the background sweep
-    finishes at once. Its presence lets us prove the guard blocks BEFORE any sweep is scheduled
-    (rejected requests must leave ``calls`` empty)."""
-
     def __init__(self) -> None:
         self.calls: list[int | None] = []
 
@@ -42,14 +26,11 @@ def _client(fake: _FakeRunner) -> TestClient:
 
 
 def _drain() -> None:
-    """Block until the background sweep has finished — re-acquiring the guard the endpoint holds
-    until the daemon thread releases it is a deterministic "sweep done" barrier."""
     assert cron._sync_lock.acquire(timeout=2), "background sweep did not finish in time"
     cron._sync_lock.release()
 
 
 def _assert_guard_not_stranded() -> None:
-    """A rejected request must never schedule the sweep, so the single-flight guard stays free."""
     assert cron._sync_lock.acquire(blocking=False)
     cron._sync_lock.release()
 

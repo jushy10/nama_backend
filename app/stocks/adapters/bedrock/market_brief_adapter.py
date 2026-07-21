@@ -1,34 +1,3 @@
-"""Interface Adapter: the daily market brief via Claude on Amazon Bedrock.
-
-The whole-market sibling of ``market_summary_adapter.py`` / ``sector_analysis_adapter.py``,
-one step wider: where the summary reads the two headline indices and the sector analysis the
-day's rotation, the brief takes the *assembled* market snapshot the generate use case gathered
-— the index board, the sector board, the day's biggest movers and the market breadth — and
-asks Claude for a short, plain-language daily read: a headline mood, a 2-3 sentence summary,
-and a few narrative sections. The only module (alongside its cousins) that knows Bedrock and
-the Anthropic SDK exist; swap models or vendors and only this file changes.
-
-The two choices that keep the other Bedrock adapters robust apply here:
-
-* **Auth is the runtime's job, not ours.** Bedrock authenticates through the process's AWS
-  credentials (in production, the ECS task role), so there's no API key — only ``model_id``
-  and ``region``.
-* **Structured output via a forced tool call.** Claude must call ``submit_market_brief``, so
-  the model returns validated JSON arguments that map straight onto the entity — no brittle
-  prose parsing.
-
-And the same discipline: the model never authors numbers. Every figure it's shown comes from
-the context the use case already gathered (true quotes); the model contributes only the tone
-and the prose. So a brief never carries a figure the model recalled or invented.
-
-The Anthropic SDK is imported lazily inside ``__init__`` so the app (and the offline test
-suite, which injects a stub client) imports cleanly without the ``bedrock`` extra. Any
-Bedrock/SDK failure is translated to ``StockDataUnavailable`` — the one error this port
-documents.
-
-Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
-"""
-
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
@@ -150,16 +119,6 @@ _SYSTEM_PROMPT = (
 
 
 class BedrockMarketBriefProvider(MarketBriefProvider):
-    """Generates a ``MarketBrief`` with Claude on Amazon Bedrock.
-
-    Structured exactly like ``BedrockMarketSummaryProvider``: defaults to the fast Haiku tier
-    (the output is short and plain), takes ``model_id``/``region`` as deploy-time config (the
-    model id may be a cross-region inference profile, env-overridable so a deploy can swap
-    models without a code change), and accepts a ``client`` injection seam so tests bypass the
-    Anthropic SDK entirely. Otherwise the Bedrock client is built lazily and authenticates
-    through the process's AWS credentials.
-    """
-
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock, so the
     # short form 400s. (Same default as the market-summary / sector adapters.)
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -232,12 +191,6 @@ class BedrockMarketBriefProvider(MarketBriefProvider):
     def _invoke(
         self, prompt: str, costs: CostAccumulator, *, model: str | None = None
     ) -> dict | None:
-        """One forced-tool call, returning the ``submit_market_brief`` arguments (or ``None``
-        if the model somehow didn't call the tool). ``model`` overrides which model runs (the
-        retry escalates onto ``recovery_model_id``); defaults to the primary. Any SDK/botocore
-        failure is mapped to this port's documented ``StockDataUnavailable``. The call's token
-        usage is folded into ``costs`` under the model that produced it, for the caller's single
-        per-generation cost line."""
         chosen = model or self._model_id
         try:
             message = self._client.messages.create(
@@ -257,7 +210,6 @@ class BedrockMarketBriefProvider(MarketBriefProvider):
 
 
 def _tool_payload(message) -> dict | None:
-    """Pull the submit_market_brief arguments out of the tool call, if any."""
     for block in getattr(message, "content", None) or []:
         if (
             getattr(block, "type", None) == "tool_use"
@@ -270,11 +222,6 @@ def _tool_payload(message) -> dict | None:
 
 
 def _to_entity(payload: dict, model_id: str, brief_date: date) -> MarketBrief:
-    """Map the validated tool arguments onto the domain entity.
-
-    The forced-tool schema constrains the shape, but a defensive guard keeps an off-schema
-    result (e.g. an unknown ``tone``) from leaking out as something other than this port's
-    documented ``StockDataUnavailable``. The date/generated_at/model are stamped here."""
     try:
         summary = str(payload["summary"]).strip()
         tone = BriefTone(payload["tone"])
@@ -294,8 +241,6 @@ def _to_entity(payload: dict, model_id: str, brief_date: date) -> MarketBrief:
 
 
 def _sections(value) -> tuple[MarketBriefSection, ...]:
-    """Build the section tuple from the model's list, dropping any element missing a heading
-    or body (so a partial section never renders as an empty card)."""
     if not isinstance(value, list):
         return ()
     out: list[MarketBriefSection] = []
@@ -310,20 +255,12 @@ def _sections(value) -> tuple[MarketBriefSection, ...]:
 
 
 def _missing_sections(payload: dict | None) -> bool:
-    """True when a returned tool result is present but carries no usable sections — the signal
-    to retry. A ``None`` payload (the model didn't call the tool) is left for the caller to
-    surface as ``StockDataUnavailable``, not retried."""
     if payload is None:
         return False
     return not _sections(payload.get("sections"))
 
 
 def _render_prompt(context: MarketBriefContext) -> str:
-    """Render the gathered market snapshot into a compact, labelled block for the model.
-
-    Every number here is a true quote the use case gathered; the model only writes prose about
-    them. Sections that have no data (a down day with no live movers) are simply omitted, so
-    the model isn't handed empty headings."""
     blocks: list[str] = ["US market today (each index/sector read through the ETF that tracks it):"]
 
     if context.indexes:
@@ -385,7 +322,6 @@ def _headline_line(headline: BriefHeadline) -> str:
 
 
 def _num(value: object) -> str:
-    """Format a numeric field readably; pass non-numbers through unchanged."""
     if isinstance(value, bool):  # bool is an int subclass — keep it as-is
         return str(value)
     if isinstance(value, float):

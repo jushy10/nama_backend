@@ -1,19 +1,3 @@
-"""HTTP API for reading a stock's per-year (annual) earnings timeline.
-
-``GET /stocks/{symbol}/earnings/annual`` — the read endpoint for the annual-earnings slice:
-a stock's recent reported fiscal years plus its upcoming (estimated) ones, in chronological
-order, served from the DB cache over yfinance. Controller + presenter + wiring, the
-composition-root way, sitting in ``app/stocks/endpoints/`` beside the cron entrypoint
-(``cron_annual_earnings_endpoints``) so all of the slice's HTTP lives in one place.
-
-Wiring mirrors the quarterly read path: the process-singleton live provider is memoized with
-``@lru_cache`` while the DB cache is built per request (it needs the request session). A
-persistent DB cache (filled lazily on a miss, refreshed out of band by the cron endpoint)
-sits in front of Yahoo so the endpoint rarely calls it — Yahoo rate-limits, so the fewer live
-hits the better. yfinance needs no credential, so the endpoint is always wired; a cold cache
-on a host Yahoo blocks just yields an empty timeline (best-effort).
-"""
-
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -83,7 +67,6 @@ def _present_year(year: AnnualEarnings) -> AnnualEarningsYearResponse:
 
 
 def _present(timeline: AnnualEarningsTimeline) -> AnnualEarningsResponse:
-    """Presenter: annual-earnings timeline entity -> HTTP response DTO."""
     return AnnualEarningsResponse(
         symbol=timeline.symbol,
         count=len(timeline.years),

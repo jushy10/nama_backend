@@ -1,11 +1,3 @@
-"""Tests for the database-backed IndexMembershipRepository.
-
-Offline: an in-memory SQLite database stands in for the real ``stocks`` table (membership has
-no table of its own). Verifies the reconcile marks current members (creating anchors as
-needed), clears drop-outs, leaves a skipped index untouched, never clobbers other anchor facts,
-and counts only genuine transitions.
-"""
-
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session

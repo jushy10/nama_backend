@@ -1,30 +1,3 @@
-"""Interface Adapter: insider transactions from SEC EDGAR (Form 4).
-
-The only module that knows SEC EDGAR backs the insider-transactions slice; swap it for another
-``InsiderTransactionsProvider`` and only this file changes. It translates a stock's recent
-**Form 4** filings — the two-business-day disclosures an officer, director, or 10%+ owner must
-file when they trade their own company's stock — into ``InsiderTransaction`` entities.
-
-**Keyless**, like the SEC revenue-segments source and unlike the paid insider APIs: EDGAR is a
-public government open-data service that welcomes programmatic reads from data-centre IPs — it
-works from Fargate where Yahoo's endpoints block us. Its only ask is a descriptive ``User-Agent``
-(a blank one is refused) and staying under ~10 requests/second, which the read-path pacing
-respects.
-
-The walk: ticker -> CIK (``company_tickers.json``) -> the filer's recent Form 4s
-(``submissions``) -> each filing's raw ownership XML -> parse its non-derivative transactions.
-Unlike the revenue-segments source's clean JSON APIs, the transaction detail lives only in each
-Form 4's own XML instance, so this fetches one document per filing (bounded to the most recent
-``_MAX_FILINGS``) — each **best-effort**, so one unreadable filing is skipped, not fatal.
-
-Only **non-derivative** transactions are read — the actual buys and sells of the stock. The
-derivative table (option grants / exercises) is deliberately out of scope: it's compensation
-plumbing, not the "big buy / big sell" this feature is about.
-
-The ``_http`` attribute is the fake seam the offline tests swap; ``_parse_form4`` is a pure
-function they exercise directly on a canned ownership document.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -71,8 +44,6 @@ _MAX_TEXT_LEN = 255
 
 
 class SecEdgarInsiderTransactionsProvider(InsiderTransactionsProvider):
-    """Reads a stock's recent insider transactions from its Form 4 filings on SEC EDGAR (keyless)."""
-
     def __init__(
         self,
         *,
@@ -88,8 +59,6 @@ class SecEdgarInsiderTransactionsProvider(InsiderTransactionsProvider):
         # Lazily-built ticker -> CIK map (one ~1 MB file covers every filer); cached for the
         # process once fetched, since it changes only as companies list/delist.
         self._ticker_cik: dict[str, int] | None = None
-
-    # ── the port ──────────────────────────────────────────────────────────────────────────
 
     def get_insider_transactions(self, symbol: str) -> InsiderActivity:
         cik = self._cik_for(symbol)  # raises StockNotFound when unmapped
@@ -139,11 +108,7 @@ class SecEdgarInsiderTransactionsProvider(InsiderTransactionsProvider):
         )
         return InsiderActivity(symbol=symbol, transactions=tuple(transactions))
 
-    # ── SEC walk steps ────────────────────────────────────────────────────────────────────
-
     def _cik_for(self, symbol: str) -> int:
-        """Resolve a ticker to its CIK via the cached ticker map. ``StockNotFound`` when the
-        ticker maps to no SEC filer (delisted, foreign-only, or simply absent)."""
         if self._ticker_cik is None:
             self._ticker_cik = self._load_ticker_map()
         cik = self._ticker_cik.get(symbol.upper())
@@ -152,8 +117,6 @@ class SecEdgarInsiderTransactionsProvider(InsiderTransactionsProvider):
         return cik
 
     def _load_ticker_map(self) -> dict[str, int]:
-        """Fetch ``company_tickers.json`` and build ``{ticker: cik}``. A failure here sinks the
-        request (the map is required to resolve any symbol), so it raises ``StockDataUnavailable``."""
         payload = self._get_json(_COMPANY_TICKERS_URL, "*")
         mapping: dict[str, int] = {}
         # The file is a JSON object of positional rows: {"0": {"cik_str", "ticker", "title"}, …}.
@@ -167,10 +130,6 @@ class SecEdgarInsiderTransactionsProvider(InsiderTransactionsProvider):
         return mapping
 
     def _recent_form4_filings(self, cik: int) -> list[tuple[str, str, date]]:
-        """The most-recent Form 4 filings as ``(accession, primary_document, filing_date)``,
-        newest first and capped to ``_MAX_FILINGS``. ``submissions`` lists recent filings
-        newest-first as parallel arrays; a filing missing a parseable filing date is skipped
-        (there'd be nothing to order or serve it by)."""
         payload = self._get_json(_SUBMISSIONS_URL.format(cik=cik), str(cik))
         # ``… or {}`` / ``… or []`` (not ``.get(k, default)``) so a present-but-null key in a
         # malformed 200 body degrades to empty rather than raising an unmapped AttributeError
@@ -199,10 +158,6 @@ class SecEdgarInsiderTransactionsProvider(InsiderTransactionsProvider):
     def _filing_xml(
         self, cik: int, accession: str, primary_document: str
     ) -> bytes | None:
-        """Fetch one Form 4's raw ownership XML. ``submissions`` gives the *rendered* primary
-        document (``xslF345X0N/<name>.xml``); the raw XML we parse is its basename at the
-        accession root. **Best-effort**: a transport error, a non-200, or a missing document
-        yields ``None`` (the filing is skipped) rather than sinking the whole feed."""
         base = _ARCHIVE_BASE.format(cik=cik, accession=accession.replace("-", ""))
         raw_doc = primary_document.rsplit("/", 1)[-1]  # drop the ``xslF345X0N/`` render prefix
         url = f"{base}/{raw_doc}"
@@ -215,11 +170,7 @@ class SecEdgarInsiderTransactionsProvider(InsiderTransactionsProvider):
             return None
         return resp.content
 
-    # ── HTTP plumbing ─────────────────────────────────────────────────────────────────────
-
     def _get(self, url: str, label: str) -> httpx.Response:
-        """GET ``url``, paced under EDGAR's rate ceiling. Maps transport failures and non-200
-        responses to ``StockDataUnavailable`` (``label`` is the symbol/CIK for the message)."""
         self._pace()
         try:
             resp = self._http.get(url)
@@ -232,7 +183,6 @@ class SecEdgarInsiderTransactionsProvider(InsiderTransactionsProvider):
         return resp
 
     def _get_json(self, url: str, label: str) -> dict:
-        """GET ``url`` and parse it as a JSON object. A body that isn't JSON is a source failure."""
         resp = self._get(url, label)
         try:
             payload = resp.json()
@@ -241,8 +191,6 @@ class SecEdgarInsiderTransactionsProvider(InsiderTransactionsProvider):
         return payload if isinstance(payload, dict) else {}
 
     def _pace(self) -> None:
-        """Sleep just enough to keep successive SEC requests at/under the configured spacing —
-        a no-op when the interval is 0 (the test default)."""
         if self._min_interval <= 0:
             return
         elapsed = time.monotonic() - self._last_request
@@ -257,11 +205,6 @@ class SecEdgarInsiderTransactionsProvider(InsiderTransactionsProvider):
 
 @dataclass(frozen=True)
 class _ParsedTxn:
-    """One non-derivative transaction parsed from a Form 4, before the caller stamps the filing
-    accession and filing date onto it. ``line_index`` is the transaction's ordinal in the
-    filing's ``nonDerivativeTable`` (its raw position, not its position among the kept lines), so
-    the ``(accession, line_index)`` cache key stays stable across parser changes."""
-
     transaction_date: date | None
     insider_name: str
     officer_title: str | None
@@ -278,15 +221,6 @@ class _ParsedTxn:
 
 
 def _parse_form4(xml_bytes: bytes) -> list[_ParsedTxn]:
-    """Extract the non-derivative transactions from a Form 4 ownership document.
-
-    The Form 4 XML carries **no namespace** (plain ``<ownershipDocument>`` tags), so the paths
-    here are literal. Reads the reporting owner (name + relationship flags + officer title) once,
-    then each ``<nonDerivativeTransaction>`` (code, shares, price, acquired/disposed, resulting
-    holding). A transaction missing its code is dropped (nothing to classify); a price reported
-    only as a footnote reference (no ``<value>``) parses to ``None`` (best-effort value). A
-    malformed document yields an empty list rather than raising — one bad filing shouldn't sink
-    the feed. Only the first reporting owner is read (joint filings are rare)."""
     try:
         root = ET.fromstring(xml_bytes)
     except ET.ParseError:
@@ -350,16 +284,12 @@ def _parse_form4(xml_bytes: bytes) -> list[_ParsedTxn]:
 
 
 def _clip(text: str | None) -> str | None:
-    """Bound a free-text field to the DB column width so an outlier can't overflow the column on
-    Postgres (see ``_MAX_TEXT_LEN``). ``None`` passes through unchanged."""
     if text is None:
         return None
     return text[:_MAX_TEXT_LEN]
 
 
 def _first_text(element: ET.Element | None, path: str) -> str | None:
-    """The stripped text at ``path`` under ``element`` (a limited-XPath ``a/b/c``), or ``None``
-    when the element/path/text is absent or blank."""
     if element is None:
         return None
     found = element.find(path)
@@ -370,7 +300,6 @@ def _first_text(element: ET.Element | None, path: str) -> str | None:
 
 
 def _bool_text(element: ET.Element | None, path: str) -> bool:
-    """A Form 4 boolean flag at ``path`` (``1``/``true`` -> True), defaulting to False when absent."""
     text = _first_text(element, path)
     return text is not None and text.lower() in {"1", "true"}
 
@@ -385,8 +314,6 @@ def _parse_date(text: str | None) -> date | None:
 
 
 def _parse_number(text: str | None) -> float | None:
-    """A numeric field's value (commas stripped). A nil/blank/non-numeric field — including a
-    price reported only as a footnote reference (no ``<value>``) — yields ``None``."""
     if text is None:
         return None
     stripped = text.strip().replace(",", "")

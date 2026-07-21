@@ -1,16 +1,3 @@
-"""Application use cases for the annual-earnings slice.
-
-Two actions, both pure orchestration over the ports so they run offline in tests against
-hand-written fakes and know nothing of yfinance, HTTP, or SQLAlchemy:
-
-- ``GetAnnualEarnings`` — the read path. Normalizes the symbol and returns the timeline
-  through the ``AnnualEarningsProvider`` (wired in production as the DB cache over yfinance,
-  so the read hits Yahoo only on a miss).
-- ``SyncAnnualEarnings`` — the out-of-band refresh. Walks the already-stored rows
-  stalest-first and renews them from the live provider, so users see current years without a
-  request ever waiting on a vendor round-trip. Invoked by the cron endpoint.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -46,18 +33,10 @@ _DEFAULT_MAX_ATTEMPTS = 3
 
 
 def _normalize_symbol(symbol: str) -> str:
-    """Trim/upper-case the ticker and reject obvious junk, once, at the edge of the use case
-    — so every layer below sees a clean symbol. Mirrors the stocks slice's guard."""
     return normalize_symbol(symbol)
 
 
 class GetAnnualEarnings:
-    """Use case: retrieve a stock's per-year earnings timeline by its symbol.
-
-    Best-effort: an uncovered symbol yields an empty timeline rather than an error, so the
-    endpoint can present an empty result instead of a 404.
-    """
-
     def __init__(self, provider: AnnualEarningsProvider) -> None:
         self._provider = provider
 
@@ -67,10 +46,6 @@ class GetAnnualEarnings:
 
 @dataclass(frozen=True)
 class AnnualEarningsSyncReport:
-    """The outcome of one refresh run: how many stocks were renewed (including any recovered on
-    a retry pass), how many the provider still couldn't serve after the run's retries (or
-    returned empty for), and the per-run cap (``None`` when the run was uncapped)."""
-
     refreshed: int
     failed: int
     limit: int | None
@@ -78,19 +53,12 @@ class AnnualEarningsSyncReport:
 
 @dataclass(frozen=True)
 class _PassOutcome:
-    """One pass's tally: stocks renewed, stocks that failed *finally* (genuine no-coverage — an
-    empty result or ``StockNotFound`` — which a retry can't fix), and the targets that failed
-    *transiently* (``StockDataUnavailable``) and are worth another pass."""
-
     refreshed: int
     final_failed: int
     retryable: list[RefreshTarget]
 
 
 class SyncAnnualEarnings:
-    """Renew stored annual earnings from the live source, most-stale stocks first — and
-    **seed** stocks not yet cached (never-fetched anchor stocks come first)."""
-
     def __init__(
         self,
         provider: AnnualEarningsProvider,
@@ -110,15 +78,6 @@ class SyncAnnualEarnings:
         self._retry_backoff_seconds = max(0.0, retry_backoff_seconds)
 
     def execute(self, *, limit: int | None = None) -> AnnualEarningsSyncReport:
-        """Refresh up to ``limit`` stocks most in need of it (un-cached first, then stalest);
-        ``limit=None`` (the default) processes every stock in the anchor. Returns a summary.
-        Never raises for a single symbol's failure — the run continues and the failure is
-        counted, so one bad symbol doesn't abort the whole sweep.
-
-        Symbols a *transient* failure blocked (``StockDataUnavailable`` — an outage, or the
-        intermittent data-centre-IP gate) are re-attempted across up to ``max_attempts`` passes
-        rather than surrendered to the next scheduled run, which for annual is a month away.
-        """
         effective = None if limit is None else max(1, limit)
         # refresh_targets is read once, up front: the same stalest-first batch is retried, so
         # the retries can't spill past the per-run cap into fresh symbols.
@@ -154,16 +113,6 @@ class SyncAnnualEarnings:
         )
 
     def _run_pass(self, targets: list[RefreshTarget], *, label: str) -> _PassOutcome:
-        """Fetch and persist one pass over ``targets``, returning its tally.
-
-        Each symbol's fetch is several blocking Yahoo round-trips, so fan the fetches out across
-        a small thread pool — but keep every DB write serial on the one (thread-unsafe) session
-        by consuming the futures here on the main thread. Consuming them in submission order
-        keeps the write/commit order stalest-first (so an interrupted run resumes cleanly) and
-        lets iter_with_progress log the same "<label>: P% (i/N)" lines as before. Failures are
-        split: a transient ``StockDataUnavailable`` is returned for a later pass; genuine
-        no-coverage (empty / ``StockNotFound``) is counted final here.
-        """
         refreshed = 0
         final_failed = 0
         retryable: list[RefreshTarget] = []

@@ -1,12 +1,3 @@
-"""Tests for the DB-only analysis-context providers.
-
-These wrap a slice's persistence repository and read **DB-only** — a stored timeline
-is served, a miss yields an *empty* one, and a read error degrades to empty too. They
-never fall through to a live (Yahoo) fetch, which is the whole point: the analysis
-path must not block on a rate-limited vendor for best-effort context. The fakes are
-duck-typed (the adapters only ever call ``.get``).
-"""
-
 from datetime import date
 
 from app.stocks.adapters.db_only_context_providers import (

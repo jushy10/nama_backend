@@ -1,19 +1,9 @@
-"""Tests for the eval-suite runner (RunEvalSuite).
-
-Offline and vendor-free: a fake subject returns canned answers (or raises), and a fake judge
-returns canned grades (or raises). This exercises the runner's one policy — that a subject or
-judge failure becomes a recorded ``errored`` result rather than aborting the run — plus the
-report aggregation, with no Bedrock and no server.
-"""
-
 from app.evals.entities import EvalCase, Grade
 from app.evals.exceptions import JudgeUnavailable, SubjectUnavailable
 from app.evals.use_cases import RunEvalSuite
 
 
 class _FakeSubject:
-    """Returns a per-question canned answer, or raises for a question in ``fail_on``."""
-
     def __init__(self, answers=None, fail_on=()) -> None:
         self._answers = answers or {}
         self._fail_on = set(fail_on)
@@ -25,8 +15,6 @@ class _FakeSubject:
 
 
 class _FakeJudge:
-    """Grades by a per-case-id table of Grades, or raises for an id in ``fail_on``."""
-
     def __init__(self, grades=None, fail_on=()) -> None:
         self._grades = grades or {}
         self._fail_on = set(fail_on)

@@ -1,5 +1,3 @@
-"""Application Business Rules: the logo use case."""
-
 import re
 
 from app.stocks.logo.entities import Logo
@@ -16,10 +14,6 @@ _SYMBOL_RE = re.compile(r"^[A-Z]{1,5}(?:\.[A-Z]{1,3})?$")
 
 
 def _normalize_symbol(symbol: str) -> str:
-    """Trim/upper-case the ticker and reject obvious junk, once, at the edge of the
-    use case — so every layer below sees a clean symbol. Mirrors the other slices'
-    guard, but keeps an exchange/class suffix (``RY.TO``) so a Canadian listing resolves
-    to its own logo rather than being rejected outright."""
     normalized = (symbol or "").strip().upper()
     if not normalized:
         raise ValueError("A stock symbol is required.")
@@ -29,8 +23,6 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 class GetStockLogo:
-    """Use case: retrieve the company logo image for a stock symbol."""
-
     def __init__(self, provider: LogoProvider) -> None:
         self._provider = provider
 

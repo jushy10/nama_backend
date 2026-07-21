@@ -1,11 +1,3 @@
-"""Entity tests for the universe slice — the tier-scoped industry P/E cohort.
-
-``IndustryValuation.for_stock_peers`` is pure statistics over ``(pe, tier)`` pairs, so it
-drives directly here with no repository. Covers the three outcomes the widening rule can
-land on: a representative same-tier hit, a one-step widen to the neighbouring tier, and the
-whole-industry fall-back — plus the cohort labels each produces.
-"""
-
 from app.stocks.universe.entities import (
     IndustryValuation,
     MarketCapTier,
@@ -19,7 +11,6 @@ MID = MarketCapTier.MID
 
 
 def _peers(*specs):
-    """Expand ``(tier, n)`` specs into ``n`` identical-tier peers, each with a distinct P/E."""
     peers = []
     pe = 10.0
     for tier, n in specs:

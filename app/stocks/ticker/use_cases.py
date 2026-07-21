@@ -1,39 +1,3 @@
-"""Application use case for the ticker slice.
-
-One action, pure orchestration over existing ports so it runs offline in tests
-against hand-written fakes and knows nothing of Alpaca, Yahoo, the database, or
-HTTP:
-
-- ``GetTickerCard`` — the read path. Normalizes the ticker and the requested
-  includes, takes the live quote through the ``StockQuoteProvider``, then serves
-  everything else off **one anchor read**: the clean display name and the listing
-  exchange (name served straight off the ``stocks`` row where the syncs write it;
-  exchange lazily filled once from the feed), the read-only screen facts (market
-  cap, sector, industry) the universe sync writes there, the annual slice's
-  trailing growth + per-share cash, and the fundamentals slice's margins +
-  dividend per share. The *opt-in* blocks are gated on the requested includes —
-  ``dividend`` (per share off the anchor, yield priced live on the quote),
-  ``performance`` (trailing windows, a live feed call), ``metrics`` (the full
-  trailing valuation ladder — P/E off the quarterly slice's stored TTM on the
-  consensus basis, plus P/B / P/S / PEG and the fundamentals slice's margins /
-  ROE / liquidity / leverage / beta off the anchor, the trailing + forward YoY
-  growth, and the forward P/E / P/S priced live off the stored forward
-  consensus), and ``options_metrics`` (the options-market
-  read: ATM implied volatility, the priced-in expected move, the cost of a
-  protective put, and the day's put/call lean). No live *fundamentals* vendor is
-  called at all — the margins and dividend ride the same anchor read as everything
-  else, so a bare card and the metrics/dividend blocks alike cost zero fundamentals
-  calls. Returns the assembled ``TickerCard``.
-
-Unlike the earnings/recommendations slices there is no sync counterpart, and the
-only persistence is the exchange lazy fill on the ``stocks`` row (through
-``TickerRepository``): the card is built around the *live* quote, so nothing else
-slice-owned is worth persisting — the slow-moving half (the anchor facts: name,
-the FY1/FY2 consensus, the materialized fundamentals) is already stored and
-refreshed by the universe / earnings / fundamentals syncs, and the fast-moving
-half (the quote) must be fetched fresh anyway.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -85,16 +49,10 @@ _INSURANCE_WINDOW = timedelta(days=90)
 
 
 def _normalize_symbol(symbol: str) -> str:
-    """The shared kernel guard — accepts a Canadian ``.TO``/``.V``/``.NE``/``.CN`` suffix and
-    preserves it so the price router can dispatch on it."""
     return normalize_symbol(symbol)
 
 
 def _normalize_includes(include: Sequence[str] | None) -> frozenset[str]:
-    """Flatten/lower-case the requested includes and reject unknown ones, once, at
-    the edge — the same stance as ``_normalize_symbol``. Accepts both repeated
-    params and comma-separated values (``?include=dividend&include=metrics`` or
-    ``?include=dividend,metrics``), since both are common client idioms."""
     if not include:
         return frozenset()
     parts = {
@@ -121,19 +79,6 @@ def sample_options_metrics(
     near_window: timedelta = _NEAR_WINDOW,
     insurance_window: timedelta = _INSURANCE_WINDOW,
 ) -> TickerOptionsMetrics | None:
-    """The ticker card's options-market read: sample the ~1-month and ~3-month
-    expiries and let the entity derive the four figures at ``price``.
-
-    Nearest-listed wins: options expire on fixed exchange dates, so each window
-    picks the future expiry closest to its target — and when the listed dates are
-    sparse both windows may land on the same expiry (the entity dedupes the shared
-    chain). ``None`` when the symbol has no listed options — "no coverage", not an
-    error.
-
-    Propagates the provider's ``StockNotFound``/``StockDataUnavailable`` straight
-    through: the read is best-effort enrichment, so the caller wraps this in its
-    own try/except rather than the helper deciding to swallow a failure.
-    """
     future = [e for e in options.get_expirations(symbol) if e > today]
     if not future:
         return None
@@ -146,17 +91,6 @@ def sample_options_metrics(
 
 @dataclass(frozen=True)
 class TickerCard:
-    """Everything the ticker endpoint serves, assembled from the ports.
-
-    A composition of shared entities rather than a new domain concept — which is
-    why it lives here with the orchestration (like the sync slices' report
-    dataclasses) instead of in the slice's ``entities.py``: the slice-local entity
-    (``TickerValuation``) owns the trailing-P/E rule, and this just bundles it with
-    the quote and the enrichment blocks. ``include`` records which opt-in blocks
-    the caller asked for, so the presenter can tell "not requested" apart from
-    "requested but unavailable" (best-effort blocks are ``None`` either way).
-    """
-
     quote: Quote  # live price + the day's move
     include: frozenset[str]  # the opt-in blocks this card was asked to carry
     valuation: TickerValuation | None  # the trailing-P/E read; only with 'metrics'
@@ -200,22 +134,6 @@ class TickerCard:
 
 
 class GetTickerCard:
-    """Use case: a stock's ticker card — live quote, name, market cap, and the
-    opt-in blocks (dividend, performance, metrics).
-
-    The quote is the only primary read — it failing propagates (the endpoint maps
-    it to HTTP). Everything else — the name, exchange, the margins/dividend/growth,
-    performance, options metrics and the trailing TTM read — is best-effort
-    enrichment: an anchor the syncs haven't reached yet, or an unconfigured/failing
-    live feed, just leaves its block ``None``. The options and TTM reads stay
-    best-effort *even when requested* — both can go live to Yahoo (the TTM on a cold
-    cache miss), and Yahoo intermittently blocks data-centre IPs; a colored insight
-    going missing must not take the quote down with it. The fundamentals (margins +
-    dividend per share) now ride the same anchor read as market cap / sector /
-    growth — no live fundamentals vendor is called — so the opt-in gating only
-    controls which blocks the response carries, not whether a call is made.
-    """
-
     def __init__(
         self,
         quotes: StockQuoteProvider,
@@ -399,10 +317,6 @@ class GetTickerCard:
             return None  # best-effort: never sink the card
 
     def _get_options_metrics(self, symbol: str, quote: Quote) -> TickerOptionsMetrics | None:
-        """The card's options-market read — best-effort, so a Yahoo-blocked read
-        leaves the block null rather than sinking the card. The expiry sampling
-        lives in ``sample_options_metrics`` (a module-level helper, so the rule for
-        which two expiries to read is stated once)."""
         if self._options is None:
             return None
         try:
@@ -415,24 +329,11 @@ class GetTickerCard:
 
 @dataclass(frozen=True)
 class TickerClassification:
-    """The ``ClassifyTicker`` result: the normalized ticker and its asset type."""
-
     ticker: str
     asset_type: str
 
 
 class ClassifyTicker:
-    """Classify a ticker as an ETF or an equity — the lightweight counterpart to
-    ``GetTickerCard``'s ``asset_type``.
-
-    A single indexed ETF-universe membership check, with no quote or fundamentals
-    call, so it stays one cheap DB read (for a caller that only needs to know
-    which kind a symbol is, not its whole card). Any *valid* symbol resolves to
-    one of the two — ``"equity"`` for a symbol outside the screened ETF set — so
-    it never 404s; only a malformed symbol raises ``ValueError`` (a 400 at the
-    edge), exactly as the card's normalization does.
-    """
-
     def __init__(self, etfs: EtfLookupRepository) -> None:
         self._etfs = etfs
 
@@ -445,22 +346,6 @@ class ClassifyTicker:
 
 
 class GetStockPeHistory:
-    """Use case: a stock's trailing P/E sampled at each earnings release.
-
-    Derives the walk from two legs the entity combines: the *reported-EPS run* (through
-    ``EpsHistoryProvider`` — the deep Yahoo read) rolled into a trailing-twelve-month
-    series, and the *daily closes* (through the shared ``CandleProvider``, i.e. Alpaca)
-    that price each release. One point per reported quarter, oldest first.
-
-    The two legs split the way the card splits primary from enrichment. The closes are
-    the reliable leg — Alpaca serves from data-centre IPs — so a failure there
-    propagates (the endpoint maps it to HTTP). The EPS history is the best-effort leg —
-    Yahoo intermittently blocks data-centre IPs — so a blocked read degrades to an
-    *empty* history: a 200 with no points, the same "no data ≠ error" stance the rest of
-    the slice takes. With fewer than a full trailing year of reported quarters there's
-    nothing to anchor, so it returns empty without even paying the price fetch.
-    """
-
     def __init__(
         self,
         candles: CandleProvider,

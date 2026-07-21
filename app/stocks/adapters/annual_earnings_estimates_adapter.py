@@ -1,20 +1,3 @@
-"""Interface Adapter: forward analyst estimates read from the annual-earnings cache.
-
-The stock snapshot's forward consensus (forward P/E, forward P/S, FY1→FY2 growth) used
-to come from a dedicated ``stock_analyst_estimates`` table with its own Yahoo fetch and
-cron. But the annual-earnings slice already stores the *same* consensus — its upcoming
-years are built from the very ``earnings_estimate``/``revenue_estimate`` frames the
-estimates feed read — so this adapter projects the timeline's forward years into an
-``AnalystEstimates`` block instead of maintaining a second copy: the first upcoming
-year is FY1, the one after FY2.
-
-Deliberately DB-only — it reads the ``AnnualEarningsRepository`` and never falls
-through to Yahoo. Estimates are best-effort enrichment on the snapshot, so a symbol
-whose timeline hasn't been cached yet (nothing viewed, cron not run) simply yields an
-empty (``is_empty``) block; the annual-earnings read path is what fills the cache
-lazily, and its cron is what keeps the rows current.
-"""
-
 from app.stocks.earnings.annual.repository import AnnualEarningsRepository
 from app.stocks.entities import AnalystEstimates
 from app.stocks.exceptions import StockDataUnavailable
@@ -31,8 +14,6 @@ _EMPTY = AnalystEstimates(
 
 
 class AnnualEarningsEstimatesProvider(AnalystEstimatesProvider):
-    """Projects the stored annual-earnings forward years into an estimates block."""
-
     def __init__(self, repository: AnnualEarningsRepository) -> None:
         self._repository = repository
 

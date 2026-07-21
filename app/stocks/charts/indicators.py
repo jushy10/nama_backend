@@ -1,16 +1,3 @@
-"""Enterprise Business Rules: technical indicators derived from price history.
-
-Pure calculations over close prices — no framework, no vendor, no I/O. An
-indicator is a fact about a price series, so it lives in the domain next to the
-Candle it's computed from. Outer layers fetch the candles (through a port) and
-hand them here; nothing in this module reaches out for data.
-
-Currently: EMA (exponential moving average — e.g. the 9/21/50 chart overlay),
-swing-low support levels, a multi-horizon trend read, and the technical-indicator
-bundle (RSI / MACD / Bollinger / ATR / Stochastic / ADX / OBV / VWAP / Williams %R
-/ CCI / ROC / MFI / SMA / EMA) that the ``/indicators`` endpoint serves.
-"""
-
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -25,61 +12,28 @@ from app.stocks.entities import CandleSeries, Timeframe
 
 @dataclass(frozen=True)
 class EmaPoint:
-    """One EMA value at the close it was computed for (timestamp is that bar's).
-
-    An EMA rides on the price scale, so ``value`` is in the quote currency — an
-    overlay drawn straight on the candle chart's price axis.
-    """
-
     timestamp: datetime
     value: float
 
 
 @dataclass(frozen=True)
 class EmaLine:
-    """One EMA overlay line at a single period (e.g. the 50-EMA).
-
-    Seeded from the simple average of the first ``period`` closes, so ``points``
-    is shorter than the input series by ``period - 1`` (and empty when there
-    isn't enough history). ``latest`` is a convenience view of the final point.
-    """
-
     period: int
     points: tuple[EmaPoint, ...]
 
     @property
     def latest(self) -> EmaPoint | None:
-        """The most recent EMA point, or None when there wasn't enough history."""
         return self.points[-1] if self.points else None
 
 
 @dataclass(frozen=True)
 class EmaSeries:
-    """One or more EMA lines for a symbol at one timeframe, one per requested
-    period — e.g. the 9/21/50 overlay drawn on a single chart.
-
-    ``lines`` preserves the order the periods were requested in.
-    """
-
     symbol: str
     timeframe: Timeframe
     lines: tuple[EmaLine, ...]
 
 
 def compute_ema(closes: Sequence[float], period: int) -> list[float]:
-    """Exponential moving average over a chronological (oldest-first) close series.
-
-    Seeded with the simple average of the first ``period`` closes (the
-    conventional seed), then smoothed with multiplier ``k = 2 / (period + 1)``:
-    each later value weights the newest close by ``k`` and carries the rest from
-    the prior EMA. Returns one value per close from index ``period - 1`` onward —
-    the first ``period - 1`` closes only seed the initial average — so the result
-    has ``len(closes) - period + 1`` values. Returns ``[]`` when there isn't
-    enough history (fewer than ``period`` closes).
-
-    Raises:
-        ValueError: period < 1.
-    """
     if period < 1:
         raise ValueError("EMA period must be at least 1.")
     if len(closes) < period:
@@ -94,13 +48,6 @@ def compute_ema(closes: Sequence[float], period: int) -> list[float]:
 
 
 def ema_line(series: CandleSeries, period: int) -> EmaLine:
-    """Compute one EMA line for a candle series, aligning each value to its close's
-    bar.
-
-    The math runs on close prices; timestamps come from the candles those values
-    land on (``candles[period - 1:]``, since the seed consumes the first
-    ``period`` closes and its value dates the last of them). Pure.
-    """
     closes = [candle.close for candle in series.candles]
     values = compute_ema(closes, period)
     points = tuple(
@@ -111,12 +58,6 @@ def ema_line(series: CandleSeries, period: int) -> EmaLine:
 
 
 def ema_series(series: CandleSeries, periods: Sequence[int]) -> EmaSeries:
-    """Compute an EMA overlay (one line per period) for a candle series.
-
-    Each period is computed independently over the same closes; ``lines`` keeps
-    the caller's period order. Pure — given the same series it always returns the
-    same result.
-    """
     return EmaSeries(
         symbol=series.symbol,
         timeframe=series.timeframe,
@@ -133,9 +74,6 @@ _MODERATE_MIN_TOUCHES = 2
 
 
 class SupportStrength(str, Enum):
-    """How firmly a support level has held, by the number of swing lows that
-    formed it. String values double as the API's JSON values."""
-
     WEAK = "weak"  # a single swing low
     MODERATE = "moderate"  # two
     STRONG = "strong"  # three or more
@@ -143,16 +81,6 @@ class SupportStrength(str, Enum):
 
 @dataclass(frozen=True)
 class SupportLevel:
-    """One horizontal support level — a price zone where the stock has repeatedly
-    found buyers.
-
-    Built by clustering nearby *swing lows* (pivot lows): the level is the mean of
-    the lows that formed it. ``touches`` is how many did (the strength signal),
-    ``last_touched`` dates the most recent, and ``distance_percent`` is how far the
-    level sits below the reference price it was measured against (``<= 0`` —
-    support is at or below the current price).
-    """
-
     price: float
     touches: int
     last_touched: date
@@ -162,14 +90,6 @@ class SupportLevel:
 
 @dataclass(frozen=True)
 class SupportLevelSeries:
-    """The support levels detected for one symbol at one timeframe.
-
-    ``reference_price`` is the latest close the levels were measured against (what
-    "below the current price" means here); ``levels`` are strongest-first and can
-    be empty when there isn't enough history — or no swing low sits below the
-    current price — to find any.
-    """
-
     symbol: str
     timeframe: Timeframe
     reference_price: float
@@ -177,7 +97,6 @@ class SupportLevelSeries:
 
 
 def _strength_for(touches: int) -> SupportStrength:
-    """Map a level's swing-low count onto its strength band."""
     if touches >= _STRONG_MIN_TOUCHES:
         return SupportStrength.STRONG
     if touches >= _MODERATE_MIN_TOUCHES:
@@ -186,14 +105,6 @@ def _strength_for(touches: int) -> SupportStrength:
 
 
 def _pivot_low_indices(lows: Sequence[float], window: int) -> list[int]:
-    """Indices of the swing lows in ``lows`` — each a bar whose low is at or below
-    every low within ``window`` bars on both sides (a *pivot low* / fractal).
-
-    The first and last ``window`` bars are skipped: a swing low isn't confirmed
-    until ``window`` bars have printed on each side, so the edges can't form one.
-    A flat trough (consecutive equal lows) collapses to its first bar, so one
-    V-shaped turn counts as a single touch rather than several.
-    """
     n = len(lows)
     pivots: list[int] = []
     for i in range(window, n - window):
@@ -213,14 +124,6 @@ def _is_taken_out(
     closes: Sequence[float],
     timestamps: Sequence[datetime],
 ) -> bool:
-    """True if a candle *after* ``formed_at`` closed below ``price`` — the level
-    was broken and is no longer support.
-
-    Only the close counts: a candle that wicked below the level but closed back
-    above did not take it out. Only bars strictly after the level's most recent
-    swing low count, so an earlier dip through the level that a later touch
-    reclaimed (re-forming the support) is not treated as a break.
-    """
     return any(
         ts > formed_at and close < price for close, ts in zip(closes, timestamps)
     )
@@ -236,35 +139,6 @@ def compute_support_levels(
     tolerance: float = 0.02,
     max_levels: int = 5,
 ) -> list[SupportLevel]:
-    """Detect horizontal support levels from a chronological (oldest-first) low
-    series and the timestamps those lows fall on.
-
-    Swing lows (``_pivot_low_indices``) are clustered by price — a low within
-    ``tolerance`` (a fraction, e.g. ``0.02`` = 2%) above a cluster's base low joins
-    it — and each cluster becomes a level at the mean of its lows. Only levels at
-    or below ``reference_price`` (the latest close) are kept: support sits under
-    the current price. Levels are ranked by strength (touch count, then recency),
-    the top ``max_levels`` are taken, and they're returned nearest-first (highest
-    price first — just under the quote).
-
-    ``closes`` (index-aligned with ``lows``) drops **broken** levels: a support
-    that a later candle *closed below* has been taken out and is no longer support
-    (it flips to resistance), so it isn't returned. See ``_is_taken_out`` for the
-    rule — closes only (a wick that pierced but closed back above does not break
-    it), and only bars strictly after the level's most recent swing low, so a dip
-    that a fresh touch later reclaimed still counts. When ``closes`` is omitted the
-    break filter is skipped and levels are reported as-formed.
-
-    Returns ``[]`` when there isn't enough history (fewer than ``2 * window + 1``
-    lows), when no swing low sits at or below the price (or every candidate has
-    been taken out), or when ``reference_price`` is non-positive — "couldn't find
-    any" is not an error.
-
-    Raises:
-        ValueError: ``window < 2``, ``tolerance`` outside ``(0, 1)``,
-            ``max_levels < 1``, or ``lows``/``timestamps``/``closes`` (when given)
-            differ in length.
-    """
     if window < 2:
         raise ValueError("window must be at least 2.")
     if not 0.0 < tolerance < 1.0:
@@ -335,14 +209,6 @@ def support_levels(
     tolerance: float = 0.02,
     max_levels: int = 5,
 ) -> SupportLevelSeries:
-    """Detect support levels for a candle series, measured against its latest close.
-
-    Pure: the detection (``compute_support_levels``) runs on the candles' lows and
-    their timestamps, with the final close as the reference price the levels sit
-    below. The candles' closes are passed too, so a level a later candle closed
-    below (taken out) is dropped. Given the same series it always returns the same
-    result.
-    """
     lows = [candle.low for candle in series.candles]
     closes = [candle.close for candle in series.candles]
     timestamps = [candle.timestamp for candle in series.candles]
@@ -382,22 +248,12 @@ _DEFAULT_PRICE_FLAT_THRESHOLD_PERCENT = 1.0
 
 
 class TrendDirection(str, Enum):
-    """Which way one horizon is heading. String values double as the API's JSON
-    values."""
-
     UP = "up"
     DOWN = "down"
     SIDEWAYS = "sideways"
 
 
 class TrendReading(str, Enum):
-    """The three horizons (short / medium / long) combined into one plain reading —
-    the whole point of the endpoint (e.g. "long-term up but mid-term rolling over").
-    The long horizon sets the primary trend; the medium horizon is the main qualifier
-    (its turn against the primary trend is the early warning), and the short horizon
-    adds near-term nuance and confirms strength. String values double as the API's
-    JSON values."""
-
     STRONG_UPTREND = "strong_uptrend"  # long up, medium up, short up (all aligned)
     UPTREND = "uptrend"  # long up, faster horizons mildly confirming
     UPTREND_PULLBACK = "uptrend_pullback"  # long up, medium not down, short down
@@ -419,16 +275,6 @@ def _combined_reading(
     medium_dir: TrendDirection,
     short_dir: TrendDirection,
 ) -> TrendReading:
-    """Fold the three horizons' directions into one plain-language reading.
-
-    The long horizon sets the *primary* trend (uptrend / downtrend / range). The
-    medium horizon is the main qualifier — a mid-term turn *against* the primary
-    trend is the strongest warning it's tiring (``*_weakening`` / ``*_recovering``),
-    stronger than a mere short-term wobble (``*_pullback`` / ``*_bounce``). The short
-    horizon confirms strength: all three aligned is the ``strong_*`` read. In a range
-    (long flat) the medium horizon leads the break/turn and the short horizon breaks
-    ties when the medium one is flat too.
-    """
     up, down = TrendDirection.UP, TrendDirection.DOWN
     if long_dir is up:
         if medium_dir is down:
@@ -460,25 +306,6 @@ def _combined_reading(
 
 @dataclass(frozen=True)
 class HorizonTrend:
-    """One horizon's trend read, from the slope of its EMA and price's position on it.
-
-    ``direction`` is read off the EMA's *slope* — the smoothed price line's heading
-    over its own timescale — not the raw closes, so a single noisy bar can't flip
-    it. ``slope_percent`` is that slope as an average percent change *per bar* (the
-    figure the SIDEWAYS deadband is applied to); ``change_percent`` is the same move
-    totalled across the ``lookback`` bars it was measured over (the human-readable
-    "the trend line is up X%"). ``price_vs_ema_percent`` says where the latest close
-    sits relative to the EMA — above (positive) or below.
-
-    ``effective_direction`` folds those two together, with **price leading** (see
-    ``_effective_direction``): a horizon whose line still slopes up while price has
-    broken decisively below it reads DOWN, because the slope is a trailing average
-    and price's side of the line is now. It's the horizon's read for display *and*
-    what the combined reading aggregates, so both track what the chart shows.
-    ``direction`` stays the pure slope, for a detail view that wants to show the
-    line's own heading beside the price gap.
-    """
-
     period: int
     lookback: int
     direction: TrendDirection
@@ -491,15 +318,6 @@ class HorizonTrend:
 
 @dataclass(frozen=True)
 class TrendAssessment:
-    """A stock's trend at three horizons (short / medium / long) plus their combined
-    reading.
-
-    ``short_term`` / ``medium_term`` / ``long_term`` are each ``None`` when there
-    isn't enough history to warm that horizon's EMA and measure its slope (a young
-    listing, or a deep ``long_period`` over a short window). ``reference_price`` is the
-    latest close the read was taken at.
-    """
-
     symbol: str
     timeframe: Timeframe
     reference_price: float
@@ -509,13 +327,6 @@ class TrendAssessment:
 
     @property
     def reading(self) -> TrendReading:
-        """The three horizons combined into one plain reading (the headline). The long
-        horizon sets the primary trend, the medium horizon qualifies it (pulling back,
-        weakening, …), and the short horizon confirms strength. Each horizon speaks
-        through its ``effective_direction`` — price's side of the line leading, the
-        slope speaking only when price sits on it — so a rising line that price has
-        dropped below votes down, not up. ``UNKNOWN`` when any horizon is missing —
-        the primary read isn't trustworthy without all three."""
         if (
             self.long_term is None
             or self.medium_term is None
@@ -530,8 +341,6 @@ class TrendAssessment:
 
 
 def _classify_direction(slope_percent_per_bar: float, deadband: float) -> TrendDirection:
-    """Map a per-bar EMA slope onto a direction, with a flat band around zero so a
-    barely-moving line reads SIDEWAYS rather than a weak UP/DOWN."""
     if slope_percent_per_bar > deadband:
         return TrendDirection.UP
     if slope_percent_per_bar < -deadband:
@@ -544,21 +353,6 @@ def _effective_direction(
     price_vs_ema_percent: float,
     price_deadband: float,
 ) -> TrendDirection:
-    """Fold a horizon's EMA-slope direction with where price sits on that same EMA
-    into one effective direction — the horizon's true tilt, not just its line's.
-
-    **Price leads.** More than ``price_deadband`` percent above the line reads UP,
-    more than that below reads DOWN — regardless of which way the line is sloping.
-    Within the band price is "on the line" and abstains, and the slope decides.
-
-    Price wins a conflict because the two speak about different moments: an EMA's
-    slope is a trailing average over ``lookback`` bars (it keeps pointing up for a
-    while after a top), whereas price's side of the line is *now*. A rising line
-    price has broken decisively below is a horizon that has already turned — the
-    divergence the eye catches on the chart, which the pure-slope read called an
-    uptrend. The cost is symmetric and accepted: a brief dip through a strongly
-    rising line flips the horizon down until price recovers, which is why the band
-    exists — a routine touch of the line doesn't clear it."""
     if price_vs_ema_percent > price_deadband:
         return TrendDirection.UP
     if price_vs_ema_percent < -price_deadband:
@@ -573,21 +367,6 @@ def horizon_trend(
     deadband_percent: float = _DEFAULT_FLAT_THRESHOLD_PERCENT,
     price_deadband_percent: float = _DEFAULT_PRICE_FLAT_THRESHOLD_PERCENT,
 ) -> HorizonTrend | None:
-    """Read one horizon's trend from a chronological (oldest-first) close series.
-
-    Smooths the closes into an EMA of ``period`` bars, then measures that line's
-    slope from ``lookback = min(period, len(ema) - 1)`` bars ago to its latest
-    value. The per-bar slope (percent) is classified UP / DOWN / SIDEWAYS against a
-    ``deadband_percent`` flat band, so a gently drifting or choppy market reads
-    SIDEWAYS rather than as a weak trend. The ``effective_direction`` then lets the
-    latest close's side of that line lead (``_effective_direction``, with its own
-    ``price_deadband_percent`` band). Returns ``None`` when there isn't
-    enough history to form at least two EMA points — nothing to measure a slope from.
-
-    Raises:
-        ValueError: ``period < 2``, ``deadband_percent < 0`` or
-            ``price_deadband_percent < 0``.
-    """
     if period < 2:
         raise ValueError("trend period must be at least 2.")
     if deadband_percent < 0:
@@ -628,20 +407,6 @@ def assess_trend(
     deadband_percent: float = _DEFAULT_FLAT_THRESHOLD_PERCENT,
     price_deadband_percent: float = _DEFAULT_PRICE_FLAT_THRESHOLD_PERCENT,
 ) -> TrendAssessment:
-    """Assess a candle series' trend at a short, a medium and a long horizon.
-
-    All three horizons are read from the same closes via ``horizon_trend`` (the slope
-    of a short, a medium and a long EMA, each folded with price's side of its line);
-    their ``effective_direction``s combine into ``TrendAssessment.reading`` — the
-    "long-term up but mid-term rolling over" headline. A horizon with too little
-    history to warm its EMA comes back ``None`` (and the reading is ``UNKNOWN``).
-    Pure: given the same series it always returns the same result.
-
-    Raises:
-        ValueError: any period below 2, the periods not strictly increasing
-            (``short_period < medium_period < long_period``),
-            ``deadband_percent < 0`` or ``price_deadband_percent < 0``.
-    """
     if short_period < 2 or medium_period < 2 or long_period < 2:
         raise ValueError("trend periods must be at least 2.")
     if not short_period < medium_period < long_period:
@@ -691,37 +456,22 @@ def assess_trend(
 
 @dataclass(frozen=True)
 class IndicatorPoint:
-    """One indicator reading at the bar it was computed for."""
-
     timestamp: datetime
     value: float
 
 
 @dataclass(frozen=True)
 class IndicatorLine:
-    """One named series within an indicator (e.g. MACD's ``signal`` line).
-
-    ``points`` is empty when there wasn't enough history to compute the line.
-    """
-
     key: str
     points: tuple[IndicatorPoint, ...]
 
     @property
     def latest(self) -> IndicatorPoint | None:
-        """The most recent reading, or None when the line couldn't be computed."""
         return self.points[-1] if self.points else None
 
 
 @dataclass(frozen=True)
 class Indicator:
-    """One computed indicator: its identity, how it renders, and its line(s).
-
-    ``overlay`` is True for a price-axis overlay (drawn on the candles) and False
-    for a separate-pane oscillator (its own scale). ``label`` is a display string
-    that carries the resolved parameters (e.g. ``"RSI (14)"``).
-    """
-
     name: str
     label: str
     overlay: bool
@@ -730,8 +480,6 @@ class Indicator:
 
 @dataclass(frozen=True)
 class IndicatorSet:
-    """The indicators computed for one symbol at one timeframe, in request order."""
-
     symbol: str
     timeframe: Timeframe
     indicators: tuple[Indicator, ...]
@@ -739,18 +487,9 @@ class IndicatorSet:
 
 @dataclass(frozen=True)
 class IndicatorSpec:
-    """A request for one indicator: its name and an optional primary-period override.
-
-    ``period`` overrides the indicator's main lookback (e.g. ``rsi:21``); ``None``
-    means "use the standard default". Indicators without a single primary period
-    (MACD, OBV, VWAP) reject a period override.
-    """
-
     name: str
     period: int | None = None
 
-
-# --------------------------- catalogue & parameters ---------------------------
 
 # The standard primary lookback for each single-period indicator (the value a
 # `name:period` token overrides). MACD/OBV/VWAP don't have one and are handled apart.
@@ -786,13 +525,6 @@ _STOCH_SMOOTH, _STOCH_SIGNAL = 3, 3
 
 
 def _resolve_period(name: str, override: int | None) -> int:
-    """Resolve an indicator's primary lookback from its default and an optional
-    override, validating both.
-
-    Raises:
-        ValueError: an unknown name, a period on a no-period indicator, or a
-            period below 2.
-    """
     if name not in INDICATOR_NAMES:
         raise ValueError(f"Unknown indicator '{name}'.")
     if name in _NO_PERIOD:
@@ -806,14 +538,6 @@ def _resolve_period(name: str, override: int | None) -> int:
 
 
 def indicator_warmup_bars(name: str, period: int | None = None) -> int:
-    """How many bars *before* the visible window an indicator needs so it's already
-    computed by that window's first bar — the deepest of these across a request
-    sizes the warmup fetch (see ``GetStockIndicators``).
-
-    Cumulative indicators (OBV/VWAP) define a value from the first bar, so they need
-    none; the recursive Wilder ADX consumes ~2×period before its first reading; MACD
-    consumes slow+signal; everything else consumes its primary period.
-    """
     if name in ("obv", "vwap"):
         return 0
     if name == "macd":
@@ -830,8 +554,6 @@ def indicator_warmup_bars(name: str, period: int | None = None) -> int:
 
 
 def _sma(values: Sequence[float], period: int) -> list[float]:
-    """Rolling simple moving average (full precision), tail-aligned. ``[]`` when
-    there are fewer than ``period`` values."""
     if period < 1:
         raise ValueError("SMA period must be at least 1.")
     n = len(values)
@@ -846,12 +568,10 @@ def _sma(values: Sequence[float], period: int) -> list[float]:
 
 
 def compute_sma(closes: Sequence[float], period: int) -> list[float]:
-    """Simple moving average over closes — the arithmetic-mean cousin of ``compute_ema``."""
     return [round(v, 4) for v in _sma(closes, period)]
 
 
 def _rsi_value(avg_gain: float, avg_loss: float) -> float:
-    """RSI from average gain/loss, guarding the flat and no-loss edges."""
     if avg_loss == 0:
         return 100.0 if avg_gain > 0 else 50.0  # all up → 100; dead flat → neutral 50
     rs = avg_gain / avg_loss
@@ -859,12 +579,6 @@ def _rsi_value(avg_gain: float, avg_loss: float) -> float:
 
 
 def compute_rsi(closes: Sequence[float], period: int = 14) -> list[float]:
-    """Relative Strength Index (Wilder), 0–100, tail-aligned.
-
-    Seeds the first average gain/loss over the first ``period`` close-to-close
-    changes, then smooths them Wilder-style. Needs ``period + 1`` closes for the
-    first value; returns ``[]`` below that.
-    """
     if period < 1:
         raise ValueError("RSI period must be at least 1.")
     n = len(closes)
@@ -896,15 +610,6 @@ def compute_macd(
     slow: int = _MACD_SLOW,
     signal: int = _MACD_SIGNAL,
 ) -> tuple[list[float], list[float], list[float]]:
-    """MACD line, signal line and histogram — three tail-aligned lists (each aligned
-    to its own tail of the candles).
-
-    MACD = EMA(fast) − EMA(slow); signal = EMA(MACD, signal); histogram = MACD − signal
-    over the overlap. Reuses ``compute_ema``. Empty lists when history is too short.
-
-    Raises:
-        ValueError: a period < 1 or ``fast >= slow``.
-    """
     if fast < 1 or slow < 1 or signal < 1:
         raise ValueError("MACD periods must be at least 1.")
     if fast >= slow:
@@ -926,12 +631,6 @@ def compute_macd(
 def compute_bollinger(
     closes: Sequence[float], period: int = 20, num_std: float = _BBANDS_STDDEV
 ) -> tuple[list[float], list[float], list[float]]:
-    """Bollinger Bands: (upper, middle, lower), tail-aligned. Middle is the SMA;
-    the bands sit ``num_std`` population standard deviations either side.
-
-    Raises:
-        ValueError: ``period < 1`` or ``num_std < 0``.
-    """
     if period < 1:
         raise ValueError("Bollinger period must be at least 1.")
     if num_std < 0:
@@ -956,8 +655,6 @@ def compute_bollinger(
 def _true_ranges(
     highs: Sequence[float], lows: Sequence[float], closes: Sequence[float]
 ) -> list[float]:
-    """True range per bar from index 1 on (each needs the prior close) — the shared
-    input to ATR and ADX. ``_true_ranges[i-1]`` is the true range of candle ``i``."""
     return [
         max(
             highs[i] - lows[i],
@@ -974,12 +671,6 @@ def compute_atr(
     closes: Sequence[float],
     period: int = 14,
 ) -> list[float]:
-    """Average True Range (Wilder), tail-aligned. Seeds on the first ``period`` true
-    ranges, then Wilder-smooths. ``[]`` when there are ≤ ``period`` bars.
-
-    Raises:
-        ValueError: ``period < 1`` or mismatched input lengths.
-    """
     if period < 1:
         raise ValueError("ATR period must be at least 1.")
     if not len(highs) == len(lows) == len(closes):
@@ -1004,15 +695,6 @@ def compute_stochastic(
     smooth: int = _STOCH_SMOOTH,
     d_period: int = _STOCH_SIGNAL,
 ) -> tuple[list[float], list[float]]:
-    """Stochastic oscillator: (%K, %D), tail-aligned, 0–100.
-
-    Raw %K is where the close sits in the ``k_period`` high-low range; %K is that
-    smoothed over ``smooth`` bars, and %D is the ``d_period`` SMA of %K. A flat range
-    (high == low) reads a neutral 50.
-
-    Raises:
-        ValueError: any period < 1 or mismatched input lengths.
-    """
     if k_period < 1 or smooth < 1 or d_period < 1:
         raise ValueError("Stochastic periods must be at least 1.")
     if not len(highs) == len(lows) == len(closes):
@@ -1031,7 +713,6 @@ def compute_stochastic(
 
 
 def _dx(plus_di: float, minus_di: float) -> float:
-    """Directional index: the normalized gap between the two directional indicators."""
     total = plus_di + minus_di
     return 100.0 * abs(plus_di - minus_di) / total if total else 0.0
 
@@ -1042,17 +723,6 @@ def compute_adx(
     closes: Sequence[float],
     period: int = 14,
 ) -> tuple[list[float], list[float], list[float]]:
-    """Average Directional Index with the two directional indicators: (ADX, +DI, −DI),
-    each tail-aligned (Wilder).
-
-    +DI/−DI come from the Wilder-smoothed directional movement over the true range;
-    ADX is the Wilder-smoothed directional index. ADX lags +DI/−DI by another
-    ``period`` bars (it smooths their spread), so its line is shorter — each line
-    aligns to its own tail and they share the latest bar.
-
-    Raises:
-        ValueError: ``period < 1`` or mismatched input lengths.
-    """
     if period < 1:
         raise ValueError("ADX period must be at least 1.")
     if not len(highs) == len(lows) == len(closes):
@@ -1098,10 +768,6 @@ def compute_adx(
 
 
 def compute_obv(closes: Sequence[float], volumes: Sequence[int | None]) -> list[float]:
-    """On-Balance Volume, tail-aligned to every bar. A running total that adds the
-    bar's volume on an up-close and subtracts it on a down-close (unchanged when
-    flat). The baseline is arbitrary (starts at 0) — OBV is read for its slope, not
-    its level. Missing volume counts as 0."""
     n = len(closes)
     if n == 0:
         return []
@@ -1123,10 +789,6 @@ def compute_vwap(
     closes: Sequence[float],
     volumes: Sequence[int | None],
 ) -> list[float]:
-    """Volume-Weighted Average Price, anchored at the first bar of the series and
-    accumulated forward (tail-aligned to every bar). Each point is the running
-    typical-price×volume over running volume. Missing volume counts as 0; a
-    zero-volume run falls back to the typical price."""
     n = len(closes)
     if n == 0:
         return []
@@ -1148,12 +810,6 @@ def compute_williams_r(
     closes: Sequence[float],
     period: int = 14,
 ) -> list[float]:
-    """Williams %R, tail-aligned, −100..0 (where the close sits in the ``period``
-    high-low range, inverted). A flat range reads a neutral −50.
-
-    Raises:
-        ValueError: ``period < 1`` or mismatched input lengths.
-    """
     if period < 1:
         raise ValueError("Williams %R period must be at least 1.")
     if not len(highs) == len(lows) == len(closes):
@@ -1175,12 +831,6 @@ def compute_cci(
     closes: Sequence[float],
     period: int = 20,
 ) -> list[float]:
-    """Commodity Channel Index, tail-aligned. The typical price's deviation from its
-    SMA, scaled by mean absolute deviation (×0.015). A zero-deviation window reads 0.
-
-    Raises:
-        ValueError: ``period < 1`` or mismatched input lengths.
-    """
     if period < 1:
         raise ValueError("CCI period must be at least 1.")
     if not len(highs) == len(lows) == len(closes):
@@ -1199,12 +849,6 @@ def compute_cci(
 
 
 def compute_roc(closes: Sequence[float], period: int = 12) -> list[float]:
-    """Rate of Change (percent), tail-aligned: the percent change of the close versus
-    ``period`` bars ago. ``[]`` when there are ≤ ``period`` closes.
-
-    Raises:
-        ValueError: ``period < 1``.
-    """
     if period < 1:
         raise ValueError("ROC period must be at least 1.")
     n = len(closes)
@@ -1224,13 +868,6 @@ def compute_mfi(
     volumes: Sequence[int | None],
     period: int = 14,
 ) -> list[float]:
-    """Money Flow Index (volume-weighted RSI), tail-aligned, 0–100. Positive money
-    flow (typical price up) versus negative over the last ``period`` bars. A window
-    with no negative flow reads 100. Missing volume counts as 0.
-
-    Raises:
-        ValueError: ``period < 1`` or mismatched input lengths.
-    """
     if period < 1:
         raise ValueError("MFI period must be at least 1.")
     if not len(highs) == len(lows) == len(closes) == len(volumes):
@@ -1260,8 +897,6 @@ def compute_mfi(
 
 
 def _line(key: str, candles: tuple, values: Sequence[float]) -> IndicatorLine:
-    """Assemble one line, tail-aligning ``values`` to the final ``len(values)``
-    candles and rounding to the price/indicator scale."""
     tail = candles[len(candles) - len(values):]
     points = tuple(
         IndicatorPoint(timestamp=candle.timestamp, value=round(value, 4))
@@ -1271,17 +906,8 @@ def _line(key: str, candles: tuple, values: Sequence[float]) -> IndicatorLine:
 
 
 def build_indicator(series: CandleSeries, spec: IndicatorSpec) -> Indicator:
-    """Compute one indicator over a candle series.
-
-    Resolves the spec's period (default or override), dispatches to the pure math,
-    and assembles the named line(s). An indicator with too little history comes back
-    with empty lines (never an error).
-
-    Raises:
-        ValueError: an unknown name or an invalid/period-on-a-no-period-indicator spec.
-    """
     name = spec.name
-    period = _resolve_period(name, spec.period)  # validates name + period
+    period = _resolve_period(name, spec.period)
     candles = series.candles
     overlay = name in _OVERLAY
     highs = [c.high for c in candles]
@@ -1358,7 +984,6 @@ def build_indicator(series: CandleSeries, spec: IndicatorSpec) -> Indicator:
 def build_indicators(
     series: CandleSeries, specs: Sequence[IndicatorSpec]
 ) -> IndicatorSet:
-    """Compute an ordered set of indicators over one candle series (request order)."""
     return IndicatorSet(
         symbol=series.symbol,
         timeframe=series.timeframe,

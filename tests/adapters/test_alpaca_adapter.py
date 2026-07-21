@@ -1,10 +1,3 @@
-"""Unit tests for the Alpaca adapter.
-
-No network: the real Alpaca clients are swapped for fakes, and the pure
-mapping is tested directly. Verifies an adapter's two jobs — translate
-Alpaca models -> Stock entity, and Alpaca failures -> domain exceptions.
-"""
-
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -76,8 +69,6 @@ class FakeTradingClient:
 
 
 class ExplodingTradingClient:
-    """Fails if touched — proves get_quote never makes the asset-metadata call."""
-
     def get_asset(self, symbol):
         raise AssertionError("get_quote must not call the trading client")
 
@@ -193,9 +184,6 @@ def test_get_quote_api_error_translated_to_unavailable():
         p.get_quote("AAPL")
 
 
-# --------------------------- performance from bars ---------------------------
-
-
 def bar(year, month, day, close):
     return SimpleNamespace(
         timestamp=datetime(year, month, day, tzinfo=timezone.utc), close=close
@@ -203,7 +191,6 @@ def bar(year, month, day, close):
 
 
 def performance_bars():
-    """Bars placed exactly on each window's start date; current close = 110."""
     return [
         bar(2025, 6, 18, 55.0),  # 1y  -> +100%
         bar(2025, 12, 18, 50.0),  # 6m  -> +120%
@@ -281,9 +268,6 @@ def test_get_performance_unknown_symbol_returns_empty():
     )
 
 
-# --------------------------- sector performance ---------------------------
-
-
 def test_get_sector_performance_attaches_day_change_and_windows():
     # One snapshot batch + one bars batch. XLK has bars; XLV has a snapshot but
     # no bars, so it still appears with all-None trailing windows.
@@ -322,9 +306,6 @@ def test_get_sector_performance_empty_board_not_found():
     p = provider_with(FakeDataClient(result={}), FakeTradingClient())
     with pytest.raises(StockNotFound):
         p.get_sector_performance()
-
-
-# --------------------------- market overview ---------------------------
 
 
 def test_get_market_overview_attaches_day_change_and_windows():
@@ -368,8 +349,6 @@ def test_get_market_overview_empty_board_not_found():
         p.get_market_overview()
 
 
-# --------------------------- candles ---------------------------
-
 def make_bar(ts, open_, high, low, close, volume=1000.0):
     return SimpleNamespace(
         timestamp=ts, open=open_, high=high, low=low, close=close, volume=volume
@@ -377,8 +356,6 @@ def make_bar(ts, open_, high, low, close, volume=1000.0):
 
 
 class FakeBarsClient:
-    """Stands in for StockHistoricalDataClient.get_stock_bars."""
-
     def __init__(self, bars_by_symbol=None, error=None):
         self._barset = SimpleNamespace(data=bars_by_symbol or {})
         self._error = error
@@ -445,7 +422,6 @@ def test_get_candles_returns_chronological_order():
 
 
 def _aware(dt):
-    """Alpaca's request model stores datetimes tz-naive (UTC); re-attach it."""
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
@@ -493,12 +469,7 @@ def test_get_candles_api_error_translated_to_unavailable():
         p.get_candles("AAPL", Timeframe.HOUR_1, start=None, end=None)
 
 
-# --------------------------- all-time high ---------------------------
-
-
 def ath_bars():
-    """Daily history whose peak intraday high (130) prints on 2024-03-04, with the
-    earliest bar in 2016 — the bound the high is computed over."""
     return [
         make_bar(datetime(2016, 1, 4, tzinfo=timezone.utc), 90, 100, 88, 95),
         make_bar(datetime(2024, 3, 4, tzinfo=timezone.utc), 120, 130, 118, 125),  # peak
@@ -546,9 +517,6 @@ def test_get_all_time_high_api_error_translated_to_unavailable():
         p.get_all_time_high("AAPL")
 
 
-# --------------------------- port composition ---------------------------
-
-
 def test_provider_implements_all_ports():
     # The merged adapter serves the snapshot, performance, candle, and sector
     # ports from one instance. The router relies on this: get_stock_info uses an
@@ -569,9 +537,6 @@ def test_provider_implements_all_ports():
 
 
 class RecordingSnapshotClient:
-    """A data client that records each snapshot request's symbol list and serves a fixed
-    symbol->snapshot map, so a test can assert both the returned quotes and the chunking."""
-
     def __init__(self, snapshots_by_symbol, error=None):
         self._snapshots = snapshots_by_symbol
         self._error = error
@@ -634,9 +599,6 @@ def test_get_quotes_chunks_large_symbol_lists():
 
 
 class OneChunkFailsClient:
-    """Fails the Nth snapshot call (0-indexed) with an APIError, serves the rest — so a test
-    can prove a single rejected chunk doesn't discard the other chunks' quotes."""
-
     def __init__(self, snapshots_by_symbol, fail_index):
         self._snapshots = snapshots_by_symbol
         self._fail_index = fail_index
@@ -695,10 +657,6 @@ def test_get_quotes_requests_class_shares_in_alpaca_symbology():
 
 
 class RecordingSingleSnapshotClient:
-    """Records the single-symbol snapshot request and serves a fixed symbol->snapshot map.
-    Separate from RecordingSnapshotClient because the per-symbol path sends a bare string,
-    not a list."""
-
     def __init__(self, snapshots_by_symbol):
         self._snapshots = snapshots_by_symbol
         self.requested = []  # each call's symbol, in order

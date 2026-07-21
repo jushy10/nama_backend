@@ -1,11 +1,3 @@
-"""Tests for the P/E-history read endpoint (GET /stocks/ticker/{ticker}/pe-history).
-
-Offline: a fake GetStockPeHistory is injected through dependency_overrides + FastAPI's
-TestClient, so this checks only the controller + presenter — the JSON shape and count, an
-empty history as a 200 (not a 404), rounding at the edge, and the exception → status map —
-without touching Alpaca, Yahoo, or the database.
-"""
-
 from datetime import date
 
 from fastapi import FastAPI
@@ -17,8 +9,6 @@ from app.stocks.ticker.entities import PeHistory, PeHistoryPoint
 
 
 class _FakeUseCase:
-    """Stands in for GetStockPeHistory; returns a canned history or raises."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error

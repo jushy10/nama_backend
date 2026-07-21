@@ -1,10 +1,3 @@
-"""Tests for the revenue-segments entities: member humanization + the segmentation views.
-
-Pure and offline — no I/O. Covers ``humanize_member`` (the raw XBRL member -> display label),
-the ``label`` property that rides it, and the ``RevenueSegmentation`` views a client reads
-(``fiscal_years`` / ``latest_fiscal_year`` / ``for_axis`` / ``latest_for_axis``).
-"""
-
 from datetime import date
 
 import pytest

@@ -1,12 +1,3 @@
-"""Unit tests for the yfinance institutional-ownership adapter.
-
-No network: a fake Ticker exposing canned pandas frames (the real shapes yfinance returns) is
-injected through the factory. Verifies the adapter maps the holder rows, converts Yahoo's fractions
-to human percent, orders newest-quarter/largest-position first, tags the institution vs. mutual-fund
-feeds, parses the breakdown, drops un-keyable rows, treats an empty primary frame as no coverage,
-keeps the fund feed + breakdown best-effort, and turns a hard primary failure into a domain error.
-"""
-
 from datetime import date
 
 import pandas as pd
