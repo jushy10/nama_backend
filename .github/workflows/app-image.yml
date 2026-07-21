@@ -1,13 +1,17 @@
 name: Build & Deploy App
 run-name: Build & deploy app · ${{ github.ref_name }}
 
-# Merge (push) to main, or manual run -> build, migrate, then deploy — as three
+# Merge (push) to main, or manual run -> test, build, migrate, then deploy — as four
 # sequential, gating jobs:
 #
-#   build  ->  migrate  ->  deploy
+#   tests  ->  build  ->  migrate  ->  deploy
 #
-# (Pull requests are validated by the separate Validate App Build workflow, so the
-# validate check never appears on main commits.)
+# (Pull requests are validated by the separate Validate App Build workflow and run the
+# same suite via Tests, so neither check appears on main commits twice.)
+#
+# `tests` calls the reusable Tests workflow (tests.yml) rather than duplicating it, so
+# the pre-merge PR check and this post-merge gate are the exact same suite. A red suite
+# on main therefore never reaches ECR.
 #
 # The image build has to come first: the migration runs as a one-off ECS task *inside
 # the VPC* (RDS is private, unreachable from the GitHub runner) on the image just pushed,
@@ -40,9 +44,16 @@ env:
   ECS_SERVICE: nama-dev
 
 jobs:
-  # 1/3 — On merge to main (or a manual run): build the image and push it to ECR.
+  # 1/4 — Prove the offline suite is green on the merged commit before anything is
+  # built or shipped. Reuses tests.yml, the same workflow the PR check runs.
+  tests:
+    name: Tests
+    uses: ./.github/workflows/tests.yml
+
+  # 2/4 — On merge to main (or a manual run): build the image and push it to ECR.
   build:
     name: Build & push image
+    needs: tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -86,7 +97,7 @@ jobs:
           docker push "$REGISTRY/$ECR_REPOSITORY:latest"
           docker push "$REGISTRY/$ECR_REPOSITORY:${{ github.sha }}"
 
-  # 2/3 — Apply database migrations before rolling the service, so the new code never
+  # 3/4 — Apply database migrations before rolling the service, so the new code never
   # serves against an out-of-date schema. Runs `alembic upgrade head` as a one-off ECS
   # task on the image just pushed — inside the VPC, where it can reach the private RDS —
   # reusing the service's own network config. Gates `deploy`: if it fails, we never roll.
@@ -141,7 +152,7 @@ jobs:
           fi
           echo "Migrations applied."
 
-  # 3/3 — Roll the service onto the new image, only after migrations succeed. On a
+  # 4/4 — Roll the service onto the new image, only after migrations succeed. On a
   # brand-new deploy the service may not be up yet — that's fine, it will pull :latest
   # when it starts.
   deploy:
