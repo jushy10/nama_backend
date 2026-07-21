@@ -10,7 +10,7 @@ from app.stocks.ai.analysis.entities import (
     FundamentalsAnalysis,
     FundamentalsVerdict,
 )
-from app.stocks.ai.analysis.ports import AiAnalysisCache, FundamentalsAnalysisProvider
+from app.stocks.ai.analysis.interfaces import AiAnalysisCache, FundamentalsAnalysisProvider
 from app.stocks.ai.analysis.use_cases import GetFundamentalsAnalysis, GetStockInfo
 from app.stocks.endpoints import analysis_endpoints as stocks_router
 from app.stocks.entities import AnalystEstimates, Stock

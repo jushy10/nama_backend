@@ -6,20 +6,20 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.rate_limit import limiter
-from app.stocks.adapters.bedrock.analysis_adapter import BedrockScorecardProvider
-from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
+from app.stocks.adapters.bedrock.bedrock_analysis_adapter import BedrockScorecardProvider
+from app.stocks.adapters.bedrock.bedrock_earnings_analysis_adapter import (
     BedrockEarningsAnalysisProvider,
 )
-from app.stocks.adapters.bedrock.fundamentals_analysis_adapter import (
+from app.stocks.adapters.bedrock.bedrock_fundamentals_analysis_adapter import (
     BedrockFundamentalsAnalysisProvider,
 )
-from app.stocks.adapters.bedrock.market_summary_adapter import (
+from app.stocks.adapters.bedrock.bedrock_market_summary_adapter import (
     BedrockMarketSummaryProvider,
 )
-from app.stocks.adapters.bedrock.ratings_analysis_adapter import (
+from app.stocks.adapters.bedrock.bedrock_ratings_analysis_adapter import (
     BedrockRatingsAnalysisProvider,
 )
-from app.stocks.adapters.bedrock.sector_analysis_adapter import (
+from app.stocks.adapters.bedrock.bedrock_sector_analysis_adapter import (
     BedrockSectorAnalysisProvider,
 )
 from app.stocks.adapters.db.db_only_context_providers import (
@@ -29,7 +29,7 @@ from app.stocks.adapters.db.db_only_context_providers import (
     DbOnlyRecommendationsProvider,
 )
 from app.stocks.adapters.yfinance.eps_history_adapter import YfinanceEpsHistoryProvider
-from app.stocks.ai.analysis.ai_analysis_cache_repository import (
+from app.stocks.ai.analysis.db_ai_analysis_cache import (
     earnings_analysis_cache,
     fundamentals_analysis_cache,
     market_summary_cache,
@@ -49,7 +49,7 @@ from app.stocks.ai.analysis.entities import (
     SectorMover,
     StockScorecard,
 )
-from app.stocks.ai.analysis.ports import (
+from app.stocks.ai.analysis.interfaces import (
     EarningsAnalysisProvider,
     FundamentalsAnalysisProvider,
     MarketSummaryProvider,
@@ -58,7 +58,7 @@ from app.stocks.ai.analysis.ports import (
     StockScorecardCache,
     StockScorecardProvider,
 )
-from app.stocks.ai.analysis.scorecard_db_repository import SqlStockScorecardCache
+from app.stocks.ai.analysis.db_stock_scorecard_cache import SqlStockScorecardCache
 from app.stocks.ai.analysis.schemas import (
     EarningsAnalysisResponse,
     FundamentalsAnalysisResponse,

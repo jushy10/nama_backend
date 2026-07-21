@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from app.stocks.adapters.bedrock.ratings_analysis_adapter import (
+from app.stocks.adapters.bedrock.bedrock_ratings_analysis_adapter import (
     BedrockRatingsAnalysisProvider,
 )
 from app.stocks.ai.analysis.entities import Confidence, RatingsVerdict

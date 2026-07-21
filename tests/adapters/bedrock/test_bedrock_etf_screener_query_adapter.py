@@ -1,6 +1,6 @@
 import pytest
 
-from app.stocks.adapters.bedrock.etf_screener_query_adapter import (
+from app.stocks.adapters.bedrock.bedrock_etf_screener_query_adapter import (
     BedrockEtfScreenerQueryTranslator,
 )
 from app.stocks.catalog.etfs.entities import EtfSort, SortDirection

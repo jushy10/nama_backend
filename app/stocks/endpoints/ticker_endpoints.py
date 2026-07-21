@@ -14,7 +14,7 @@ from app.stocks.entities import Quote, StockPerformance
 from app.stocks.catalog.etfs.db_repository import SqlEtfLookupRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import AnalystEstimatesProvider, StockPerformanceProvider
-from app.stocks.adapters.bedrock.screener_query_adapter import (
+from app.stocks.adapters.bedrock.bedrock_screener_query_adapter import (
     BedrockScreenerQueryTranslator,
 )
 from app.stocks.wiring import (

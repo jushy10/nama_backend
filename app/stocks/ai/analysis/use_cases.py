@@ -15,7 +15,7 @@ from app.stocks.ai.analysis.entities import (
     SectorMover,
     StockScorecard,
 )
-from app.stocks.ai.analysis.ports import (
+from app.stocks.ai.analysis.interfaces import (
     AiAnalysisCache,
     EarningsAnalysisProvider,
     FundamentalsAnalysisProvider,

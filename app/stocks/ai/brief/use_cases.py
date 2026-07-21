@@ -12,8 +12,8 @@ from app.stocks.ai.brief.entities import (
     MarketBrief,
     MarketBriefContext,
 )
-from app.stocks.ai.brief.ports import MarketBriefProvider
-from app.stocks.ai.brief.repository import MarketBriefRepository
+from app.stocks.ai.brief.interfaces import MarketBriefProvider
+from app.stocks.ai.brief.interfaces import MarketBriefRepository
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.heatmap.entities import HeatMap, HeatMapScope
 from app.stocks.market.heatmap.use_cases import GetStockHeatMap

@@ -14,14 +14,3 @@ class ConversationModel(ABC):
         tools: Sequence[ToolSpec],
     ) -> ModelTurn:
         raise NotImplementedError
-
-
-class Tool(ABC):
-    @property
-    @abstractmethod
-    def spec(self) -> ToolSpec:
-        raise NotImplementedError
-
-    @abstractmethod
-    def run(self, arguments: dict) -> str:
-        raise NotImplementedError

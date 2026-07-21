@@ -1,6 +1,6 @@
 import pytest
 
-from app.stocks.adapters.bedrock.screener_query_adapter import (
+from app.stocks.adapters.bedrock.bedrock_screener_query_adapter import (
     BedrockScreenerQueryTranslator,
 )
 from app.stocks.exceptions import StockDataUnavailable

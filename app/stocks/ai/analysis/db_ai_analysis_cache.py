@@ -22,7 +22,7 @@ from app.stocks.ai.analysis.entities import (
     SectorHighlight,
 )
 from app.stocks.ai.analysis.models import AnalysisCacheRecord
-from app.stocks.ai.analysis.ports import AiAnalysisCache
+from app.stocks.ai.analysis.interfaces import AiAnalysisCache
 
 logger = logging.getLogger(__name__)
 

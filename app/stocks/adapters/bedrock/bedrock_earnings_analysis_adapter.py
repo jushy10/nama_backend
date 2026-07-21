@@ -5,7 +5,7 @@ from app.stocks.company.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.company.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.ai.analysis.entities import EarningsAnalysis, EarningsTrend
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ai.analysis.ports import EarningsAnalysisProvider
+from app.stocks.ai.analysis.interfaces import EarningsAnalysisProvider
 
 # How many recent reported periods to feed the model — enough to show a trend
 # without a wall of history the plain-language read would only skim. Four quarters

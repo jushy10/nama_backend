@@ -11,7 +11,7 @@ from app.stocks.ai.brief.entities import (
     MarketBriefSection,
 )
 from app.stocks.ai.brief.models import MarketBriefRecord
-from app.stocks.ai.brief.repository import MarketBriefRepository
+from app.stocks.ai.brief.interfaces import MarketBriefRepository
 
 
 def _to_entity(row: MarketBriefRecord) -> MarketBrief:

@@ -8,7 +8,7 @@ from app.stocks.ai.analysis.entities import (
     SectorContext,
     SectorHighlight,
 )
-from app.stocks.ai.analysis.ports import SectorAnalysisProvider
+from app.stocks.ai.analysis.interfaces import SectorAnalysisProvider
 from app.stocks.exceptions import StockDataUnavailable
 
 # The key the adapter reports failures under — there is no single symbol here, so

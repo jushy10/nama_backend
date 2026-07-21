@@ -30,7 +30,7 @@ from app.stocks.catalog.etfs.repository import (
     EtfSearchRepository,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ai.analysis.ports import InvestmentAnalysisCache
+from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCache
 from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,

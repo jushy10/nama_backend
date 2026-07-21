@@ -1,6 +1,6 @@
 import pytest
 
-from app.stocks.adapters.bedrock.research_model_adapter import BedrockConversationModel
+from app.stocks.adapters.bedrock.bedrock_research_model_adapter import BedrockConversationModel
 from app.stocks.ai.agent.entities import (
     AssistantMessage,
     ModelTurn,

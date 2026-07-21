@@ -4,17 +4,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.adapters.bedrock.analysis_adapter import (
+from app.stocks.adapters.bedrock.bedrock_analysis_adapter import (
     BedrockScorecardProvider,
     _SECTIONS as _SCORECARD_SECTIONS,
 )
-from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
+from app.stocks.adapters.bedrock.bedrock_earnings_analysis_adapter import (
     BedrockEarningsAnalysisProvider,
 )
-from app.stocks.adapters.bedrock.market_summary_adapter import (
+from app.stocks.adapters.bedrock.bedrock_market_summary_adapter import (
     BedrockMarketSummaryProvider,
 )
-from app.stocks.adapters.bedrock.sector_analysis_adapter import (
+from app.stocks.adapters.bedrock.bedrock_sector_analysis_adapter import (
     BedrockSectorAnalysisProvider,
 )
 from app.stocks.company.charts.chart_window import ChartRange, resolve_window
@@ -38,7 +38,7 @@ from app.stocks.ai.analysis.entities import (
     SectorMover,
     StockScorecard,
 )
-from app.stocks.ai.analysis.ports import (
+from app.stocks.ai.analysis.interfaces import (
     AiAnalysisCache,
     EarningsAnalysisProvider,
     MarketSummaryProvider,

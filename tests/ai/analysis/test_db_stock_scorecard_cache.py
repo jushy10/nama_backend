@@ -14,7 +14,7 @@ from app.stocks.ai.analysis.entities import (
     StockScorecard,
 )
 from app.stocks.ai.analysis.models import AnalysisCacheRecord
-from app.stocks.ai.analysis.scorecard_db_repository import SqlStockScorecardCache
+from app.stocks.ai.analysis.db_stock_scorecard_cache import SqlStockScorecardCache
 
 _NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 

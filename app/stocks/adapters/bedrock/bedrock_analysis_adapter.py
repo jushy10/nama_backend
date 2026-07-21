@@ -10,7 +10,7 @@ from app.stocks.ai.analysis.entities import (
     SectionStance,
     StockScorecard,
 )
-from app.stocks.ai.analysis.ports import StockScorecardProvider
+from app.stocks.ai.analysis.interfaces import StockScorecardProvider
 from app.stocks.adapters.bedrock.cost import CostAccumulator
 from app.stocks.company.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.company.earnings.quarterly.entities import QuarterlyEarningsTimeline

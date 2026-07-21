@@ -1,7 +1,7 @@
 import pytest
 
 from app.stocks.ai.agent.entities import ModelTurn, ToolCall, ToolSpec
-from app.stocks.ai.agent.ports import Tool
+from app.stocks.ai.agent.interfaces import Tool
 from app.stocks.ai.agent.use_cases import (
     _EMPTY_ANSWER_FALLBACK,
     RunResearch,

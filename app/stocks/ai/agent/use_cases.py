@@ -12,7 +12,7 @@ from app.stocks.ai.agent.entities import (
     ToolResultsMessage,
     UserMessage,
 )
-from app.stocks.ai.agent.ports import ConversationModel, Tool
+from app.stocks.ai.agent.interfaces import ConversationModel, Tool
 
 logger = logging.getLogger(__name__)
 

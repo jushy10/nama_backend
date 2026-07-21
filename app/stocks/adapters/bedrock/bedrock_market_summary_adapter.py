@@ -8,7 +8,7 @@ from app.stocks.ai.analysis.entities import (
     MarketSummary,
     MarketTone,
 )
-from app.stocks.ai.analysis.ports import MarketSummaryProvider
+from app.stocks.ai.analysis.interfaces import MarketSummaryProvider
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.market.boards.entities import MarketIndexPerformance
 

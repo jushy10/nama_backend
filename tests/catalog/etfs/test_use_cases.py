@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.stocks.ai.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
-from app.stocks.ai.analysis.ports import InvestmentAnalysisCache
+from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCache
 from app.stocks.entities import Quote, StockPerformance
 from app.stocks.ports import StockPerformanceProvider, StockQuoteProvider
 from app.stocks.catalog.etfs.entities import (

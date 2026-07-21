@@ -9,7 +9,7 @@ from app.stocks.ai.agent.entities import (
     ToolSpec,
     UserMessage,
 )
-from app.stocks.ai.agent.ports import ConversationModel
+from app.stocks.ai.agent.interfaces import ConversationModel
 from app.stocks.exceptions import StockDataUnavailable
 
 

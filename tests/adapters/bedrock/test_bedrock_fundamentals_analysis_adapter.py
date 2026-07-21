@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from app.stocks.adapters.bedrock.fundamentals_analysis_adapter import (
+from app.stocks.adapters.bedrock.bedrock_fundamentals_analysis_adapter import (
     BedrockFundamentalsAnalysisProvider,
 )
 from app.stocks.ai.analysis.entities import Confidence, FundamentalsVerdict

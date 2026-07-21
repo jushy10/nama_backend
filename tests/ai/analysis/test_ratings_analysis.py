@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import analysis_endpoints
 from app.stocks.ai.analysis.entities import Confidence, RatingsAnalysis, RatingsVerdict
-from app.stocks.ai.analysis.ports import AiAnalysisCache, RatingsAnalysisProvider
+from app.stocks.ai.analysis.interfaces import AiAnalysisCache, RatingsAnalysisProvider
 from app.stocks.ai.analysis.use_cases import GetRatingsFindings
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.company.recommendations.entities import (

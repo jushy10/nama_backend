@@ -6,7 +6,7 @@ from app.stocks.ai.analysis.entities import (
     FundamentalsAnalysis,
     FundamentalsVerdict,
 )
-from app.stocks.ai.analysis.ports import FundamentalsAnalysisProvider
+from app.stocks.ai.analysis.interfaces import FundamentalsAnalysisProvider
 from app.stocks.entities import Stock
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.company.ticker.entities import PeHistoryStats

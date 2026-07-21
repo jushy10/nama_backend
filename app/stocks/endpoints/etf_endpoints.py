@@ -5,11 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.bedrock.etf_analysis_adapter import BedrockEtfAnalysisProvider
+from app.stocks.adapters.bedrock.bedrock_etf_analysis_adapter import BedrockEtfAnalysisProvider
 from app.stocks.adapters.yfinance.etf_profile_adapter import (
     YfinanceEtfProfileProvider,
 )
-from app.stocks.ai.analysis.db_repository import SqlInvestmentAnalysisCache
+from app.stocks.ai.analysis.db_investment_analysis_cache import SqlInvestmentAnalysisCache
 from app.stocks.ai.analysis.entities import InvestmentAnalysis
 from app.stocks.catalog.etfs.db_repository import (
     SqlEtfLookupRepository,
@@ -46,12 +46,12 @@ from app.stocks.catalog.etfs.use_cases import (
     SearchEtfs,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ai.analysis.ports import InvestmentAnalysisCache
+from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCache
 from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,
 )
-from app.stocks.adapters.bedrock.etf_screener_query_adapter import (
+from app.stocks.adapters.bedrock.bedrock_etf_screener_query_adapter import (
     BedrockEtfScreenerQueryTranslator,
 )
 from app.stocks.wiring import (

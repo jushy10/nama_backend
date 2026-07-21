@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.stocks.ai.analysis.ai_analysis_cache_repository import (
+from app.stocks.ai.analysis.db_ai_analysis_cache import (
     earnings_analysis_cache,
     fundamentals_analysis_cache,
     market_summary_cache,

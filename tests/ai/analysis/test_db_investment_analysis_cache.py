@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.stocks.ai.analysis.db_repository import SqlInvestmentAnalysisCache
+from app.stocks.ai.analysis.db_investment_analysis_cache import SqlInvestmentAnalysisCache
 from app.stocks.ai.analysis.models import AnalysisCacheRecord
 from app.stocks.ai.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
 

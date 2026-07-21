@@ -13,7 +13,7 @@ from app.stocks.ai.analysis.entities import (
     StockScorecard,
 )
 from app.stocks.ai.analysis.models import AnalysisCacheRecord
-from app.stocks.ai.analysis.ports import StockScorecardCache
+from app.stocks.ai.analysis.interfaces import StockScorecardCache
 
 logger = logging.getLogger(__name__)
 

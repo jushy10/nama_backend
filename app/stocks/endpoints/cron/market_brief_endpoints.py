@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.bedrock.market_brief_adapter import BedrockMarketBriefProvider
-from app.stocks.ai.brief.db_repository import SqlMarketBriefRepository
-from app.stocks.ai.brief.ports import MarketBriefProvider
+from app.stocks.adapters.bedrock.bedrock_market_brief_adapter import BedrockMarketBriefProvider
+from app.stocks.ai.brief.db_market_brief_repository import SqlMarketBriefRepository
+from app.stocks.ai.brief.interfaces import MarketBriefProvider
 from app.stocks.ai.brief.use_cases import (
     GenerateDailyBrief,
     MarketBriefSyncReport,

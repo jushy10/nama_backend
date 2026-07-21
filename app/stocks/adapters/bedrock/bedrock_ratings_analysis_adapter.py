@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from app.stocks.adapters.bedrock.cost import log_model_cost
 from app.stocks.ai.analysis.entities import Confidence, RatingsAnalysis, RatingsVerdict
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ai.analysis.ports import RatingsAnalysisProvider
+from app.stocks.ai.analysis.interfaces import RatingsAnalysisProvider
 from app.stocks.company.recommendations.entities import AnalystRecommendations, FirmRating
 
 # A single forced tool pins the model to structured output: Claude must call

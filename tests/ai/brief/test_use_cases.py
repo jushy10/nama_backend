@@ -8,8 +8,8 @@ from app.stocks.ai.brief.entities import (
     MarketBriefContext,
     MarketBriefSection,
 )
-from app.stocks.ai.brief.ports import MarketBriefProvider
-from app.stocks.ai.brief.repository import MarketBriefRepository
+from app.stocks.ai.brief.interfaces import MarketBriefProvider
+from app.stocks.ai.brief.interfaces import MarketBriefRepository
 from app.stocks.ai.brief.use_cases import GenerateDailyBrief, GetDailyBrief
 from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable

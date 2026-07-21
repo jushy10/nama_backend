@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.stocks.ai.analysis.models import AnalysisCacheRecord
 from app.stocks.ai.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
-from app.stocks.ai.analysis.ports import InvestmentAnalysisCache
+from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCache
 
 logger = logging.getLogger(__name__)
 
