@@ -11,8 +11,8 @@
 # nothing about it becomes publicly reachable.
 
 # Amazon Linux 2023 (arm64). The SSM agent ships preinstalled, so the instance is
-# Session-Manager-ready the moment it finishes booting. most_recent keeps it on a
-# patched image at apply time.
+# Session-Manager-ready the moment it finishes booting. most_recent applies only
+# at create time — the instance ignores later AMI releases (see its lifecycle block).
 data "aws_ami" "al2023" {
   most_recent = true
   owners      = ["amazon"]
@@ -131,6 +131,15 @@ resource "aws_instance" "this" {
     volume_size = 8
     volume_type = "gp3"
     encrypted   = true
+  }
+
+  # Keep the AMI the instance was created with: without this, every new AL2023
+  # release forces a replacement on the next apply (re-tripping the first-boot
+  # OOM above). A parked bastion also releases its public IP, which otherwise
+  # reads back as replacement drift. To take a fresh AMI deliberately, taint the
+  # instance or toggle bastion_enabled off and on.
+  lifecycle {
+    ignore_changes = [ami, associate_public_ip_address]
   }
 
   tags = merge(var.tags, { Name = var.name })
