@@ -30,7 +30,7 @@ from app.stocks.catalog.etfs.repository import (
     EtfSearchRepository,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCache
+from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCacheAdapter
 from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,
@@ -298,7 +298,7 @@ class GetEtfAnalysis:
         self,
         detail: GetEtfDetail,
         analyzer: EtfAnalysisProvider,
-        cache: InvestmentAnalysisCache | None = None,
+        cache: InvestmentAnalysisCacheAdapter | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._detail = detail

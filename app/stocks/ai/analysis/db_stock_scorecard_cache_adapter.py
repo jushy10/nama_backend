@@ -13,12 +13,12 @@ from app.stocks.ai.analysis.entities import (
     StockScorecard,
 )
 from app.stocks.ai.analysis.models import AnalysisCacheRecord
-from app.stocks.ai.analysis.interfaces import StockScorecardCache
+from app.stocks.ai.analysis.interfaces import StockScorecardCacheAdapter
 
 logger = logging.getLogger(__name__)
 
 
-class SqlStockScorecardCache(StockScorecardCache):
+class DbStockScorecardCacheAdapter(StockScorecardCacheAdapter):
     def __init__(self, session: Session, kind: str = "stock") -> None:
         self._session = session
         self._kind = kind

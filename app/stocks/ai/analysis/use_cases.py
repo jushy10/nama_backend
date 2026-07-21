@@ -16,14 +16,14 @@ from app.stocks.ai.analysis.entities import (
     StockScorecard,
 )
 from app.stocks.ai.analysis.interfaces import (
-    AiAnalysisCache,
-    EarningsAnalysisProvider,
-    FundamentalsAnalysisProvider,
-    MarketSummaryProvider,
-    RatingsAnalysisProvider,
-    SectorAnalysisProvider,
-    StockScorecardCache,
-    StockScorecardProvider,
+    AiAnalysisCacheAdapter,
+    EarningsAnalysisAdapter,
+    FundamentalsAnalysisAdapter,
+    MarketSummaryAdapter,
+    RatingsAnalysisAdapter,
+    SectorAnalysisAdapter,
+    StockScorecardCacheAdapter,
+    StockScorecardAdapter,
 )
 from app.stocks.company.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.company.earnings.annual.ports import AnnualEarningsProvider
@@ -248,12 +248,12 @@ class GetStockAnalysis:
     def __init__(
         self,
         stock_info: GetStockInfo,
-        analyzer: StockScorecardProvider,
+        analyzer: StockScorecardAdapter,
         quarterly_provider: QuarterlyEarningsProvider | None = None,
         annual_provider: AnnualEarningsProvider | None = None,
         recommendations_provider: RecommendationProvider | None = None,
         industry_repository: StockSearchRepository | None = None,
-        cache: StockScorecardCache | None = None,
+        cache: StockScorecardCacheAdapter | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._stock_info = stock_info
@@ -396,10 +396,10 @@ class GetStockAnalysis:
 class GetEarningsAnalysis:
     def __init__(
         self,
-        analyzer: EarningsAnalysisProvider,
+        analyzer: EarningsAnalysisAdapter,
         quarterly_provider: QuarterlyEarningsProvider | None = None,
         annual_provider: AnnualEarningsProvider | None = None,
-        cache: AiAnalysisCache[EarningsAnalysis] | None = None,
+        cache: AiAnalysisCacheAdapter[EarningsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._analyzer = analyzer
@@ -463,10 +463,10 @@ class GetRatingsFindings:
 
     def __init__(
         self,
-        analyzer: RatingsAnalysisProvider,
+        analyzer: RatingsAnalysisAdapter,
         recommendations_provider: RecommendationProvider | None = None,
         rating_change_provider: RatingChangeProvider | None = None,
-        cache: AiAnalysisCache[RatingsAnalysis] | None = None,
+        cache: AiAnalysisCacheAdapter[RatingsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
         *,
         now: datetime | None = None,
@@ -533,11 +533,11 @@ class GetFundamentalsAnalysis:
     def __init__(
         self,
         stock_info: GetStockInfo,
-        analyzer: FundamentalsAnalysisProvider,
+        analyzer: FundamentalsAnalysisAdapter,
         industry_repository: StockSearchRepository | None = None,
         quarterly_provider: QuarterlyEarningsProvider | None = None,
         pe_history: GetStockPeHistory | None = None,
-        cache: AiAnalysisCache[FundamentalsAnalysis] | None = None,
+        cache: AiAnalysisCacheAdapter[FundamentalsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._stock_info = stock_info
@@ -689,8 +689,8 @@ class GetSectorAnalysis:
     def __init__(
         self,
         sectors: GetSectorPerformance,
-        analyzer: SectorAnalysisProvider,
-        cache: AiAnalysisCache[SectorAnalysis] | None = None,
+        analyzer: SectorAnalysisAdapter,
+        cache: AiAnalysisCacheAdapter[SectorAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
         *,
         constituents: StockSearchRepository | None = None,
@@ -882,8 +882,8 @@ class GetMarketSummary:
     def __init__(
         self,
         overview: GetMarketOverview,
-        analyzer: MarketSummaryProvider,
-        cache: AiAnalysisCache[MarketSummary] | None = None,
+        analyzer: MarketSummaryAdapter,
+        cache: AiAnalysisCacheAdapter[MarketSummary] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._overview = overview

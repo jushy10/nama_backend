@@ -13,7 +13,7 @@ from app.stocks.ai.brief.entities import (
     MarketBriefContext,
     MarketBriefSection,
 )
-from app.stocks.ai.brief.interfaces import MarketBriefProvider
+from app.stocks.ai.brief.interfaces import MarketBriefAdapter
 from app.stocks.exceptions import StockDataUnavailable
 
 # The key the adapter reports failures under — there is no single symbol here, so the market
@@ -118,7 +118,7 @@ _SYSTEM_PROMPT = (
 )
 
 
-class BedrockMarketBriefProvider(MarketBriefProvider):
+class BedrockMarketBriefAdapter(MarketBriefAdapter):
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock, so the
     # short form 400s. (Same default as the market-summary / sector adapters.)
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"

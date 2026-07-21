@@ -4,7 +4,7 @@ from app.stocks.ai.analysis.entities import RatingsAnalysis
 from app.stocks.company.recommendations.entities import AnalystRecommendations, FirmRating
 
 
-class RatingsAnalysisProvider(ABC):
+class RatingsAnalysisAdapter(ABC):
     @abstractmethod
     def analyze(
         self,

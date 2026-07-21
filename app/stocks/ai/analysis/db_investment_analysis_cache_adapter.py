@@ -6,12 +6,12 @@ from sqlalchemy.orm import Session
 
 from app.stocks.ai.analysis.models import AnalysisCacheRecord
 from app.stocks.ai.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
-from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCache
+from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCacheAdapter
 
 logger = logging.getLogger(__name__)
 
 
-class SqlInvestmentAnalysisCache(InvestmentAnalysisCache):
+class DbInvestmentAnalysisCacheAdapter(InvestmentAnalysisCacheAdapter):
     def __init__(self, session: Session, kind: str) -> None:
         self._session = session
         self._kind = kind

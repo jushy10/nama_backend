@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 
 from app.stocks.adapters.bedrock.bedrock_ratings_analysis_adapter import (
-    BedrockRatingsAnalysisProvider,
+    BedrockRatingsAnalysisAdapter,
 )
 from app.stocks.ai.analysis.entities import Confidence, RatingsVerdict
 from app.stocks.exceptions import StockDataUnavailable
@@ -109,7 +109,7 @@ def _top_firms() -> tuple[FirmRating, ...]:
 
 def test_parses_tool_call_into_entity():
     client = _StubClient(_tool_message())
-    provider = BedrockRatingsAnalysisProvider(client=client, model_id="test-model")
+    provider = BedrockRatingsAnalysisAdapter(client=client, model_id="test-model")
 
     analysis = provider.analyze("nvda", _recommendations(), _top_firms())
 
@@ -129,7 +129,7 @@ def test_parses_tool_call_into_entity():
 
 def test_renders_coverage_into_the_prompt():
     client = _StubClient(_tool_message())
-    BedrockRatingsAnalysisProvider(client=client).analyze(
+    BedrockRatingsAnalysisAdapter(client=client).analyze(
         "NVDA", _recommendations(), _top_firms()
     )
 
@@ -146,7 +146,7 @@ def test_omits_absent_blocks_from_the_prompt():
     # No consensus and no top firms -> a short prompt with just the header, nothing to reason
     # over beyond the label (the use case only reaches the model when there IS something).
     client = _StubClient(_tool_message())
-    BedrockRatingsAnalysisProvider(client=client).analyze("NVDA", None, ())
+    BedrockRatingsAnalysisAdapter(client=client).analyze("NVDA", None, ())
 
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Analyst coverage for NVDA" in prompt
@@ -158,14 +158,14 @@ def test_omits_absent_blocks_from_the_prompt():
 def test_raises_when_the_model_does_not_call_the_tool():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
     with pytest.raises(StockDataUnavailable):
-        BedrockRatingsAnalysisProvider(client=client).analyze(
+        BedrockRatingsAnalysisAdapter(client=client).analyze(
             "NVDA", _recommendations(), _top_firms()
         )
 
 
 def test_maps_a_client_error_to_a_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockRatingsAnalysisProvider(client=_BoomClient()).analyze(
+        BedrockRatingsAnalysisAdapter(client=_BoomClient()).analyze(
             "NVDA", _recommendations(), ()
         )
 
@@ -173,12 +173,12 @@ def test_maps_a_client_error_to_a_domain_error():
 def test_rejects_an_offschema_verdict():
     client = _StubClient(_tool_message(verdict="very_bullish"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
-        BedrockRatingsAnalysisProvider(client=client).analyze("NVDA", _recommendations(), ())
+        BedrockRatingsAnalysisAdapter(client=client).analyze("NVDA", _recommendations(), ())
 
 
 def test_drops_string_findings_instead_of_char_splitting():
     client = _StubClient(_tool_message(findings="not a list"))
-    analysis = BedrockRatingsAnalysisProvider(client=client).analyze(
+    analysis = BedrockRatingsAnalysisAdapter(client=client).analyze(
         "NVDA", _recommendations(), ()
     )
     assert analysis.findings == ()  # a bare string yields no findings, not characters

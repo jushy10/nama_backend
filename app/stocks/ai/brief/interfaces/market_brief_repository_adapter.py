@@ -4,7 +4,7 @@ from datetime import date
 from app.stocks.ai.brief.entities import MarketBrief
 
 
-class MarketBriefRepository(ABC):
+class MarketBriefRepositoryAdapter(ABC):
     @abstractmethod
     def get(self, brief_date: date) -> MarketBrief | None:
         raise NotImplementedError

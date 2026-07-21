@@ -6,7 +6,7 @@ from app.stocks.ai.analysis.entities import (
     FundamentalsAnalysis,
     FundamentalsVerdict,
 )
-from app.stocks.ai.analysis.interfaces import FundamentalsAnalysisProvider
+from app.stocks.ai.analysis.interfaces import FundamentalsAnalysisAdapter
 from app.stocks.entities import Stock
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.company.ticker.entities import PeHistoryStats
@@ -115,7 +115,7 @@ _SYSTEM_PROMPT = (
 _KEY = "fundamentals-analysis"
 
 
-class BedrockFundamentalsAnalysisProvider(FundamentalsAnalysisProvider):
+class BedrockFundamentalsAnalysisAdapter(FundamentalsAnalysisAdapter):
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock, so the
     # short form 400s. Same default as the earnings/ratings/market/sector reads.
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"

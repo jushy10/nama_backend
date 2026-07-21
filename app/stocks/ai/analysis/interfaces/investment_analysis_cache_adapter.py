@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from app.stocks.ai.analysis.entities import InvestmentAnalysis
 
 
-class InvestmentAnalysisCache(ABC):
+class InvestmentAnalysisCacheAdapter(ABC):
     @abstractmethod
     def get(self, symbol: str) -> InvestmentAnalysis | None:
         raise NotImplementedError

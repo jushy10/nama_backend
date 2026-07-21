@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.bedrock.bedrock_market_brief_adapter import BedrockMarketBriefProvider
-from app.stocks.ai.brief.db_market_brief_repository import SqlMarketBriefRepository
-from app.stocks.ai.brief.interfaces import MarketBriefProvider
+from app.stocks.adapters.bedrock.bedrock_market_brief_adapter import BedrockMarketBriefAdapter
+from app.stocks.ai.brief.db_market_brief_repository_adapter import DbMarketBriefRepositoryAdapter
+from app.stocks.ai.brief.interfaces import MarketBriefAdapter
 from app.stocks.ai.brief.use_cases import (
     GenerateDailyBrief,
     MarketBriefSyncReport,
@@ -34,17 +34,17 @@ router = APIRouter(tags=["market-brief-cron"])
 _sync_lock = threading.Lock()
 
 
-def get_market_brief_provider() -> MarketBriefProvider:
+def get_market_brief_provider() -> MarketBriefAdapter:
     region = os.environ.get("BEDROCK_REGION", "us-east-1")
     model_id = os.environ.get("BEDROCK_MARKET_BRIEF_MODEL_ID")
     # The single incomplete-result retry escalates onto this model when set (else it
     # stays on the primary) — see wiring.bedrock_recovery_model_id.
     recovery = bedrock_recovery_model_id("BEDROCK_MARKET_BRIEF_RECOVERY_MODEL_ID")
     if model_id:
-        return BedrockMarketBriefProvider(
+        return BedrockMarketBriefAdapter(
             model_id=model_id, region=region, recovery_model_id=recovery
         )
-    return BedrockMarketBriefProvider(region=region, recovery_model_id=recovery)
+    return BedrockMarketBriefAdapter(region=region, recovery_model_id=recovery)
 
 
 def run_market_brief_sync(limit: int | None) -> MarketBriefSyncReport:
@@ -56,7 +56,7 @@ def run_market_brief_sync(limit: int | None) -> MarketBriefSyncReport:
             GetSectorPerformance(provider),
             GetStockHeatMap(SqlStockSearchRepository(db), provider),
             get_market_brief_provider(),
-            SqlMarketBriefRepository(db),
+            DbMarketBriefRepositoryAdapter(db),
             # DB-only news reader (never a live fetch) — the daily news sync keeps it warm,
             # so the movers' catalyst headlines cost the generation no extra vendor call.
             news=SqlNewsRepository(db),

@@ -4,7 +4,7 @@ from typing import Generic, TypeVar
 T = TypeVar("T")
 
 
-class AiAnalysisCache(ABC, Generic[T]):
+class AiAnalysisCacheAdapter(ABC, Generic[T]):
     @abstractmethod
     def get(self, key: str) -> T | None:
         raise NotImplementedError

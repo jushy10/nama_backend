@@ -9,7 +9,7 @@ from app.stocks.adapters.bedrock.bedrock_etf_analysis_adapter import BedrockEtfA
 from app.stocks.adapters.yfinance.etf_profile_adapter import (
     YfinanceEtfProfileProvider,
 )
-from app.stocks.ai.analysis.db_investment_analysis_cache import SqlInvestmentAnalysisCache
+from app.stocks.ai.analysis.db_investment_analysis_cache_adapter import DbInvestmentAnalysisCacheAdapter
 from app.stocks.ai.analysis.entities import InvestmentAnalysis
 from app.stocks.catalog.etfs.db_repository import (
     SqlEtfLookupRepository,
@@ -46,7 +46,7 @@ from app.stocks.catalog.etfs.use_cases import (
     SearchEtfs,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCache
+from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCacheAdapter
 from app.stocks.ports import (
     StockPerformanceProvider,
     StockQuoteProvider,
@@ -148,16 +148,16 @@ def get_etf_analysis_provider() -> EtfAnalysisProvider:
 
 def get_etf_analysis_cache(
     db: Session = Depends(get_db),
-) -> InvestmentAnalysisCache:
+) -> InvestmentAnalysisCacheAdapter:
     # The read-through result cache for the fund analysis (kind="etf", so it never collides with a
     # stock of the same ticker). Same table + best-effort contract as the stock analysis cache.
-    return SqlInvestmentAnalysisCache(db, "etf")
+    return DbInvestmentAnalysisCacheAdapter(db, "etf")
 
 
 def get_etf_analysis_use_case(
     detail: GetEtfDetail = Depends(get_etf_detail_use_case),
     analyzer: EtfAnalysisProvider = Depends(get_etf_analysis_provider),
-    cache: InvestmentAnalysisCache = Depends(get_etf_analysis_cache),
+    cache: InvestmentAnalysisCacheAdapter = Depends(get_etf_analysis_cache),
 ) -> GetEtfAnalysis:
     # Reuses the detail use case as the primary snapshot builder (so the analysis reasons over
     # exactly what the detail card shows — same quote, same stored facts, same profile) and pairs it

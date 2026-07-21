@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from app.stocks.adapters.bedrock.cost import log_model_cost
 from app.stocks.ai.analysis.entities import Confidence, RatingsAnalysis, RatingsVerdict
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ai.analysis.interfaces import RatingsAnalysisProvider
+from app.stocks.ai.analysis.interfaces import RatingsAnalysisAdapter
 from app.stocks.company.recommendations.entities import AnalystRecommendations, FirmRating
 
 # A single forced tool pins the model to structured output: Claude must call
@@ -92,7 +92,7 @@ _SYSTEM_PROMPT = (
 _KEY = "ratings-analysis"
 
 
-class BedrockRatingsAnalysisProvider(RatingsAnalysisProvider):
+class BedrockRatingsAnalysisAdapter(RatingsAnalysisAdapter):
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock, so the
     # short form 400s. Same default as the earnings/market/sector reads.
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"

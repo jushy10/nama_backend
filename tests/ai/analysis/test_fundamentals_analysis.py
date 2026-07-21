@@ -10,7 +10,7 @@ from app.stocks.ai.analysis.entities import (
     FundamentalsAnalysis,
     FundamentalsVerdict,
 )
-from app.stocks.ai.analysis.interfaces import AiAnalysisCache, FundamentalsAnalysisProvider
+from app.stocks.ai.analysis.interfaces import AiAnalysisCacheAdapter, FundamentalsAnalysisAdapter
 from app.stocks.ai.analysis.use_cases import GetFundamentalsAnalysis, GetStockInfo
 from app.stocks.endpoints import analysis_endpoints as stocks_router
 from app.stocks.entities import AnalystEstimates, Stock
@@ -85,7 +85,7 @@ class _FakeEstimates(AnalystEstimatesProvider):
         return self._estimates
 
 
-class _FakeAnalyzer(FundamentalsAnalysisProvider):
+class _FakeAnalyzer(FundamentalsAnalysisAdapter):
     def __init__(self, result=None, *, error=None) -> None:
         self._result = result
         self._error = error
@@ -353,7 +353,7 @@ def test_rejects_invalid_symbols_before_touching_providers():
     assert analyzer.received == []
 
 
-class _FakeCache(AiAnalysisCache):
+class _FakeCache(AiAnalysisCacheAdapter):
     def __init__(self, stored=None, key: str = "AAPL") -> None:
         self._store = {key: stored} if stored is not None else {}
         self.puts: list[tuple] = []

@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from app.stocks.ai.agent.entities import Message, ModelTurn, ToolSpec
 
 
-class ConversationModel(ABC):
+class ConversationModelAdapter(ABC):
     @abstractmethod
     def respond(
         self,

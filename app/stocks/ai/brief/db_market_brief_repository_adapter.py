@@ -11,7 +11,7 @@ from app.stocks.ai.brief.entities import (
     MarketBriefSection,
 )
 from app.stocks.ai.brief.models import MarketBriefRecord
-from app.stocks.ai.brief.interfaces import MarketBriefRepository
+from app.stocks.ai.brief.interfaces import MarketBriefRepositoryAdapter
 
 
 def _to_entity(row: MarketBriefRecord) -> MarketBrief:
@@ -34,7 +34,7 @@ def _to_entity(row: MarketBriefRecord) -> MarketBrief:
     )
 
 
-class SqlMarketBriefRepository(MarketBriefRepository):
+class DbMarketBriefRepositoryAdapter(MarketBriefRepositoryAdapter):
     def __init__(self, session: Session) -> None:
         self._session = session
 

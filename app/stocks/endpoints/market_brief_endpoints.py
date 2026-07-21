@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.ai.brief.db_market_brief_repository import SqlMarketBriefRepository
+from app.stocks.ai.brief.db_market_brief_repository_adapter import DbMarketBriefRepositoryAdapter
 from app.stocks.ai.brief.entities import MarketBrief
 from app.stocks.ai.brief.schemas import MarketBriefResponse, MarketBriefSectionResponse
 from app.stocks.ai.brief.use_cases import GetDailyBrief
@@ -22,7 +22,7 @@ _DISCLAIMER = (
 
 def get_daily_brief_use_case(db: Session = Depends(get_db)) -> GetDailyBrief:
     # Pure DB read over the brief store — no vendor, no key, no model.
-    return GetDailyBrief(SqlMarketBriefRepository(db))
+    return GetDailyBrief(DbMarketBriefRepositoryAdapter(db))
 
 
 def _present(brief: MarketBrief) -> MarketBriefResponse:

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.stocks.ai.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
-from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCache
+from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCacheAdapter
 from app.stocks.entities import Quote, StockPerformance
 from app.stocks.ports import StockPerformanceProvider, StockQuoteProvider
 from app.stocks.catalog.etfs.entities import (
@@ -831,7 +831,7 @@ def test_analysis_propagates_a_model_failure():
         GetEtfAnalysis(detail_uc, analyzer).execute("VOO")
 
 
-class _FakeAnalysisCache(InvestmentAnalysisCache):
+class _FakeAnalysisCache(InvestmentAnalysisCacheAdapter):
     def __init__(self, stored: InvestmentAnalysis | None = None) -> None:
         self._store = {stored.symbol: stored} if stored is not None else {}
         self.puts: list[InvestmentAnalysis] = []

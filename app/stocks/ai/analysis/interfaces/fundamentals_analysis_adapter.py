@@ -6,7 +6,7 @@ from app.stocks.entities import Stock
 from app.stocks.catalog.universe.entities import IndustryValuation
 
 
-class FundamentalsAnalysisProvider(ABC):
+class FundamentalsAnalysisAdapter(ABC):
     @abstractmethod
     def analyze(
         self,

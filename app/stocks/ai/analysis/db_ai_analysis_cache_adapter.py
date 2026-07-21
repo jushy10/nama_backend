@@ -22,7 +22,7 @@ from app.stocks.ai.analysis.entities import (
     SectorHighlight,
 )
 from app.stocks.ai.analysis.models import AnalysisCacheRecord
-from app.stocks.ai.analysis.interfaces import AiAnalysisCache
+from app.stocks.ai.analysis.interfaces import AiAnalysisCacheAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ _MUTABLE_COLUMNS = (
 )
 
 
-class SqlAiAnalysisCache(AiAnalysisCache[T], Generic[T]):
+class DbAiAnalysisCacheAdapter(AiAnalysisCacheAdapter[T], Generic[T]):
     def __init__(
         self,
         session: Session,
@@ -107,28 +107,28 @@ class SqlAiAnalysisCache(AiAnalysisCache[T], Generic[T]):
 # private to this module). The router builds one per request session.
 
 
-def earnings_analysis_cache(session: Session) -> SqlAiAnalysisCache[EarningsAnalysis]:
-    return SqlAiAnalysisCache(session, "earnings", _earnings_to_row, _earnings_from_row)
+def earnings_analysis_cache(session: Session) -> DbAiAnalysisCacheAdapter[EarningsAnalysis]:
+    return DbAiAnalysisCacheAdapter(session, "earnings", _earnings_to_row, _earnings_from_row)
 
 
-def ratings_analysis_cache(session: Session) -> SqlAiAnalysisCache[RatingsAnalysis]:
-    return SqlAiAnalysisCache(session, "ratings", _ratings_to_row, _ratings_from_row)
+def ratings_analysis_cache(session: Session) -> DbAiAnalysisCacheAdapter[RatingsAnalysis]:
+    return DbAiAnalysisCacheAdapter(session, "ratings", _ratings_to_row, _ratings_from_row)
 
 
 def fundamentals_analysis_cache(
     session: Session,
-) -> SqlAiAnalysisCache[FundamentalsAnalysis]:
-    return SqlAiAnalysisCache(
+) -> DbAiAnalysisCacheAdapter[FundamentalsAnalysis]:
+    return DbAiAnalysisCacheAdapter(
         session, "fundamentals", _fundamentals_to_row, _fundamentals_from_row
     )
 
 
-def sector_analysis_cache(session: Session) -> SqlAiAnalysisCache[SectorAnalysis]:
-    return SqlAiAnalysisCache(session, "sector", _sector_to_row, _sector_from_row)
+def sector_analysis_cache(session: Session) -> DbAiAnalysisCacheAdapter[SectorAnalysis]:
+    return DbAiAnalysisCacheAdapter(session, "sector", _sector_to_row, _sector_from_row)
 
 
-def market_summary_cache(session: Session) -> SqlAiAnalysisCache[MarketSummary]:
-    return SqlAiAnalysisCache(session, "market", _market_to_row, _market_from_row)
+def market_summary_cache(session: Session) -> DbAiAnalysisCacheAdapter[MarketSummary]:
+    return DbAiAnalysisCacheAdapter(session, "market", _market_to_row, _market_from_row)
 
 
 def _utc(dt: datetime | None) -> datetime | None:

@@ -8,7 +8,7 @@ from app.stocks.ai.analysis.entities import (
     SectorContext,
     SectorHighlight,
 )
-from app.stocks.ai.analysis.interfaces import SectorAnalysisProvider
+from app.stocks.ai.analysis.interfaces import SectorAnalysisAdapter
 from app.stocks.exceptions import StockDataUnavailable
 
 # The key the adapter reports failures under — there is no single symbol here, so
@@ -135,7 +135,7 @@ _SYSTEM_PROMPT = (
 )
 
 
-class BedrockSectorAnalysisProvider(SectorAnalysisProvider):
+class BedrockSectorAnalysisAdapter(SectorAnalysisAdapter):
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock
     # (unlike us.anthropic.claude-sonnet-4-6), so the short form 400s with "invalid
     # model identifier". Verified ACTIVE + invokable in us-east-1.

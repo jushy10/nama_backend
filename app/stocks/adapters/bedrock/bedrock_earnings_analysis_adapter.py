@@ -5,7 +5,7 @@ from app.stocks.company.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.company.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.ai.analysis.entities import EarningsAnalysis, EarningsTrend
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ai.analysis.interfaces import EarningsAnalysisProvider
+from app.stocks.ai.analysis.interfaces import EarningsAnalysisAdapter
 
 # How many recent reported periods to feed the model — enough to show a trend
 # without a wall of history the plain-language read would only skim. Four quarters
@@ -136,7 +136,7 @@ _HIGHLIGHTS_INSTRUCTION = (
 _KEY = "earnings-analysis"
 
 
-class BedrockEarningsAnalysisProvider(EarningsAnalysisProvider):
+class BedrockEarningsAnalysisAdapter(EarningsAnalysisAdapter):
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on
     # Bedrock, so the short form 400s. Same default as the market/sector reads.
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"

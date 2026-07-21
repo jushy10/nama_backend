@@ -9,11 +9,11 @@ from app.stocks.ai.agent.entities import (
     ToolSpec,
     UserMessage,
 )
-from app.stocks.ai.agent.interfaces import ConversationModel
+from app.stocks.ai.agent.interfaces import ConversationModelAdapter
 from app.stocks.exceptions import StockDataUnavailable
 
 
-class BedrockConversationModel(ConversationModel):
+class BedrockConversationModelAdapter(ConversationModelAdapter):
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     _DEFAULT_REGION = "us-east-1"
     # One turn is a short narration plus a tool call or two, or the final answer — a modest cap

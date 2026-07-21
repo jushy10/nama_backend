@@ -1,6 +1,6 @@
 import pytest
 
-from app.stocks.adapters.bedrock.bedrock_research_model_adapter import BedrockConversationModel
+from app.stocks.adapters.bedrock.bedrock_conversation_model_adapter import BedrockConversationModelAdapter
 from app.stocks.ai.agent.entities import (
     AssistantMessage,
     ModelTurn,
@@ -55,9 +55,9 @@ class _BoomClient:
     messages = _BoomMessages()
 
 
-def _model(message) -> tuple[BedrockConversationModel, _Client]:
+def _model(message) -> tuple[BedrockConversationModelAdapter, _Client]:
     client = _Client(message)
-    return BedrockConversationModel(client=client), client
+    return BedrockConversationModelAdapter(client=client), client
 
 
 # --- Response parsing: content blocks -> ModelTurn ---------------------------------------------
@@ -76,7 +76,7 @@ def test_parses_text_and_tool_use_blocks_into_a_turn():
     assert turn.text == "Let me screen those."
     assert turn.tool_calls == (ToolCall(id="tu_1", name="search_stocks", arguments={"query": "NVDA"}),)
     assert turn.wants_tools is True
-    assert turn.model == BedrockConversationModel._DEFAULT_MODEL_ID
+    assert turn.model == BedrockConversationModelAdapter._DEFAULT_MODEL_ID
 
 
 def test_a_plain_text_response_is_a_final_turn():
@@ -140,6 +140,6 @@ def test_omits_the_tools_parameter_when_none_are_offered():
 
 
 def test_vendor_failure_becomes_stock_data_unavailable():
-    model = BedrockConversationModel(client=_BoomClient())
+    model = BedrockConversationModelAdapter(client=_BoomClient())
     with pytest.raises(StockDataUnavailable):
         model.respond(system="sys", messages=[UserMessage("q")], tools=[])

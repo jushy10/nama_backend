@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import analysis_endpoints
 from app.stocks.ai.analysis.entities import Confidence, RatingsAnalysis, RatingsVerdict
-from app.stocks.ai.analysis.interfaces import AiAnalysisCache, RatingsAnalysisProvider
+from app.stocks.ai.analysis.interfaces import AiAnalysisCacheAdapter, RatingsAnalysisAdapter
 from app.stocks.ai.analysis.use_cases import GetRatingsFindings
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.company.recommendations.entities import (
@@ -34,7 +34,7 @@ def _an_analysis(symbol="NVDA") -> RatingsAnalysis:
     )
 
 
-class _FakeAnalyzer(RatingsAnalysisProvider):
+class _FakeAnalyzer(RatingsAnalysisAdapter):
     def __init__(self, result=None, *, error=None) -> None:
         self._result = result
         self._error = error
@@ -183,7 +183,7 @@ def test_rejects_invalid_symbols_before_touching_providers():
     assert analyzer.received == []
 
 
-class _FakeCache(AiAnalysisCache):
+class _FakeCache(AiAnalysisCacheAdapter):
     def __init__(self, stored: RatingsAnalysis | None = None, key: str = "NVDA") -> None:
         self._store = {key: stored} if stored is not None else {}
         self.puts: list[tuple[str, RatingsAnalysis]] = []

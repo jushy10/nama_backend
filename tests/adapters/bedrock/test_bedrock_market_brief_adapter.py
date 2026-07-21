@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from app.stocks.adapters.bedrock.bedrock_market_brief_adapter import BedrockMarketBriefProvider
+from app.stocks.adapters.bedrock.bedrock_market_brief_adapter import BedrockMarketBriefAdapter
 from app.stocks.ai.brief.entities import (
     BriefHeadline,
     BriefIndexMove,
@@ -98,7 +98,7 @@ _D = date(2026, 7, 14)
 
 def test_parses_tool_call_into_entity():
     client = _StubClient(_tool_message())
-    provider = BedrockMarketBriefProvider(client=client, model_id="test-model")
+    provider = BedrockMarketBriefAdapter(client=client, model_id="test-model")
 
     brief = provider.generate(_context(), _D)
 
@@ -117,7 +117,7 @@ def test_parses_tool_call_into_entity():
 
 def test_renders_context_into_the_prompt():
     client = _StubClient(_tool_message())
-    BedrockMarketBriefProvider(client=client).generate(_context(), _D)
+    BedrockMarketBriefAdapter(client=client).generate(_context(), _D)
 
     prompt = client.calls[0]["messages"][0]["content"]
     assert "S&P 500 (SPY)" in prompt
@@ -137,7 +137,7 @@ def test_retries_when_sections_come_back_empty():
     good = _tool_message()
     client = _StubClient(empty, good)
 
-    brief = BedrockMarketBriefProvider(client=client).generate(_context(), _D)
+    brief = BedrockMarketBriefAdapter(client=client).generate(_context(), _D)
 
     assert len(brief.sections) == 2  # recovered on the retry
     assert len(client.calls) == 2  # one retry fired
@@ -151,7 +151,7 @@ def test_incomplete_retry_escalates_to_the_recovery_model():
     client = _StubClient(empty, good)
     recovery = "us.anthropic.claude-sonnet-4-6-v1:0"
 
-    BedrockMarketBriefProvider(
+    BedrockMarketBriefAdapter(
         client=client, model_id="test-model", recovery_model_id=recovery
     ).generate(_context(), _D)
 
@@ -175,7 +175,7 @@ def test_escalated_recovery_failure_is_best_effort():
             raise RuntimeError("recovery model not entitled")
 
     client = _EmptyThenBoom()
-    brief = BedrockMarketBriefProvider(
+    brief = BedrockMarketBriefAdapter(
         client=client, recovery_model_id="us.anthropic.claude-sonnet-4-6-v1:0"
     ).generate(_context(), _D)
 
@@ -186,15 +186,15 @@ def test_escalated_recovery_failure_is_best_effort():
 def test_raises_when_the_model_never_calls_the_tool():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
     with pytest.raises(StockDataUnavailable):
-        BedrockMarketBriefProvider(client=client).generate(_context(), _D)
+        BedrockMarketBriefAdapter(client=client).generate(_context(), _D)
 
 
 def test_maps_a_client_error_to_a_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockMarketBriefProvider(client=_BoomClient()).generate(_context(), _D)
+        BedrockMarketBriefAdapter(client=_BoomClient()).generate(_context(), _D)
 
 
 def test_rejects_an_offschema_tone():
     client = _StubClient(_tool_message(tone="euphoric"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
-        BedrockMarketBriefProvider(client=client).generate(_context(), _D)
+        BedrockMarketBriefAdapter(client=client).generate(_context(), _D)

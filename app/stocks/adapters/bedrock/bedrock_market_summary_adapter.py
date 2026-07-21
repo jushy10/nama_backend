@@ -8,7 +8,7 @@ from app.stocks.ai.analysis.entities import (
     MarketSummary,
     MarketTone,
 )
-from app.stocks.ai.analysis.interfaces import MarketSummaryProvider
+from app.stocks.ai.analysis.interfaces import MarketSummaryAdapter
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.market.boards.entities import MarketIndexPerformance
 
@@ -122,7 +122,7 @@ _SYSTEM_PROMPT = (
 )
 
 
-class BedrockMarketSummaryProvider(MarketSummaryProvider):
+class BedrockMarketSummaryAdapter(MarketSummaryAdapter):
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock,
     # so the short form 400s with "invalid model identifier". Verified ACTIVE +
     # invokable in us-east-1. (Same default as the sector adapter.)

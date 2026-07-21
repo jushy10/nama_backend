@@ -8,8 +8,8 @@ from app.stocks.ai.brief.entities import (
     MarketBriefContext,
     MarketBriefSection,
 )
-from app.stocks.ai.brief.interfaces import MarketBriefProvider
-from app.stocks.ai.brief.interfaces import MarketBriefRepository
+from app.stocks.ai.brief.interfaces import MarketBriefAdapter
+from app.stocks.ai.brief.interfaces import MarketBriefRepositoryAdapter
 from app.stocks.ai.brief.use_cases import GenerateDailyBrief, GetDailyBrief
 from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable
@@ -33,7 +33,7 @@ class _FakeExec:
         return self._result
 
 
-class _FakeProvider(MarketBriefProvider):
+class _FakeProvider(MarketBriefAdapter):
     def __init__(self, brief=None, error=None):
         self._brief = brief
         self._error = error
@@ -50,7 +50,7 @@ class _FakeProvider(MarketBriefProvider):
         return self._brief
 
 
-class _FakeRepository(MarketBriefRepository):
+class _FakeRepository(MarketBriefRepositoryAdapter):
     def __init__(self):
         self.store: dict[date, MarketBrief] = {}
         self.upserts = 0

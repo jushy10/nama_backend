@@ -8,7 +8,7 @@ from app.stocks.entities import Stock
 from app.stocks.catalog.universe.entities import IndustryValuation
 
 
-class StockScorecardProvider(ABC):
+class StockScorecardAdapter(ABC):
     @abstractmethod
     def analyze(
         self,

@@ -6,11 +6,11 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.rate_limit import limiter
-from app.stocks.adapters.bedrock.bedrock_research_model_adapter import BedrockConversationModel
+from app.stocks.adapters.bedrock.bedrock_conversation_model_adapter import BedrockConversationModelAdapter
 from app.stocks.adapters.cnn.fear_greed_adapter import CnnFearGreedProvider
 from app.stocks.adapters.fred.vix_adapter import FredVixProvider
 from app.stocks.ai.agent.entities import ResearchResult
-from app.stocks.ai.agent.interfaces import ConversationModel
+from app.stocks.ai.agent.interfaces import ConversationModelAdapter
 from app.stocks.ai.agent.schemas import (
     AgentStepResponse,
     ResearchRequest,
@@ -38,7 +38,7 @@ _RESEARCH_DISCLAIMER = (
 
 
 @lru_cache(maxsize=1)
-def get_conversation_model() -> ConversationModel:
+def get_conversation_model() -> ConversationModelAdapter:
     # The agent's model is its primary data, so it's required — but, like the analysis
     # adapters, there's no secret to gate on: Bedrock authenticates through the process's AWS
     # credentials (the ECS task role in production). Region + model id are config with sane
@@ -48,8 +48,8 @@ def get_conversation_model() -> ConversationModel:
     model_id = os.environ.get("BEDROCK_RESEARCH_MODEL_ID")
     try:
         if model_id:
-            return BedrockConversationModel(model_id=model_id, region=region)
-        return BedrockConversationModel(region=region)
+            return BedrockConversationModelAdapter(model_id=model_id, region=region)
+        return BedrockConversationModelAdapter(region=region)
     except ImportError as exc:
         raise HTTPException(
             503, "AI research is not configured (install the 'bedrock' extra)."
@@ -64,7 +64,7 @@ def get_market_sentiment_use_case() -> GetMarketSentiment:
 
 
 def get_run_research(
-    model: ConversationModel = Depends(get_conversation_model),
+    model: ConversationModelAdapter = Depends(get_conversation_model),
     sentiment: GetMarketSentiment = Depends(get_market_sentiment_use_case),
     db: Session = Depends(get_db),
 ) -> RunResearch:

@@ -10,7 +10,7 @@ from app.stocks.ai.analysis.entities import (
     SectionStance,
     StockScorecard,
 )
-from app.stocks.ai.analysis.interfaces import StockScorecardProvider
+from app.stocks.ai.analysis.interfaces import StockScorecardAdapter
 from app.stocks.adapters.bedrock.cost import CostAccumulator
 from app.stocks.company.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.company.earnings.quarterly.entities import QuarterlyEarningsTimeline
@@ -334,7 +334,7 @@ _SECTIONS_INSTRUCTION = (
 )
 
 
-class BedrockScorecardProvider(StockScorecardProvider):
+class BedrockStockScorecardAdapter(StockScorecardAdapter):
     # Defaults to the fast Haiku tier: this endpoint's output is short and plain by
     # design, so the extra reasoning of a larger model buys little here — and Haiku
     # generates markedly faster, the whole point of this endpoint. The id is a

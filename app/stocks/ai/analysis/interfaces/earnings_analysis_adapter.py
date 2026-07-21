@@ -5,7 +5,7 @@ from app.stocks.company.earnings.annual.entities import AnnualEarningsTimeline
 from app.stocks.company.earnings.quarterly.entities import QuarterlyEarningsTimeline
 
 
-class EarningsAnalysisProvider(ABC):
+class EarningsAnalysisAdapter(ABC):
     @abstractmethod
     def analyze(
         self,
