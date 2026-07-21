@@ -57,6 +57,29 @@ pytest
 
 Tests run against an in-memory SQLite database — no setup, no files.
 
+## Evaluations
+
+The AI answers are held to a golden set of questions, each with a rubric of what a
+good answer must (and must not) do, graded by an LLM-as-judge. It's a quality gate:
+a prompt or model change that starts hallucinating figures or handing out advice it
+shouldn't fails the run. The harness lives in [`app/evals/`](app/evals/) — a
+clean-architecture slice (a subject-under-test port, a judge port, an offline-tested
+runner) so the loop, the judge, and the report are covered by `tests/evals` with no
+Bedrock and no server.
+
+Run it against a live server (the subject) with the `bedrock` extra + AWS creds (the
+judge):
+
+```sh
+uvicorn app.main:app &                       # the subject under test
+python -m app.evals --base-url http://localhost:8080 --threshold 0.75
+python -m app.evals --tags guardrail refusal --output evals.json   # slice + artifact
+```
+
+It prints a per-case pass/fail table and exits non-zero when the pass rate drops
+below `--threshold`. Add a case to [`app/evals/dataset.py`](app/evals/dataset.py)
+whenever a real bad answer surfaces — that's how the gate hardens over time.
+
 ## Database
 
 The app picks its backend from the `DATABASE_URL` environment variable. Unset →
