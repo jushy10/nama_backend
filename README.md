@@ -47,6 +47,7 @@ Tables are created by migrations, not on boot — run `alembic upgrade head` fir
 | GET    | `/stocks/{symbol}/earnings/annual` | Per-year earnings timeline (reported + upcoming) |
 | GET    | `/stocks/ticker/{ticker}/analyst-info` | Analyst coverage: buy/hold/sell trends, consensus price target, upgrade/downgrade events |
 | GET    | `/stocks/{symbol}/analysis` | AI-generated buy/hold/sell read (Bedrock) |
+| POST   | `/research` | AI research agent: a plain-English question answered by a Claude tool-use loop over the app's own read tools (Bedrock) |
 
 ## Test
 
