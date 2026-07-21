@@ -8,24 +8,28 @@ run-name: Tests · ${{ github.ref_name }}
 #      build/migrate/deploy pipeline in app-image.yml, so a merge to main can
 #      never deploy a red suite
 #
-# Deliberately no `paths:` filter on the pull_request trigger — a change
-# anywhere (tests, conftest, pyproject) can break the suite, and it runs in
-# well under a minute.
+# Deliberately no `paths:` filter on the pull_request trigger, unlike the
+# sibling Validate App Build workflow. Two reasons: a change anywhere (tests,
+# conftest, pyproject) can break the suite and it runs in well under a minute;
+# and this is a *required* status check on main, which a path filter would
+# quietly break — a required check that never runs never reports, leaving an
+# unrelated PR unmergeable rather than green.
 #
 # The suite is fully offline (in-memory SQLite, hand-written fakes through the
 # ports), so this needs no secrets, no AWS credentials, and no network.
 
 on:
-  pull_request: {}
-  workflow_call: {}
+  pull_request:
+  workflow_call:
 
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # The job id is the status-check name main's branch protection requires —
+  # renaming it means updating that setting too.
   pytest:
-    name: pytest
     runs-on: ubuntu-latest
     permissions:
       contents: read
