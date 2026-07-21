@@ -12,13 +12,13 @@ from app.stocks.company.recommendations.entities import (
     AnalystRecommendations,
     FirmRating,
 )
-from app.stocks.company.recommendations.ports import (
-    RatingChangeProvider,
-    RecommendationProvider,
+from app.stocks.company.recommendations.interfaces import (
+    RatingChangeAdapter,
+    RecommendationAdapter,
 )
-from app.stocks.company.recommendations.repository import (
-    RatingChangesRepository,
-    RecommendationsRepository,
+from app.stocks.company.recommendations.interfaces import (
+    RatingChangesRepositoryAdapter,
+    RecommendationsRepositoryAdapter,
     RefreshTarget,
 )
 
@@ -40,8 +40,8 @@ class AnalystInfo:
 class GetStockAnalystInfo:
     def __init__(
         self,
-        recommendations: RecommendationProvider,
-        rating_changes: RatingChangeProvider,
+        recommendations: RecommendationAdapter,
+        rating_changes: RatingChangeAdapter,
         *,
         now: datetime | None = None,
     ) -> None:
@@ -83,11 +83,11 @@ class RecommendationsSyncReport:
 class SyncRecommendations:
     def __init__(
         self,
-        provider: RecommendationProvider,
-        repository: RecommendationsRepository,
+        provider: RecommendationAdapter,
+        repository: RecommendationsRepositoryAdapter,
         *,
-        rating_change_provider: RatingChangeProvider | None = None,
-        rating_change_repository: RatingChangesRepository | None = None,
+        rating_change_provider: RatingChangeAdapter | None = None,
+        rating_change_repository: RatingChangesRepositoryAdapter | None = None,
     ) -> None:
         self._provider = provider
         self._repository = repository

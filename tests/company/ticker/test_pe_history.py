@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from app.stocks.company.charts.ports import CandleProvider
+from app.stocks.company.charts.interfaces import CandleAdapter
 from app.stocks.entities import Candle, CandleSeries, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.company.ticker.entities import (
@@ -12,7 +12,7 @@ from app.stocks.company.ticker.entities import (
     ValuationSignal,
     _without_cyclical_spikes,
 )
-from app.stocks.company.ticker.ports import EpsHistoryProvider
+from app.stocks.company.ticker.interfaces import EpsHistoryAdapter
 from app.stocks.company.ticker.use_cases import GetStockPeHistory
 
 
@@ -35,7 +35,7 @@ def _series(symbol: str, closes: dict[date, float]) -> CandleSeries:
     return CandleSeries(symbol=symbol, timeframe=Timeframe.DAY_1, candles=candles)
 
 
-class _FakeCandles(CandleProvider):
+class _FakeCandles(CandleAdapter):
     def __init__(self, closes: dict[date, float] | None = None, error=None) -> None:
         self._closes = closes or {}
         self._error = error
@@ -48,7 +48,7 @@ class _FakeCandles(CandleProvider):
         return _series(symbol, self._closes)
 
 
-class _FakeEpsHistory(EpsHistoryProvider):
+class _FakeEpsHistory(EpsHistoryAdapter):
     def __init__(self, eps: tuple[ReportedEps, ...] = (), error=None) -> None:
         self._eps = eps
         self._error = error

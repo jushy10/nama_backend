@@ -4,8 +4,8 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.yfinance.institutional_holders_adapter import (
-    YfinanceInstitutionalHoldersProvider,
+from app.stocks.adapters.yfinance.institutional_ownership_adapter_impl import (
+    InstitutionalOwnershipAdapterImpl,
 )
 from app.stocks.endpoints.cron.background_sync import (
     SyncRunner,
@@ -13,8 +13,8 @@ from app.stocks.endpoints.cron.background_sync import (
     trigger_sync,
 )
 from app.stocks.endpoints.cron.auth import require_cron_token
-from app.stocks.company.institutional_ownership.db_repository import (
-    SqlInstitutionalOwnershipRepository,
+from app.stocks.company.institutional_ownership.institutional_ownership_repository_adapter_impl import (
+    InstitutionalOwnershipRepositoryAdapterImpl,
 )
 from app.stocks.company.institutional_ownership.use_cases import (
     InstitutionalOwnershipSyncReport,
@@ -35,8 +35,8 @@ def run_institutional_ownership_sync(
     db = SessionLocal()
     try:
         report = SyncInstitutionalOwnership(
-            YfinanceInstitutionalHoldersProvider(),
-            SqlInstitutionalOwnershipRepository(db),
+            InstitutionalOwnershipAdapterImpl(),
+            InstitutionalOwnershipRepositoryAdapterImpl(db),
         ).execute(limit=limit)
         logger.info(
             "institutional-ownership sync done: refreshed=%d failed=%d limit=%s",

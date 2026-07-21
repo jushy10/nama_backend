@@ -6,9 +6,9 @@ from app.stocks.company.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.stocks.company.earnings.annual.ports import AnnualEarningsProvider
-from app.stocks.company.earnings.annual.repository import (
-    AnnualEarningsRepository,
+from app.stocks.company.earnings.annual.interfaces import AnnualEarningsAdapter
+from app.stocks.company.earnings.annual.interfaces import (
+    AnnualEarningsRepositoryAdapter,
     RefreshTarget,
 )
 from app.stocks.company.earnings.annual.use_cases import (
@@ -36,7 +36,7 @@ def _a_timeline(symbol: str) -> AnnualEarningsTimeline:
     )
 
 
-class _FakeReadProvider(AnnualEarningsProvider):
+class _FakeReadProvider(AnnualEarningsAdapter):
     def __init__(self, timeline: AnnualEarningsTimeline) -> None:
         self._timeline = timeline
         self.calls: list[str] = []
@@ -71,7 +71,7 @@ def test_get_rejects_obviously_invalid_symbols():
     assert provider.calls == []
 
 
-class _FakeRepo(AnnualEarningsRepository):
+class _FakeRepo(AnnualEarningsRepositoryAdapter):
     def __init__(
         self,
         targets: list[RefreshTarget],
@@ -95,7 +95,7 @@ class _FakeRepo(AnnualEarningsRepository):
         return self._targets[:limit]
 
 
-class _FakeSyncProvider(AnnualEarningsProvider):
+class _FakeSyncProvider(AnnualEarningsAdapter):
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}
@@ -181,7 +181,7 @@ def _upcoming(year: int, eps: float) -> AnnualEarnings:
     )
 
 
-class _TimelineSyncProvider(AnnualEarningsProvider):
+class _TimelineSyncProvider(AnnualEarningsAdapter):
     def __init__(self, timeline: AnnualEarningsTimeline) -> None:
         self._timeline = timeline
 
@@ -275,7 +275,7 @@ def test_sync_limit_is_passed_through_and_floored_at_one():
     assert repo.refresh_limit == 1  # a non-positive cap is floored to one
 
 
-class _FlakyProvider(AnnualEarningsProvider):
+class _FlakyProvider(AnnualEarningsAdapter):
     def __init__(self, fail_counts: dict[str, int | None]) -> None:
         self._fail_counts = dict(fail_counts)
         self.calls: list[str] = []

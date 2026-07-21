@@ -14,8 +14,8 @@ from app.stocks.company.congress.entities import (
     CongressTrade,
     build_leaderboard,
 )
-from app.stocks.company.congress.ports import CongressTradesSource
-from app.stocks.company.congress.repository import CongressTradesRepository
+from app.stocks.company.congress.interfaces import CongressTradesAdapter
+from app.stocks.company.congress.interfaces import CongressTradesRepositoryAdapter
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.progress import iter_with_progress
 
@@ -41,7 +41,7 @@ def _clamp_offset(offset: int | None) -> int:
 
 
 class GetCongressTrades:
-    def __init__(self, repository: CongressTradesRepository) -> None:
+    def __init__(self, repository: CongressTradesRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(self, symbol: str) -> CongressActivity:
@@ -77,7 +77,7 @@ def parse_window(window: str | None) -> int | None:
 
 
 class GetCongressActivity:
-    def __init__(self, repository: CongressTradesRepository, *, today=None) -> None:
+    def __init__(self, repository: CongressTradesRepositoryAdapter, *, today=None) -> None:
         self._repository = repository
         # Injectable clock keeps the window's cutoff deterministic in tests.
         self._today = today or date.today
@@ -114,7 +114,7 @@ def parse_metric(metric: str | None) -> CongressMetric:
 
 
 class GetCongressLeaderboard:
-    def __init__(self, repository: CongressTradesRepository, *, today=None) -> None:
+    def __init__(self, repository: CongressTradesRepositoryAdapter, *, today=None) -> None:
         self._repository = repository
         # Injectable clock keeps the window's cutoff deterministic in tests.
         self._today = today or date.today
@@ -151,8 +151,8 @@ class CongressSyncReport:
 class SyncCongressTrades:
     def __init__(
         self,
-        source: CongressTradesSource,
-        repository: CongressTradesRepository,
+        source: CongressTradesAdapter,
+        repository: CongressTradesRepositoryAdapter,
     ) -> None:
         self._source = source
         self._repository = repository

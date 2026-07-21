@@ -6,30 +6,30 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.rate_limit import limiter
-from app.stocks.adapters.bedrock.analysis_adapter import BedrockScorecardProvider
-from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
-    BedrockEarningsAnalysisProvider,
+from app.stocks.adapters.bedrock.stock_scorecard_adapter_impl import StockScorecardAdapterImpl
+from app.stocks.adapters.bedrock.earnings_analysis_adapter_impl import (
+    EarningsAnalysisAdapterImpl,
 )
-from app.stocks.adapters.bedrock.fundamentals_analysis_adapter import (
-    BedrockFundamentalsAnalysisProvider,
+from app.stocks.adapters.bedrock.fundamentals_analysis_adapter_impl import (
+    FundamentalsAnalysisAdapterImpl,
 )
-from app.stocks.adapters.bedrock.market_summary_adapter import (
-    BedrockMarketSummaryProvider,
+from app.stocks.adapters.bedrock.market_summary_adapter_impl import (
+    MarketSummaryAdapterImpl,
 )
-from app.stocks.adapters.bedrock.ratings_analysis_adapter import (
-    BedrockRatingsAnalysisProvider,
+from app.stocks.adapters.bedrock.ratings_analysis_adapter_impl import (
+    RatingsAnalysisAdapterImpl,
 )
-from app.stocks.adapters.bedrock.sector_analysis_adapter import (
-    BedrockSectorAnalysisProvider,
+from app.stocks.adapters.bedrock.sector_analysis_adapter_impl import (
+    SectorAnalysisAdapterImpl,
 )
-from app.stocks.adapters.db.db_only_context_providers import (
-    DbOnlyAnnualEarningsProvider,
-    DbOnlyQuarterlyEarningsProvider,
-    DbOnlyRatingChangesProvider,
-    DbOnlyRecommendationsProvider,
+from app.stocks.adapters.db.db_only_context_adapter_impls import (
+    AnnualEarningsAdapterImpl,
+    QuarterlyEarningsAdapterImpl,
+    RatingChangeAdapterImpl,
+    RecommendationAdapterImpl,
 )
-from app.stocks.adapters.yfinance.eps_history_adapter import YfinanceEpsHistoryProvider
-from app.stocks.ai.analysis.ai_analysis_cache_repository import (
+from app.stocks.adapters.yfinance.eps_history_adapter_impl import EpsHistoryAdapterImpl
+from app.stocks.ai.analysis.ai_analysis_cache_adapter_impl import (
     earnings_analysis_cache,
     fundamentals_analysis_cache,
     market_summary_cache,
@@ -49,16 +49,16 @@ from app.stocks.ai.analysis.entities import (
     SectorMover,
     StockScorecard,
 )
-from app.stocks.ai.analysis.ports import (
-    EarningsAnalysisProvider,
-    FundamentalsAnalysisProvider,
-    MarketSummaryProvider,
-    RatingsAnalysisProvider,
-    SectorAnalysisProvider,
-    StockScorecardCache,
-    StockScorecardProvider,
+from app.stocks.ai.analysis.interfaces import (
+    EarningsAnalysisAdapter,
+    FundamentalsAnalysisAdapter,
+    MarketSummaryAdapter,
+    RatingsAnalysisAdapter,
+    SectorAnalysisAdapter,
+    StockScorecardCacheAdapter,
+    StockScorecardAdapter,
 )
-from app.stocks.ai.analysis.scorecard_db_repository import SqlStockScorecardCache
+from app.stocks.ai.analysis.stock_scorecard_cache_adapter_impl import StockScorecardCacheAdapterImpl
 from app.stocks.ai.analysis.schemas import (
     EarningsAnalysisResponse,
     FundamentalsAnalysisResponse,
@@ -84,9 +84,9 @@ from app.stocks.ai.analysis.use_cases import (
     GetStockInfo,
 )
 from app.stocks.company.ticker.use_cases import GetStockPeHistory
-from app.stocks.company.earnings.annual.db_repository import SqlAnnualEarningsRepository
-from app.stocks.company.earnings.quarterly.db_repository import (
-    SqlQuarterlyEarningsRepository,
+from app.stocks.company.earnings.annual.annual_earnings_repository_adapter_impl import AnnualEarningsRepositoryAdapterImpl
+from app.stocks.company.earnings.quarterly.quarterly_earnings_repository_adapter_impl import (
+    QuarterlyEarningsRepositoryAdapterImpl,
 )
 from app.stocks.endpoints.market_endpoints import (
     get_market_overview,
@@ -94,18 +94,18 @@ from app.stocks.endpoints.market_endpoints import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.boards.use_cases import GetMarketOverview, GetSectorPerformance
-from app.stocks.company.news.db_repository import SqlNewsRepository
-from app.stocks.ports import (
-    AllTimeHighProvider,
-    AnalystEstimatesProvider,
-    StockDataProvider,
-    StockPerformanceProvider,
+from app.stocks.company.news.news_repository_adapter_impl import NewsRepositoryAdapterImpl
+from app.stocks.interfaces import (
+    AllTimeHighAdapter,
+    AnalystEstimatesAdapter,
+    StockDataAdapter,
+    StockPerformanceAdapter,
 )
-from app.stocks.company.recommendations.db_repository import (
-    SqlRatingChangesRepository,
-    SqlRecommendationsRepository,
+from app.stocks.company.recommendations.repository_adapter_impl import (
+    RatingChangesRepositoryAdapterImpl,
+    RecommendationsRepositoryAdapterImpl,
 )
-from app.stocks.catalog.universe.db_repository import SqlStockSearchRepository
+from app.stocks.catalog.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.stocks.wiring import (
     analysis_cache_ttl,
     bedrock_recovery_model_id,
@@ -130,26 +130,26 @@ _AI_ANALYSIS_RATE_LIMIT = os.environ.get("AI_ANALYSIS_RATE_LIMIT", "10/minute")
 
 
 def get_stock_info(
-    provider: StockDataProvider = Depends(get_price_provider),
-    estimates: AnalystEstimatesProvider | None = Depends(get_estimates_provider),
+    provider: StockDataAdapter = Depends(get_price_provider),
+    estimates: AnalystEstimatesAdapter | None = Depends(get_estimates_provider),
 ) -> GetStockInfo:
     # The enriched snapshot use case now serves only as the AI analysis context
     # (the standalone GET /stocks/{symbol} endpoint was removed). The market-routing
     # provider supplies the snapshot, the performance windows, and the all-time high —
     # all derived from the same price feed, one instance backing each capability via its
     # respective port — routed per symbol (US→Alpaca / CA→Yahoo), so a Canadian ticker's
-    # analysis context reads its price from Yahoo. The router implements AllTimeHighProvider
+    # analysis context reads its price from Yahoo. The router implements AllTimeHighAdapter
     # too, so this keeps the drawdown-from-high context for US symbols (a router missing it
     # would drop it for everyone). The trailing fundamentals + clean name are no longer read
     # from a live vendor here — the analysis use cases overlay them from the stocks anchor
     # (materialized by the fundamentals/universe syncs).
-    performance = provider if isinstance(provider, StockPerformanceProvider) else None
-    all_time_high = provider if isinstance(provider, AllTimeHighProvider) else None
+    performance = provider if isinstance(provider, StockPerformanceAdapter) else None
+    all_time_high = provider if isinstance(provider, AllTimeHighAdapter) else None
     return GetStockInfo(provider, performance, all_time_high, estimates)
 
 
 @lru_cache(maxsize=1)
-def get_analysis_provider() -> StockScorecardProvider:
+def get_analysis_provider() -> StockScorecardAdapter:
     # AI analysis is this endpoint's primary data, so it's required — but unlike
     # the API-key vendors there's no secret to gate on: Bedrock authenticates
     # through the process's AWS credentials (the ECS task role in production), so
@@ -163,10 +163,10 @@ def get_analysis_provider() -> StockScorecardProvider:
     recovery = bedrock_recovery_model_id("BEDROCK_ANALYSIS_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockScorecardProvider(
+            return StockScorecardAdapterImpl(
                 model_id=model_id, region=region, recovery_model_id=recovery
             )
-        return BedrockScorecardProvider(region=region, recovery_model_id=recovery)
+        return StockScorecardAdapterImpl(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -175,18 +175,18 @@ def get_analysis_provider() -> StockScorecardProvider:
 
 def get_analysis_cache(
     db: Session = Depends(get_db),
-) -> StockScorecardCache:
+) -> StockScorecardCacheAdapter:
     # The read-through result cache for the stock scorecard (kind="stock", so it
     # never collides with a fund of the same ticker). One row per symbol, refreshed
     # whenever a served read ages past the use case's TTL — best-effort, so a DB
     # problem degrades to a regeneration, never an error.
-    return SqlStockScorecardCache(db, "stock")
+    return StockScorecardCacheAdapterImpl(db, "stock")
 
 
 def get_stock_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
-    analyzer: StockScorecardProvider = Depends(get_analysis_provider),
-    cache: StockScorecardCache = Depends(get_analysis_cache),
+    analyzer: StockScorecardAdapter = Depends(get_analysis_provider),
+    cache: StockScorecardCacheAdapter = Depends(get_analysis_cache),
     # Best-effort *context* for the analysis: the quarterly and annual earnings
     # timelines and the analyst recommendation trends. Read **DB-only** here (via the
     # slices' repositories, not their read-through providers) — this path must never
@@ -202,17 +202,17 @@ def get_stock_analysis(
     return GetStockAnalysis(
         stock_info,
         analyzer,
-        DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
-        DbOnlyAnnualEarningsProvider(SqlAnnualEarningsRepository(db)),
-        DbOnlyRecommendationsProvider(SqlRecommendationsRepository(db)),
-        SqlStockSearchRepository(db),
+        QuarterlyEarningsAdapterImpl(QuarterlyEarningsRepositoryAdapterImpl(db)),
+        AnnualEarningsAdapterImpl(AnnualEarningsRepositoryAdapterImpl(db)),
+        RecommendationAdapterImpl(RecommendationsRepositoryAdapterImpl(db)),
+        StockSearchRepositoryAdapterImpl(db),
         cache=cache,
         cache_ttl=analysis_cache_ttl("stock"),
     )
 
 
 @lru_cache(maxsize=1)
-def get_sector_analysis_provider() -> SectorAnalysisProvider:
+def get_sector_analysis_provider() -> SectorAnalysisAdapter:
     # The sector read is short, plain output (a few sentences + two brief highlight
     # lists), so it runs on the fast Haiku tier — the provider's own default —
     # rather than inheriting BEDROCK_ANALYSIS_MODEL_ID (the per-stock and ETF
@@ -225,10 +225,10 @@ def get_sector_analysis_provider() -> SectorAnalysisProvider:
     recovery = bedrock_recovery_model_id("BEDROCK_SECTOR_ANALYSIS_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockSectorAnalysisProvider(
+            return SectorAnalysisAdapterImpl(
                 model_id=model_id, region=region, recovery_model_id=recovery
             )
-        return BedrockSectorAnalysisProvider(region=region, recovery_model_id=recovery)
+        return SectorAnalysisAdapterImpl(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -246,8 +246,8 @@ def get_sector_analysis(
     # (market-wide, so one stored read serves every viewer within the TTL and skips the
     # gather + model call).
     sectors: GetSectorPerformance = Depends(get_sector_performance),
-    analyzer: SectorAnalysisProvider = Depends(get_sector_analysis_provider),
-    provider: StockDataProvider = Depends(get_provider),
+    analyzer: SectorAnalysisAdapter = Depends(get_sector_analysis_provider),
+    provider: StockDataAdapter = Depends(get_provider),
     db: Session = Depends(get_db),
 ) -> GetSectorAnalysis:
     return GetSectorAnalysis(
@@ -255,14 +255,14 @@ def get_sector_analysis(
         analyzer,
         cache=sector_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("sector"),
-        constituents=SqlStockSearchRepository(db),
-        quotes=provider,  # the Alpaca singleton also implements BulkQuoteProvider
-        news=SqlNewsRepository(db),
+        constituents=StockSearchRepositoryAdapterImpl(db),
+        quotes=provider,  # the Alpaca singleton also implements BulkQuoteAdapter
+        news=NewsRepositoryAdapterImpl(db),
     )
 
 
 @lru_cache(maxsize=1)
-def get_market_summary_provider() -> MarketSummaryProvider:
+def get_market_summary_provider() -> MarketSummaryAdapter:
     # The market read is short, plain output (a few sentences + three brief period
     # notes), so it runs on the fast Haiku tier — the provider's own default —
     # rather than inheriting BEDROCK_ANALYSIS_MODEL_ID (the per-stock and ETF
@@ -275,10 +275,10 @@ def get_market_summary_provider() -> MarketSummaryProvider:
     recovery = bedrock_recovery_model_id("BEDROCK_MARKET_SUMMARY_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockMarketSummaryProvider(
+            return MarketSummaryAdapterImpl(
                 model_id=model_id, region=region, recovery_model_id=recovery
             )
-        return BedrockMarketSummaryProvider(region=region, recovery_model_id=recovery)
+        return MarketSummaryAdapterImpl(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -291,7 +291,7 @@ def get_market_summary(
     # read-through result cache (market-wide, so one stored read serves every viewer
     # within the TTL and skips the gather + model call).
     overview: GetMarketOverview = Depends(get_market_overview),
-    analyzer: MarketSummaryProvider = Depends(get_market_summary_provider),
+    analyzer: MarketSummaryAdapter = Depends(get_market_summary_provider),
     db: Session = Depends(get_db),
 ) -> GetMarketSummary:
     return GetMarketSummary(
@@ -303,7 +303,7 @@ def get_market_summary(
 
 
 @lru_cache(maxsize=1)
-def get_earnings_analysis_provider() -> EarningsAnalysisProvider:
+def get_earnings_analysis_provider() -> EarningsAnalysisAdapter:
     # The earnings read is short, plain output (a few sentences + a few
     # highlights), so it runs on the fast Haiku tier — the provider's own default
     # — rather than inheriting BEDROCK_ANALYSIS_MODEL_ID (the per-stock and ETF
@@ -317,10 +317,10 @@ def get_earnings_analysis_provider() -> EarningsAnalysisProvider:
     recovery = bedrock_recovery_model_id("BEDROCK_EARNINGS_ANALYSIS_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockEarningsAnalysisProvider(
+            return EarningsAnalysisAdapterImpl(
                 model_id=model_id, region=region, recovery_model_id=recovery
             )
-        return BedrockEarningsAnalysisProvider(region=region, recovery_model_id=recovery)
+        return EarningsAnalysisAdapterImpl(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -328,7 +328,7 @@ def get_earnings_analysis_provider() -> EarningsAnalysisProvider:
 
 
 def get_earnings_analysis(
-    analyzer: EarningsAnalysisProvider = Depends(get_earnings_analysis_provider),
+    analyzer: EarningsAnalysisAdapter = Depends(get_earnings_analysis_provider),
     # The earnings timelines, read **DB-only** (via the slices' repositories, not
     # their read-through providers) — this path must never trigger a synchronous,
     # rate-limited Yahoo fetch on a cache miss; keeping the caches current is the
@@ -337,15 +337,15 @@ def get_earnings_analysis(
 ) -> GetEarningsAnalysis:
     return GetEarningsAnalysis(
         analyzer,
-        DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
-        DbOnlyAnnualEarningsProvider(SqlAnnualEarningsRepository(db)),
+        QuarterlyEarningsAdapterImpl(QuarterlyEarningsRepositoryAdapterImpl(db)),
+        AnnualEarningsAdapterImpl(AnnualEarningsRepositoryAdapterImpl(db)),
         cache=earnings_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("earnings"),
     )
 
 
 @lru_cache(maxsize=1)
-def get_ratings_analysis_provider() -> RatingsAnalysisProvider:
+def get_ratings_analysis_provider() -> RatingsAnalysisAdapter:
     # The analyst-coverage read is short, plain output (a few sentences + a few findings), so it
     # runs on the fast Haiku tier — the provider's own default — with its own override,
     # BEDROCK_RATINGS_ANALYSIS_MODEL_ID, so the model can be swapped without a code change,
@@ -355,8 +355,8 @@ def get_ratings_analysis_provider() -> RatingsAnalysisProvider:
     model_id = os.environ.get("BEDROCK_RATINGS_ANALYSIS_MODEL_ID")
     try:
         if model_id:
-            return BedrockRatingsAnalysisProvider(model_id=model_id, region=region)
-        return BedrockRatingsAnalysisProvider(region=region)
+            return RatingsAnalysisAdapterImpl(model_id=model_id, region=region)
+        return RatingsAnalysisAdapterImpl(region=region)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -364,7 +364,7 @@ def get_ratings_analysis_provider() -> RatingsAnalysisProvider:
 
 
 def get_ratings_findings(
-    analyzer: RatingsAnalysisProvider = Depends(get_ratings_analysis_provider),
+    analyzer: RatingsAnalysisAdapter = Depends(get_ratings_analysis_provider),
     # The recommendation consensus + rating-change events, read **DB-only** (via the slice's
     # repositories, not their read-through providers) — this path must never trigger a
     # synchronous, rate-limited Yahoo fetch on a cache miss; keeping the caches current is the
@@ -373,15 +373,15 @@ def get_ratings_findings(
 ) -> GetRatingsFindings:
     return GetRatingsFindings(
         analyzer,
-        DbOnlyRecommendationsProvider(SqlRecommendationsRepository(db)),
-        DbOnlyRatingChangesProvider(SqlRatingChangesRepository(db)),
+        RecommendationAdapterImpl(RecommendationsRepositoryAdapterImpl(db)),
+        RatingChangeAdapterImpl(RatingChangesRepositoryAdapterImpl(db)),
         cache=ratings_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("ratings"),
     )
 
 
 @lru_cache(maxsize=1)
-def get_fundamentals_analysis_provider() -> FundamentalsAnalysisProvider:
+def get_fundamentals_analysis_provider() -> FundamentalsAnalysisAdapter:
     # The fundamentals read is short, plain output (a few sentences + a few findings), so it
     # runs on the fast Haiku tier — the provider's own default — with its own override,
     # BEDROCK_FUNDAMENTALS_ANALYSIS_MODEL_ID, so the model can be swapped without a code change,
@@ -391,8 +391,8 @@ def get_fundamentals_analysis_provider() -> FundamentalsAnalysisProvider:
     model_id = os.environ.get("BEDROCK_FUNDAMENTALS_ANALYSIS_MODEL_ID")
     try:
         if model_id:
-            return BedrockFundamentalsAnalysisProvider(model_id=model_id, region=region)
-        return BedrockFundamentalsAnalysisProvider(region=region)
+            return FundamentalsAnalysisAdapterImpl(model_id=model_id, region=region)
+        return FundamentalsAnalysisAdapterImpl(region=region)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -400,21 +400,21 @@ def get_fundamentals_analysis_provider() -> FundamentalsAnalysisProvider:
 
 
 @lru_cache(maxsize=1)
-def _eps_history_provider() -> YfinanceEpsHistoryProvider:
+def _eps_history_provider() -> EpsHistoryAdapterImpl:
     # Keyless yfinance singleton (like the options provider): shares the module-level pacing
     # state and is best-effort at read, so it's always constructable — no key to gate on. Backs
     # the fundamentals analysis's P/E-history context (the same adapter the pe-history endpoint
     # uses).
-    return YfinanceEpsHistoryProvider()
+    return EpsHistoryAdapterImpl()
 
 
 def get_fundamentals_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
-    analyzer: FundamentalsAnalysisProvider = Depends(get_fundamentals_analysis_provider),
+    analyzer: FundamentalsAnalysisAdapter = Depends(get_fundamentals_analysis_provider),
     # The market-routing provider supplies the daily closes for the P/E-history context (it
-    # implements CandleProvider — the same instance the candle chart and pe-history endpoint
+    # implements CandleAdapter — the same instance the candle chart and pe-history endpoint
     # use, routed US→Alpaca / CA→Yahoo).
-    candles: StockDataProvider = Depends(get_price_provider),
+    candles: StockDataAdapter = Depends(get_price_provider),
     # The industry-P/E benchmark is a pure DB read off the shared anchor (the same screened
     # universe the /stocks/industries/{industry}/pe endpoint groups on) — best-effort context
     # for the fundamentals read, so a miss just omits it.
@@ -432,8 +432,8 @@ def get_fundamentals_analysis(
     return GetFundamentalsAnalysis(
         stock_info,
         analyzer,
-        SqlStockSearchRepository(db),
-        DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
+        StockSearchRepositoryAdapterImpl(db),
+        QuarterlyEarningsAdapterImpl(QuarterlyEarningsRepositoryAdapterImpl(db)),
         pe_history=GetStockPeHistory(candles, _eps_history_provider()),
         cache=fundamentals_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("fundamentals"),

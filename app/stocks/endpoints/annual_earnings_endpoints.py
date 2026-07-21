@@ -4,18 +4,18 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db.db_cached_annual_earnings_adapter import (
-    DbCachedAnnualEarningsProvider,
+from app.stocks.adapters.db.db_cached_annual_earnings_adapter_impl import (
+    AnnualEarningsAdapterImpl as DbCachedAnnualEarningsAdapterImpl,
 )
-from app.stocks.adapters.yfinance.annual_earnings_adapter import (
-    YfinanceAnnualEarningsProvider,
+from app.stocks.adapters.yfinance.annual_earnings_adapter_impl import (
+    AnnualEarningsAdapterImpl as YfinanceAnnualEarningsAdapterImpl,
 )
-from app.stocks.company.earnings.annual.db_repository import SqlAnnualEarningsRepository
+from app.stocks.company.earnings.annual.annual_earnings_repository_adapter_impl import AnnualEarningsRepositoryAdapterImpl
 from app.stocks.company.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.stocks.company.earnings.annual.ports import AnnualEarningsProvider
+from app.stocks.company.earnings.annual.interfaces import AnnualEarningsAdapter
 from app.stocks.company.earnings.annual.schemas import (
     AnnualEarningsResponse,
     AnnualEarningsYearResponse,
@@ -27,25 +27,25 @@ router = APIRouter(tags=["annual-earnings"])
 
 
 @lru_cache(maxsize=1)
-def _yfinance_annual_earnings_provider() -> AnnualEarningsProvider:
+def _yfinance_annual_earnings_provider() -> AnnualEarningsAdapter:
     # One process-singleton live provider (no key, no connection pool to share); the DB cache
     # that wraps it is built per request, since it needs the request session.
-    return YfinanceAnnualEarningsProvider()
+    return YfinanceAnnualEarningsAdapterImpl()
 
 
 def get_annual_earnings_provider(
     db: Session = Depends(get_db),
-) -> AnnualEarningsProvider:
+) -> AnnualEarningsAdapter:
     # A persistent DB cache (refreshed out of band by the annual-earnings cron endpoint +
     # lazily on a miss) sits in front of Yahoo so the endpoint rarely calls it, and it serves
     # stored rows without a live round-trip. yfinance needs no key, so this is always wired.
-    return DbCachedAnnualEarningsProvider(
-        _yfinance_annual_earnings_provider(), SqlAnnualEarningsRepository(db)
+    return DbCachedAnnualEarningsAdapterImpl(
+        _yfinance_annual_earnings_provider(), AnnualEarningsRepositoryAdapterImpl(db)
     )
 
 
 def get_annual_earnings_use_case(
-    provider: AnnualEarningsProvider = Depends(get_annual_earnings_provider),
+    provider: AnnualEarningsAdapter = Depends(get_annual_earnings_provider),
 ) -> GetAnnualEarnings:
     return GetAnnualEarnings(provider)
 

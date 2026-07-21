@@ -1,9 +1,9 @@
 from app.stocks.market.yields.entities import YieldCurve, YieldHistory
-from app.stocks.market.yields.ports import YieldCurveProvider, YieldHistoryProvider
+from app.stocks.market.yields.interfaces import YieldCurveAdapter, YieldHistoryAdapter
 
 
 class GetYieldCurve:
-    def __init__(self, provider: YieldCurveProvider) -> None:
+    def __init__(self, provider: YieldCurveAdapter) -> None:
         self._provider = provider
 
     def execute(self) -> YieldCurve:
@@ -18,7 +18,7 @@ class GetYieldHistory:
     _DEFAULT_LOOKBACK_DAYS = 365 * 3
     _MAX_LOOKBACK_DAYS = 365 * 30
 
-    def __init__(self, provider: YieldHistoryProvider) -> None:
+    def __init__(self, provider: YieldHistoryAdapter) -> None:
         self._provider = provider
 
     def execute(self, lookback_days: int | None = None) -> YieldHistory:

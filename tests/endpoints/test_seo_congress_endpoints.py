@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import seo_endpoints as endpoints
-from app.stocks.seo.repository import CongressPageTrade, TickerPageFacts
+from app.stocks.seo.interfaces import CongressPageTrade, TickerPageFacts
 from app.stocks.seo.use_cases import CongressBoardPage, TickerStockPage
 
 

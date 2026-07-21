@@ -12,7 +12,7 @@ from app.stocks.ai.agent.entities import (
     ToolResultsMessage,
     UserMessage,
 )
-from app.stocks.ai.agent.ports import ConversationModel, Tool
+from app.stocks.ai.agent.interfaces import ConversationModelAdapter, Tool
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ _EMPTY_ANSWER_FALLBACK = (
 class RunResearch:
     def __init__(
         self,
-        model: ConversationModel,
+        model: ConversationModelAdapter,
         tools: Sequence[Tool],
         *,
         max_steps: int = _DEFAULT_MAX_STEPS,

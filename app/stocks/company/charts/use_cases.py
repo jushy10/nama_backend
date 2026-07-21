@@ -16,7 +16,7 @@ from app.stocks.company.charts.indicators import (
     indicator_warmup_bars,
     support_levels,
 )
-from app.stocks.company.charts.ports import CandleProvider
+from app.stocks.company.charts.interfaces import CandleAdapter
 from app.stocks.entities import CandleSeries, Timeframe, normalize_symbol
 
 
@@ -25,7 +25,7 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 class GetStockCandles:
-    def __init__(self, provider: CandleProvider) -> None:
+    def __init__(self, provider: CandleAdapter) -> None:
         self._provider = provider
 
     def execute(
@@ -70,7 +70,7 @@ def _warmup_span(timeframe: Timeframe, max_period: int) -> timedelta:
 
 
 class GetStockEma:
-    def __init__(self, provider: CandleProvider) -> None:
+    def __init__(self, provider: CandleAdapter) -> None:
         self._provider = provider
 
     def execute(
@@ -108,7 +108,7 @@ class GetStockEma:
 
 
 class GetStockSupportLevels:
-    def __init__(self, provider: CandleProvider) -> None:
+    def __init__(self, provider: CandleAdapter) -> None:
         self._provider = provider
 
     def execute(
@@ -141,7 +141,7 @@ _DEFAULT_LONG_PERIOD = 200
 
 
 class GetStockTrend:
-    def __init__(self, provider: CandleProvider) -> None:
+    def __init__(self, provider: CandleAdapter) -> None:
         self._provider = provider
 
     def execute(
@@ -183,7 +183,7 @@ class GetStockTrend:
 
 
 class GetStockIndicators:
-    def __init__(self, provider: CandleProvider) -> None:
+    def __init__(self, provider: CandleAdapter) -> None:
         self._provider = provider
 
     def execute(

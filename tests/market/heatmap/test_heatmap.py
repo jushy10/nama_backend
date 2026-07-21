@@ -13,7 +13,7 @@ from app.stocks.catalog.universe.entities import (
     StockSearchResult,
     StockSort,
 )
-from app.stocks.catalog.universe.repository import StockSearchRepository
+from app.stocks.catalog.universe.interfaces import StockSearchRepositoryAdapter
 
 
 def _row(ticker, sector, industry, cap, *, name=None):
@@ -67,7 +67,7 @@ def _perf(one_year=None, **windows):
     )
 
 
-class FakeSearchRepo(StockSearchRepository):
+class FakeSearchRepo(StockSearchRepositoryAdapter):
     def __init__(self, results):
         self._results = tuple(results)
         self.criteria: StockSearchCriteria | None = None

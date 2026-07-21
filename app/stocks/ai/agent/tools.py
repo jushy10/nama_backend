@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 
 from app.stocks.ai.agent.entities import ToolSpec
-from app.stocks.ai.agent.ports import Tool
+from app.stocks.ai.agent.interfaces import Tool
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.sentiment.use_cases import GetMarketSentiment
 from app.stocks.catalog.universe.entities import (

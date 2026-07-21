@@ -1,15 +1,15 @@
 import httpx
 import pytest
 
-from app.evals.adapters.http_subject import HttpAnswerAdapter
+from app.evals.adapters.answer_under_test_adapter_impl import AnswerUnderTestAdapterImpl
 from app.evals.exceptions import SubjectUnavailable
 
 
-def _adapter(handler, *, answer_field="answer", path="/research") -> HttpAnswerAdapter:
+def _adapter(handler, *, answer_field="answer", path="/research") -> AnswerUnderTestAdapterImpl:
     client = httpx.Client(
         transport=httpx.MockTransport(handler), base_url="http://test"
     )
-    return HttpAnswerAdapter(path=path, answer_field=answer_field, client=client)
+    return AnswerUnderTestAdapterImpl(path=path, answer_field=answer_field, client=client)
 
 
 def test_posts_the_question_and_returns_the_answer_field():

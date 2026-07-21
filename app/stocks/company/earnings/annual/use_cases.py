@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from app.stocks.company.earnings.annual.entities import AnnualEarningsTimeline
-from app.stocks.company.earnings.annual.ports import AnnualEarningsProvider
-from app.stocks.company.earnings.annual.repository import AnnualEarningsRepository, RefreshTarget
+from app.stocks.company.earnings.annual.interfaces import AnnualEarningsAdapter
+from app.stocks.company.earnings.annual.interfaces import AnnualEarningsRepositoryAdapter, RefreshTarget
 from app.stocks.entities import normalize_symbol
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.progress import iter_with_progress
@@ -37,7 +37,7 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 class GetAnnualEarnings:
-    def __init__(self, provider: AnnualEarningsProvider) -> None:
+    def __init__(self, provider: AnnualEarningsAdapter) -> None:
         self._provider = provider
 
     def execute(self, symbol: str) -> AnnualEarningsTimeline:
@@ -61,8 +61,8 @@ class _PassOutcome:
 class SyncAnnualEarnings:
     def __init__(
         self,
-        provider: AnnualEarningsProvider,
-        repository: AnnualEarningsRepository,
+        provider: AnnualEarningsAdapter,
+        repository: AnnualEarningsRepositoryAdapter,
         *,
         max_workers: int = _DEFAULT_SYNC_WORKERS,
         max_attempts: int = _DEFAULT_MAX_ATTEMPTS,

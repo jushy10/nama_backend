@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.stocks.adapters.alpaca.price_adapter import AlpacaStockDataProvider
+from app.stocks.adapters.alpaca.price_adapter_impl import PriceAdapterImpl
 from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.boards.entities import SectorPerformance
@@ -16,17 +16,17 @@ router = APIRouter(tags=["market"])
 
 
 def get_sector_performance(
-    # The Alpaca provider implements SectorPerformanceProvider as well, reading
+    # The Alpaca provider implements SectorPerformanceAdapter as well, reading
     # each sector through its proxy ETF snapshot.
-    provider: AlpacaStockDataProvider = Depends(get_provider),
+    provider: PriceAdapterImpl = Depends(get_provider),
 ) -> GetSectorPerformance:
     return GetSectorPerformance(provider)
 
 
 def get_market_overview(
-    # The Alpaca provider implements MarketOverviewProvider too, reading the S&P
+    # The Alpaca provider implements MarketOverviewAdapter too, reading the S&P
     # 500 and Nasdaq through their proxy ETFs (SPY / QQQ) — same as the sectors.
-    provider: AlpacaStockDataProvider = Depends(get_provider),
+    provider: PriceAdapterImpl = Depends(get_provider),
 ) -> GetMarketOverview:
     return GetMarketOverview(provider)
 

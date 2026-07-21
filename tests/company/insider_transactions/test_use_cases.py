@@ -7,9 +7,9 @@ from app.stocks.company.insider_transactions.entities import (
     InsiderActivity,
     InsiderTransaction,
 )
-from app.stocks.company.insider_transactions.ports import InsiderTransactionsProvider
-from app.stocks.company.insider_transactions.repository import (
-    InsiderTransactionsRepository,
+from app.stocks.company.insider_transactions.interfaces import InsiderTransactionsAdapter
+from app.stocks.company.insider_transactions.interfaces import (
+    InsiderTransactionsRepositoryAdapter,
     RefreshTarget,
 )
 from app.stocks.company.insider_transactions.use_cases import (
@@ -44,7 +44,7 @@ def _activity(symbol: str) -> InsiderActivity:
     )
 
 
-class _FakeProvider(InsiderTransactionsProvider):
+class _FakeProvider(InsiderTransactionsAdapter):
     def __init__(self, result: InsiderActivity) -> None:
         self.result = result
         self.calls: list[str] = []
@@ -73,7 +73,7 @@ def test_rejects_a_bad_symbol_with_value_error(bad):
     assert fake.calls == []  # never reached the provider
 
 
-class _FakeRepo(InsiderTransactionsRepository):
+class _FakeRepo(InsiderTransactionsRepositoryAdapter):
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = list(targets)
         self.upserts: list[tuple[str, str | None]] = []
@@ -90,7 +90,7 @@ class _FakeRepo(InsiderTransactionsRepository):
         return self._targets if limit is None else self._targets[:limit]
 
 
-class _FakeSyncProvider(InsiderTransactionsProvider):
+class _FakeSyncProvider(InsiderTransactionsAdapter):
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}

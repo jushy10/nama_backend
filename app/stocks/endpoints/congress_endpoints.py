@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.company.congress.db_repository import SqlCongressTradesRepository
+from app.stocks.company.congress.congress_trades_repository_adapter_impl import CongressTradesRepositoryAdapterImpl
 from app.stocks.company.congress.entities import (
     CongressLeaderboard,
     CongressLeaderboardEntry,
@@ -32,17 +32,17 @@ router = APIRouter(tags=["congress"])
 def get_congress_trades_use_case(db: Session = Depends(get_db)) -> GetCongressTrades:
     # DB-only read: serve the stored feed, never fetch the source on a read. The weekly cron is the
     # sole populator, so the endpoint never downloads the feed inside a user request.
-    return GetCongressTrades(SqlCongressTradesRepository(db))
+    return GetCongressTrades(CongressTradesRepositoryAdapterImpl(db))
 
 
 def get_congress_activity_use_case(db: Session = Depends(get_db)) -> GetCongressActivity:
-    return GetCongressActivity(SqlCongressTradesRepository(db))
+    return GetCongressActivity(CongressTradesRepositoryAdapterImpl(db))
 
 
 def get_congress_leaderboard_use_case(
     db: Session = Depends(get_db),
 ) -> GetCongressLeaderboard:
-    return GetCongressLeaderboard(SqlCongressTradesRepository(db))
+    return GetCongressLeaderboard(CongressTradesRepositoryAdapterImpl(db))
 
 
 def _present_trade(trade: CongressTrade) -> CongressTradeResponse:

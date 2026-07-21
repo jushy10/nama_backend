@@ -4,13 +4,13 @@ import logging
 
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.market.heatmap.entities import HeatMap, HeatMapRow, HeatMapScope
-from app.stocks.ports import BulkQuoteProvider
+from app.stocks.interfaces import BulkQuoteAdapter
 from app.stocks.catalog.universe.entities import (
     SortDirection,
     StockSearchCriteria,
     StockSort,
 )
-from app.stocks.catalog.universe.repository import StockSearchRepository
+from app.stocks.catalog.universe.interfaces import StockSearchRepositoryAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +23,8 @@ class GetStockHeatMap:
 
     def __init__(
         self,
-        repository: StockSearchRepository,
-        quotes: BulkQuoteProvider,
+        repository: StockSearchRepositoryAdapter,
+        quotes: BulkQuoteAdapter,
     ) -> None:
         self._repository = repository
         self._quotes = quotes

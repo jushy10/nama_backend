@@ -6,7 +6,7 @@ from typing import Callable
 
 from app.stocks.entities import normalize_symbol
 from app.stocks.company.options.entities import ExpiryChain
-from app.stocks.company.options.ports import OptionsChainProvider
+from app.stocks.company.options.interfaces import OptionsChainAdapter
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -23,7 +23,7 @@ class OptionsFlow:
 class GetOptionsFlow:
     def __init__(
         self,
-        options: OptionsChainProvider,
+        options: OptionsChainAdapter,
         today: Callable[[], date] | None = None,
     ) -> None:
         self._options = options

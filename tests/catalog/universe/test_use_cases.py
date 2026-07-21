@@ -4,7 +4,7 @@ from app.stocks.company.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.stocks.company.earnings.quarterly.repository import QuarterlyEarningsRepository
+from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsRepositoryAdapter
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.catalog.universe.entities import (
     Classifications,
@@ -19,14 +19,14 @@ from app.stocks.catalog.universe.entities import (
     StockSearchResult,
     StockSort,
 )
-from app.stocks.catalog.universe.ports import (
-    CompanyClassificationProvider,
-    ScreenerQueryTranslator,
-    StockScreener,
+from app.stocks.catalog.universe.interfaces import (
+    CompanyClassificationAdapter,
+    ScreenerQueryAdapter,
+    StockScreenerAdapter,
 )
-from app.stocks.catalog.universe.repository import (
-    StockSearchRepository,
-    UniverseRepository,
+from app.stocks.catalog.universe.interfaces import (
+    StockSearchRepositoryAdapter,
+    UniverseRepositoryAdapter,
     UniverseSyncCounts,
 )
 from app.stocks.catalog.universe.use_cases import (
@@ -87,7 +87,7 @@ def _four_quarter_timeline(symbol: str, ttm_eps: float) -> QuarterlyEarningsTime
     return QuarterlyEarningsTimeline(symbol=symbol, quarters=quarters)
 
 
-class _FakeQuarterlyRepo(QuarterlyEarningsRepository):
+class _FakeQuarterlyRepo(QuarterlyEarningsRepositoryAdapter):
     def __init__(self, ttm_by_ticker=None) -> None:
         self._ttm = dict(ttm_by_ticker or {})
         self.gets: list[str] = []
@@ -105,7 +105,7 @@ class _FakeQuarterlyRepo(QuarterlyEarningsRepository):
         raise NotImplementedError
 
 
-class _FakeScreener(StockScreener):
+class _FakeScreener(StockScreenerAdapter):
     def __init__(self, stocks=(), *, error=None) -> None:
         self._stocks = tuple(stocks)
         self._error = error
@@ -120,7 +120,7 @@ class _FakeScreener(StockScreener):
         return self._stocks
 
 
-class _FakeClassifier(CompanyClassificationProvider):
+class _FakeClassifier(CompanyClassificationAdapter):
     def __init__(self, mapping=None, *, errors=()) -> None:
         self._mapping = dict(mapping or {})
         self._errors = set(errors)
@@ -133,7 +133,7 @@ class _FakeClassifier(CompanyClassificationProvider):
         return self._mapping.get(symbol, CompanyClassification())
 
 
-class _FakeRepo(UniverseRepository):
+class _FakeRepo(UniverseRepositoryAdapter):
     def __init__(
         self,
         *,
@@ -614,7 +614,7 @@ _RESULT = StockSearchResult(
 )
 
 
-class _FakeSearchRepo(StockSearchRepository):
+class _FakeSearchRepo(StockSearchRepositoryAdapter):
     def __init__(
         self,
         *,
@@ -880,7 +880,7 @@ def test_peer_comparison_rejects_a_blank_ticker():
 # --- AiScreenStocks (the AI-driven screen) ------------------------------------------------
 
 
-class _FakeTranslator(ScreenerQueryTranslator):
+class _FakeTranslator(ScreenerQueryAdapter):
     def __init__(self, *, intent: ScreenIntent | None = None, boom: bool = False) -> None:
         self._intent = intent or ScreenIntent()
         self._boom = boom

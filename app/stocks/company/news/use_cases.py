@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from app.stocks.entities import normalize_symbol
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.company.news.entities import StockNews
-from app.stocks.company.news.ports import NewsProvider
-from app.stocks.company.news.repository import NewsRepository
+from app.stocks.company.news.interfaces import NewsAdapter
+from app.stocks.company.news.interfaces import NewsRepositoryAdapter
 from app.stocks.progress import iter_with_progress
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 class GetStockNews:
-    def __init__(self, provider: NewsProvider) -> None:
+    def __init__(self, provider: NewsAdapter) -> None:
         self._provider = provider
 
     def execute(self, symbol: str) -> StockNews:
@@ -33,7 +33,7 @@ class NewsSyncReport:
 
 
 class SyncStockNews:
-    def __init__(self, provider: NewsProvider, repository: NewsRepository) -> None:
+    def __init__(self, provider: NewsAdapter, repository: NewsRepositoryAdapter) -> None:
         self._provider = provider
         self._repository = repository
 

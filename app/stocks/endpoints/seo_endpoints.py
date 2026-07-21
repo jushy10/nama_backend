@@ -12,8 +12,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.seo.db_repository import SqlSeoReadRepository
-from app.stocks.seo.repository import CongressPageTrade, EtfPageFacts, TickerPageFacts
+from app.stocks.seo.seo_read_repository_adapter_impl import SeoReadRepositoryAdapterImpl
+from app.stocks.seo.interfaces import CongressPageTrade, EtfPageFacts, TickerPageFacts
 from app.stocks.seo.use_cases import (
     CongressBoardPage,
     EtfPage,
@@ -54,7 +54,7 @@ def get_ticker_stock_page_use_case(
 ) -> GetTickerStockPage:
     # Pure DB read over the shared anchor — no vendor, no key — so it's always
     # constructable (the pages must render even when every upstream key is absent).
-    return GetTickerStockPage(SqlSeoReadRepository(db))
+    return GetTickerStockPage(SeoReadRepositoryAdapterImpl(db))
 
 
 # --- Presenter helpers: stored facts -> display strings ----------------------------------
@@ -296,7 +296,7 @@ def stock_page_endpoint(
 
 
 def get_sector_page_use_case(db: Session = Depends(get_db)) -> GetSectorPage:
-    return GetSectorPage(SqlSeoReadRepository(db))
+    return GetSectorPage(SeoReadRepositoryAdapterImpl(db))
 
 
 def _sector_description(page: SectorPage) -> str:
@@ -407,7 +407,7 @@ def sector_page_endpoint(
 
 
 def get_screen_page_use_case(db: Session = Depends(get_db)) -> GetScreenPage:
-    return GetScreenPage(SqlSeoReadRepository(db))
+    return GetScreenPage(SeoReadRepositoryAdapterImpl(db))
 
 
 def _render_screen(request: Request, page: ScreenPage) -> Response:
@@ -459,7 +459,7 @@ def screen_page_endpoint(
 
 
 def get_etf_page_use_case(db: Session = Depends(get_db)) -> GetEtfPage:
-    return GetEtfPage(SqlSeoReadRepository(db))
+    return GetEtfPage(SeoReadRepositoryAdapterImpl(db))
 
 
 def _etf_description(name: str, ticker: str, facts: EtfPageFacts) -> str:
@@ -868,7 +868,7 @@ def get_congress_board_page_use_case(
     db: Session = Depends(get_db),
 ) -> GetCongressBoardPage:
     # Pure DB read over the congress table joined to the anchor — no vendor, no key.
-    return GetCongressBoardPage(SqlSeoReadRepository(db))
+    return GetCongressBoardPage(SeoReadRepositoryAdapterImpl(db))
 
 
 def _congress_jsonld(canonical: str, site: str) -> str:
@@ -1070,7 +1070,7 @@ not investment advice.
 
 def get_sitemap_use_case(db: Session = Depends(get_db)) -> GetSitemap:
     # Pure DB read over the screened universe — no vendor, no key.
-    return GetSitemap(SqlSeoReadRepository(db))
+    return GetSitemap(SeoReadRepositoryAdapterImpl(db))
 
 
 def _sitemap_xml(data: SitemapData, site: str) -> str:

@@ -4,21 +4,21 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db.db_cached_institutional_holders_adapter import (
-    DbCachedInstitutionalOwnershipProvider,
+from app.stocks.adapters.db.db_cached_institutional_ownership_adapter_impl import (
+    InstitutionalOwnershipAdapterImpl as DbCachedInstitutionalOwnershipAdapterImpl,
 )
-from app.stocks.adapters.yfinance.institutional_holders_adapter import (
-    YfinanceInstitutionalHoldersProvider,
+from app.stocks.adapters.yfinance.institutional_ownership_adapter_impl import (
+    InstitutionalOwnershipAdapterImpl as YfinanceInstitutionalOwnershipAdapterImpl,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.company.institutional_ownership.db_repository import (
-    SqlInstitutionalOwnershipRepository,
+from app.stocks.company.institutional_ownership.institutional_ownership_repository_adapter_impl import (
+    InstitutionalOwnershipRepositoryAdapterImpl,
 )
 from app.stocks.company.institutional_ownership.entities import (
     InstitutionalHolder,
     InstitutionalOwnership,
 )
-from app.stocks.company.institutional_ownership.ports import InstitutionalOwnershipProvider
+from app.stocks.company.institutional_ownership.interfaces import InstitutionalOwnershipAdapter
 from app.stocks.company.institutional_ownership.schemas import (
     HolderFlowResponse,
     InstitutionalHolderResponse,
@@ -31,25 +31,25 @@ router = APIRouter(tags=["institutional-ownership"])
 
 
 @lru_cache(maxsize=1)
-def _yfinance_institutional_provider() -> InstitutionalOwnershipProvider:
+def _yfinance_institutional_provider() -> InstitutionalOwnershipAdapter:
     # One process-singleton live provider (no key, no connection pool to share); the DB cache that
     # wraps it is built per request, since it needs the request session.
-    return YfinanceInstitutionalHoldersProvider()
+    return YfinanceInstitutionalOwnershipAdapterImpl()
 
 
 def get_institutional_ownership_provider(
     db: Session = Depends(get_db),
-) -> InstitutionalOwnershipProvider:
+) -> InstitutionalOwnershipAdapter:
     # A persistent DB cache (refreshed out of band by the cron endpoint + lazily on a miss) sits in
     # front of Yahoo so the endpoint rarely calls it. yfinance needs no key, so this is always wired.
-    return DbCachedInstitutionalOwnershipProvider(
+    return DbCachedInstitutionalOwnershipAdapterImpl(
         _yfinance_institutional_provider(),
-        SqlInstitutionalOwnershipRepository(db),
+        InstitutionalOwnershipRepositoryAdapterImpl(db),
     )
 
 
 def get_institutional_ownership_use_case(
-    provider: InstitutionalOwnershipProvider = Depends(
+    provider: InstitutionalOwnershipAdapter = Depends(
         get_institutional_ownership_provider
     ),
 ) -> GetInstitutionalOwnership:

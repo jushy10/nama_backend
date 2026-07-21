@@ -5,17 +5,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.yfinance.eps_history_adapter import YfinanceEpsHistoryProvider
-from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.adapters.yfinance.eps_history_adapter_impl import EpsHistoryAdapterImpl
+from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
 from app.stocks.endpoints.quarterly_earnings_endpoints import (
     get_quarterly_earnings_provider,
 )
 from app.stocks.entities import Quote, StockPerformance
-from app.stocks.catalog.etfs.db_repository import SqlEtfLookupRepository
+from app.stocks.catalog.etfs.repository_adapter_impl import EtfLookupRepositoryAdapterImpl
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import AnalystEstimatesProvider, StockPerformanceProvider
-from app.stocks.adapters.bedrock.screener_query_adapter import (
-    BedrockScreenerQueryTranslator,
+from app.stocks.interfaces import AnalystEstimatesAdapter, StockPerformanceAdapter
+from app.stocks.adapters.bedrock.screener_query_adapter_impl import (
+    ScreenerQueryAdapterImpl,
 )
 from app.stocks.wiring import (
     get_estimates_provider,
@@ -23,9 +23,9 @@ from app.stocks.wiring import (
     get_price_provider,
 )
 from app.stocks.schemas import StockPerformanceResponse
-from app.stocks.company.ticker.db_repository import SqlTickerRepository
+from app.stocks.company.ticker.ticker_repository_adapter_impl import TickerRepositoryAdapterImpl
 from app.stocks.company.ticker.entities import PeHistory, PeHistoryStats, TickerOptionsMetrics
-from app.stocks.company.ticker.ports import OptionChainProvider
+from app.stocks.company.ticker.interfaces import OptionChainAdapter
 from app.stocks.company.ticker.schemas import (
     DividendResponse,
     ExtendedHoursResponse,
@@ -43,7 +43,7 @@ from app.stocks.company.ticker.use_cases import (
     GetTickerCard,
     TickerCard,
 )
-from app.stocks.catalog.universe.db_repository import SqlStockSearchRepository
+from app.stocks.catalog.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.stocks.catalog.universe.entities import (
     Classifications,
     IndustryValuation,
@@ -55,7 +55,7 @@ from app.stocks.catalog.universe.entities import (
     StockSearchPage,
     StockSort,
 )
-from app.stocks.catalog.universe.ports import ScreenerQueryTranslator
+from app.stocks.catalog.universe.interfaces import ScreenerQueryAdapter
 from app.stocks.catalog.universe.schemas import (
     AiScreenInterpretationResponse,
     AiScreenResponse,
@@ -80,9 +80,9 @@ router = APIRouter(tags=["ticker"])
 
 def get_ticker_card_use_case(
     provider=Depends(get_price_provider),
-    options: OptionChainProvider = Depends(get_options_provider),
-    earnings: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
-    estimates: AnalystEstimatesProvider = Depends(get_estimates_provider),
+    options: OptionChainAdapter = Depends(get_options_provider),
+    earnings: QuarterlyEarningsAdapter = Depends(get_quarterly_earnings_provider),
+    estimates: AnalystEstimatesAdapter = Depends(get_estimates_provider),
     db: Session = Depends(get_db),
 ) -> GetTickerCard:
     # The market-routing provider backs the quote, the trailing performance windows, and the
@@ -96,19 +96,19 @@ def get_ticker_card_use_case(
     # the trailing P/E's TTM sum), and the estimates provider is the DB-only annual-forward
     # projection (backing forward P/E and P/S — the only fundamentals not on the anchor), read
     # best-effort only when 'metrics' is requested.
-    performance = provider if isinstance(provider, StockPerformanceProvider) else None
+    performance = provider if isinstance(provider, StockPerformanceAdapter) else None
     return GetTickerCard(
         provider,
         performance=performance,
         stocks=provider,
-        repository=SqlTickerRepository(db),
+        repository=TickerRepositoryAdapterImpl(db),
         options=options,
         earnings=earnings,
         estimates=estimates,
         # The card's asset_type is a single indexed membership check against the etfs
         # table (same request-scoped session as the anchor read) — "etf" for a screened
         # fund, else "equity".
-        etfs=SqlEtfLookupRepository(db),
+        etfs=EtfLookupRepositoryAdapterImpl(db),
     )
 
 
@@ -274,16 +274,16 @@ def get_ticker_card_endpoint(
 
 
 @lru_cache
-def _eps_history_provider() -> YfinanceEpsHistoryProvider:
+def _eps_history_provider() -> EpsHistoryAdapterImpl:
     # Keyless yfinance singleton (like the options provider): it shares the module-level
     # pacing state and is best-effort at read, so it's always constructable — no key gate.
-    return YfinanceEpsHistoryProvider()
+    return EpsHistoryAdapterImpl()
 
 
 def get_pe_history_use_case(
     provider=Depends(get_price_provider),
 ) -> GetStockPeHistory:
-    # The market-routing provider supplies the daily closes (it implements CandleProvider — the
+    # The market-routing provider supplies the daily closes (it implements CandleAdapter — the
     # same instance the candle chart uses, US→Alpaca / CA→Yahoo), and the deep reported-EPS
     # history rides the keyless yfinance adapter. The card's Alpaca 503 gate is inherited for a
     # US symbol (the closes are primary here); the EPS leg is best-effort, so no key to gate on.
@@ -351,7 +351,7 @@ def get_peer_comparison_use_case(
 ) -> GetPeerComparison:
     # Same request-scoped read repository the search / industry-P/E reads use — a pure DB read
     # over the shared anchor, no vendor or key.
-    return GetPeerComparison(SqlStockSearchRepository(db))
+    return GetPeerComparison(StockSearchRepositoryAdapterImpl(db))
 
 
 def _present_peer_company(company: PeerCompany) -> PeerCompanyResponse:
@@ -412,7 +412,7 @@ def get_peer_comparison_endpoint(
 def get_classify_ticker_use_case(db: Session = Depends(get_db)) -> ClassifyTicker:
     # Pure DB read: a single indexed membership check against the etfs table — no
     # vendor, no key, request-scoped session — so it's always constructable.
-    return ClassifyTicker(SqlEtfLookupRepository(db))
+    return ClassifyTicker(EtfLookupRepositoryAdapterImpl(db))
 
 
 @router.get("/stocks/type/{ticker}", response_model=TickerTypeResponse)
@@ -441,18 +441,18 @@ def get_ticker_type_endpoint(
 def get_search_use_case(db: Session = Depends(get_db)) -> SearchStocks:
     # Pure DB read over the shared anchor — no vendor, no key to gate on. The repository is
     # request-scoped, like the session.
-    return SearchStocks(SqlStockSearchRepository(db))
+    return SearchStocks(StockSearchRepositoryAdapterImpl(db))
 
 
 def get_classifications_use_case(db: Session = Depends(get_db)) -> ListClassifications:
-    return ListClassifications(SqlStockSearchRepository(db))
+    return ListClassifications(StockSearchRepositoryAdapterImpl(db))
 
 
 def get_industry_valuation_use_case(
     db: Session = Depends(get_db),
 ) -> GetIndustryValuation:
     # Same request-scoped read repository the search uses — a pure DB read over the anchor.
-    return GetIndustryValuation(SqlStockSearchRepository(db))
+    return GetIndustryValuation(StockSearchRepositoryAdapterImpl(db))
 
 
 def _present_search(page: StockSearchPage) -> StockSearchResponse:
@@ -618,7 +618,7 @@ def search_stocks_endpoint(
 
 
 @lru_cache(maxsize=1)
-def get_screener_translator() -> ScreenerQueryTranslator:
+def get_screener_translator() -> ScreenerQueryAdapter:
     # The AI screener's translation is its primary data (its reason to exist), so it's
     # required — but like the analysis providers there's no secret to gate on: Bedrock
     # authenticates through the process's AWS credentials (the ECS task role in
@@ -630,8 +630,8 @@ def get_screener_translator() -> ScreenerQueryTranslator:
     model_id = os.environ.get("BEDROCK_SCREENER_MODEL_ID")
     try:
         if model_id:
-            return BedrockScreenerQueryTranslator(model_id=model_id, region=region)
-        return BedrockScreenerQueryTranslator(region=region)
+            return ScreenerQueryAdapterImpl(model_id=model_id, region=region)
+        return ScreenerQueryAdapterImpl(region=region)
     except ImportError as exc:
         raise HTTPException(
             503, "AI stock screening is not configured (install the 'bedrock' extra)."
@@ -640,12 +640,12 @@ def get_screener_translator() -> ScreenerQueryTranslator:
 
 def get_ai_search_use_case(
     db: Session = Depends(get_db),
-    translator: ScreenerQueryTranslator = Depends(get_screener_translator),
+    translator: ScreenerQueryAdapter = Depends(get_screener_translator),
 ) -> AiScreenStocks:
     # The AI screen only translates — it reads the universe's classifications (the
     # translator's allowed vocabulary) but does not run the search itself. The translator
     # (Bedrock) is the only non-DB dependency — it carries its own 503 gate in the wiring.
-    return AiScreenStocks(translator, SqlStockSearchRepository(db))
+    return AiScreenStocks(translator, StockSearchRepositoryAdapterImpl(db))
 
 
 def _present_ai_screen(intent: ScreenIntent) -> AiScreenResponse:

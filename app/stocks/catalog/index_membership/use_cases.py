@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.stocks.catalog.index_membership.ports import IndexMembershipSource
-from app.stocks.catalog.index_membership.repository import IndexMembershipRepository
+from app.stocks.catalog.index_membership.interfaces import IndexMembershipAdapter
+from app.stocks.catalog.index_membership.interfaces import IndexMembershipRepositoryAdapter
 
 
 @dataclass(frozen=True)
@@ -28,8 +28,8 @@ class SyncIndexMembership:
 
     def __init__(
         self,
-        source: IndexMembershipSource,
-        repository: IndexMembershipRepository,
+        source: IndexMembershipAdapter,
+        repository: IndexMembershipRepositoryAdapter,
     ) -> None:
         self._source = source
         self._repository = repository

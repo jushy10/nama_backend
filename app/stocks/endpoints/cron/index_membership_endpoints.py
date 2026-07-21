@@ -4,8 +4,8 @@ import threading
 from fastapi import APIRouter, Depends, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.wikipedia.index_membership_adapter import (
-    WikipediaIndexMembershipProvider,
+from app.stocks.adapters.wikipedia.index_membership_adapter_impl import (
+    IndexMembershipAdapterImpl,
 )
 from app.stocks.endpoints.cron.background_sync import (
     SyncRunner,
@@ -13,7 +13,7 @@ from app.stocks.endpoints.cron.background_sync import (
     trigger_sync,
 )
 from app.stocks.endpoints.cron.auth import require_cron_token
-from app.stocks.catalog.index_membership.db_repository import SqlIndexMembershipRepository
+from app.stocks.catalog.index_membership.index_membership_repository_adapter_impl import IndexMembershipRepositoryAdapterImpl
 from app.stocks.catalog.index_membership.use_cases import (
     IndexMembershipSyncReport,
     SyncIndexMembership,
@@ -31,7 +31,7 @@ def run_index_membership_sync(_limit: int) -> IndexMembershipSyncReport:
     db = SessionLocal()
     try:
         report = SyncIndexMembership(
-            WikipediaIndexMembershipProvider(), SqlIndexMembershipRepository(db)
+            IndexMembershipAdapterImpl(), IndexMembershipRepositoryAdapterImpl(db)
         ).execute()
         logger.info(
             "index-membership sync done: sp500 members=%d marked=%d cleared=%d skipped=%s | "

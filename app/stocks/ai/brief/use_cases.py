@@ -12,20 +12,20 @@ from app.stocks.ai.brief.entities import (
     MarketBrief,
     MarketBriefContext,
 )
-from app.stocks.ai.brief.ports import MarketBriefProvider
-from app.stocks.ai.brief.repository import MarketBriefRepository
+from app.stocks.ai.brief.interfaces import MarketBriefAdapter
+from app.stocks.ai.brief.interfaces import MarketBriefRepositoryAdapter
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.heatmap.entities import HeatMap, HeatMapScope
 from app.stocks.market.heatmap.use_cases import GetStockHeatMap
 from app.stocks.market.boards.entities import MarketIndexPerformance, SectorPerformance
 from app.stocks.market.boards.use_cases import GetMarketOverview, GetSectorPerformance
-from app.stocks.company.news.repository import NewsRepository
+from app.stocks.company.news.interfaces import NewsRepositoryAdapter
 
 logger = logging.getLogger(__name__)
 
 
 class GetDailyBrief:
-    def __init__(self, repository: MarketBriefRepository) -> None:
+    def __init__(self, repository: MarketBriefRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(self, brief_date: date | None = None) -> MarketBrief | None:
@@ -51,10 +51,10 @@ class GenerateDailyBrief:
         overview: GetMarketOverview,
         sectors: GetSectorPerformance,
         heatmap: GetStockHeatMap,
-        provider: MarketBriefProvider,
-        repository: MarketBriefRepository,
+        provider: MarketBriefAdapter,
+        repository: MarketBriefRepositoryAdapter,
         *,
-        news: NewsRepository | None = None,
+        news: NewsRepositoryAdapter | None = None,
         scope: HeatMapScope = HeatMapScope.SP500,
         movers: int = 5,
         headlines: int = 8,

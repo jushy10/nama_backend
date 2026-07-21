@@ -1,7 +1,7 @@
 import re
 
 from app.stocks.company.logo.entities import Logo
-from app.stocks.company.logo.ports import LogoProvider
+from app.stocks.company.logo.interfaces import LogoAdapter
 
 # A ticker: 1-5 letters, optionally an exchange or share-class suffix — a dot then 1-3 letters.
 # The suffix is what lets a Canadian listing get its *own* logo: Logo.dev is exchange-aware, so
@@ -23,7 +23,7 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 class GetStockLogo:
-    def __init__(self, provider: LogoProvider) -> None:
+    def __init__(self, provider: LogoAdapter) -> None:
         self._provider = provider
 
     def execute(self, symbol: str) -> Logo:

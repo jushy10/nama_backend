@@ -8,10 +8,10 @@ from app.stocks.company.revenue_segments.entities import (
     RevenueSegmentation,
     SegmentAxis,
 )
-from app.stocks.company.revenue_segments.ports import RevenueSegmentsProvider
-from app.stocks.company.revenue_segments.repository import (
+from app.stocks.company.revenue_segments.interfaces import RevenueSegmentsAdapter
+from app.stocks.company.revenue_segments.interfaces import (
     RefreshTarget,
-    RevenueSegmentsRepository,
+    RevenueSegmentsRepositoryAdapter,
 )
 from app.stocks.company.revenue_segments.use_cases import (
     GetRevenueSegments,
@@ -29,7 +29,7 @@ def _segmentation(symbol: str) -> RevenueSegmentation:
     )
 
 
-class _FakeReadProvider(RevenueSegmentsProvider):
+class _FakeReadProvider(RevenueSegmentsAdapter):
     def __init__(self, result: RevenueSegmentation) -> None:
         self._result = result
         self.calls: list[str] = []
@@ -62,7 +62,7 @@ def test_get_rejects_obviously_invalid_symbols():
     assert provider.calls == []
 
 
-class _FakeRepo(RevenueSegmentsRepository):
+class _FakeRepo(RevenueSegmentsRepositoryAdapter):
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = list(targets)
         self.upserts: list[tuple[str, str | None]] = []
@@ -81,7 +81,7 @@ class _FakeRepo(RevenueSegmentsRepository):
         return self._targets if limit is None else self._targets[:limit]
 
 
-class _FakeSyncProvider(RevenueSegmentsProvider):
+class _FakeSyncProvider(RevenueSegmentsAdapter):
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}

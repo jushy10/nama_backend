@@ -4,13 +4,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import chart_endpoints as endpoints
-from app.stocks.company.charts.ports import CandleProvider
+from app.stocks.company.charts.interfaces import CandleAdapter
 from app.stocks.entities import Candle, CandleSeries, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.wiring import get_price_provider
 
 
-class _FakeCandleProvider(CandleProvider):
+class _FakeCandleProvider(CandleAdapter):
     def __init__(self, *, series: CandleSeries | None = None, error=None) -> None:
         self._series = series
         self._error = error
@@ -43,7 +43,7 @@ def _client(fake: _FakeCandleProvider) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
     # The chart endpoints ride the market-routing price provider; override it with the fake
-    # CandleProvider (the router slot accepts any CandleProvider), so these stay offline.
+    # CandleAdapter (the router slot accepts any CandleAdapter), so these stay offline.
     app.dependency_overrides[get_price_provider] = lambda: fake
     return TestClient(app)
 

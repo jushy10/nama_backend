@@ -4,7 +4,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from app.stocks.company.earnings.quarterly.repository import QuarterlyEarningsRepository
+from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsRepositoryAdapter
 from app.stocks.entities import is_cboe_canada
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.progress import iter_with_progress
@@ -22,12 +22,12 @@ from app.stocks.catalog.universe.entities import (
     normalize_company_name,
     slugify,
 )
-from app.stocks.catalog.universe.ports import (
-    CompanyClassificationProvider,
-    ScreenerQueryTranslator,
-    StockScreener,
+from app.stocks.catalog.universe.interfaces import (
+    CompanyClassificationAdapter,
+    ScreenerQueryAdapter,
+    StockScreenerAdapter,
 )
-from app.stocks.catalog.universe.repository import StockSearchRepository, UniverseRepository
+from app.stocks.catalog.universe.interfaces import StockSearchRepositoryAdapter, UniverseRepositoryAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -109,10 +109,10 @@ class SyncUniverse:
 
     def __init__(
         self,
-        screener: StockScreener,
-        repository: UniverseRepository,
-        classifier: CompanyClassificationProvider,
-        quarterly: QuarterlyEarningsRepository | None = None,
+        screener: StockScreenerAdapter,
+        repository: UniverseRepositoryAdapter,
+        classifier: CompanyClassificationAdapter,
+        quarterly: QuarterlyEarningsRepositoryAdapter | None = None,
         *,
         region: str = "us",
     ) -> None:
@@ -251,7 +251,7 @@ class SearchStocks:
     DEFAULT_LIMIT = 25
     MAX_LIMIT = 100
 
-    def __init__(self, repository: StockSearchRepository) -> None:
+    def __init__(self, repository: StockSearchRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(
@@ -294,8 +294,8 @@ class SearchStocks:
 class AiScreenStocks:
     def __init__(
         self,
-        translator: ScreenerQueryTranslator,
-        repository: StockSearchRepository,
+        translator: ScreenerQueryAdapter,
+        repository: StockSearchRepositoryAdapter,
     ) -> None:
         self._translator = translator
         # Read only for the allowed-vocabulary the translator is constrained to.
@@ -312,7 +312,7 @@ class AiScreenStocks:
 
 
 class ListClassifications:
-    def __init__(self, repository: StockSearchRepository) -> None:
+    def __init__(self, repository: StockSearchRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(self) -> Classifications:
@@ -320,7 +320,7 @@ class ListClassifications:
 
 
 class GetIndustryValuation:
-    def __init__(self, repository: StockSearchRepository) -> None:
+    def __init__(self, repository: StockSearchRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(self, industry: str) -> IndustryValuation:
@@ -339,7 +339,7 @@ def _normalize_ticker(ticker: str) -> str:
 
 
 class GetPeerComparison:
-    def __init__(self, repository: StockSearchRepository) -> None:
+    def __init__(self, repository: StockSearchRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(self, ticker: str) -> PeerComparison:

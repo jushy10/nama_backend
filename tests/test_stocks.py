@@ -4,18 +4,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.adapters.bedrock.analysis_adapter import (
-    BedrockScorecardProvider,
+from app.stocks.adapters.bedrock.stock_scorecard_adapter_impl import (
+    StockScorecardAdapterImpl,
     _SECTIONS as _SCORECARD_SECTIONS,
 )
-from app.stocks.adapters.bedrock.earnings_analysis_adapter import (
-    BedrockEarningsAnalysisProvider,
+from app.stocks.adapters.bedrock.earnings_analysis_adapter_impl import (
+    EarningsAnalysisAdapterImpl,
 )
-from app.stocks.adapters.bedrock.market_summary_adapter import (
-    BedrockMarketSummaryProvider,
+from app.stocks.adapters.bedrock.market_summary_adapter_impl import (
+    MarketSummaryAdapterImpl,
 )
-from app.stocks.adapters.bedrock.sector_analysis_adapter import (
-    BedrockSectorAnalysisProvider,
+from app.stocks.adapters.bedrock.sector_analysis_adapter_impl import (
+    SectorAnalysisAdapterImpl,
 )
 from app.stocks.company.charts.chart_window import ChartRange, resolve_window
 from app.stocks.ai.analysis.entities import (
@@ -38,13 +38,13 @@ from app.stocks.ai.analysis.entities import (
     SectorMover,
     StockScorecard,
 )
-from app.stocks.ai.analysis.ports import (
-    AiAnalysisCache,
-    EarningsAnalysisProvider,
-    MarketSummaryProvider,
-    SectorAnalysisProvider,
-    StockScorecardCache,
-    StockScorecardProvider,
+from app.stocks.ai.analysis.interfaces import (
+    AiAnalysisCacheAdapter,
+    EarningsAnalysisAdapter,
+    MarketSummaryAdapter,
+    SectorAnalysisAdapter,
+    StockScorecardCacheAdapter,
+    StockScorecardAdapter,
 )
 from app.stocks.ai.analysis.use_cases import (
     GetEarningsAnalysis,
@@ -54,7 +54,7 @@ from app.stocks.ai.analysis.use_cases import (
     GetStockInfo,
 )
 from app.stocks.company.charts.indicators import TrendDirection, TrendReading
-from app.stocks.company.charts.ports import CandleProvider
+from app.stocks.company.charts.interfaces import CandleAdapter
 from app.stocks.company.charts.use_cases import (
     GetStockCandles,
     GetStockEma,
@@ -65,12 +65,12 @@ from app.stocks.company.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.stocks.company.earnings.annual.ports import AnnualEarningsProvider
+from app.stocks.company.earnings.annual.interfaces import AnnualEarningsAdapter
 from app.stocks.company.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
 from app.stocks.endpoints.analysis_endpoints import (
     get_market_summary,
     get_sector_analysis,
@@ -101,24 +101,24 @@ from app.stocks.entities import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.company.logo.entities import Logo
-from app.stocks.company.logo.ports import LogoProvider
+from app.stocks.company.logo.interfaces import LogoAdapter
 from app.stocks.company.logo.use_cases import GetStockLogo
 from app.stocks.market.boards.entities import MarketIndexPerformance, SectorPerformance
-from app.stocks.market.boards.ports import MarketOverviewProvider, SectorPerformanceProvider
+from app.stocks.market.boards.interfaces import MarketOverviewAdapter, SectorPerformanceAdapter
 from app.stocks.market.boards.use_cases import GetMarketOverview, GetSectorPerformance
-from app.stocks.ports import (
-    AllTimeHighProvider,
-    AnalystEstimatesProvider,
-    StockDataProvider,
-    StockPerformanceProvider,
+from app.stocks.interfaces import (
+    AllTimeHighAdapter,
+    AnalystEstimatesAdapter,
+    StockDataAdapter,
+    StockPerformanceAdapter,
 )
 from app.stocks.company.recommendations.entities import (
     AnalystRecommendations,
     RecommendationTrend,
 )
-from app.stocks.company.recommendations.ports import RecommendationProvider
+from app.stocks.company.recommendations.interfaces import RecommendationAdapter
 from app.stocks.company.news.entities import NewsArticle, StockNews
-from app.stocks.company.news.repository import NewsRepository
+from app.stocks.company.news.interfaces import NewsRepositoryAdapter
 from app.stocks.catalog.universe.entities import (
     AnchorMetrics,
     IndustryValuation,
@@ -129,11 +129,11 @@ from app.stocks.catalog.universe.entities import (
     StockSearchResult,
     StockSort,
 )
-from app.stocks.catalog.universe.repository import StockSearchRepository
+from app.stocks.catalog.universe.interfaces import StockSearchRepositoryAdapter
 from app.stocks.wiring import analysis_cache_ttl
 
 
-class FakeProvider(StockDataProvider):
+class FakeProvider(StockDataAdapter):
     def __init__(self, stock: Stock | None = None, raises: Exception | None = None):
         self._stock = stock
         self._raises = raises
@@ -147,7 +147,7 @@ class FakeProvider(StockDataProvider):
         return self._stock
 
 
-class FakeLogoProvider(LogoProvider):
+class FakeLogoProvider(LogoAdapter):
     def __init__(self, logo: Logo | None = None, raises: Exception | None = None):
         self._logo = logo
         self._raises = raises
@@ -161,7 +161,7 @@ class FakeLogoProvider(LogoProvider):
         return self._logo
 
 
-class FakePerformanceProvider(StockPerformanceProvider):
+class FakePerformanceProvider(StockPerformanceAdapter):
     def __init__(self, performance=None, raises=None):
         self._performance = performance
         self._raises = raises
@@ -175,7 +175,7 @@ class FakePerformanceProvider(StockPerformanceProvider):
         return self._performance
 
 
-class FakeAllTimeHighProvider(AllTimeHighProvider):
+class FakeAllTimeHighProvider(AllTimeHighAdapter):
     def __init__(self, all_time_high=None, raises=None):
         self._all_time_high = all_time_high
         self._raises = raises
@@ -189,7 +189,7 @@ class FakeAllTimeHighProvider(AllTimeHighProvider):
         return self._all_time_high
 
 
-class FakeEstimatesProvider(AnalystEstimatesProvider):
+class FakeEstimatesProvider(AnalystEstimatesAdapter):
     def __init__(self, estimates=None, raises=None):
         self._estimates = estimates
         self._raises = raises
@@ -203,7 +203,7 @@ class FakeEstimatesProvider(AnalystEstimatesProvider):
         return self._estimates
 
 
-class FakeCandleProvider(CandleProvider):
+class FakeCandleProvider(CandleAdapter):
     def __init__(
         self, series: CandleSeries | None = None, raises: Exception | None = None
     ):
@@ -219,7 +219,7 @@ class FakeCandleProvider(CandleProvider):
         return self._series
 
 
-class FakeSectorProvider(SectorPerformanceProvider):
+class FakeSectorProvider(SectorPerformanceAdapter):
     def __init__(self, sectors=None, raises: Exception | None = None):
         self._sectors = sectors
         self._raises = raises
@@ -233,7 +233,7 @@ class FakeSectorProvider(SectorPerformanceProvider):
         return self._sectors
 
 
-class FakeMarketOverviewProvider(MarketOverviewProvider):
+class FakeMarketOverviewProvider(MarketOverviewAdapter):
     def __init__(self, indexes=None, raises: Exception | None = None):
         self._indexes = indexes
         self._raises = raises
@@ -247,7 +247,7 @@ class FakeMarketOverviewProvider(MarketOverviewProvider):
         return self._indexes
 
 
-class FakeQuarterlyEarningsProvider(QuarterlyEarningsProvider):
+class FakeQuarterlyEarningsProvider(QuarterlyEarningsAdapter):
     def __init__(self, timeline=None, raises: Exception | None = None):
         self._timeline = timeline
         self._raises = raises
@@ -259,7 +259,7 @@ class FakeQuarterlyEarningsProvider(QuarterlyEarningsProvider):
         return self._timeline
 
 
-class FakeAnnualEarningsProvider(AnnualEarningsProvider):
+class FakeAnnualEarningsProvider(AnnualEarningsAdapter):
     def __init__(self, timeline=None, raises: Exception | None = None):
         self._timeline = timeline
         self._raises = raises
@@ -271,7 +271,7 @@ class FakeAnnualEarningsProvider(AnnualEarningsProvider):
         return self._timeline
 
 
-class FakeRecommendationProvider(RecommendationProvider):
+class FakeRecommendationProvider(RecommendationAdapter):
     def __init__(self, recommendations=None, raises: Exception | None = None):
         self._recommendations = recommendations
         self._raises = raises
@@ -283,7 +283,7 @@ class FakeRecommendationProvider(RecommendationProvider):
         return self._recommendations
 
 
-class FakeSearchRepo(StockSearchRepository):
+class FakeSearchRepo(StockSearchRepositoryAdapter):
     def __init__(
         self,
         *,
@@ -373,7 +373,7 @@ class FakeSearchRepo(StockSearchRepository):
         raise NotImplementedError
 
 
-class FakeAnalysisProvider(StockScorecardProvider):
+class FakeAnalysisProvider(StockScorecardAdapter):
     def __init__(
         self,
         analysis: StockScorecard | None = None,
@@ -461,7 +461,7 @@ def an_analysis(**overrides) -> StockScorecard:
     return StockScorecard(**base)
 
 
-class FakeAnalysisCache(StockScorecardCache):
+class FakeAnalysisCache(StockScorecardCacheAdapter):
     def __init__(self, stored: StockScorecard | None = None) -> None:
         self._store = {stored.symbol: stored} if stored is not None else {}
         self.puts: list[StockScorecard] = []
@@ -474,7 +474,7 @@ class FakeAnalysisCache(StockScorecardCache):
         self._store[analysis.symbol] = analysis
 
 
-class FakeSectorAnalysisProvider(SectorAnalysisProvider):
+class FakeSectorAnalysisAdapter(SectorAnalysisAdapter):
     def __init__(
         self,
         analysis: SectorAnalysis | None = None,
@@ -509,7 +509,7 @@ def a_sector_analysis(**overrides) -> SectorAnalysis:
     return SectorAnalysis(**base)
 
 
-class FakeMarketSummaryProvider(MarketSummaryProvider):
+class FakeMarketSummaryAdapter(MarketSummaryAdapter):
     def __init__(
         self,
         summary: MarketSummary | None = None,
@@ -1456,24 +1456,24 @@ def test_sector_use_case_propagates_not_found():
 @pytest.fixture
 def make_client():
     def _make(
-        provider: StockDataProvider | None = None,
-        logo_provider: LogoProvider | None = None,
-        performance_provider: StockPerformanceProvider | None = None,
-        ath_provider: AllTimeHighProvider | None = None,
-        estimates_provider: AnalystEstimatesProvider | None = None,
-        candle_provider: CandleProvider | None = None,
-        ema_provider: CandleProvider | None = None,
-        support_levels_provider: CandleProvider | None = None,
-        trend_provider: CandleProvider | None = None,
-        sector_provider: SectorPerformanceProvider | None = None,
-        earnings_provider: QuarterlyEarningsProvider | None = None,
-        annual_earnings_provider: AnnualEarningsProvider | None = None,
-        recommendations_provider: RecommendationProvider | None = None,
-        analysis_provider: StockScorecardProvider | None = None,
-        industry_repository: StockSearchRepository | None = None,
-        sector_analysis_provider: SectorAnalysisProvider | None = None,
-        market_overview_provider: MarketOverviewProvider | None = None,
-        market_summary_provider: MarketSummaryProvider | None = None,
+        provider: StockDataAdapter | None = None,
+        logo_provider: LogoAdapter | None = None,
+        performance_provider: StockPerformanceAdapter | None = None,
+        ath_provider: AllTimeHighAdapter | None = None,
+        estimates_provider: AnalystEstimatesAdapter | None = None,
+        candle_provider: CandleAdapter | None = None,
+        ema_provider: CandleAdapter | None = None,
+        support_levels_provider: CandleAdapter | None = None,
+        trend_provider: CandleAdapter | None = None,
+        sector_provider: SectorPerformanceAdapter | None = None,
+        earnings_provider: QuarterlyEarningsAdapter | None = None,
+        annual_earnings_provider: AnnualEarningsAdapter | None = None,
+        recommendations_provider: RecommendationAdapter | None = None,
+        analysis_provider: StockScorecardAdapter | None = None,
+        industry_repository: StockSearchRepositoryAdapter | None = None,
+        sector_analysis_provider: SectorAnalysisAdapter | None = None,
+        market_overview_provider: MarketOverviewAdapter | None = None,
+        market_summary_provider: MarketSummaryAdapter | None = None,
     ) -> TestClient:
         if logo_provider is not None:
             app.dependency_overrides[get_stock_logo] = lambda: GetStockLogo(logo_provider)
@@ -1707,7 +1707,7 @@ def test_analysis_incomplete_read_is_not_cached():
 # --- result cache: the newer AI analyses (earnings / sector / market) --------------
 #
 # Ratings + fundamentals cache scenarios live in their own test modules; here are the
-# three that share this file's fakes. Each proves the generic AiAnalysisCache wiring: a
+# three that share this file's fakes. Each proves the generic AiAnalysisCacheAdapter wiring: a
 # fresh stored read skips the gather + model call, a miss generates and stores, and an
 # incomplete read is returned but not frozen. The two market-wide reads take no symbol,
 # so they key on the "_MARKET_" sentinel.
@@ -1715,7 +1715,7 @@ def test_analysis_incomplete_read_is_not_cached():
 _MARKET_KEY = "_MARKET_"
 
 
-class FakeAiAnalysisCache(AiAnalysisCache):
+class FakeAiAnalysisCacheAdapter(AiAnalysisCacheAdapter):
     def __init__(self, stored=None, key=None):
         self._store = {key: stored} if stored is not None else {}
         self.puts: list[tuple] = []
@@ -1728,7 +1728,7 @@ class FakeAiAnalysisCache(AiAnalysisCache):
         self._store[key] = analysis
 
 
-class FakeEarningsAnalysisProvider(EarningsAnalysisProvider):
+class FakeEarningsAnalysisAdapter(EarningsAnalysisAdapter):
     def __init__(self, result=None, *, raises=None):
         self._result = result
         self._raises = raises
@@ -1763,9 +1763,9 @@ def _earnings_use_case(analyzer, cache):
 
 def test_earnings_analysis_fresh_cache_skips_generation():
     fresh = an_earnings_analysis(when=datetime.now(timezone.utc))
-    analyzer = FakeEarningsAnalysisProvider(raises=AssertionError("model must not run"))
+    analyzer = FakeEarningsAnalysisAdapter(raises=AssertionError("model must not run"))
     result = _earnings_use_case(
-        analyzer, FakeAiAnalysisCache(stored=fresh, key="AAPL")
+        analyzer, FakeAiAnalysisCacheAdapter(stored=fresh, key="AAPL")
     ).execute("aapl")  # normalizes to AAPL, matching the cached key
     assert result is fresh
     assert analyzer.received == []  # model never called
@@ -1773,9 +1773,9 @@ def test_earnings_analysis_fresh_cache_skips_generation():
 
 def test_earnings_analysis_cache_miss_generates_and_stores():
     generated = an_earnings_analysis()
-    cache = FakeAiAnalysisCache()
+    cache = FakeAiAnalysisCacheAdapter()
     result = _earnings_use_case(
-        FakeEarningsAnalysisProvider(result=generated), cache
+        FakeEarningsAnalysisAdapter(result=generated), cache
     ).execute("AAPL")
     assert result is generated
     assert cache.puts == [("AAPL", generated)]
@@ -1783,9 +1783,9 @@ def test_earnings_analysis_cache_miss_generates_and_stores():
 
 def test_earnings_analysis_incomplete_read_is_not_cached():
     incomplete = an_earnings_analysis(summary="", highlights=())  # not is_complete
-    cache = FakeAiAnalysisCache()
+    cache = FakeAiAnalysisCacheAdapter()
     result = _earnings_use_case(
-        FakeEarningsAnalysisProvider(result=incomplete), cache
+        FakeEarningsAnalysisAdapter(result=incomplete), cache
     ).execute("AAPL")
     assert result is incomplete  # still returned
     assert cache.puts == []  # but not stored
@@ -1793,9 +1793,9 @@ def test_earnings_analysis_incomplete_read_is_not_cached():
 
 def test_sector_analysis_fresh_cache_skips_generation():
     fresh = a_sector_analysis(generated_at=datetime.now(timezone.utc))
-    analyzer = FakeSectorAnalysisProvider(raises=AssertionError("model must not run"))
+    analyzer = FakeSectorAnalysisAdapter(raises=AssertionError("model must not run"))
     board = FakeSectorProvider([a_sector()])
-    cache = FakeAiAnalysisCache(stored=fresh, key=_MARKET_KEY)
+    cache = FakeAiAnalysisCacheAdapter(stored=fresh, key=_MARKET_KEY)
     result = GetSectorAnalysis(
         GetSectorPerformance(board), analyzer, cache=cache
     ).execute()
@@ -1806,10 +1806,10 @@ def test_sector_analysis_fresh_cache_skips_generation():
 
 def test_sector_analysis_cache_miss_generates_and_stores():
     generated = a_sector_analysis()
-    cache = FakeAiAnalysisCache()
+    cache = FakeAiAnalysisCacheAdapter()
     result = GetSectorAnalysis(
         GetSectorPerformance(FakeSectorProvider([a_sector()])),
-        FakeSectorAnalysisProvider(generated),
+        FakeSectorAnalysisAdapter(generated),
         cache=cache,
     ).execute()
     assert result is generated
@@ -1818,9 +1818,9 @@ def test_sector_analysis_cache_miss_generates_and_stores():
 
 def test_market_summary_fresh_cache_skips_generation():
     fresh = a_market_summary(generated_at=datetime.now(timezone.utc))
-    analyzer = FakeMarketSummaryProvider(raises=AssertionError("model must not run"))
+    analyzer = FakeMarketSummaryAdapter(raises=AssertionError("model must not run"))
     board = FakeMarketOverviewProvider([a_market_index()])
-    cache = FakeAiAnalysisCache(stored=fresh, key=_MARKET_KEY)
+    cache = FakeAiAnalysisCacheAdapter(stored=fresh, key=_MARKET_KEY)
     result = GetMarketSummary(
         GetMarketOverview(board), analyzer, cache=cache
     ).execute()
@@ -1831,10 +1831,10 @@ def test_market_summary_fresh_cache_skips_generation():
 
 def test_market_summary_cache_miss_generates_and_stores():
     generated = a_market_summary()
-    cache = FakeAiAnalysisCache()
+    cache = FakeAiAnalysisCacheAdapter()
     result = GetMarketSummary(
         GetMarketOverview(FakeMarketOverviewProvider([a_market_index()])),
-        FakeMarketSummaryProvider(generated),
+        FakeMarketSummaryAdapter(generated),
         cache=cache,
     ).execute()
     assert result is generated
@@ -2298,7 +2298,7 @@ def test_bedrock_adapter_parses_tool_call_into_entity():
             }
         )
     )
-    provider = BedrockScorecardProvider(client=client, model_id="test-model")
+    provider = StockScorecardAdapterImpl(client=client, model_id="test-model")
     scorecard = provider.analyze(
         a_stock(metrics=a_key_metrics()), a_quarterly_timeline()
     )
@@ -2324,7 +2324,7 @@ def test_bedrock_adapter_parses_tool_call_into_entity():
 
 def test_bedrock_adapter_renders_figures_into_prompt():
     client = _StubClient(_tool_message())
-    BedrockScorecardProvider(client=client).analyze(
+    StockScorecardAdapterImpl(client=client).analyze(
         a_stock(metrics=a_key_metrics()), a_quarterly_timeline()
     )
     prompt = client.calls[0]["messages"][0]["content"]
@@ -2339,7 +2339,7 @@ def test_bedrock_adapter_renders_forward_recommendations_and_annual_into_prompt(
     # The richer context — forward consensus (from estimates), the analyst
     # recommendations, and the annual timeline — each renders into its own section.
     client = _StubClient(_tool_message())
-    BedrockScorecardProvider(client=client).analyze(
+    StockScorecardAdapterImpl(client=client).analyze(
         a_stock(metrics=a_key_metrics(), analyst_estimates=an_estimates()),
         a_quarterly_timeline(),
         an_annual_timeline(),
@@ -2360,7 +2360,7 @@ def test_bedrock_adapter_renders_industry_valuation_into_prompt():
     # The industry benchmark renders its own labelled block, so the model can weigh
     # the stock's own trailing P/E against its peers.
     client = _StubClient(_tool_message())
-    BedrockScorecardProvider(client=client).analyze(
+    StockScorecardAdapterImpl(client=client).analyze(
         a_stock(metrics=a_key_metrics()),
         a_quarterly_timeline(),
         industry_valuation=IndustryValuation.from_pe_ratios(
@@ -2386,7 +2386,7 @@ def test_bedrock_adapter_renders_a_tier_scoped_cohort_as_same_size_peers():
         (8.0, MarketCapTier.MID),
         (9.0, MarketCapTier.MID),
     )
-    BedrockScorecardProvider(client=client).analyze(
+    StockScorecardAdapterImpl(client=client).analyze(
         a_stock(metrics=a_key_metrics()),
         a_quarterly_timeline(),
         industry_valuation=IndustryValuation.for_stock_peers(
@@ -2401,7 +2401,7 @@ def test_bedrock_adapter_renders_a_tier_scoped_cohort_as_same_size_peers():
 def test_bedrock_adapter_omits_industry_valuation_block_when_absent():
     # No benchmark supplied -> no block (the section is skipped, not rendered empty).
     client = _StubClient(_tool_message())
-    BedrockScorecardProvider(client=client).analyze(a_stock(metrics=a_key_metrics()))
+    StockScorecardAdapterImpl(client=client).analyze(a_stock(metrics=a_key_metrics()))
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Industry valuation benchmark" not in prompt
 
@@ -2409,25 +2409,25 @@ def test_bedrock_adapter_omits_industry_valuation_block_when_absent():
 def test_bedrock_adapter_raises_when_no_tool_call():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # model didn't call it
     with pytest.raises(StockDataUnavailable):
-        BedrockScorecardProvider(client=client).analyze(a_stock())
+        StockScorecardAdapterImpl(client=client).analyze(a_stock())
 
 
 def test_bedrock_adapter_maps_client_error_to_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockScorecardProvider(client=_BoomClient()).analyze(a_stock())
+        StockScorecardAdapterImpl(client=_BoomClient()).analyze(a_stock())
 
 
 def test_bedrock_adapter_rejects_offschema_value():
     client = _StubClient(_tool_message(recommendation="mega_buy"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
-        BedrockScorecardProvider(client=client).analyze(a_stock())
+        StockScorecardAdapterImpl(client=client).analyze(a_stock())
 
 
 def test_bedrock_adapter_neutral_stance_when_section_stance_off_enum():
     # A section whose stance isn't a known value degrades to neutral rather than
     # sinking the whole scorecard (a cosmetic field, unlike the overall verdict).
     client = _StubClient(_tool_message(valuation=_section_payload(stance="wildly_off")))
-    scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
+    scorecard = StockScorecardAdapterImpl(client=client).analyze(a_stock())
     valuation = next(s for s in scorecard.sections if s.key == "valuation")
     assert valuation.stance is SectionStance.NEUTRAL
 
@@ -2436,19 +2436,19 @@ def test_bedrock_adapter_confidence_reflects_data_coverage():
     # Confidence is the service's deterministic read of how many data sources resolved
     # (sections with real chips), not the model's guess. A full multi-source snapshot
     # reads HIGH, a fundamentals-only one MEDIUM, a bare quote LOW.
-    full = BedrockScorecardProvider(client=_StubClient(_tool_message())).analyze(
+    full = StockScorecardAdapterImpl(client=_StubClient(_tool_message())).analyze(
         a_stock(metrics=a_key_metrics()),
         a_quarterly_timeline(),
         recommendations=an_analyst_recommendations(),
     )
     assert full.confidence is Confidence.HIGH
 
-    partial = BedrockScorecardProvider(client=_StubClient(_tool_message())).analyze(
+    partial = StockScorecardAdapterImpl(client=_StubClient(_tool_message())).analyze(
         a_stock(metrics=a_key_metrics())  # fundamentals only — no earnings/analyst
     )
     assert partial.confidence is Confidence.MEDIUM
 
-    bare = BedrockScorecardProvider(client=_StubClient(_tool_message())).analyze(
+    bare = StockScorecardAdapterImpl(client=_StubClient(_tool_message())).analyze(
         a_stock()  # a quote with no fundamentals, earnings, or analyst coverage
     )
     assert bare.confidence is Confidence.LOW
@@ -2471,7 +2471,7 @@ def test_bedrock_adapter_recovers_blank_sections_with_targeted_retry():
         ]
     )
 
-    scorecard = BedrockScorecardProvider(client=client).analyze(
+    scorecard = StockScorecardAdapterImpl(client=client).analyze(
         a_stock(metrics=a_key_metrics())
     )
 
@@ -2494,7 +2494,7 @@ def test_bedrock_adapter_merge_keeps_a_section_the_first_pass_already_wrote():
     )
     client = _SeqStubClient([first, _sections_recovery_message()])
 
-    scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
+    scorecard = StockScorecardAdapterImpl(client=client).analyze(a_stock())
 
     prof = next(s for s in scorecard.sections if s.key == "profitability")
     assert prof.label == "Exceptional"  # kept from the first pass, not the recovery
@@ -2507,10 +2507,10 @@ def test_bedrock_adapter_accepts_blank_sections_after_exhausting_retries():
     # view regenerates.
     client = _SeqStubClient([_blank_sections_message()])  # repeats the blank message
 
-    scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
+    scorecard = StockScorecardAdapterImpl(client=client).analyze(a_stock())
 
     # initial call + the bounded retries, then accept
-    assert len(client.calls) == 1 + BedrockScorecardProvider._MAX_INCOMPLETE_RETRIES
+    assert len(client.calls) == 1 + StockScorecardAdapterImpl._MAX_INCOMPLETE_RETRIES
     assert not scorecard.is_complete
     assert scorecard.thesis  # the overall verdict still comes through
 
@@ -2520,7 +2520,7 @@ def test_bedrock_adapter_does_not_retry_a_complete_scorecard():
     # returned after a single call.
     client = _SeqStubClient([_tool_message(), _sections_recovery_message()])
 
-    scorecard = BedrockScorecardProvider(client=client).analyze(a_stock())
+    scorecard = StockScorecardAdapterImpl(client=client).analyze(a_stock())
 
     assert len(client.calls) == 1  # no recovery call
     assert scorecard.is_complete
@@ -3144,7 +3144,7 @@ def _a_board() -> list[SectorContext]:
 
 def test_sector_analysis_parses_tool_call_into_entity():
     client = _StubClient(_sector_tool_message())
-    provider = BedrockSectorAnalysisProvider(client=client, model_id="test-model")
+    provider = SectorAnalysisAdapterImpl(client=client, model_id="test-model")
 
     analysis = provider.analyze(_a_board())
 
@@ -3167,7 +3167,7 @@ def test_sector_analysis_parses_tool_call_into_entity():
 def test_sector_analysis_renders_board_into_prompt():
     client = _StubClient(_sector_tool_message())
     board = [_ctx("Technology", "XLK", 10.0, performance=a_performance())]
-    BedrockSectorAnalysisProvider(client=client).analyze(board)
+    SectorAnalysisAdapterImpl(client=client).analyze(board)
 
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Market sectors today" in prompt
@@ -3194,7 +3194,7 @@ def test_sector_analysis_renders_movers_breadth_and_headlines_into_prompt():
             ),
         )
     ]
-    BedrockSectorAnalysisProvider(client=client).analyze(board)
+    SectorAnalysisAdapterImpl(client=client).analyze(board)
 
     prompt = client.calls[0]["messages"][0]["content"]
     assert "driven by: NVIDIA +6.20%; Broadcom +4.10%" in prompt
@@ -3212,7 +3212,7 @@ def test_sector_analysis_joins_movers_and_headlines_onto_the_highlight():
         _ctx("Energy", "XLE", -5.0),
     ]
 
-    analysis = BedrockSectorAnalysisProvider(client=client).analyze(board)
+    analysis = SectorAnalysisAdapterImpl(client=client).analyze(board)
 
     leader = analysis.leaders[0]
     assert [m.ticker for m in leader.movers] == ["NVDA"]
@@ -3231,7 +3231,7 @@ def test_sector_analysis_joins_real_percent_and_drops_unknown_sector():
             ]
         )
     )
-    analysis = BedrockSectorAnalysisProvider(client=client).analyze(_a_board())
+    analysis = SectorAnalysisAdapterImpl(client=client).analyze(_a_board())
     assert [h.sector for h in analysis.leaders] == ["Technology"]
     assert analysis.leaders[0].change_percent == 10.0
 
@@ -3240,25 +3240,25 @@ def test_sector_analysis_drops_a_highlight_without_a_note():
     client = _StubClient(
         _sector_tool_message(laggards=[{"sector": "Energy", "note": ""}])
     )
-    analysis = BedrockSectorAnalysisProvider(client=client).analyze(_a_board())
+    analysis = SectorAnalysisAdapterImpl(client=client).analyze(_a_board())
     assert analysis.laggards == ()
 
 
 def test_sector_analysis_raises_when_model_does_not_call_the_tool():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
     with pytest.raises(StockDataUnavailable):
-        BedrockSectorAnalysisProvider(client=client).analyze(_a_board())
+        SectorAnalysisAdapterImpl(client=client).analyze(_a_board())
 
 
 def test_sector_analysis_maps_a_client_error_to_a_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockSectorAnalysisProvider(client=_BoomClient()).analyze(_a_board())
+        SectorAnalysisAdapterImpl(client=_BoomClient()).analyze(_a_board())
 
 
 def test_sector_analysis_rejects_an_offschema_tone():
     client = _StubClient(_sector_tool_message(tone="euphoric"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
-        BedrockSectorAnalysisProvider(client=client).analyze(_a_board())
+        SectorAnalysisAdapterImpl(client=client).analyze(_a_board())
 
 
 def test_sector_analysis_retries_once_when_lists_come_back_empty():
@@ -3267,7 +3267,7 @@ def test_sector_analysis_retries_once_when_lists_come_back_empty():
     full = _sector_tool_message()
     client = _SeqStubClient([empty, full])
 
-    analysis = BedrockSectorAnalysisProvider(client=client).analyze(_a_board())
+    analysis = SectorAnalysisAdapterImpl(client=client).analyze(_a_board())
 
     assert len(client.calls) == 2  # retried exactly once
     assert [h.sector for h in analysis.leaders] == ["Technology"]
@@ -3276,7 +3276,7 @@ def test_sector_analysis_retries_once_when_lists_come_back_empty():
 
 def test_sector_analysis_use_case_hands_over_a_ranked_board():
     # The use case ranks the board best-first before handing it to the analyzer.
-    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    analyzer = FakeSectorAnalysisAdapter(a_sector_analysis())
     tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
     energy = a_sector(sector="Energy", symbol="XLE", price=95.0, previous_close=100.0)
     use_case = GetSectorAnalysis(
@@ -3289,7 +3289,7 @@ def test_sector_analysis_use_case_hands_over_a_ranked_board():
 # --- sector attribution: the movers / breadth / headlines behind a move ("why") -----------
 
 
-class _FakeConstituentsRepo(StockSearchRepository):
+class _FakeConstituentsRepo(StockSearchRepositoryAdapter):
     def __init__(self, results=(), *, raises=None):
         self._results = tuple(results)
         self.criteria: StockSearchCriteria | None = None
@@ -3355,7 +3355,7 @@ class _FakeBulkQuotes:
         return out
 
 
-class _FakeNewsRepo(NewsRepository):
+class _FakeNewsRepo(NewsRepositoryAdapter):
     def __init__(self, news_by_symbol=None):
         self._news = news_by_symbol or {}
         self.requested: list[str] = []
@@ -3393,7 +3393,7 @@ def _screened(ticker, sector, market_cap, *, name=None) -> StockSearchResult:
 
 
 def test_sector_analysis_attributes_cap_weighted_gainers_for_an_up_sector():
-    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    analyzer = FakeSectorAnalysisAdapter(a_sector_analysis())
     tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
     constituents = _FakeConstituentsRepo(
         [
@@ -3421,7 +3421,7 @@ def test_sector_analysis_attributes_cap_weighted_gainers_for_an_up_sector():
 
 
 def test_sector_analysis_attributes_losers_for_a_down_sector():
-    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    analyzer = FakeSectorAnalysisAdapter(a_sector_analysis())
     energy = a_sector(sector="Energy", symbol="XLE", price=95.0, previous_close=100.0)
     constituents = _FakeConstituentsRepo(
         [
@@ -3447,7 +3447,7 @@ def test_sector_analysis_attributes_losers_for_a_down_sector():
 def test_sector_analysis_maps_gics_board_name_to_the_yahoo_sector_slug():
     # The board says "Financials"; the universe stores "financial_services". The join must
     # still find the constituents (the bug this mapping exists to prevent).
-    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    analyzer = FakeSectorAnalysisAdapter(a_sector_analysis())
     fins = a_sector(sector="Financials", symbol="XLF", price=101.0, previous_close=100.0)
     constituents = _FakeConstituentsRepo(
         [_screened("JPM", "financial_services", 6.0e11, name="JPMorgan")]
@@ -3465,7 +3465,7 @@ def test_sector_analysis_maps_gics_board_name_to_the_yahoo_sector_slug():
 
 
 def test_sector_analysis_attaches_catalyst_headlines_db_only():
-    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    analyzer = FakeSectorAnalysisAdapter(a_sector_analysis())
     tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
     constituents = _FakeConstituentsRepo(
         [_screened("NVDA", "technology", 3.2e12, name="NVIDIA")]
@@ -3504,7 +3504,7 @@ def test_sector_analysis_attaches_catalyst_headlines_db_only():
 def test_sector_analysis_degrades_to_plain_board_without_attribution():
     # No attribution collaborators wired -> contexts carry the board row and nothing else,
     # so the analysis still runs (its prior behaviour) rather than failing.
-    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    analyzer = FakeSectorAnalysisAdapter(a_sector_analysis())
     tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
     GetSectorAnalysis(
         GetSectorPerformance(FakeSectorProvider([tech])), analyzer
@@ -3520,7 +3520,7 @@ def test_sector_analysis_degrades_to_plain_board_without_attribution():
 def test_sector_analysis_survives_a_quote_feed_failure():
     # A hard quote-feed failure is swallowed: the movers just carry no change (and drop from
     # the ranking), never sinking the analysis.
-    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    analyzer = FakeSectorAnalysisAdapter(a_sector_analysis())
     tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
     constituents = _FakeConstituentsRepo(
         [_screened("NVDA", "technology", 3.2e12, name="NVIDIA")]
@@ -3541,7 +3541,7 @@ def test_sector_analysis_survives_a_quote_feed_failure():
 
 def test_sector_analysis_survives_a_constituent_read_failure():
     # A DB hiccup on the constituent read degrades to the plain board, never sinks the run.
-    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    analyzer = FakeSectorAnalysisAdapter(a_sector_analysis())
     tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
     constituents = _FakeConstituentsRepo(raises=RuntimeError("db down"))
     quotes = _FakeBulkQuotes({"NVDA": 6.0})
@@ -3558,7 +3558,7 @@ def test_sector_analysis_survives_a_constituent_read_failure():
 
 
 def test_sector_analysis_use_case_propagates_a_board_failure():
-    analyzer = FakeSectorAnalysisProvider(a_sector_analysis())
+    analyzer = FakeSectorAnalysisAdapter(a_sector_analysis())
     use_case = GetSectorAnalysis(
         GetSectorPerformance(
             FakeSectorProvider(raises=StockDataUnavailable("sectors", "boom"))
@@ -3571,7 +3571,7 @@ def test_sector_analysis_use_case_propagates_a_board_failure():
 
 def test_get_sector_analysis_returns_200(make_client):
     client = make_client(
-        sector_analysis_provider=FakeSectorAnalysisProvider(a_sector_analysis())
+        sector_analysis_provider=FakeSectorAnalysisAdapter(a_sector_analysis())
     )
     r = client.get("/sectors/analysis")
     assert r.status_code == 200, r.text
@@ -3604,7 +3604,7 @@ def test_get_sector_analysis_serializes_movers_and_headlines(make_client):
         )
     )
     client = make_client(
-        sector_analysis_provider=FakeSectorAnalysisProvider(analysis)
+        sector_analysis_provider=FakeSectorAnalysisAdapter(analysis)
     )
     r = client.get("/sectors/analysis")
     assert r.status_code == 200, r.text
@@ -3622,7 +3622,7 @@ def test_get_sector_analysis_serializes_movers_and_headlines(make_client):
 
 def test_get_sector_analysis_502_when_model_fails(make_client):
     client = make_client(
-        sector_analysis_provider=FakeSectorAnalysisProvider(
+        sector_analysis_provider=FakeSectorAnalysisAdapter(
             raises=StockDataUnavailable("sectors", "bedrock timeout")
         )
     )
@@ -3633,7 +3633,7 @@ def test_get_sector_analysis_404_when_board_unavailable(make_client):
     # The board is primary — a not-found board surfaces as 404, like /sectors.
     client = make_client(
         sector_provider=FakeSectorProvider(raises=StockNotFound("sectors")),
-        sector_analysis_provider=FakeSectorAnalysisProvider(a_sector_analysis()),
+        sector_analysis_provider=FakeSectorAnalysisAdapter(a_sector_analysis()),
     )
     assert client.get("/sectors/analysis").status_code == 404
 
@@ -3678,7 +3678,7 @@ def test_market_index_entity_change_and_percent():
 
 def test_market_summary_parses_tool_call_into_entity():
     client = _StubClient(_market_tool_message())
-    provider = BedrockMarketSummaryProvider(client=client, model_id="test-model")
+    provider = MarketSummaryAdapterImpl(client=client, model_id="test-model")
 
     summary = provider.analyze(_a_market_board())
 
@@ -3710,7 +3710,7 @@ def test_market_summary_parses_tool_call_into_entity():
 
 def test_market_summary_renders_board_into_prompt():
     client = _StubClient(_market_tool_message())
-    BedrockMarketSummaryProvider(client=client).analyze(_a_market_board())
+    MarketSummaryAdapterImpl(client=client).analyze(_a_market_board())
 
     prompt = client.calls[0]["messages"][0]["content"]
     assert "US market today" in prompt
@@ -3727,7 +3727,7 @@ def test_market_summary_keeps_a_period_even_without_a_note():
     client = _StubClient(
         _market_tool_message(periods=[{"period": "year", "note": "A strong year."}])
     )
-    summary = BedrockMarketSummaryProvider(client=client).analyze(_a_market_board())
+    summary = MarketSummaryAdapterImpl(client=client).analyze(_a_market_board())
     assert [p.period for p in summary.periods] == [
         MarketPeriod.YEAR,
         MarketPeriod.MONTH,
@@ -3742,7 +3742,7 @@ def test_market_summary_builds_none_returns_without_history():
     # An index with no trailing performance still appears, with None returns.
     board = [a_market_index(name="S&P 500", symbol="SPY", performance=None)]
     client = _StubClient(_market_tool_message())
-    summary = BedrockMarketSummaryProvider(client=client).analyze(board)
+    summary = MarketSummaryAdapterImpl(client=client).analyze(board)
     year = summary.periods[0]
     assert year.indexes[0].symbol == "SPY"
     assert year.indexes[0].change_percent is None
@@ -3751,18 +3751,18 @@ def test_market_summary_builds_none_returns_without_history():
 def test_market_summary_raises_when_model_does_not_call_the_tool():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
     with pytest.raises(StockDataUnavailable):
-        BedrockMarketSummaryProvider(client=client).analyze(_a_market_board())
+        MarketSummaryAdapterImpl(client=client).analyze(_a_market_board())
 
 
 def test_market_summary_maps_a_client_error_to_a_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockMarketSummaryProvider(client=_BoomClient()).analyze(_a_market_board())
+        MarketSummaryAdapterImpl(client=_BoomClient()).analyze(_a_market_board())
 
 
 def test_market_summary_rejects_an_offschema_tone():
     client = _StubClient(_market_tool_message(tone="euphoric"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
-        BedrockMarketSummaryProvider(client=client).analyze(_a_market_board())
+        MarketSummaryAdapterImpl(client=client).analyze(_a_market_board())
 
 
 def test_market_summary_retries_once_when_periods_come_back_empty():
@@ -3771,7 +3771,7 @@ def test_market_summary_retries_once_when_periods_come_back_empty():
     full = _market_tool_message()
     client = _SeqStubClient([empty, full])
 
-    summary = BedrockMarketSummaryProvider(client=client).analyze(_a_market_board())
+    summary = MarketSummaryAdapterImpl(client=client).analyze(_a_market_board())
 
     assert len(client.calls) == 2  # retried exactly once
     assert summary.periods[0].note == "A strong year for both indexes."
@@ -3810,7 +3810,7 @@ def _earnings_highlights_message(**input_overrides) -> _StubMessage:
 
 def test_earnings_analysis_parses_tool_call_into_entity():
     client = _StubClient(_earnings_tool_message())
-    provider = BedrockEarningsAnalysisProvider(client=client, model_id="test-model")
+    provider = EarningsAnalysisAdapterImpl(client=client, model_id="test-model")
 
     analysis = provider.analyze(
         "aapl", a_quarterly_timeline(), an_annual_timeline()
@@ -3833,7 +3833,7 @@ def test_earnings_analysis_parses_tool_call_into_entity():
 
 def test_earnings_analysis_renders_timelines_into_prompt():
     client = _StubClient(_earnings_tool_message())
-    BedrockEarningsAnalysisProvider(client=client).analyze(
+    EarningsAnalysisAdapterImpl(client=client).analyze(
         "AAPL", a_quarterly_timeline(), an_annual_timeline()
     )
 
@@ -3852,14 +3852,14 @@ def test_earnings_analysis_renders_timelines_into_prompt():
 def test_earnings_analysis_raises_when_model_does_not_call_the_tool():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
     with pytest.raises(StockDataUnavailable):
-        BedrockEarningsAnalysisProvider(client=client).analyze(
+        EarningsAnalysisAdapterImpl(client=client).analyze(
             "AAPL", a_quarterly_timeline()
         )
 
 
 def test_earnings_analysis_maps_a_client_error_to_a_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockEarningsAnalysisProvider(client=_BoomClient()).analyze(
+        EarningsAnalysisAdapterImpl(client=_BoomClient()).analyze(
             "AAPL", a_quarterly_timeline()
         )
 
@@ -3867,7 +3867,7 @@ def test_earnings_analysis_maps_a_client_error_to_a_domain_error():
 def test_earnings_analysis_rejects_an_offschema_trend():
     client = _StubClient(_earnings_tool_message(trend="exploding"))  # not in enum
     with pytest.raises(StockDataUnavailable):
-        BedrockEarningsAnalysisProvider(client=client).analyze(
+        EarningsAnalysisAdapterImpl(client=client).analyze(
             "AAPL", a_quarterly_timeline()
         )
 
@@ -3879,7 +3879,7 @@ def test_earnings_analysis_retries_once_when_highlights_come_back_empty():
     highlights = _earnings_highlights_message()  # the targeted recovery call
     client = _SeqStubClient([empty, highlights])
 
-    analysis = BedrockEarningsAnalysisProvider(client=client).analyze(
+    analysis = EarningsAnalysisAdapterImpl(client=client).analyze(
         "AAPL", a_quarterly_timeline()
     )
 
@@ -3900,7 +3900,7 @@ def test_earnings_analysis_drops_string_highlights_instead_of_char_splitting():
     leaked = '<parameter name="highlights">["Beat every quarter", "Profit climbing"]'
     client = _StubClient(_earnings_tool_message(highlights=leaked))
 
-    analysis = BedrockEarningsAnalysisProvider(client=client).analyze(
+    analysis = EarningsAnalysisAdapterImpl(client=client).analyze(
         "AAPL", a_quarterly_timeline()
     )
 
@@ -3910,7 +3910,7 @@ def test_earnings_analysis_drops_string_highlights_instead_of_char_splitting():
 
 
 def test_market_summary_use_case_hands_over_the_board():
-    analyzer = FakeMarketSummaryProvider(a_market_summary())
+    analyzer = FakeMarketSummaryAdapter(a_market_summary())
     use_case = GetMarketSummary(
         GetMarketOverview(FakeMarketOverviewProvider(_a_market_board())), analyzer
     )
@@ -3919,7 +3919,7 @@ def test_market_summary_use_case_hands_over_the_board():
 
 
 def test_market_summary_use_case_propagates_a_board_failure():
-    analyzer = FakeMarketSummaryProvider(a_market_summary())
+    analyzer = FakeMarketSummaryAdapter(a_market_summary())
     use_case = GetMarketSummary(
         GetMarketOverview(
             FakeMarketOverviewProvider(raises=StockDataUnavailable("market", "boom"))
@@ -3932,7 +3932,7 @@ def test_market_summary_use_case_propagates_a_board_failure():
 
 def test_get_market_summary_returns_200(make_client):
     client = make_client(
-        market_summary_provider=FakeMarketSummaryProvider(a_market_summary())
+        market_summary_provider=FakeMarketSummaryAdapter(a_market_summary())
     )
     r = client.get("/market/summary")
     assert r.status_code == 200, r.text
@@ -3952,7 +3952,7 @@ def test_get_market_summary_returns_200(make_client):
 
 def test_get_market_summary_502_when_model_fails(make_client):
     client = make_client(
-        market_summary_provider=FakeMarketSummaryProvider(
+        market_summary_provider=FakeMarketSummaryAdapter(
             raises=StockDataUnavailable("market", "bedrock timeout")
         )
     )
@@ -3965,7 +3965,7 @@ def test_get_market_summary_404_when_board_unavailable(make_client):
         market_overview_provider=FakeMarketOverviewProvider(
             raises=StockNotFound("market")
         ),
-        market_summary_provider=FakeMarketSummaryProvider(a_market_summary()),
+        market_summary_provider=FakeMarketSummaryAdapter(a_market_summary()),
     )
     assert client.get("/market/summary").status_code == 404
 

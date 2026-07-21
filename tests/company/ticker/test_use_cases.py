@@ -6,26 +6,26 @@ from app.stocks.company.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
 from app.stocks.entities import (
     Quote,
     Stock,
     StockPerformance,
 )
-from app.stocks.ports import (
-    StockDataProvider,
-    StockPerformanceProvider,
-    StockQuoteProvider,
+from app.stocks.interfaces import (
+    StockDataAdapter,
+    StockPerformanceAdapter,
+    StockQuoteAdapter,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.catalog.etfs.repository import EtfLookupRepository
+from app.stocks.catalog.etfs.interfaces import EtfLookupRepositoryAdapter
 from app.stocks.company.ticker.entities import (
     OptionContract,
     TickerOptionsMetrics,
     TickerValuation,
 )
-from app.stocks.company.ticker.ports import OptionChainProvider
-from app.stocks.company.ticker.repository import StoredTickerFacts, TickerRepository
+from app.stocks.company.ticker.interfaces import OptionChainAdapter
+from app.stocks.company.ticker.interfaces import StoredTickerFacts, TickerRepositoryAdapter
 from app.stocks.company.ticker.use_cases import (
     ASSET_TYPE_EQUITY,
     ASSET_TYPE_ETF,
@@ -52,7 +52,7 @@ def _performance() -> StockPerformance:
     )
 
 
-class _FakeQuotes(StockQuoteProvider):
+class _FakeQuotes(StockQuoteAdapter):
     def __init__(self, price: float = 100.0, error: Exception | None = None) -> None:
         self._price = price
         self._error = error
@@ -65,7 +65,7 @@ class _FakeQuotes(StockQuoteProvider):
         return _a_quote(symbol, self._price)
 
 
-class _FakePerformance(StockPerformanceProvider):
+class _FakePerformance(StockPerformanceAdapter):
     def __init__(self, error: Exception | None = None) -> None:
         self._error = error
         self.calls: list[str] = []
@@ -77,7 +77,7 @@ class _FakePerformance(StockPerformanceProvider):
         return _performance()
 
 
-class _FakeStocks(StockDataProvider):
+class _FakeStocks(StockDataAdapter):
     def __init__(self, exchange: str | None = "NASDAQ", error=None) -> None:
         self._exchange = exchange
         self._error = error
@@ -103,7 +103,7 @@ class _FakeStocks(StockDataProvider):
         )
 
 
-class _FakeRepo(TickerRepository):
+class _FakeRepo(TickerRepositoryAdapter):
     def __init__(
         self,
         name: str | None = None,
@@ -178,7 +178,7 @@ class _FakeRepo(TickerRepository):
         self._exchange = exchange
 
 
-class _FakeEtfs(EtfLookupRepository):
+class _FakeEtfs(EtfLookupRepositoryAdapter):
     def __init__(self, is_member: bool = False) -> None:
         self._is_member = is_member
         self.calls: list[str] = []
@@ -211,7 +211,7 @@ def _four_quarters(*eps: float) -> QuarterlyEarningsTimeline:
     return QuarterlyEarningsTimeline(symbol="MU", quarters=quarters)
 
 
-class _FakeEarnings(QuarterlyEarningsProvider):
+class _FakeEarnings(QuarterlyEarningsAdapter):
     def __init__(self, timeline: QuarterlyEarningsTimeline | None = None, error=None):
         self._timeline = timeline or QuarterlyEarningsTimeline("MU", ())
         self._error = error
@@ -259,7 +259,7 @@ def _far_chain() -> tuple[OptionContract, ...]:
     )
 
 
-class _FakeOptions(OptionChainProvider):
+class _FakeOptions(OptionChainAdapter):
     def __init__(self, expirations=(), chains=None, error=None) -> None:
         self._expirations = expirations
         self._chains = chains or {}

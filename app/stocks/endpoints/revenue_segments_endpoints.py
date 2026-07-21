@@ -4,19 +4,19 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db.db_cached_revenue_segments_adapter import (
-    DbCachedRevenueSegmentsProvider,
+from app.stocks.adapters.db.db_cached_revenue_segments_adapter_impl import (
+    RevenueSegmentsAdapterImpl as DbCachedRevenueSegmentsAdapterImpl,
 )
-from app.stocks.adapters.sec_edgar.revenue_segments_adapter import (
-    SecEdgarRevenueSegmentsProvider,
+from app.stocks.adapters.sec_edgar.revenue_segments_adapter_impl import (
+    RevenueSegmentsAdapterImpl as SecEdgarRevenueSegmentsAdapterImpl,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.company.revenue_segments.db_repository import SqlRevenueSegmentsRepository
+from app.stocks.company.revenue_segments.revenue_segments_repository_adapter_impl import RevenueSegmentsRepositoryAdapterImpl
 from app.stocks.company.revenue_segments.entities import (
     RevenueSegment,
     RevenueSegmentation,
 )
-from app.stocks.company.revenue_segments.ports import RevenueSegmentsProvider
+from app.stocks.company.revenue_segments.interfaces import RevenueSegmentsAdapter
 from app.stocks.company.revenue_segments.schemas import (
     RevenueSegmentationResponse,
     RevenueSegmentResponse,
@@ -32,27 +32,27 @@ _SEC_MIN_REQUEST_INTERVAL = 0.15
 
 
 @lru_cache(maxsize=1)
-def _sec_revenue_segments_provider() -> RevenueSegmentsProvider:
+def _sec_revenue_segments_provider() -> RevenueSegmentsAdapter:
     # One process-singleton live provider (no key; it caches the ticker->CIK map across calls);
     # the DB cache that wraps it is built per request, since it needs the request session.
-    return SecEdgarRevenueSegmentsProvider(
+    return SecEdgarRevenueSegmentsAdapterImpl(
         min_request_interval_seconds=_SEC_MIN_REQUEST_INTERVAL
     )
 
 
 def get_revenue_segments_provider(
     db: Session = Depends(get_db),
-) -> RevenueSegmentsProvider:
+) -> RevenueSegmentsAdapter:
     # A persistent DB cache (refreshed out of band by the revenue-segments cron endpoint + lazily
     # on a miss) sits in front of EDGAR so the endpoint rarely walks the filing. SEC needs no
     # key, so this is always wired.
-    return DbCachedRevenueSegmentsProvider(
-        _sec_revenue_segments_provider(), SqlRevenueSegmentsRepository(db)
+    return DbCachedRevenueSegmentsAdapterImpl(
+        _sec_revenue_segments_provider(), RevenueSegmentsRepositoryAdapterImpl(db)
     )
 
 
 def get_revenue_segments_use_case(
-    provider: RevenueSegmentsProvider = Depends(get_revenue_segments_provider),
+    provider: RevenueSegmentsAdapter = Depends(get_revenue_segments_provider),
 ) -> GetRevenueSegments:
     return GetRevenueSegments(provider)
 

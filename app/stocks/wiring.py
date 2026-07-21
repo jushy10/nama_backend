@@ -6,65 +6,65 @@ from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.alpaca.price_adapter import AlpacaStockDataProvider
-from app.stocks.adapters.db.annual_earnings_estimates_adapter import (
-    AnnualEarningsEstimatesProvider,
+from app.stocks.adapters.alpaca.price_adapter_impl import PriceAdapterImpl as AlpacaPriceAdapterImpl
+from app.stocks.adapters.db.analyst_estimates_adapter_impl import (
+    AnalystEstimatesAdapterImpl,
 )
-from app.stocks.adapters.market_routing.price_adapter import MarketRoutingPriceProvider
-from app.stocks.adapters.yfinance.price_adapter import YahooPriceProvider
-from app.stocks.adapters.yfinance.options_adapter import YfinanceOptionChainProvider
-from app.stocks.company.earnings.annual.db_repository import SqlAnnualEarningsRepository
-from app.stocks.ports import AnalystEstimatesProvider
+from app.stocks.adapters.market_routing.price_adapter_impl import PriceAdapterImpl as MarketRoutingPriceAdapterImpl
+from app.stocks.adapters.yfinance.price_adapter_impl import PriceAdapterImpl as YahooPriceAdapterImpl
+from app.stocks.adapters.yfinance.option_chain_adapter_impl import OptionChainAdapterImpl
+from app.stocks.company.earnings.annual.annual_earnings_repository_adapter_impl import AnnualEarningsRepositoryAdapterImpl
+from app.stocks.interfaces import AnalystEstimatesAdapter
 
 
 @lru_cache(maxsize=1)
-def get_provider() -> AlpacaStockDataProvider:
+def get_provider() -> AlpacaPriceAdapterImpl:
     key = os.environ.get("APCA_API_KEY_ID")
     secret = os.environ.get("APCA_API_SECRET_KEY")
     if not key or not secret:
         raise HTTPException(
             503, "Stock data is not configured (APCA_API_KEY_ID / APCA_API_SECRET_KEY)."
         )
-    return AlpacaStockDataProvider(key, secret)
+    return AlpacaPriceAdapterImpl(key, secret)
 
 
 @lru_cache(maxsize=1)
-def get_yahoo_price_provider() -> YahooPriceProvider:
+def get_yahoo_price_provider() -> YahooPriceAdapterImpl:
     # The Canadian (TSX/TSXV) price feed — keyless Yahoo via yfinance, like the earnings
     # timelines' live source. Always constructable (no key gate); best-effort at read.
-    return YahooPriceProvider()
+    return YahooPriceAdapterImpl()
 
 
-def get_price_provider() -> MarketRoutingPriceProvider:
+def get_price_provider() -> MarketRoutingPriceAdapterImpl:
     # The per-symbol price provider the ticker card and charts ride: routes a US symbol to
     # Alpaca (real-time, the primary market) and a Canadian-suffixed one (.TO/.V/…) to the
     # keyless Yahoo feed. A US-only deployment still needs the Alpaca keys (get_provider's 503
     # gate), so wiring the US leg keeps that hard requirement — the CA leg is always available.
     # Not @lru_cache'd: get_provider raises 503 without keys, and caching must not freeze that.
-    return MarketRoutingPriceProvider(
+    return MarketRoutingPriceAdapterImpl(
         us=get_provider(), ca=get_yahoo_price_provider()
     )
 
 
 @lru_cache(maxsize=1)
-def get_options_provider() -> YfinanceOptionChainProvider:
+def get_options_provider() -> OptionChainAdapterImpl:
     # The ticker card's options read comes from Yahoo via yfinance — keyless,
     # like the earnings timelines' live source, so there's no key gate here at
     # all. Best-effort enrichment: a blocked Yahoo call leaves the block null
     # rather than sinking the card, so the provider is always wired.
-    return YfinanceOptionChainProvider()
+    return OptionChainAdapterImpl()
 
 
 def get_estimates_provider(
     db: Session = Depends(get_db),
-) -> AnalystEstimatesProvider:
+) -> AnalystEstimatesAdapter:
     # Forward analyst estimates back the AI analysis context — best-effort
     # enrichment. They're projected from the
     # annual-earnings slice's stored forward years (the same Yahoo consensus that
     # timeline serves), DB-only: a symbol whose timeline isn't cached yet just
     # omits the forward metrics until the annual read path or its cron fills the
     # rows. No second table, fetch, or cron.
-    return AnnualEarningsEstimatesProvider(SqlAnnualEarningsRepository(db))
+    return AnalystEstimatesAdapterImpl(AnnualEarningsRepositoryAdapterImpl(db))
 
 
 # Per-kind default TTL for a stored AI analysis (minutes) — each tuned to how

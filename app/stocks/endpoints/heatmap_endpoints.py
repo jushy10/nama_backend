@@ -13,7 +13,7 @@ from app.stocks.market.heatmap.schemas import (
 )
 from app.stocks.market.heatmap.use_cases import GetStockHeatMap
 from app.stocks.schemas import StockPerformanceResponse
-from app.stocks.catalog.universe.db_repository import SqlStockSearchRepository
+from app.stocks.catalog.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.stocks.wiring import get_provider
 
 router = APIRouter(tags=["heatmap"])
@@ -25,9 +25,9 @@ def get_heatmap_use_case(
 ) -> GetStockHeatMap:
     # The universe read is a request-scoped DB read over the shared anchor (no vendor, no key) —
     # structure, tile sizes and the trailing-window colours all come off it in one query. The
-    # Alpaca singleton supplies only the live day-change board (BulkQuoteProvider), inheriting
+    # Alpaca singleton supplies only the live day-change board (BulkQuoteAdapter), inheriting
     # its missing-keys 503 gate.
-    return GetStockHeatMap(SqlStockSearchRepository(db), provider)
+    return GetStockHeatMap(StockSearchRepositoryAdapterImpl(db), provider)
 
 
 def _present_performance(

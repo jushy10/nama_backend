@@ -5,14 +5,14 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.alpaca.price_adapter import AlpacaStockDataProvider
+from app.stocks.adapters.alpaca.price_adapter_impl import PriceAdapterImpl
 from app.stocks.endpoints.cron.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
     trigger_sync,
 )
 from app.stocks.endpoints.cron.auth import require_cron_token
-from app.stocks.catalog.performance.db_repository import SqlPerformanceRepository
+from app.stocks.catalog.performance.performance_repository_adapter_impl import PerformanceRepositoryAdapterImpl
 from app.stocks.catalog.performance.use_cases import PerformanceSyncReport, SyncStockPerformance
 
 logger = logging.getLogger(__name__)
@@ -35,8 +35,8 @@ def run_stock_performance_sync(limit: int | None) -> PerformanceSyncReport:
     db = SessionLocal()
     try:
         report = SyncStockPerformance(
-            AlpacaStockDataProvider(key, secret),
-            SqlPerformanceRepository(db),
+            PriceAdapterImpl(key, secret),
+            PerformanceRepositoryAdapterImpl(db),
         ).execute(limit=limit)
         logger.info(
             "stock performance sync done: refreshed=%d skipped=%d limit=%s",

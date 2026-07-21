@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.catalog.fundamentals.entities import Fundamentals
-from app.stocks.catalog.fundamentals.repository import FundamentalsRepository, RefreshTarget
+from app.stocks.catalog.fundamentals.interfaces import FundamentalsRepositoryAdapter, RefreshTarget
 from app.stocks.catalog.fundamentals.use_cases import SyncFundamentals
 
 
@@ -19,7 +19,7 @@ class FakeProvider:
         return result
 
 
-class FakeRepo(FundamentalsRepository):
+class FakeRepo(FundamentalsRepositoryAdapter):
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = targets
         self.requested_limit: int | None = "unset"  # type: ignore[assignment]

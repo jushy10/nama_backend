@@ -3,12 +3,12 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
-from app.stocks.adapters.yfinance.options_flow_adapter import (
-    YfinanceOptionsChainProvider,
+from app.stocks.adapters.yfinance.options_chain_adapter_impl import (
+    OptionsChainAdapterImpl,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.company.options.entities import ExpiryChain, OptionContract, OptionsFlowSummary
-from app.stocks.company.options.ports import OptionsChainProvider
+from app.stocks.company.options.interfaces import OptionsChainAdapter
 from app.stocks.company.options.schemas import (
     OptionContractResponse,
     OptionsFlowResponse,
@@ -25,15 +25,15 @@ _MAX_UNUSUAL = 25
 
 
 @lru_cache(maxsize=1)
-def get_options_chain_provider() -> OptionsChainProvider:
+def get_options_chain_provider() -> OptionsChainAdapter:
     # Keyless yfinance singleton (like the ticker card's options provider): best-effort at
     # read and always constructable, so there's no key gate. A blocked Yahoo call surfaces
     # as a 502 at the endpoint (the chain is primary here), not a boot-time failure.
-    return YfinanceOptionsChainProvider()
+    return OptionsChainAdapterImpl()
 
 
 def get_options_flow_use_case(
-    options: OptionsChainProvider = Depends(get_options_chain_provider),
+    options: OptionsChainAdapter = Depends(get_options_chain_provider),
 ) -> GetOptionsFlow:
     return GetOptionsFlow(options)
 

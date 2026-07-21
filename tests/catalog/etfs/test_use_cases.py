@@ -3,9 +3,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.stocks.ai.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
-from app.stocks.ai.analysis.ports import InvestmentAnalysisCache
+from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCacheAdapter
 from app.stocks.entities import Quote, StockPerformance
-from app.stocks.ports import StockPerformanceProvider, StockQuoteProvider
+from app.stocks.interfaces import StockPerformanceAdapter, StockQuoteAdapter
 from app.stocks.catalog.etfs.entities import (
     EtfCategories,
     EtfHolding,
@@ -18,16 +18,16 @@ from app.stocks.catalog.etfs.entities import (
     ScreenedEtf,
     SortDirection,
 )
-from app.stocks.catalog.etfs.ports import (
-    EtfAnalysisProvider,
-    EtfProfileProvider,
-    EtfScreener,
-    EtfScreenerQueryTranslator,
+from app.stocks.catalog.etfs.interfaces import (
+    EtfAnalysisAdapter,
+    EtfProfileAdapter,
+    EtfScreenerAdapter,
+    EtfScreenerQueryAdapter,
 )
-from app.stocks.catalog.etfs.repository import (
-    EtfLookupRepository,
-    EtfRepository,
-    EtfSearchRepository,
+from app.stocks.catalog.etfs.interfaces import (
+    EtfLookupRepositoryAdapter,
+    EtfRepositoryAdapter,
+    EtfSearchRepositoryAdapter,
     EtfSyncCounts,
 )
 from app.stocks.catalog.etfs.use_cases import (
@@ -50,7 +50,7 @@ def _a_screen(n: int) -> tuple[ScreenedEtf, ...]:
     return tuple(_etf(f"E{i:04d}", net_assets=1e9 + i) for i in range(n))
 
 
-class _FakeScreener(EtfScreener):
+class _FakeScreener(EtfScreenerAdapter):
     def __init__(self, etfs=(), *, error=None) -> None:
         self._etfs = tuple(etfs)
         self._error = error
@@ -68,7 +68,7 @@ class _FakeScreener(EtfScreener):
 _NOT_CALLED = object()  # sentinel: the enrichment work-list query was never issued
 
 
-class _FakeProfileProvider(EtfProfileProvider):
+class _FakeProfileProvider(EtfProfileAdapter):
     def __init__(self, mapping=None, *, errors=()) -> None:
         self._mapping = dict(mapping or {})
         self._errors = set(errors)
@@ -81,7 +81,7 @@ class _FakeProfileProvider(EtfProfileProvider):
         return self._mapping.get(symbol, EtfProfile.empty())
 
 
-class _FakeRepo(EtfRepository):
+class _FakeRepo(EtfRepositoryAdapter):
     def __init__(self, *, counts=EtfSyncCounts(0, 0), targets=()) -> None:
         self._counts = counts
         self._targets = tuple(targets)
@@ -249,7 +249,7 @@ _RESULT = EtfSearchResult(
 )
 
 
-class _FakeSearchRepo(EtfSearchRepository):
+class _FakeSearchRepo(EtfSearchRepositoryAdapter):
     def __init__(self, *, page=None, categories=None) -> None:
         self._page = page or EtfSearchPage(results=(), total=0, limit=0, offset=0)
         self._categories = categories or EtfCategories(())
@@ -352,7 +352,7 @@ def test_list_categories_passes_through():
 # --- AiScreenEtfs (the AI-driven read side) ------------------------------------------------
 
 
-class _FakeEtfTranslator(EtfScreenerQueryTranslator):
+class _FakeEtfTranslator(EtfScreenerQueryAdapter):
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result if result is not None else EtfScreenIntent()
         self._error = error
@@ -440,7 +440,7 @@ def _live_returns_profile() -> EtfProfile:
     return EtfProfile(ytd_return=11.25, three_year_return=20.41, five_year_return=13.01)
 
 
-class _FakeLookup(EtfLookupRepository):
+class _FakeLookup(EtfLookupRepositoryAdapter):
     def __init__(self, facts: EtfSearchResult | None, profile: EtfProfile | None = None) -> None:
         self._facts = facts
         self._profile = profile if profile is not None else EtfProfile.empty()
@@ -459,7 +459,7 @@ class _FakeLookup(EtfLookupRepository):
         return self._profile
 
 
-class _FakeQuotes(StockQuoteProvider):
+class _FakeQuotes(StockQuoteAdapter):
     def __init__(self, quote: Quote | None = None, error: Exception | None = None) -> None:
         self._quote = quote
         self._error = error
@@ -478,7 +478,7 @@ def _a_performance() -> StockPerformance:
     )
 
 
-class _FakePerformance(StockPerformanceProvider):
+class _FakePerformance(StockPerformanceAdapter):
     def __init__(
         self, perf: StockPerformance | None = None, error: Exception | None = None
     ) -> None:
@@ -732,12 +732,12 @@ def test_detail_rejects_an_unknown_include_before_the_lookup():
 
 # --- GetEtfAnalysis --------------------------------------------------------------------------
 #
-# Composes GetEtfDetail (the primary snapshot) + an EtfAnalysisProvider (the AI read). The detail's
+# Composes GetEtfDetail (the primary snapshot) + an EtfAnalysisAdapter (the AI read). The detail's
 # normalization / membership gate / quote-primary failures all propagate unchanged; the analyzer is
 # only reached once a snapshot is in hand.
 
 
-class _FakeEtfAnalysisProvider(EtfAnalysisProvider):
+class _FakeEtfAnalysisProvider(EtfAnalysisAdapter):
     def __init__(self, analysis: InvestmentAnalysis | None = None, *, raises=None) -> None:
         self._analysis = analysis
         self._raises = raises
@@ -831,7 +831,7 @@ def test_analysis_propagates_a_model_failure():
         GetEtfAnalysis(detail_uc, analyzer).execute("VOO")
 
 
-class _FakeAnalysisCache(InvestmentAnalysisCache):
+class _FakeAnalysisCache(InvestmentAnalysisCacheAdapter):
     def __init__(self, stored: InvestmentAnalysis | None = None) -> None:
         self._store = {stored.symbol: stored} if stored is not None else {}
         self.puts: list[InvestmentAnalysis] = []

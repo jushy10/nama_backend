@@ -4,22 +4,22 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db.db_cached_rating_changes_adapter import (
-    DbCachedRatingChangeProvider,
+from app.stocks.adapters.db.db_cached_rating_change_adapter_impl import (
+    RatingChangeAdapterImpl as DbCachedRatingChangeAdapterImpl,
 )
-from app.stocks.adapters.db.db_cached_recommendations_adapter import (
-    DbCachedRecommendationProvider,
+from app.stocks.adapters.db.db_cached_recommendation_adapter_impl import (
+    RecommendationAdapterImpl as DbCachedRecommendationAdapterImpl,
 )
-from app.stocks.adapters.yfinance.rating_changes_adapter import (
-    YfinanceRatingChangeProvider,
+from app.stocks.adapters.yfinance.rating_change_adapter_impl import (
+    RatingChangeAdapterImpl as YfinanceRatingChangeAdapterImpl,
 )
-from app.stocks.adapters.yfinance.recommendations_adapter import (
-    YfinanceRecommendationProvider,
+from app.stocks.adapters.yfinance.recommendation_adapter_impl import (
+    RecommendationAdapterImpl as YfinanceRecommendationAdapterImpl,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.company.recommendations.db_repository import (
-    SqlRatingChangesRepository,
-    SqlRecommendationsRepository,
+from app.stocks.company.recommendations.repository_adapter_impl import (
+    RatingChangesRepositoryAdapterImpl,
+    RecommendationsRepositoryAdapterImpl,
 )
 from app.stocks.company.recommendations.entities import (
     AnalystPriceTargets,
@@ -28,9 +28,9 @@ from app.stocks.company.recommendations.entities import (
     RatingChange,
     RecommendationTrend,
 )
-from app.stocks.company.recommendations.ports import (
-    RatingChangeProvider,
-    RecommendationProvider,
+from app.stocks.company.recommendations.interfaces import (
+    RatingChangeAdapter,
+    RecommendationAdapter,
 )
 from app.stocks.company.recommendations.schemas import (
     AnalystInfoResponse,
@@ -46,42 +46,42 @@ router = APIRouter(tags=["analyst-info"])
 
 
 @lru_cache(maxsize=1)
-def _yfinance_recommendation_provider() -> RecommendationProvider:
+def _yfinance_recommendation_provider() -> RecommendationAdapter:
     # One process-singleton live provider (no key, no connection pool to share); the DB
     # cache that wraps it is built per request, since it needs the request session.
-    return YfinanceRecommendationProvider()
+    return YfinanceRecommendationAdapterImpl()
 
 
 @lru_cache(maxsize=1)
-def _yfinance_rating_change_provider() -> RatingChangeProvider:
+def _yfinance_rating_change_provider() -> RatingChangeAdapter:
     # Its rating-change sibling — same singleton rationale.
-    return YfinanceRatingChangeProvider()
+    return YfinanceRatingChangeAdapterImpl()
 
 
 def get_recommendation_provider(
     db: Session = Depends(get_db),
-) -> RecommendationProvider:
+) -> RecommendationAdapter:
     # A persistent DB cache (refreshed out of band by the recommendations cron + lazily on a
     # miss) sits in front of Yahoo so the endpoint rarely calls it, and it serves stored rows
     # without a live round-trip. yfinance needs no key, so this is always wired.
-    return DbCachedRecommendationProvider(
-        _yfinance_recommendation_provider(), SqlRecommendationsRepository(db)
+    return DbCachedRecommendationAdapterImpl(
+        _yfinance_recommendation_provider(), RecommendationsRepositoryAdapterImpl(db)
     )
 
 
 def get_rating_change_provider(
     db: Session = Depends(get_db),
-) -> RatingChangeProvider:
+) -> RatingChangeAdapter:
     # The rating-change DB cache, wired the same way (refreshed by the same sweep + lazily on
     # a miss). Keyless, so always wired.
-    return DbCachedRatingChangeProvider(
-        _yfinance_rating_change_provider(), SqlRatingChangesRepository(db)
+    return DbCachedRatingChangeAdapterImpl(
+        _yfinance_rating_change_provider(), RatingChangesRepositoryAdapterImpl(db)
     )
 
 
 def get_analyst_info_use_case(
-    recommendations: RecommendationProvider = Depends(get_recommendation_provider),
-    rating_changes: RatingChangeProvider = Depends(get_rating_change_provider),
+    recommendations: RecommendationAdapter = Depends(get_recommendation_provider),
+    rating_changes: RatingChangeAdapter = Depends(get_rating_change_provider),
 ) -> GetStockAnalystInfo:
     return GetStockAnalystInfo(recommendations, rating_changes)
 

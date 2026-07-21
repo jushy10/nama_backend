@@ -3,16 +3,16 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
-from app.stocks.adapters.logodev.logo_adapter import LogoDevProvider
+from app.stocks.adapters.logodev.logo_adapter_impl import LogoAdapterImpl
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.company.logo.ports import LogoProvider
+from app.stocks.company.logo.interfaces import LogoAdapter
 from app.stocks.company.logo.use_cases import GetStockLogo
 
 router = APIRouter(tags=["stocks"])
 
 
 @lru_cache(maxsize=1)
-def get_logo_provider() -> LogoProvider:
+def get_logo_provider() -> LogoAdapter:
     # Logo.dev keeps logos current through rebrands/symbol changes. It needs a
     # free *publishable* token (logo.dev, 500k/mo); without it the logo endpoint
     # returns 503, mirroring how the Alpaca keys gate price data. LOGODEV_BASE_URL
@@ -21,10 +21,10 @@ def get_logo_provider() -> LogoProvider:
     if not token:
         raise HTTPException(503, "Logos are not configured (LOGODEV_TOKEN).")
     base_url = os.environ.get("LOGODEV_BASE_URL")
-    return LogoDevProvider(token, base_url) if base_url else LogoDevProvider(token)
+    return LogoAdapterImpl(token, base_url) if base_url else LogoAdapterImpl(token)
 
 
-def get_stock_logo(provider: LogoProvider = Depends(get_logo_provider)) -> GetStockLogo:
+def get_stock_logo(provider: LogoAdapter = Depends(get_logo_provider)) -> GetStockLogo:
     return GetStockLogo(provider)
 
 

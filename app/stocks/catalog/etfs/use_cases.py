@@ -18,22 +18,22 @@ from app.stocks.catalog.etfs.entities import (
     SortDirection,
     slugify,
 )
-from app.stocks.catalog.etfs.ports import (
-    EtfAnalysisProvider,
-    EtfProfileProvider,
-    EtfScreener,
-    EtfScreenerQueryTranslator,
+from app.stocks.catalog.etfs.interfaces import (
+    EtfAnalysisAdapter,
+    EtfProfileAdapter,
+    EtfScreenerAdapter,
+    EtfScreenerQueryAdapter,
 )
-from app.stocks.catalog.etfs.repository import (
-    EtfLookupRepository,
-    EtfRepository,
-    EtfSearchRepository,
+from app.stocks.catalog.etfs.interfaces import (
+    EtfLookupRepositoryAdapter,
+    EtfRepositoryAdapter,
+    EtfSearchRepositoryAdapter,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ai.analysis.ports import InvestmentAnalysisCache
-from app.stocks.ports import (
-    StockPerformanceProvider,
-    StockQuoteProvider,
+from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCacheAdapter
+from app.stocks.interfaces import (
+    StockPerformanceAdapter,
+    StockQuoteAdapter,
 )
 from app.stocks.progress import iter_with_progress
 
@@ -77,9 +77,9 @@ class SyncEtfs:
 
     def __init__(
         self,
-        screener: EtfScreener,
-        repository: EtfRepository,
-        profile_provider: EtfProfileProvider,
+        screener: EtfScreenerAdapter,
+        repository: EtfRepositoryAdapter,
+        profile_provider: EtfProfileAdapter,
     ) -> None:
         self._screener = screener
         self._repository = repository
@@ -144,7 +144,7 @@ class SearchEtfs:
     DEFAULT_LIMIT = 25
     MAX_LIMIT = 100
 
-    def __init__(self, repository: EtfSearchRepository) -> None:
+    def __init__(self, repository: EtfSearchRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(
@@ -173,7 +173,7 @@ class SearchEtfs:
 
 
 class ListEtfCategories:
-    def __init__(self, repository: EtfSearchRepository) -> None:
+    def __init__(self, repository: EtfSearchRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(self) -> EtfCategories:
@@ -183,8 +183,8 @@ class ListEtfCategories:
 class AiScreenEtfs:
     def __init__(
         self,
-        translator: EtfScreenerQueryTranslator,
-        repository: EtfSearchRepository,
+        translator: EtfScreenerQueryAdapter,
+        repository: EtfSearchRepositoryAdapter,
     ) -> None:
         self._translator = translator
         # Read only for the allowed vocabulary the translator is constrained to.
@@ -223,10 +223,10 @@ def _normalize_includes(include: Sequence[str] | None) -> frozenset[str]:
 class GetEtfDetail:
     def __init__(
         self,
-        lookup: EtfLookupRepository,
-        quotes: StockQuoteProvider,
-        performance: StockPerformanceProvider | None = None,
-        profile_provider: EtfProfileProvider | None = None,
+        lookup: EtfLookupRepositoryAdapter,
+        quotes: StockQuoteAdapter,
+        performance: StockPerformanceAdapter | None = None,
+        profile_provider: EtfProfileAdapter | None = None,
     ) -> None:
         self._lookup = lookup
         self._quotes = quotes
@@ -297,8 +297,8 @@ class GetEtfAnalysis:
     def __init__(
         self,
         detail: GetEtfDetail,
-        analyzer: EtfAnalysisProvider,
-        cache: InvestmentAnalysisCache | None = None,
+        analyzer: EtfAnalysisAdapter,
+        cache: InvestmentAnalysisCacheAdapter | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
         self._detail = detail

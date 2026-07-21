@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.catalog.performance.repository import PerformanceRepository
+from app.stocks.catalog.performance.interfaces import PerformanceRepositoryAdapter
 from app.stocks.catalog.performance.use_cases import SyncStockPerformance
 
 
@@ -17,7 +17,7 @@ def _perf(one_year=None, **windows):
     )
 
 
-class FakeRepo(PerformanceRepository):
+class FakeRepo(PerformanceRepositoryAdapter):
     def __init__(self, targets):
         self._targets = tuple(targets)
         self.written: dict[str, StockPerformance] | None = None

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from app.stocks.entities import normalize_symbol
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.company.insider_transactions.entities import InsiderActivity
-from app.stocks.company.insider_transactions.ports import InsiderTransactionsProvider
-from app.stocks.company.insider_transactions.repository import InsiderTransactionsRepository
+from app.stocks.company.insider_transactions.interfaces import InsiderTransactionsAdapter
+from app.stocks.company.insider_transactions.interfaces import InsiderTransactionsRepositoryAdapter
 from app.stocks.progress import iter_with_progress
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 class GetInsiderTransactions:
-    def __init__(self, provider: InsiderTransactionsProvider) -> None:
+    def __init__(self, provider: InsiderTransactionsAdapter) -> None:
         self._provider = provider
 
     def execute(self, symbol: str) -> InsiderActivity:
@@ -35,8 +35,8 @@ class InsiderTransactionsSyncReport:
 class SyncInsiderTransactions:
     def __init__(
         self,
-        provider: InsiderTransactionsProvider,
-        repository: InsiderTransactionsRepository,
+        provider: InsiderTransactionsAdapter,
+        repository: InsiderTransactionsRepositoryAdapter,
     ) -> None:
         self._provider = provider
         self._repository = repository

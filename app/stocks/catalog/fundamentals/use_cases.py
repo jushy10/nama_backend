@@ -5,8 +5,8 @@ import time
 from dataclasses import dataclass
 
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.catalog.fundamentals.ports import FundamentalsProvider
-from app.stocks.catalog.fundamentals.repository import FundamentalsRepository, RefreshTarget
+from app.stocks.catalog.fundamentals.interfaces import FundamentalsAdapter
+from app.stocks.catalog.fundamentals.interfaces import FundamentalsRepositoryAdapter, RefreshTarget
 from app.stocks.progress import iter_with_progress
 
 logger = logging.getLogger(__name__)
@@ -35,8 +35,8 @@ class _PassOutcome:
 class SyncFundamentals:
     def __init__(
         self,
-        provider: FundamentalsProvider,
-        repository: FundamentalsRepository,
+        provider: FundamentalsAdapter,
+        repository: FundamentalsRepositoryAdapter,
         *,
         max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
         retry_backoff_seconds: float = 0.0,

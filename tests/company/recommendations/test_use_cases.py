@@ -12,13 +12,13 @@ from app.stocks.company.recommendations.entities import (
     RatingChange,
     RecommendationTrend,
 )
-from app.stocks.company.recommendations.ports import (
-    RatingChangeProvider,
-    RecommendationProvider,
+from app.stocks.company.recommendations.interfaces import (
+    RatingChangeAdapter,
+    RecommendationAdapter,
 )
-from app.stocks.company.recommendations.repository import (
-    RatingChangesRepository,
-    RecommendationsRepository,
+from app.stocks.company.recommendations.interfaces import (
+    RatingChangesRepositoryAdapter,
+    RecommendationsRepositoryAdapter,
     RefreshTarget,
 )
 from app.stocks.company.recommendations.use_cases import (
@@ -129,7 +129,7 @@ def test_rating_changes_latest_and_empty():
     assert empty.is_empty and empty.latest is None
 
 
-class _FakeRecommendationReadProvider(RecommendationProvider):
+class _FakeRecommendationReadProvider(RecommendationAdapter):
     def __init__(self, recommendations=None, *, error=None) -> None:
         self._recommendations = recommendations
         self._error = error
@@ -142,7 +142,7 @@ class _FakeRecommendationReadProvider(RecommendationProvider):
         return self._recommendations
 
 
-class _FakeRatingChangeReadProvider(RatingChangeProvider):
+class _FakeRatingChangeReadProvider(RatingChangeAdapter):
     def __init__(self, rating_changes=None, *, error=None) -> None:
         self._rating_changes = rating_changes
         self._error = error
@@ -334,7 +334,7 @@ def test_analyst_info_top_firms_empty_without_credible_coverage():
     assert info.top_firms == ()
 
 
-class _FakeRepo(RecommendationsRepository):
+class _FakeRepo(RecommendationsRepositoryAdapter):
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = list(targets)
         self.upserts: list[tuple[str, str | None]] = []
@@ -351,7 +351,7 @@ class _FakeRepo(RecommendationsRepository):
         return self._targets[:limit]
 
 
-class _FakeSyncProvider(RecommendationProvider):
+class _FakeSyncProvider(RecommendationAdapter):
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}
@@ -433,7 +433,7 @@ def test_sync_limit_is_passed_through_and_floored_at_one():
     assert repo.refresh_limit == 1  # a non-positive cap is floored to one
 
 
-class _FakeRatingChangeProvider(RatingChangeProvider):
+class _FakeRatingChangeProvider(RatingChangeAdapter):
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}
@@ -448,7 +448,7 @@ class _FakeRatingChangeProvider(RatingChangeProvider):
         return AnalystRatingChanges(symbol, (RatingChange("A Firm", date(2026, 6, 1)),))
 
 
-class _FakeRatingChangesRepo(RatingChangesRepository):
+class _FakeRatingChangesRepo(RatingChangesRepositoryAdapter):
     def __init__(self, *, fail_on=()) -> None:
         self.upserts: list[tuple[str, str | None]] = []
         self._fail_on = set(fail_on)

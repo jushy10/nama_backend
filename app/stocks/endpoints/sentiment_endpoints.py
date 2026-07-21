@@ -2,15 +2,15 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
-from app.stocks.adapters.cnn.fear_greed_adapter import CnnFearGreedProvider
-from app.stocks.adapters.fred.vix_adapter import FredVixProvider
+from app.stocks.adapters.cnn.fear_greed_adapter_impl import FearGreedAdapterImpl
+from app.stocks.adapters.fred.vix_adapter_impl import VixAdapterImpl
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.sentiment.entities import (
     FearGreedSnapshot,
     MarketSentiment,
     VixSnapshot,
 )
-from app.stocks.market.sentiment.ports import FearGreedProvider, VixProvider
+from app.stocks.market.sentiment.interfaces import FearGreedAdapter, VixAdapter
 from app.stocks.market.sentiment.schemas import (
     FearGreedResponse,
     MarketSentimentResponse,
@@ -22,20 +22,20 @@ router = APIRouter(tags=["market"])
 
 
 @lru_cache(maxsize=1)
-def get_vix_provider() -> VixProvider:
+def get_vix_provider() -> VixAdapter:
     # Keyless (FRED), so no 503 gate — unlike the Alpaca price feed.
-    return FredVixProvider()
+    return VixAdapterImpl()
 
 
 @lru_cache(maxsize=1)
-def get_fear_greed_provider() -> FearGreedProvider:
+def get_fear_greed_provider() -> FearGreedAdapter:
     # Keyless (CNN), so no 503 gate.
-    return CnnFearGreedProvider()
+    return FearGreedAdapterImpl()
 
 
 def get_market_sentiment(
-    vix_provider: VixProvider = Depends(get_vix_provider),
-    fear_greed_provider: FearGreedProvider = Depends(get_fear_greed_provider),
+    vix_provider: VixAdapter = Depends(get_vix_provider),
+    fear_greed_provider: FearGreedAdapter = Depends(get_fear_greed_provider),
 ) -> GetMarketSentiment:
     return GetMarketSentiment(vix_provider, fear_greed_provider)
 
