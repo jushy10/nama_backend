@@ -4,10 +4,10 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.yfinance.annual_earnings_adapter import (
-    YfinanceAnnualEarningsProvider,
+from app.stocks.adapters.yfinance.annual_earnings_adapter_impl import (
+    AnnualEarningsAdapterImpl,
 )
-from app.stocks.company.earnings.annual.db_repository import SqlAnnualEarningsRepository
+from app.stocks.company.earnings.annual.annual_earnings_repository_adapter_impl import AnnualEarningsRepositoryAdapterImpl
 from app.stocks.company.earnings.annual.use_cases import (
     AnnualEarningsSyncReport,
     SyncAnnualEarnings,
@@ -37,8 +37,8 @@ def run_annual_earnings_sync(limit: int | None) -> AnnualEarningsSyncReport:
     db = SessionLocal()
     try:
         report = SyncAnnualEarnings(
-            YfinanceAnnualEarningsProvider(),
-            SqlAnnualEarningsRepository(db),
+            AnnualEarningsAdapterImpl(),
+            AnnualEarningsRepositoryAdapterImpl(db),
             retry_backoff_seconds=_RETRY_BACKOFF_SECONDS,
         ).execute(limit=limit)
         logger.info(

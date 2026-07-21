@@ -22,13 +22,13 @@ from app.stocks.adapters.bedrock.ratings_analysis_adapter_impl import (
 from app.stocks.adapters.bedrock.sector_analysis_adapter_impl import (
     SectorAnalysisAdapterImpl,
 )
-from app.stocks.adapters.db.db_only_context_providers import (
-    DbOnlyAnnualEarningsProvider,
-    DbOnlyQuarterlyEarningsProvider,
-    DbOnlyRatingChangesProvider,
-    DbOnlyRecommendationsProvider,
+from app.stocks.adapters.db.db_only_context_adapter_impls import (
+    AnnualEarningsAdapterImpl,
+    QuarterlyEarningsAdapterImpl,
+    RatingChangeAdapterImpl,
+    RecommendationAdapterImpl,
 )
-from app.stocks.adapters.yfinance.eps_history_adapter import YfinanceEpsHistoryProvider
+from app.stocks.adapters.yfinance.eps_history_adapter_impl import EpsHistoryAdapterImpl
 from app.stocks.ai.analysis.ai_analysis_cache_adapter_impl import (
     earnings_analysis_cache,
     fundamentals_analysis_cache,
@@ -84,9 +84,9 @@ from app.stocks.ai.analysis.use_cases import (
     GetStockInfo,
 )
 from app.stocks.company.ticker.use_cases import GetStockPeHistory
-from app.stocks.company.earnings.annual.db_repository import SqlAnnualEarningsRepository
-from app.stocks.company.earnings.quarterly.db_repository import (
-    SqlQuarterlyEarningsRepository,
+from app.stocks.company.earnings.annual.annual_earnings_repository_adapter_impl import AnnualEarningsRepositoryAdapterImpl
+from app.stocks.company.earnings.quarterly.quarterly_earnings_repository_adapter_impl import (
+    QuarterlyEarningsRepositoryAdapterImpl,
 )
 from app.stocks.endpoints.market_endpoints import (
     get_market_overview,
@@ -94,18 +94,18 @@ from app.stocks.endpoints.market_endpoints import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.boards.use_cases import GetMarketOverview, GetSectorPerformance
-from app.stocks.company.news.db_repository import SqlNewsRepository
-from app.stocks.ports import (
-    AllTimeHighProvider,
-    AnalystEstimatesProvider,
-    StockDataProvider,
-    StockPerformanceProvider,
+from app.stocks.company.news.news_repository_adapter_impl import NewsRepositoryAdapterImpl
+from app.stocks.interfaces import (
+    AllTimeHighAdapter,
+    AnalystEstimatesAdapter,
+    StockDataAdapter,
+    StockPerformanceAdapter,
 )
-from app.stocks.company.recommendations.db_repository import (
-    SqlRatingChangesRepository,
-    SqlRecommendationsRepository,
+from app.stocks.company.recommendations.repository_adapter_impl import (
+    RatingChangesRepositoryAdapterImpl,
+    RecommendationsRepositoryAdapterImpl,
 )
-from app.stocks.catalog.universe.db_repository import SqlStockSearchRepository
+from app.stocks.catalog.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.stocks.wiring import (
     analysis_cache_ttl,
     bedrock_recovery_model_id,
@@ -130,21 +130,21 @@ _AI_ANALYSIS_RATE_LIMIT = os.environ.get("AI_ANALYSIS_RATE_LIMIT", "10/minute")
 
 
 def get_stock_info(
-    provider: StockDataProvider = Depends(get_price_provider),
-    estimates: AnalystEstimatesProvider | None = Depends(get_estimates_provider),
+    provider: StockDataAdapter = Depends(get_price_provider),
+    estimates: AnalystEstimatesAdapter | None = Depends(get_estimates_provider),
 ) -> GetStockInfo:
     # The enriched snapshot use case now serves only as the AI analysis context
     # (the standalone GET /stocks/{symbol} endpoint was removed). The market-routing
     # provider supplies the snapshot, the performance windows, and the all-time high —
     # all derived from the same price feed, one instance backing each capability via its
     # respective port — routed per symbol (US→Alpaca / CA→Yahoo), so a Canadian ticker's
-    # analysis context reads its price from Yahoo. The router implements AllTimeHighProvider
+    # analysis context reads its price from Yahoo. The router implements AllTimeHighAdapter
     # too, so this keeps the drawdown-from-high context for US symbols (a router missing it
     # would drop it for everyone). The trailing fundamentals + clean name are no longer read
     # from a live vendor here — the analysis use cases overlay them from the stocks anchor
     # (materialized by the fundamentals/universe syncs).
-    performance = provider if isinstance(provider, StockPerformanceProvider) else None
-    all_time_high = provider if isinstance(provider, AllTimeHighProvider) else None
+    performance = provider if isinstance(provider, StockPerformanceAdapter) else None
+    all_time_high = provider if isinstance(provider, AllTimeHighAdapter) else None
     return GetStockInfo(provider, performance, all_time_high, estimates)
 
 
@@ -202,10 +202,10 @@ def get_stock_analysis(
     return GetStockAnalysis(
         stock_info,
         analyzer,
-        DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
-        DbOnlyAnnualEarningsProvider(SqlAnnualEarningsRepository(db)),
-        DbOnlyRecommendationsProvider(SqlRecommendationsRepository(db)),
-        SqlStockSearchRepository(db),
+        QuarterlyEarningsAdapterImpl(QuarterlyEarningsRepositoryAdapterImpl(db)),
+        AnnualEarningsAdapterImpl(AnnualEarningsRepositoryAdapterImpl(db)),
+        RecommendationAdapterImpl(RecommendationsRepositoryAdapterImpl(db)),
+        StockSearchRepositoryAdapterImpl(db),
         cache=cache,
         cache_ttl=analysis_cache_ttl("stock"),
     )
@@ -247,7 +247,7 @@ def get_sector_analysis(
     # gather + model call).
     sectors: GetSectorPerformance = Depends(get_sector_performance),
     analyzer: SectorAnalysisAdapter = Depends(get_sector_analysis_provider),
-    provider: StockDataProvider = Depends(get_provider),
+    provider: StockDataAdapter = Depends(get_provider),
     db: Session = Depends(get_db),
 ) -> GetSectorAnalysis:
     return GetSectorAnalysis(
@@ -255,9 +255,9 @@ def get_sector_analysis(
         analyzer,
         cache=sector_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("sector"),
-        constituents=SqlStockSearchRepository(db),
-        quotes=provider,  # the Alpaca singleton also implements BulkQuoteProvider
-        news=SqlNewsRepository(db),
+        constituents=StockSearchRepositoryAdapterImpl(db),
+        quotes=provider,  # the Alpaca singleton also implements BulkQuoteAdapter
+        news=NewsRepositoryAdapterImpl(db),
     )
 
 
@@ -337,8 +337,8 @@ def get_earnings_analysis(
 ) -> GetEarningsAnalysis:
     return GetEarningsAnalysis(
         analyzer,
-        DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
-        DbOnlyAnnualEarningsProvider(SqlAnnualEarningsRepository(db)),
+        QuarterlyEarningsAdapterImpl(QuarterlyEarningsRepositoryAdapterImpl(db)),
+        AnnualEarningsAdapterImpl(AnnualEarningsRepositoryAdapterImpl(db)),
         cache=earnings_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("earnings"),
     )
@@ -373,8 +373,8 @@ def get_ratings_findings(
 ) -> GetRatingsFindings:
     return GetRatingsFindings(
         analyzer,
-        DbOnlyRecommendationsProvider(SqlRecommendationsRepository(db)),
-        DbOnlyRatingChangesProvider(SqlRatingChangesRepository(db)),
+        RecommendationAdapterImpl(RecommendationsRepositoryAdapterImpl(db)),
+        RatingChangeAdapterImpl(RatingChangesRepositoryAdapterImpl(db)),
         cache=ratings_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("ratings"),
     )
@@ -400,21 +400,21 @@ def get_fundamentals_analysis_provider() -> FundamentalsAnalysisAdapter:
 
 
 @lru_cache(maxsize=1)
-def _eps_history_provider() -> YfinanceEpsHistoryProvider:
+def _eps_history_provider() -> EpsHistoryAdapterImpl:
     # Keyless yfinance singleton (like the options provider): shares the module-level pacing
     # state and is best-effort at read, so it's always constructable — no key to gate on. Backs
     # the fundamentals analysis's P/E-history context (the same adapter the pe-history endpoint
     # uses).
-    return YfinanceEpsHistoryProvider()
+    return EpsHistoryAdapterImpl()
 
 
 def get_fundamentals_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
     analyzer: FundamentalsAnalysisAdapter = Depends(get_fundamentals_analysis_provider),
     # The market-routing provider supplies the daily closes for the P/E-history context (it
-    # implements CandleProvider — the same instance the candle chart and pe-history endpoint
+    # implements CandleAdapter — the same instance the candle chart and pe-history endpoint
     # use, routed US→Alpaca / CA→Yahoo).
-    candles: StockDataProvider = Depends(get_price_provider),
+    candles: StockDataAdapter = Depends(get_price_provider),
     # The industry-P/E benchmark is a pure DB read off the shared anchor (the same screened
     # universe the /stocks/industries/{industry}/pe endpoint groups on) — best-effort context
     # for the fundamentals read, so a miss just omits it.
@@ -432,8 +432,8 @@ def get_fundamentals_analysis(
     return GetFundamentalsAnalysis(
         stock_info,
         analyzer,
-        SqlStockSearchRepository(db),
-        DbOnlyQuarterlyEarningsProvider(SqlQuarterlyEarningsRepository(db)),
+        StockSearchRepositoryAdapterImpl(db),
+        QuarterlyEarningsAdapterImpl(QuarterlyEarningsRepositoryAdapterImpl(db)),
         pe_history=GetStockPeHistory(candles, _eps_history_provider()),
         cache=fundamentals_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("fundamentals"),

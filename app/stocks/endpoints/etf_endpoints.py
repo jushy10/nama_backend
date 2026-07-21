@@ -5,15 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.bedrock.bedrock_etf_analysis_adapter import BedrockEtfAnalysisProvider
-from app.stocks.adapters.yfinance.etf_profile_adapter import (
-    YfinanceEtfProfileProvider,
+from app.stocks.adapters.bedrock.etf_analysis_adapter_impl import EtfAnalysisAdapterImpl
+from app.stocks.adapters.yfinance.etf_profile_adapter_impl import (
+    EtfProfileAdapterImpl,
 )
 from app.stocks.ai.analysis.investment_analysis_cache_adapter_impl import InvestmentAnalysisCacheAdapterImpl
 from app.stocks.ai.analysis.entities import InvestmentAnalysis
-from app.stocks.catalog.etfs.db_repository import (
-    SqlEtfLookupRepository,
-    SqlEtfSearchRepository,
+from app.stocks.catalog.etfs.repository_adapter_impl import (
+    EtfLookupRepositoryAdapterImpl,
+    EtfSearchRepositoryAdapterImpl,
 )
 from app.stocks.catalog.etfs.entities import (
     EtfCategories,
@@ -23,7 +23,7 @@ from app.stocks.catalog.etfs.entities import (
     EtfSort,
     SortDirection,
 )
-from app.stocks.catalog.etfs.ports import EtfAnalysisProvider, EtfScreenerQueryTranslator
+from app.stocks.catalog.etfs.interfaces import EtfAnalysisAdapter, EtfScreenerQueryAdapter
 from app.stocks.catalog.etfs.schemas import (
     AiEtfScreenInterpretationResponse,
     AiEtfScreenResponse,
@@ -47,12 +47,12 @@ from app.stocks.catalog.etfs.use_cases import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCacheAdapter
-from app.stocks.ports import (
-    StockPerformanceProvider,
-    StockQuoteProvider,
+from app.stocks.interfaces import (
+    StockPerformanceAdapter,
+    StockQuoteAdapter,
 )
-from app.stocks.adapters.bedrock.bedrock_etf_screener_query_adapter import (
-    BedrockEtfScreenerQueryTranslator,
+from app.stocks.adapters.bedrock.etf_screener_query_adapter_impl import (
+    EtfScreenerQueryAdapterImpl,
 )
 from app.stocks.wiring import (
     analysis_cache_ttl,
@@ -61,7 +61,7 @@ from app.stocks.wiring import (
 )
 
 @lru_cache(maxsize=1)
-def get_etf_screener_translator() -> EtfScreenerQueryTranslator:
+def get_etf_screener_translator() -> EtfScreenerQueryAdapter:
     # The ETF sibling of the stock screener's translator: the AI ETF screener's translation is its
     # primary data, so it's required, but there's no secret to gate on (Bedrock authenticates
     # through the process's AWS credentials — the ECS task role in prod). It shares the stock
@@ -72,8 +72,8 @@ def get_etf_screener_translator() -> EtfScreenerQueryTranslator:
     model_id = os.environ.get("BEDROCK_SCREENER_MODEL_ID")
     try:
         if model_id:
-            return BedrockEtfScreenerQueryTranslator(model_id=model_id, region=region)
-        return BedrockEtfScreenerQueryTranslator(region=region)
+            return EtfScreenerQueryAdapterImpl(model_id=model_id, region=region)
+        return EtfScreenerQueryAdapterImpl(region=region)
     except ImportError as exc:
         raise HTTPException(
             503, "AI ETF screening is not configured (install the 'bedrock' extra)."
@@ -86,43 +86,43 @@ router = APIRouter(tags=["etfs"])
 def get_search_use_case(db: Session = Depends(get_db)) -> SearchEtfs:
     # Pure DB read over the etfs table — no vendor, no key to gate on. The repository is
     # request-scoped, like the session.
-    return SearchEtfs(SqlEtfSearchRepository(db))
+    return SearchEtfs(EtfSearchRepositoryAdapterImpl(db))
 
 
 def get_categories_use_case(db: Session = Depends(get_db)) -> ListEtfCategories:
-    return ListEtfCategories(SqlEtfSearchRepository(db))
+    return ListEtfCategories(EtfSearchRepositoryAdapterImpl(db))
 
 
 def get_ai_etf_search_use_case(
     db: Session = Depends(get_db),
-    translator: EtfScreenerQueryTranslator = Depends(get_etf_screener_translator),
+    translator: EtfScreenerQueryAdapter = Depends(get_etf_screener_translator),
 ) -> AiScreenEtfs:
     # The AI screen only translates — it reads the stored set's categories (the translator's
     # allowed vocabulary) but does not run the search itself. The translator (Bedrock) is the only
     # non-DB dependency — it carries its own 503 gate in the wiring.
-    return AiScreenEtfs(translator, SqlEtfSearchRepository(db))
+    return AiScreenEtfs(translator, EtfSearchRepositoryAdapterImpl(db))
 
 
 def get_etf_detail_use_case(
-    provider: StockQuoteProvider = Depends(get_provider),
+    provider: StockQuoteAdapter = Depends(get_provider),
     db: Session = Depends(get_db),
 ) -> GetEtfDetail:
     # The Alpaca singleton backs the live quote AND the opt-in trailing-return windows (the same
     # instance the quote/ticker endpoints use, so the fund's move never disagrees) — it implements
-    # both StockQuoteProvider and StockPerformanceProvider, so the one dependency serves both roles
+    # both StockQuoteAdapter and StockPerformanceAdapter, so the one dependency serves both roles
     # (the isinstance mirrors the ticker card's wiring). The lookup repository is the request-scoped
     # read over the etfs table + its profile children (the membership gate, the stored facts, and
     # the stored profile). The Yahoo profile provider backs the performance block's live 3y/5y
     # returns (no longer stored) — the one live Yahoo call on the read path, made only when that
     # block is requested; it's keyless, so it's always constructable (best-effort like the windows).
-    performance = provider if isinstance(provider, StockPerformanceProvider) else None
+    performance = provider if isinstance(provider, StockPerformanceAdapter) else None
     return GetEtfDetail(
-        SqlEtfLookupRepository(db), provider, performance, YfinanceEtfProfileProvider()
+        EtfLookupRepositoryAdapterImpl(db), provider, performance, EtfProfileAdapterImpl()
     )
 
 
 @lru_cache(maxsize=1)
-def get_etf_analysis_provider() -> EtfAnalysisProvider:
+def get_etf_analysis_provider() -> EtfAnalysisAdapter:
     # The Bedrock analyser, a process singleton (the SDK client is reusable and the config is
     # static). Shares the stock analyser's env, so one deploy config drives both: BEDROCK_REGION
     # (default us-east-1) and the optional BEDROCK_ANALYSIS_MODEL_ID (a cross-region inference
@@ -136,10 +136,10 @@ def get_etf_analysis_provider() -> EtfAnalysisProvider:
     recovery = bedrock_recovery_model_id("BEDROCK_ANALYSIS_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockEtfAnalysisProvider(
+            return EtfAnalysisAdapterImpl(
                 model_id=model_id, region=region, recovery_model_id=recovery
             )
-        return BedrockEtfAnalysisProvider(region=region, recovery_model_id=recovery)
+        return EtfAnalysisAdapterImpl(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -156,7 +156,7 @@ def get_etf_analysis_cache(
 
 def get_etf_analysis_use_case(
     detail: GetEtfDetail = Depends(get_etf_detail_use_case),
-    analyzer: EtfAnalysisProvider = Depends(get_etf_analysis_provider),
+    analyzer: EtfAnalysisAdapter = Depends(get_etf_analysis_provider),
     cache: InvestmentAnalysisCacheAdapter = Depends(get_etf_analysis_cache),
 ) -> GetEtfAnalysis:
     # Reuses the detail use case as the primary snapshot builder (so the analysis reasons over

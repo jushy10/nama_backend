@@ -3,8 +3,8 @@ import json
 import logging
 import sys
 
-from app.evals.adapters.bedrock_judge import BedrockJudge
-from app.evals.adapters.http_subject import HttpAnswerAdapter
+from app.evals.adapters.judge_adapter_impl import JudgeAdapterImpl
+from app.evals.adapters.answer_under_test_adapter_impl import AnswerUnderTestAdapterImpl
 from app.evals.dataset import GOLDEN_CASES
 from app.evals.entities import EvalCase, EvalReport
 from app.evals.report import render_summary, to_dict
@@ -27,7 +27,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Response JSON key holding the answer text.",
     )
     parser.add_argument(
-        "--model", default=None, help="Judge model id (default: the Bedrock judge's)."
+        "--model", default=None, help="JudgeAdapter model id (default: the Bedrock judge's)."
     )
     parser.add_argument(
         "--region", default="us-east-1", help="Bedrock region for the judge."
@@ -57,14 +57,14 @@ def _select_cases(tags: list[str] | None) -> tuple[EvalCase, ...]:
     return tuple(case for case in GOLDEN_CASES if wanted.intersection(case.tags))
 
 
-def _build_suite(args: argparse.Namespace) -> tuple[RunEvalSuite, HttpAnswerAdapter]:
-    subject = HttpAnswerAdapter(
+def _build_suite(args: argparse.Namespace) -> tuple[RunEvalSuite, AnswerUnderTestAdapterImpl]:
+    subject = AnswerUnderTestAdapterImpl(
         base_url=args.base_url, path=args.path, answer_field=args.answer_field
     )
     judge = (
-        BedrockJudge(model_id=args.model, region=args.region)
+        JudgeAdapterImpl(model_id=args.model, region=args.region)
         if args.model
-        else BedrockJudge(region=args.region)
+        else JudgeAdapterImpl(region=args.region)
     )
     return RunEvalSuite(subject, judge), subject
 

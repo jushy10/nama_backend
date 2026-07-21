@@ -4,8 +4,8 @@ import pytest
 
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.company.news.entities import NewsArticle, StockNews
-from app.stocks.company.news.ports import NewsProvider
-from app.stocks.company.news.repository import NewsRepository, RefreshTarget
+from app.stocks.company.news.interfaces import NewsAdapter
+from app.stocks.company.news.interfaces import NewsRepositoryAdapter, RefreshTarget
 from app.stocks.company.news.use_cases import (
     GetStockNews,
     NewsSyncReport,
@@ -44,7 +44,7 @@ def test_empty_run_has_no_latest():
     assert news.latest is None
 
 
-class _FakeReadProvider(NewsProvider):
+class _FakeReadProvider(NewsAdapter):
     def __init__(self, news: StockNews) -> None:
         self._news = news
         self.calls: list[str] = []
@@ -79,7 +79,7 @@ def test_get_rejects_obviously_invalid_symbols():
     assert provider.calls == []
 
 
-class _FakeRepo(NewsRepository):
+class _FakeRepo(NewsRepositoryAdapter):
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = list(targets)
         self.upserts: list[tuple[str, str | None]] = []
@@ -96,7 +96,7 @@ class _FakeRepo(NewsRepository):
         return self._targets[:limit]
 
 
-class _FakeSyncProvider(NewsProvider):
+class _FakeSyncProvider(NewsAdapter):
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}

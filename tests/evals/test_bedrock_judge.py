@@ -1,6 +1,6 @@
 import pytest
 
-from app.evals.adapters.bedrock_judge import BedrockJudge
+from app.evals.adapters.judge_adapter_impl import JudgeAdapterImpl
 from app.evals.entities import EvalCase
 from app.evals.exceptions import JudgeUnavailable
 
@@ -55,9 +55,9 @@ def _case() -> EvalCase:
     )
 
 
-def _judge(message) -> tuple[BedrockJudge, _Client]:
+def _judge(message) -> tuple[JudgeAdapterImpl, _Client]:
     client = _Client(message)
-    return BedrockJudge(client=client), client
+    return JudgeAdapterImpl(client=client), client
 
 
 # --- Happy path: payload -> Grade --------------------------------------------------------------
@@ -117,6 +117,6 @@ def test_no_tool_call_is_a_hard_fail_not_a_crash():
 
 
 def test_vendor_failure_becomes_judge_unavailable():
-    judge = BedrockJudge(client=_BoomClient())
+    judge = JudgeAdapterImpl(client=_BoomClient())
     with pytest.raises(JudgeUnavailable):
         judge.grade(_case(), "a")

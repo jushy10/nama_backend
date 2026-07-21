@@ -10,7 +10,7 @@ from app.stocks.company.options.entities import (
     OptionType,
     OptionsFlowSummary,
 )
-from app.stocks.company.options.ports import OptionsChainProvider
+from app.stocks.company.options.interfaces import OptionsChainAdapter
 from app.stocks.company.options.use_cases import GetOptionsFlow
 
 _EXPIRY = date(2026, 7, 31)
@@ -106,7 +106,7 @@ def test_expiry_chain_sorts_sides_and_ranks_unusual_by_premium():
     assert chain.summary.total_volume == 200 + 1000 + 10 + 5000
 
 
-class _FakeProvider(OptionsChainProvider):
+class _FakeProvider(OptionsChainAdapter):
     def __init__(self, *, expirations=(), chains=None, error=None) -> None:
         self._expirations = tuple(expirations)
         self._chains = chains or {}

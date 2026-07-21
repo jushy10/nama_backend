@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.market.earnings_calendar.db_repository import SqlEarningsCalendarRepository
+from app.stocks.market.earnings_calendar.earnings_calendar_repository_adapter_impl import EarningsCalendarRepositoryAdapterImpl
 from app.stocks.market.earnings_calendar.entities import EarningsCalendar
 from app.stocks.market.earnings_calendar.schemas import (
     EarningsCalendarDayResponse,
@@ -28,7 +28,7 @@ def get_earnings_calendar_use_case(
     db: Session = Depends(get_db),
 ) -> GetEarningsCalendar:
     # Pure DB read over stored scheduled dates — no vendor, no key.
-    return GetEarningsCalendar(SqlEarningsCalendarRepository(db))
+    return GetEarningsCalendar(EarningsCalendarRepositoryAdapterImpl(db))
 
 
 def _present(calendar: EarningsCalendar) -> EarningsCalendarResponse:

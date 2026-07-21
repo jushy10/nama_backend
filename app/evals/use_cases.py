@@ -3,13 +3,13 @@ from collections.abc import Sequence
 
 from app.evals.entities import CaseResult, EvalCase, EvalReport, Grade
 from app.evals.exceptions import EvalError
-from app.evals.ports import AnswerUnderTest, Judge
+from app.evals.interfaces import AnswerUnderTestAdapter, JudgeAdapter
 
 logger = logging.getLogger(__name__)
 
 
 class RunEvalSuite:
-    def __init__(self, subject: AnswerUnderTest, judge: Judge) -> None:
+    def __init__(self, subject: AnswerUnderTestAdapter, judge: JudgeAdapter) -> None:
         self._subject = subject
         self._judge = judge
 

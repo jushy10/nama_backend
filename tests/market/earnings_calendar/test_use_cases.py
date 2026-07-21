@@ -3,13 +3,13 @@ from datetime import date, timedelta
 import pytest
 
 from app.stocks.market.earnings_calendar.entities import EarningsCalendarItem
-from app.stocks.market.earnings_calendar.repository import EarningsCalendarRepository
+from app.stocks.market.earnings_calendar.interfaces import EarningsCalendarRepositoryAdapter
 from app.stocks.market.earnings_calendar.use_cases import GetEarningsCalendar
 
 _TODAY = date(2026, 7, 14)
 
 
-class _FakeRepository(EarningsCalendarRepository):
+class _FakeRepository(EarningsCalendarRepositoryAdapter):
     def __init__(self, items=()):
         self._items = list(items)
         self.window: tuple[date, date, int] | None = None

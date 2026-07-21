@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from app.stocks.entities import normalize_symbol
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.company.institutional_ownership.entities import InstitutionalOwnership
-from app.stocks.company.institutional_ownership.ports import InstitutionalOwnershipProvider
-from app.stocks.company.institutional_ownership.repository import (
-    InstitutionalOwnershipRepository,
+from app.stocks.company.institutional_ownership.interfaces import InstitutionalOwnershipAdapter
+from app.stocks.company.institutional_ownership.interfaces import (
+    InstitutionalOwnershipRepositoryAdapter,
 )
 from app.stocks.progress import iter_with_progress
 
@@ -20,7 +20,7 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 class GetInstitutionalOwnership:
-    def __init__(self, provider: InstitutionalOwnershipProvider) -> None:
+    def __init__(self, provider: InstitutionalOwnershipAdapter) -> None:
         self._provider = provider
 
     def execute(self, symbol: str) -> InstitutionalOwnership:
@@ -37,8 +37,8 @@ class InstitutionalOwnershipSyncReport:
 class SyncInstitutionalOwnership:
     def __init__(
         self,
-        provider: InstitutionalOwnershipProvider,
-        repository: InstitutionalOwnershipRepository,
+        provider: InstitutionalOwnershipAdapter,
+        repository: InstitutionalOwnershipRepositoryAdapter,
     ) -> None:
         self._provider = provider
         self._repository = repository

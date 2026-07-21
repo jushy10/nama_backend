@@ -6,9 +6,9 @@ from app.stocks.company.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
-from app.stocks.company.earnings.quarterly.repository import (
-    QuarterlyEarningsRepository,
+from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
+from app.stocks.company.earnings.quarterly.interfaces import (
+    QuarterlyEarningsRepositoryAdapter,
     RefreshTarget,
 )
 from app.stocks.company.earnings.quarterly.use_cases import (
@@ -87,7 +87,7 @@ def test_ttm_eps_is_none_with_fewer_than_four_reported_quarters():
     assert QuarterlyEarningsTimeline("MU", ()).ttm_eps is None
 
 
-class _FakeReadProvider(QuarterlyEarningsProvider):
+class _FakeReadProvider(QuarterlyEarningsAdapter):
     def __init__(self, timeline: QuarterlyEarningsTimeline) -> None:
         self._timeline = timeline
         self.calls: list[str] = []
@@ -122,7 +122,7 @@ def test_get_rejects_obviously_invalid_symbols():
     assert provider.calls == []
 
 
-class _FakeRepo(QuarterlyEarningsRepository):
+class _FakeRepo(QuarterlyEarningsRepositoryAdapter):
     def __init__(
         self,
         targets: list[RefreshTarget],
@@ -146,7 +146,7 @@ class _FakeRepo(QuarterlyEarningsRepository):
         return self._targets[:limit]
 
 
-class _FakeSyncProvider(QuarterlyEarningsProvider):
+class _FakeSyncProvider(QuarterlyEarningsAdapter):
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}
@@ -235,7 +235,7 @@ def _upcoming_q(year: int, quarter: int, eps: float) -> QuarterlyEarnings:
     )
 
 
-class _TimelineSyncProvider(QuarterlyEarningsProvider):
+class _TimelineSyncProvider(QuarterlyEarningsAdapter):
     def __init__(self, timeline: QuarterlyEarningsTimeline) -> None:
         self._timeline = timeline
 
@@ -316,7 +316,7 @@ def test_sync_limit_is_passed_through_and_floored_at_one():
     assert repo.refresh_limit == 1  # a non-positive cap is floored to one
 
 
-class _FlakyProvider(QuarterlyEarningsProvider):
+class _FlakyProvider(QuarterlyEarningsAdapter):
     def __init__(self, fail_counts: dict[str, int | None]) -> None:
         self._fail_counts = dict(fail_counts)
         self.calls: list[str] = []

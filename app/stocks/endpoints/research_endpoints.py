@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.rate_limit import limiter
 from app.stocks.adapters.bedrock.conversation_model_adapter_impl import ConversationModelAdapterImpl
-from app.stocks.adapters.cnn.fear_greed_adapter import CnnFearGreedProvider
-from app.stocks.adapters.fred.vix_adapter import FredVixProvider
+from app.stocks.adapters.cnn.fear_greed_adapter_impl import FearGreedAdapterImpl
+from app.stocks.adapters.fred.vix_adapter_impl import VixAdapterImpl
 from app.stocks.ai.agent.entities import ResearchResult
 from app.stocks.ai.agent.interfaces import ConversationModelAdapter
 from app.stocks.ai.agent.schemas import (
@@ -20,7 +20,7 @@ from app.stocks.ai.agent.tools import MarketSentimentTool, SearchStocksTool
 from app.stocks.ai.agent.use_cases import RunResearch
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.sentiment.use_cases import GetMarketSentiment
-from app.stocks.catalog.universe.db_repository import SqlStockSearchRepository
+from app.stocks.catalog.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.stocks.catalog.universe.use_cases import SearchStocks
 
 router = APIRouter(tags=["stocks"])
@@ -60,7 +60,7 @@ def get_conversation_model() -> ConversationModelAdapter:
 def get_market_sentiment_use_case() -> GetMarketSentiment:
     # Keyless live sources (FRED + CNN), so no key gate — the same singletons the
     # /market/sentiment endpoint wires, reused here as the agent's sentiment tool.
-    return GetMarketSentiment(FredVixProvider(), CnnFearGreedProvider())
+    return GetMarketSentiment(VixAdapterImpl(), FearGreedAdapterImpl())
 
 
 def get_run_research(
@@ -72,7 +72,7 @@ def get_run_research(
     # read, bound to this request's session) and the live market-sentiment read. Adding a tool
     # is one more entry in this list plus its Tool subclass in app/stocks/ai/agent/tools.py.
     tools = [
-        SearchStocksTool(SearchStocks(SqlStockSearchRepository(db))),
+        SearchStocksTool(SearchStocks(StockSearchRepositoryAdapterImpl(db))),
         MarketSentimentTool(sentiment),
     ]
     return RunResearch(model, tools)

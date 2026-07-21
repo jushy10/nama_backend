@@ -26,9 +26,9 @@ from app.stocks.ai.analysis.interfaces import (
     StockScorecardAdapter,
 )
 from app.stocks.company.earnings.annual.entities import AnnualEarningsTimeline
-from app.stocks.company.earnings.annual.ports import AnnualEarningsProvider
+from app.stocks.company.earnings.annual.interfaces import AnnualEarningsAdapter
 from app.stocks.company.earnings.quarterly.entities import QuarterlyEarningsTimeline
-from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
 from app.stocks.entities import (
     AllTimeHigh,
     AnalystEstimates,
@@ -40,21 +40,21 @@ from app.stocks.entities import (
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.boards.use_cases import GetMarketOverview, GetSectorPerformance
 from app.stocks.company.news.entities import NewsArticle
-from app.stocks.company.news.repository import NewsRepository
-from app.stocks.ports import (
-    AllTimeHighProvider,
-    AnalystEstimatesProvider,
-    BulkQuoteProvider,
-    StockDataProvider,
-    StockPerformanceProvider,
+from app.stocks.company.news.interfaces import NewsRepositoryAdapter
+from app.stocks.interfaces import (
+    AllTimeHighAdapter,
+    AnalystEstimatesAdapter,
+    BulkQuoteAdapter,
+    StockDataAdapter,
+    StockPerformanceAdapter,
 )
 from app.stocks.company.recommendations.entities import (
     AnalystRatingChanges,
     AnalystRecommendations,
 )
-from app.stocks.company.recommendations.ports import (
-    RatingChangeProvider,
-    RecommendationProvider,
+from app.stocks.company.recommendations.interfaces import (
+    RatingChangeAdapter,
+    RecommendationAdapter,
 )
 from app.stocks.company.ticker.entities import PeHistoryStats
 from app.stocks.company.ticker.use_cases import GetStockPeHistory
@@ -65,7 +65,7 @@ from app.stocks.catalog.universe.entities import (
     StockSearchCriteria,
     StockSort,
 )
-from app.stocks.catalog.universe.repository import StockSearchRepository
+from app.stocks.catalog.universe.interfaces import StockSearchRepositoryAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -173,10 +173,10 @@ def _normalize_symbol(symbol: str) -> str:
 class GetStockInfo:
     def __init__(
         self,
-        provider: StockDataProvider,
-        performance_provider: StockPerformanceProvider | None = None,
-        all_time_high_provider: AllTimeHighProvider | None = None,
-        estimates_provider: AnalystEstimatesProvider | None = None,
+        provider: StockDataAdapter,
+        performance_provider: StockPerformanceAdapter | None = None,
+        all_time_high_provider: AllTimeHighAdapter | None = None,
+        estimates_provider: AnalystEstimatesAdapter | None = None,
     ) -> None:
         self._provider = provider
         self._performance_provider = performance_provider
@@ -249,10 +249,10 @@ class GetStockAnalysis:
         self,
         stock_info: GetStockInfo,
         analyzer: StockScorecardAdapter,
-        quarterly_provider: QuarterlyEarningsProvider | None = None,
-        annual_provider: AnnualEarningsProvider | None = None,
-        recommendations_provider: RecommendationProvider | None = None,
-        industry_repository: StockSearchRepository | None = None,
+        quarterly_provider: QuarterlyEarningsAdapter | None = None,
+        annual_provider: AnnualEarningsAdapter | None = None,
+        recommendations_provider: RecommendationAdapter | None = None,
+        industry_repository: StockSearchRepositoryAdapter | None = None,
         cache: StockScorecardCacheAdapter | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
@@ -397,8 +397,8 @@ class GetEarningsAnalysis:
     def __init__(
         self,
         analyzer: EarningsAnalysisAdapter,
-        quarterly_provider: QuarterlyEarningsProvider | None = None,
-        annual_provider: AnnualEarningsProvider | None = None,
+        quarterly_provider: QuarterlyEarningsAdapter | None = None,
+        annual_provider: AnnualEarningsAdapter | None = None,
         cache: AiAnalysisCacheAdapter[EarningsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
@@ -464,8 +464,8 @@ class GetRatingsFindings:
     def __init__(
         self,
         analyzer: RatingsAnalysisAdapter,
-        recommendations_provider: RecommendationProvider | None = None,
-        rating_change_provider: RatingChangeProvider | None = None,
+        recommendations_provider: RecommendationAdapter | None = None,
+        rating_change_provider: RatingChangeAdapter | None = None,
         cache: AiAnalysisCacheAdapter[RatingsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
         *,
@@ -534,8 +534,8 @@ class GetFundamentalsAnalysis:
         self,
         stock_info: GetStockInfo,
         analyzer: FundamentalsAnalysisAdapter,
-        industry_repository: StockSearchRepository | None = None,
-        quarterly_provider: QuarterlyEarningsProvider | None = None,
+        industry_repository: StockSearchRepositoryAdapter | None = None,
+        quarterly_provider: QuarterlyEarningsAdapter | None = None,
         pe_history: GetStockPeHistory | None = None,
         cache: AiAnalysisCacheAdapter[FundamentalsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
@@ -693,9 +693,9 @@ class GetSectorAnalysis:
         cache: AiAnalysisCacheAdapter[SectorAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
         *,
-        constituents: StockSearchRepository | None = None,
-        quotes: BulkQuoteProvider | None = None,
-        news: NewsRepository | None = None,
+        constituents: StockSearchRepositoryAdapter | None = None,
+        quotes: BulkQuoteAdapter | None = None,
+        news: NewsRepositoryAdapter | None = None,
     ) -> None:
         self._sectors = sectors
         self._analyzer = analyzer

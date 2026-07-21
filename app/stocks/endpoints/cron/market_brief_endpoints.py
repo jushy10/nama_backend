@@ -23,8 +23,8 @@ from app.stocks.endpoints.cron.background_sync import (
 from app.stocks.endpoints.cron.auth import require_cron_token
 from app.stocks.market.heatmap.use_cases import GetStockHeatMap
 from app.stocks.market.boards.use_cases import GetMarketOverview, GetSectorPerformance
-from app.stocks.company.news.db_repository import SqlNewsRepository
-from app.stocks.catalog.universe.db_repository import SqlStockSearchRepository
+from app.stocks.company.news.news_repository_adapter_impl import NewsRepositoryAdapterImpl
+from app.stocks.catalog.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.stocks.wiring import bedrock_recovery_model_id, get_provider
 
 logger = logging.getLogger(__name__)
@@ -54,12 +54,12 @@ def run_market_brief_sync(limit: int | None) -> MarketBriefSyncReport:
         use_case = GenerateDailyBrief(
             GetMarketOverview(provider),
             GetSectorPerformance(provider),
-            GetStockHeatMap(SqlStockSearchRepository(db), provider),
+            GetStockHeatMap(StockSearchRepositoryAdapterImpl(db), provider),
             get_market_brief_provider(),
             MarketBriefRepositoryAdapterImpl(db),
             # DB-only news reader (never a live fetch) — the daily news sync keeps it warm,
             # so the movers' catalyst headlines cost the generation no extra vendor call.
-            news=SqlNewsRepository(db),
+            news=NewsRepositoryAdapterImpl(db),
         )
         brief = use_case.execute()
         report = MarketBriefSyncReport(

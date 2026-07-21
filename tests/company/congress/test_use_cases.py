@@ -7,7 +7,7 @@ from app.stocks.company.congress.entities import (
     CongressTrade,
     build_leaderboard,
 )
-from app.stocks.company.congress.repository import RefreshTarget
+from app.stocks.company.congress.interfaces import RefreshTarget
 from app.stocks.company.congress.use_cases import (
     GetCongressActivity,
     GetCongressLeaderboard,

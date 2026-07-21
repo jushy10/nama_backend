@@ -16,9 +16,9 @@ from app.stocks.company.recommendations.entities import (
     RatingChange,
     RecommendationTrend,
 )
-from app.stocks.company.recommendations.ports import (
-    RatingChangeProvider,
-    RecommendationProvider,
+from app.stocks.company.recommendations.interfaces import (
+    RatingChangeAdapter,
+    RecommendationAdapter,
 )
 
 
@@ -47,7 +47,7 @@ class _FakeAnalyzer(RatingsAnalysisAdapter):
         return self._result if self._result is not None else _an_analysis(symbol)
 
 
-class _FakeRecs(RecommendationProvider):
+class _FakeRecs(RecommendationAdapter):
     def __init__(self, run, *, error=None) -> None:
         self._run = run
         self._error = error
@@ -58,7 +58,7 @@ class _FakeRecs(RecommendationProvider):
         return self._run
 
 
-class _FakeChanges(RatingChangeProvider):
+class _FakeChanges(RatingChangeAdapter):
     def __init__(self, run, *, error=None) -> None:
         self._run = run
         self._error = error

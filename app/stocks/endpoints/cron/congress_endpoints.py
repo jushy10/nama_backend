@@ -4,10 +4,10 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.stock_watcher.congress_adapter import (
-    StockWatcherCongressProvider,
+from app.stocks.adapters.stock_watcher.congress_trades_adapter_impl import (
+    CongressTradesAdapterImpl,
 )
-from app.stocks.company.congress.db_repository import SqlCongressTradesRepository
+from app.stocks.company.congress.congress_trades_repository_adapter_impl import CongressTradesRepositoryAdapterImpl
 from app.stocks.company.congress.use_cases import CongressSyncReport, SyncCongressTrades
 from app.stocks.endpoints.cron.background_sync import (
     SyncRunner,
@@ -32,10 +32,10 @@ def run_congress_sync(limit: int | None) -> CongressSyncReport:
     db = SessionLocal()
     try:
         report = SyncCongressTrades(
-            StockWatcherCongressProvider(
+            CongressTradesAdapterImpl(
                 min_request_interval_seconds=_FEED_MIN_REQUEST_INTERVAL
             ),
-            SqlCongressTradesRepository(db),
+            CongressTradesRepositoryAdapterImpl(db),
         ).execute(limit=limit)
         logger.info(
             "congress sync done: fetched=%d stored=%d failed=%d limit=%s",

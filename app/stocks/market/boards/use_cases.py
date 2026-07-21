@@ -1,9 +1,9 @@
 from app.stocks.market.boards.entities import MarketIndexPerformance, SectorPerformance
-from app.stocks.market.boards.ports import MarketOverviewProvider, SectorPerformanceProvider
+from app.stocks.market.boards.interfaces import MarketOverviewAdapter, SectorPerformanceAdapter
 
 
 class GetSectorPerformance:
-    def __init__(self, provider: SectorPerformanceProvider) -> None:
+    def __init__(self, provider: SectorPerformanceAdapter) -> None:
         self._provider = provider
 
     def execute(self) -> list[SectorPerformance]:
@@ -16,7 +16,7 @@ class GetSectorPerformance:
 
 
 class GetMarketOverview:
-    def __init__(self, provider: MarketOverviewProvider) -> None:
+    def __init__(self, provider: MarketOverviewAdapter) -> None:
         self._provider = provider
 
     def execute(self) -> list[MarketIndexPerformance]:

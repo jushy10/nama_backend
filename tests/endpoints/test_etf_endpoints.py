@@ -18,12 +18,12 @@ from app.stocks.catalog.etfs.entities import (
     EtfSort,
     SortDirection,
 )
-from app.stocks.catalog.etfs.repository import EtfSearchRepository
+from app.stocks.catalog.etfs.interfaces import EtfSearchRepositoryAdapter
 from app.stocks.catalog.etfs.use_cases import ListEtfCategories, SearchEtfs
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 
 
-class _FakeSearchRepo(EtfSearchRepository):
+class _FakeSearchRepo(EtfSearchRepositoryAdapter):
     def __init__(self, results=(), categories=()) -> None:
         self._results = tuple(results)
         self._categories = tuple(categories)

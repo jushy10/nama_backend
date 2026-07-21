@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Sequence
 
-from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
 from app.stocks.entities import (
     AnalystEstimates,
     Quote,
@@ -12,14 +12,14 @@ from app.stocks.entities import (
     Timeframe,
     normalize_symbol,
 )
-from app.stocks.catalog.etfs.repository import EtfLookupRepository
+from app.stocks.catalog.etfs.interfaces import EtfLookupRepositoryAdapter
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.company.charts.ports import CandleProvider
-from app.stocks.ports import (
-    AnalystEstimatesProvider,
-    StockDataProvider,
-    StockPerformanceProvider,
-    StockQuoteProvider,
+from app.stocks.company.charts.interfaces import CandleAdapter
+from app.stocks.interfaces import (
+    AnalystEstimatesAdapter,
+    StockDataAdapter,
+    StockPerformanceAdapter,
+    StockQuoteAdapter,
 )
 from app.stocks.company.ticker.entities import (
     PeHistory,
@@ -28,8 +28,8 @@ from app.stocks.company.ticker.entities import (
     TickerOptionsMetrics,
     TickerValuation,
 )
-from app.stocks.company.ticker.ports import EpsHistoryProvider, OptionChainProvider
-from app.stocks.company.ticker.repository import StoredTickerFacts, TickerRepository
+from app.stocks.company.ticker.interfaces import EpsHistoryAdapter, OptionChainAdapter
+from app.stocks.company.ticker.interfaces import StoredTickerFacts, TickerRepositoryAdapter
 
 # The card's asset-type discriminator: an ETF (in the stored ETF universe) or a plain equity.
 # Always one of these two — never null — so the FE can branch on it unconditionally.
@@ -71,7 +71,7 @@ def _normalize_includes(include: Sequence[str] | None) -> frozenset[str]:
 
 
 def sample_options_metrics(
-    options: OptionChainProvider,
+    options: OptionChainAdapter,
     symbol: str,
     price: float,
     today: date,
@@ -136,14 +136,14 @@ class TickerCard:
 class GetTickerCard:
     def __init__(
         self,
-        quotes: StockQuoteProvider,
-        performance: StockPerformanceProvider | None = None,
-        stocks: StockDataProvider | None = None,
-        repository: TickerRepository | None = None,
-        options: OptionChainProvider | None = None,
-        earnings: QuarterlyEarningsProvider | None = None,
-        estimates: AnalystEstimatesProvider | None = None,
-        etfs: EtfLookupRepository | None = None,
+        quotes: StockQuoteAdapter,
+        performance: StockPerformanceAdapter | None = None,
+        stocks: StockDataAdapter | None = None,
+        repository: TickerRepositoryAdapter | None = None,
+        options: OptionChainAdapter | None = None,
+        earnings: QuarterlyEarningsAdapter | None = None,
+        estimates: AnalystEstimatesAdapter | None = None,
+        etfs: EtfLookupRepositoryAdapter | None = None,
         today: Callable[[], date] | None = None,
     ) -> None:
         self._quotes = quotes
@@ -334,7 +334,7 @@ class TickerClassification:
 
 
 class ClassifyTicker:
-    def __init__(self, etfs: EtfLookupRepository) -> None:
+    def __init__(self, etfs: EtfLookupRepositoryAdapter) -> None:
         self._etfs = etfs
 
     def classify(self, symbol: str) -> TickerClassification:
@@ -348,8 +348,8 @@ class ClassifyTicker:
 class GetStockPeHistory:
     def __init__(
         self,
-        candles: CandleProvider,
-        eps_history: EpsHistoryProvider,
+        candles: CandleAdapter,
+        eps_history: EpsHistoryAdapter,
     ) -> None:
         self._candles = candles
         self._eps_history = eps_history

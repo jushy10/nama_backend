@@ -4,8 +4,8 @@ import logging
 from dataclasses import dataclass
 
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.catalog.performance.repository import PerformanceRepository
-from app.stocks.ports import BulkPerformanceProvider
+from app.stocks.catalog.performance.interfaces import PerformanceRepositoryAdapter
+from app.stocks.interfaces import BulkPerformanceAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +20,8 @@ class PerformanceSyncReport:
 class SyncStockPerformance:
     def __init__(
         self,
-        provider: BulkPerformanceProvider,
-        repository: PerformanceRepository,
+        provider: BulkPerformanceAdapter,
+        repository: PerformanceRepositoryAdapter,
     ) -> None:
         self._provider = provider
         self._repository = repository

@@ -19,7 +19,7 @@ from app.stocks.market.heatmap.entities import HeatMap, HeatMapScope
 from app.stocks.market.heatmap.use_cases import GetStockHeatMap
 from app.stocks.market.boards.entities import MarketIndexPerformance, SectorPerformance
 from app.stocks.market.boards.use_cases import GetMarketOverview, GetSectorPerformance
-from app.stocks.company.news.repository import NewsRepository
+from app.stocks.company.news.interfaces import NewsRepositoryAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class GenerateDailyBrief:
         provider: MarketBriefAdapter,
         repository: MarketBriefRepositoryAdapter,
         *,
-        news: NewsRepository | None = None,
+        news: NewsRepositoryAdapter | None = None,
         scope: HeatMapScope = HeatMapScope.SP500,
         movers: int = 5,
         headlines: int = 8,

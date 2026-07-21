@@ -15,10 +15,10 @@ from app.stocks.ai.analysis.use_cases import GetFundamentalsAnalysis, GetStockIn
 from app.stocks.endpoints import analysis_endpoints as stocks_router
 from app.stocks.entities import AnalystEstimates, Stock
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.ports import AnalystEstimatesProvider, StockDataProvider
+from app.stocks.interfaces import AnalystEstimatesAdapter, StockDataAdapter
 from app.stocks.company.ticker.entities import PeHistoryStats, ValuationSignal
 from app.stocks.catalog.universe.entities import AnchorMetrics, MarketCapTier
-from app.stocks.catalog.universe.repository import StockSearchRepository
+from app.stocks.catalog.universe.interfaces import StockSearchRepositoryAdapter
 
 
 def _a_stock(**overrides) -> Stock:
@@ -66,7 +66,7 @@ def _an_analysis(symbol="AAPL") -> FundamentalsAnalysis:
     )
 
 
-class _FakeProvider(StockDataProvider):
+class _FakeProvider(StockDataAdapter):
     def __init__(self, stock=None, *, raises=None):
         self._stock = stock
         self._raises = raises
@@ -77,7 +77,7 @@ class _FakeProvider(StockDataProvider):
         return self._stock
 
 
-class _FakeEstimates(AnalystEstimatesProvider):
+class _FakeEstimates(AnalystEstimatesAdapter):
     def __init__(self, estimates):
         self._estimates = estimates
 
@@ -113,7 +113,7 @@ class _FakePeHistory:
         return SimpleNamespace(stats=self._stats)
 
 
-class _FakeSearchRepo(StockSearchRepository):
+class _FakeSearchRepo(StockSearchRepositoryAdapter):
     def __init__(self, *, industry=None, pe_ratios=(), anchor=None, raises=None):
         self._industry = industry
         self._peers = tuple((pe, MarketCapTier.MID) for pe in pe_ratios)

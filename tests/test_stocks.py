@@ -54,7 +54,7 @@ from app.stocks.ai.analysis.use_cases import (
     GetStockInfo,
 )
 from app.stocks.company.charts.indicators import TrendDirection, TrendReading
-from app.stocks.company.charts.ports import CandleProvider
+from app.stocks.company.charts.interfaces import CandleAdapter
 from app.stocks.company.charts.use_cases import (
     GetStockCandles,
     GetStockEma,
@@ -65,12 +65,12 @@ from app.stocks.company.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.stocks.company.earnings.annual.ports import AnnualEarningsProvider
+from app.stocks.company.earnings.annual.interfaces import AnnualEarningsAdapter
 from app.stocks.company.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
 from app.stocks.endpoints.analysis_endpoints import (
     get_market_summary,
     get_sector_analysis,
@@ -101,24 +101,24 @@ from app.stocks.entities import (
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.company.logo.entities import Logo
-from app.stocks.company.logo.ports import LogoProvider
+from app.stocks.company.logo.interfaces import LogoAdapter
 from app.stocks.company.logo.use_cases import GetStockLogo
 from app.stocks.market.boards.entities import MarketIndexPerformance, SectorPerformance
-from app.stocks.market.boards.ports import MarketOverviewProvider, SectorPerformanceProvider
+from app.stocks.market.boards.interfaces import MarketOverviewAdapter, SectorPerformanceAdapter
 from app.stocks.market.boards.use_cases import GetMarketOverview, GetSectorPerformance
-from app.stocks.ports import (
-    AllTimeHighProvider,
-    AnalystEstimatesProvider,
-    StockDataProvider,
-    StockPerformanceProvider,
+from app.stocks.interfaces import (
+    AllTimeHighAdapter,
+    AnalystEstimatesAdapter,
+    StockDataAdapter,
+    StockPerformanceAdapter,
 )
 from app.stocks.company.recommendations.entities import (
     AnalystRecommendations,
     RecommendationTrend,
 )
-from app.stocks.company.recommendations.ports import RecommendationProvider
+from app.stocks.company.recommendations.interfaces import RecommendationAdapter
 from app.stocks.company.news.entities import NewsArticle, StockNews
-from app.stocks.company.news.repository import NewsRepository
+from app.stocks.company.news.interfaces import NewsRepositoryAdapter
 from app.stocks.catalog.universe.entities import (
     AnchorMetrics,
     IndustryValuation,
@@ -129,11 +129,11 @@ from app.stocks.catalog.universe.entities import (
     StockSearchResult,
     StockSort,
 )
-from app.stocks.catalog.universe.repository import StockSearchRepository
+from app.stocks.catalog.universe.interfaces import StockSearchRepositoryAdapter
 from app.stocks.wiring import analysis_cache_ttl
 
 
-class FakeProvider(StockDataProvider):
+class FakeProvider(StockDataAdapter):
     def __init__(self, stock: Stock | None = None, raises: Exception | None = None):
         self._stock = stock
         self._raises = raises
@@ -147,7 +147,7 @@ class FakeProvider(StockDataProvider):
         return self._stock
 
 
-class FakeLogoProvider(LogoProvider):
+class FakeLogoProvider(LogoAdapter):
     def __init__(self, logo: Logo | None = None, raises: Exception | None = None):
         self._logo = logo
         self._raises = raises
@@ -161,7 +161,7 @@ class FakeLogoProvider(LogoProvider):
         return self._logo
 
 
-class FakePerformanceProvider(StockPerformanceProvider):
+class FakePerformanceProvider(StockPerformanceAdapter):
     def __init__(self, performance=None, raises=None):
         self._performance = performance
         self._raises = raises
@@ -175,7 +175,7 @@ class FakePerformanceProvider(StockPerformanceProvider):
         return self._performance
 
 
-class FakeAllTimeHighProvider(AllTimeHighProvider):
+class FakeAllTimeHighProvider(AllTimeHighAdapter):
     def __init__(self, all_time_high=None, raises=None):
         self._all_time_high = all_time_high
         self._raises = raises
@@ -189,7 +189,7 @@ class FakeAllTimeHighProvider(AllTimeHighProvider):
         return self._all_time_high
 
 
-class FakeEstimatesProvider(AnalystEstimatesProvider):
+class FakeEstimatesProvider(AnalystEstimatesAdapter):
     def __init__(self, estimates=None, raises=None):
         self._estimates = estimates
         self._raises = raises
@@ -203,7 +203,7 @@ class FakeEstimatesProvider(AnalystEstimatesProvider):
         return self._estimates
 
 
-class FakeCandleProvider(CandleProvider):
+class FakeCandleProvider(CandleAdapter):
     def __init__(
         self, series: CandleSeries | None = None, raises: Exception | None = None
     ):
@@ -219,7 +219,7 @@ class FakeCandleProvider(CandleProvider):
         return self._series
 
 
-class FakeSectorProvider(SectorPerformanceProvider):
+class FakeSectorProvider(SectorPerformanceAdapter):
     def __init__(self, sectors=None, raises: Exception | None = None):
         self._sectors = sectors
         self._raises = raises
@@ -233,7 +233,7 @@ class FakeSectorProvider(SectorPerformanceProvider):
         return self._sectors
 
 
-class FakeMarketOverviewProvider(MarketOverviewProvider):
+class FakeMarketOverviewProvider(MarketOverviewAdapter):
     def __init__(self, indexes=None, raises: Exception | None = None):
         self._indexes = indexes
         self._raises = raises
@@ -247,7 +247,7 @@ class FakeMarketOverviewProvider(MarketOverviewProvider):
         return self._indexes
 
 
-class FakeQuarterlyEarningsProvider(QuarterlyEarningsProvider):
+class FakeQuarterlyEarningsProvider(QuarterlyEarningsAdapter):
     def __init__(self, timeline=None, raises: Exception | None = None):
         self._timeline = timeline
         self._raises = raises
@@ -259,7 +259,7 @@ class FakeQuarterlyEarningsProvider(QuarterlyEarningsProvider):
         return self._timeline
 
 
-class FakeAnnualEarningsProvider(AnnualEarningsProvider):
+class FakeAnnualEarningsProvider(AnnualEarningsAdapter):
     def __init__(self, timeline=None, raises: Exception | None = None):
         self._timeline = timeline
         self._raises = raises
@@ -271,7 +271,7 @@ class FakeAnnualEarningsProvider(AnnualEarningsProvider):
         return self._timeline
 
 
-class FakeRecommendationProvider(RecommendationProvider):
+class FakeRecommendationProvider(RecommendationAdapter):
     def __init__(self, recommendations=None, raises: Exception | None = None):
         self._recommendations = recommendations
         self._raises = raises
@@ -283,7 +283,7 @@ class FakeRecommendationProvider(RecommendationProvider):
         return self._recommendations
 
 
-class FakeSearchRepo(StockSearchRepository):
+class FakeSearchRepo(StockSearchRepositoryAdapter):
     def __init__(
         self,
         *,
@@ -1456,23 +1456,23 @@ def test_sector_use_case_propagates_not_found():
 @pytest.fixture
 def make_client():
     def _make(
-        provider: StockDataProvider | None = None,
-        logo_provider: LogoProvider | None = None,
-        performance_provider: StockPerformanceProvider | None = None,
-        ath_provider: AllTimeHighProvider | None = None,
-        estimates_provider: AnalystEstimatesProvider | None = None,
-        candle_provider: CandleProvider | None = None,
-        ema_provider: CandleProvider | None = None,
-        support_levels_provider: CandleProvider | None = None,
-        trend_provider: CandleProvider | None = None,
-        sector_provider: SectorPerformanceProvider | None = None,
-        earnings_provider: QuarterlyEarningsProvider | None = None,
-        annual_earnings_provider: AnnualEarningsProvider | None = None,
-        recommendations_provider: RecommendationProvider | None = None,
+        provider: StockDataAdapter | None = None,
+        logo_provider: LogoAdapter | None = None,
+        performance_provider: StockPerformanceAdapter | None = None,
+        ath_provider: AllTimeHighAdapter | None = None,
+        estimates_provider: AnalystEstimatesAdapter | None = None,
+        candle_provider: CandleAdapter | None = None,
+        ema_provider: CandleAdapter | None = None,
+        support_levels_provider: CandleAdapter | None = None,
+        trend_provider: CandleAdapter | None = None,
+        sector_provider: SectorPerformanceAdapter | None = None,
+        earnings_provider: QuarterlyEarningsAdapter | None = None,
+        annual_earnings_provider: AnnualEarningsAdapter | None = None,
+        recommendations_provider: RecommendationAdapter | None = None,
         analysis_provider: StockScorecardAdapter | None = None,
-        industry_repository: StockSearchRepository | None = None,
+        industry_repository: StockSearchRepositoryAdapter | None = None,
         sector_analysis_provider: SectorAnalysisAdapter | None = None,
-        market_overview_provider: MarketOverviewProvider | None = None,
+        market_overview_provider: MarketOverviewAdapter | None = None,
         market_summary_provider: MarketSummaryAdapter | None = None,
     ) -> TestClient:
         if logo_provider is not None:
@@ -3289,7 +3289,7 @@ def test_sector_analysis_use_case_hands_over_a_ranked_board():
 # --- sector attribution: the movers / breadth / headlines behind a move ("why") -----------
 
 
-class _FakeConstituentsRepo(StockSearchRepository):
+class _FakeConstituentsRepo(StockSearchRepositoryAdapter):
     def __init__(self, results=(), *, raises=None):
         self._results = tuple(results)
         self.criteria: StockSearchCriteria | None = None
@@ -3355,7 +3355,7 @@ class _FakeBulkQuotes:
         return out
 
 
-class _FakeNewsRepo(NewsRepository):
+class _FakeNewsRepo(NewsRepositoryAdapter):
     def __init__(self, news_by_symbol=None):
         self._news = news_by_symbol or {}
         self.requested: list[str] = []

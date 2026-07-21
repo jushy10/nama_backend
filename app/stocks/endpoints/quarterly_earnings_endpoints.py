@@ -4,18 +4,18 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db.db_cached_quarterly_earnings_adapter import (
-    DbCachedQuarterlyEarningsProvider,
+from app.stocks.adapters.db.db_cached_quarterly_earnings_adapter_impl import (
+    QuarterlyEarningsAdapterImpl as DbCachedQuarterlyEarningsAdapterImpl,
 )
-from app.stocks.adapters.yfinance.quarterly_earnings_adapter import (
-    YfinanceQuarterlyEarningsProvider,
+from app.stocks.adapters.yfinance.quarterly_earnings_adapter_impl import (
+    QuarterlyEarningsAdapterImpl as YfinanceQuarterlyEarningsAdapterImpl,
 )
-from app.stocks.company.earnings.quarterly.db_repository import SqlQuarterlyEarningsRepository
+from app.stocks.company.earnings.quarterly.quarterly_earnings_repository_adapter_impl import QuarterlyEarningsRepositoryAdapterImpl
 from app.stocks.company.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
 from app.stocks.company.earnings.quarterly.schemas import (
     QuarterlyEarningsQuarterResponse,
     QuarterlyEarningsResponse,
@@ -27,26 +27,26 @@ router = APIRouter(tags=["quarterly-earnings"])
 
 
 @lru_cache(maxsize=1)
-def _yfinance_quarterly_earnings_provider() -> QuarterlyEarningsProvider:
+def _yfinance_quarterly_earnings_provider() -> QuarterlyEarningsAdapter:
     # One process-singleton live provider (no key, no connection pool to share); the DB
     # cache that wraps it is built per request, since it needs the request session.
-    return YfinanceQuarterlyEarningsProvider()
+    return YfinanceQuarterlyEarningsAdapterImpl()
 
 
 def get_quarterly_earnings_provider(
     db: Session = Depends(get_db),
-) -> QuarterlyEarningsProvider:
+) -> QuarterlyEarningsAdapter:
     # A persistent DB cache (refreshed out of band by the quarterly-earnings cron endpoint
     # + lazily on a miss) sits in front of Yahoo so the endpoint rarely calls it, and it
     # serves stored rows without a live round-trip. yfinance needs no key, so this is
     # always wired.
-    return DbCachedQuarterlyEarningsProvider(
-        _yfinance_quarterly_earnings_provider(), SqlQuarterlyEarningsRepository(db)
+    return DbCachedQuarterlyEarningsAdapterImpl(
+        _yfinance_quarterly_earnings_provider(), QuarterlyEarningsRepositoryAdapterImpl(db)
     )
 
 
 def get_quarterly_earnings_use_case(
-    provider: QuarterlyEarningsProvider = Depends(get_quarterly_earnings_provider),
+    provider: QuarterlyEarningsAdapter = Depends(get_quarterly_earnings_provider),
 ) -> GetQuarterlyEarnings:
     return GetQuarterlyEarnings(provider)
 

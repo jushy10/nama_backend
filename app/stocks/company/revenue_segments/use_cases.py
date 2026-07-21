@@ -7,8 +7,8 @@ from app.stocks.entities import normalize_symbol
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.progress import iter_with_progress
 from app.stocks.company.revenue_segments.entities import RevenueSegmentation
-from app.stocks.company.revenue_segments.ports import RevenueSegmentsProvider
-from app.stocks.company.revenue_segments.repository import RevenueSegmentsRepository
+from app.stocks.company.revenue_segments.interfaces import RevenueSegmentsAdapter
+from app.stocks.company.revenue_segments.interfaces import RevenueSegmentsRepositoryAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 class GetRevenueSegments:
-    def __init__(self, provider: RevenueSegmentsProvider) -> None:
+    def __init__(self, provider: RevenueSegmentsAdapter) -> None:
         self._provider = provider
 
     def execute(self, symbol: str) -> RevenueSegmentation:
@@ -35,8 +35,8 @@ class RevenueSegmentsSyncReport:
 class SyncRevenueSegments:
     def __init__(
         self,
-        provider: RevenueSegmentsProvider,
-        repository: RevenueSegmentsRepository,
+        provider: RevenueSegmentsAdapter,
+        repository: RevenueSegmentsRepositoryAdapter,
     ) -> None:
         self._provider = provider
         self._repository = repository

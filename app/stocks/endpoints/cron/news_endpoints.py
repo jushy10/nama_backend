@@ -4,14 +4,14 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.yfinance.news_adapter import YfinanceNewsProvider
+from app.stocks.adapters.yfinance.news_adapter_impl import NewsAdapterImpl
 from app.stocks.endpoints.cron.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
     trigger_sync,
 )
 from app.stocks.endpoints.cron.auth import require_cron_token
-from app.stocks.company.news.db_repository import SqlNewsRepository
+from app.stocks.company.news.news_repository_adapter_impl import NewsRepositoryAdapterImpl
 from app.stocks.company.news.use_cases import NewsSyncReport, SyncStockNews
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ def run_news_sync(limit: int | None) -> NewsSyncReport:
     db = SessionLocal()
     try:
         report = SyncStockNews(
-            YfinanceNewsProvider(), SqlNewsRepository(db)
+            NewsAdapterImpl(), NewsRepositoryAdapterImpl(db)
         ).execute(limit=limit)
         logger.info(
             "news sync done: refreshed=%d failed=%d limit=%s",

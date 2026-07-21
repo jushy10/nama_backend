@@ -16,7 +16,7 @@ from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.market.heatmap.entities import HeatMap, HeatMapRow, HeatMapScope
 from app.stocks.market.boards.entities import MarketIndexPerformance, SectorPerformance
 from app.stocks.company.news.entities import NewsArticle, StockNews
-from app.stocks.company.news.repository import NewsRepository
+from app.stocks.company.news.interfaces import NewsRepositoryAdapter
 
 _TODAY = date(2026, 7, 14)
 _NOON = datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc)
@@ -103,7 +103,7 @@ def _complete_brief() -> MarketBrief:
     )
 
 
-class _FakeNews(NewsRepository):
+class _FakeNews(NewsRepositoryAdapter):
     def __init__(self, by_ticker=None, errors=()):
         self._by_ticker = by_ticker or {}
         self._errors = set(errors)

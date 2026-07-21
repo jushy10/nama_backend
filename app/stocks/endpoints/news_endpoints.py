@@ -4,12 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db.db_cached_news_adapter import DbCachedNewsProvider
-from app.stocks.adapters.yfinance.news_adapter import YfinanceNewsProvider
+from app.stocks.adapters.db.db_cached_news_adapter_impl import NewsAdapterImpl as DbCachedNewsAdapterImpl
+from app.stocks.adapters.yfinance.news_adapter_impl import NewsAdapterImpl as YfinanceNewsAdapterImpl
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.company.news.db_repository import SqlNewsRepository
+from app.stocks.company.news.news_repository_adapter_impl import NewsRepositoryAdapterImpl
 from app.stocks.company.news.entities import NewsArticle, StockNews
-from app.stocks.company.news.ports import NewsProvider
+from app.stocks.company.news.interfaces import NewsAdapter
 from app.stocks.company.news.schemas import NewsArticleResponse, StockNewsResponse
 from app.stocks.company.news.use_cases import GetStockNews
 
@@ -17,21 +17,21 @@ router = APIRouter(tags=["news"])
 
 
 @lru_cache(maxsize=1)
-def _yfinance_news_provider() -> NewsProvider:
+def _yfinance_news_provider() -> NewsAdapter:
     # One process-singleton live provider (no key, no connection pool to share); the DB
     # cache that wraps it is built per request, since it needs the request session.
-    return YfinanceNewsProvider()
+    return YfinanceNewsAdapterImpl()
 
 
-def get_news_provider(db: Session = Depends(get_db)) -> NewsProvider:
+def get_news_provider(db: Session = Depends(get_db)) -> NewsAdapter:
     # A persistent DB cache (refreshed out of band by the news cron endpoint + lazily on a
     # miss) sits in front of Yahoo so the endpoint rarely calls it, and it serves stored
     # rows without a live round-trip. yfinance needs no key, so this is always wired.
-    return DbCachedNewsProvider(_yfinance_news_provider(), SqlNewsRepository(db))
+    return DbCachedNewsAdapterImpl(_yfinance_news_provider(), NewsRepositoryAdapterImpl(db))
 
 
 def get_news_use_case(
-    provider: NewsProvider = Depends(get_news_provider),
+    provider: NewsAdapter = Depends(get_news_provider),
 ) -> GetStockNews:
     return GetStockNews(provider)
 

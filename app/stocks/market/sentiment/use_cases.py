@@ -3,7 +3,7 @@ from typing import Callable, TypeVar
 
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.sentiment.entities import MarketSentiment
-from app.stocks.market.sentiment.ports import FearGreedProvider, VixProvider
+from app.stocks.market.sentiment.interfaces import FearGreedAdapter, VixAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +16,8 @@ _SENTIMENT = "*"
 class GetMarketSentiment:
     def __init__(
         self,
-        vix_provider: VixProvider,
-        fear_greed_provider: FearGreedProvider,
+        vix_provider: VixAdapter,
+        fear_greed_provider: FearGreedAdapter,
     ) -> None:
         self._vix_provider = vix_provider
         self._fear_greed_provider = fear_greed_provider

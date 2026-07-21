@@ -4,15 +4,15 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.yfinance.rating_changes_adapter import (
-    YfinanceRatingChangeProvider,
+from app.stocks.adapters.yfinance.rating_change_adapter_impl import (
+    RatingChangeAdapterImpl,
 )
-from app.stocks.adapters.yfinance.recommendations_adapter import (
-    YfinanceRecommendationProvider,
+from app.stocks.adapters.yfinance.recommendation_adapter_impl import (
+    RecommendationAdapterImpl,
 )
-from app.stocks.company.recommendations.db_repository import (
-    SqlRatingChangesRepository,
-    SqlRecommendationsRepository,
+from app.stocks.company.recommendations.repository_adapter_impl import (
+    RatingChangesRepositoryAdapterImpl,
+    RecommendationsRepositoryAdapterImpl,
 )
 from app.stocks.company.recommendations.use_cases import (
     RecommendationsSyncReport,
@@ -37,10 +37,10 @@ def run_recommendations_sync(limit: int | None) -> RecommendationsSyncReport:
     db = SessionLocal()
     try:
         report = SyncRecommendations(
-            YfinanceRecommendationProvider(),
-            SqlRecommendationsRepository(db),
-            rating_change_provider=YfinanceRatingChangeProvider(),
-            rating_change_repository=SqlRatingChangesRepository(db),
+            RecommendationAdapterImpl(),
+            RecommendationsRepositoryAdapterImpl(db),
+            rating_change_provider=RatingChangeAdapterImpl(),
+            rating_change_repository=RatingChangesRepositoryAdapterImpl(db),
         ).execute(limit=limit)
         logger.info(
             "recommendations sync done: refreshed=%d rating_changes=%d failed=%d limit=%s",

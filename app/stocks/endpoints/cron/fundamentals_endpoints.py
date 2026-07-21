@@ -4,8 +4,8 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.yfinance.fundamentals_adapter import (
-    YfinanceFundamentalsProvider,
+from app.stocks.adapters.yfinance.fundamentals_adapter_impl import (
+    FundamentalsAdapterImpl,
 )
 from app.stocks.endpoints.cron.background_sync import (
     SyncRunner,
@@ -13,7 +13,7 @@ from app.stocks.endpoints.cron.background_sync import (
     trigger_sync,
 )
 from app.stocks.endpoints.cron.auth import require_cron_token
-from app.stocks.catalog.fundamentals.db_repository import SqlFundamentalsRepository
+from app.stocks.catalog.fundamentals.fundamentals_repository_adapter_impl import FundamentalsRepositoryAdapterImpl
 from app.stocks.catalog.fundamentals.use_cases import FundamentalsSyncReport, SyncFundamentals
 
 logger = logging.getLogger(__name__)
@@ -34,8 +34,8 @@ def run_fundamentals_sync(limit: int | None) -> FundamentalsSyncReport:
     db = SessionLocal()
     try:
         report = SyncFundamentals(
-            YfinanceFundamentalsProvider(),
-            SqlFundamentalsRepository(db),
+            FundamentalsAdapterImpl(),
+            FundamentalsRepositoryAdapterImpl(db),
             retry_backoff_seconds=_RETRY_BACKOFF_SECONDS,
         ).execute(limit=limit)
         logger.info(

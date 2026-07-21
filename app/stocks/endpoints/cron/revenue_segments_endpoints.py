@@ -4,8 +4,8 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.sec_edgar.revenue_segments_adapter import (
-    SecEdgarRevenueSegmentsProvider,
+from app.stocks.adapters.sec_edgar.revenue_segments_adapter_impl import (
+    RevenueSegmentsAdapterImpl,
 )
 from app.stocks.endpoints.cron.background_sync import (
     SyncRunner,
@@ -13,7 +13,7 @@ from app.stocks.endpoints.cron.background_sync import (
     trigger_sync,
 )
 from app.stocks.endpoints.cron.auth import require_cron_token
-from app.stocks.company.revenue_segments.db_repository import SqlRevenueSegmentsRepository
+from app.stocks.company.revenue_segments.revenue_segments_repository_adapter_impl import RevenueSegmentsRepositoryAdapterImpl
 from app.stocks.company.revenue_segments.use_cases import (
     RevenueSegmentsSyncReport,
     SyncRevenueSegments,
@@ -36,10 +36,10 @@ def run_revenue_segments_sync(limit: int | None) -> RevenueSegmentsSyncReport:
     db = SessionLocal()
     try:
         report = SyncRevenueSegments(
-            SecEdgarRevenueSegmentsProvider(
+            RevenueSegmentsAdapterImpl(
                 min_request_interval_seconds=_SEC_MIN_REQUEST_INTERVAL
             ),
-            SqlRevenueSegmentsRepository(db),
+            RevenueSegmentsRepositoryAdapterImpl(db),
         ).execute(limit=limit)
         logger.info(
             "revenue-segments sync done: refreshed=%d failed=%d limit=%s",

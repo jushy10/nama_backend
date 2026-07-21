@@ -4,8 +4,8 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.sec_edgar.insider_transactions_adapter import (
-    SecEdgarInsiderTransactionsProvider,
+from app.stocks.adapters.sec_edgar.insider_transactions_adapter_impl import (
+    InsiderTransactionsAdapterImpl,
 )
 from app.stocks.endpoints.cron.background_sync import (
     SyncRunner,
@@ -13,8 +13,8 @@ from app.stocks.endpoints.cron.background_sync import (
     trigger_sync,
 )
 from app.stocks.endpoints.cron.auth import require_cron_token
-from app.stocks.company.insider_transactions.db_repository import (
-    SqlInsiderTransactionsRepository,
+from app.stocks.company.insider_transactions.insider_transactions_repository_adapter_impl import (
+    InsiderTransactionsRepositoryAdapterImpl,
 )
 from app.stocks.company.insider_transactions.use_cases import (
     InsiderTransactionsSyncReport,
@@ -38,10 +38,10 @@ def run_insider_transactions_sync(limit: int | None) -> InsiderTransactionsSyncR
     db = SessionLocal()
     try:
         report = SyncInsiderTransactions(
-            SecEdgarInsiderTransactionsProvider(
+            InsiderTransactionsAdapterImpl(
                 min_request_interval_seconds=_SEC_MIN_REQUEST_INTERVAL
             ),
-            SqlInsiderTransactionsRepository(db),
+            InsiderTransactionsRepositoryAdapterImpl(db),
         ).execute(limit=limit)
         logger.info(
             "insider-transactions sync done: refreshed=%d failed=%d limit=%s",

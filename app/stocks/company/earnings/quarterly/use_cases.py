@@ -6,9 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from app.stocks.company.earnings.quarterly.entities import QuarterlyEarningsTimeline
-from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
-from app.stocks.company.earnings.quarterly.repository import (
-    QuarterlyEarningsRepository,
+from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
+from app.stocks.company.earnings.quarterly.interfaces import (
+    QuarterlyEarningsRepositoryAdapter,
     RefreshTarget,
 )
 from app.stocks.entities import normalize_symbol
@@ -40,7 +40,7 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 class GetQuarterlyEarnings:
-    def __init__(self, provider: QuarterlyEarningsProvider) -> None:
+    def __init__(self, provider: QuarterlyEarningsAdapter) -> None:
         self._provider = provider
 
     def execute(self, symbol: str) -> QuarterlyEarningsTimeline:
@@ -64,8 +64,8 @@ class _PassOutcome:
 class SyncQuarterlyEarnings:
     def __init__(
         self,
-        provider: QuarterlyEarningsProvider,
-        repository: QuarterlyEarningsRepository,
+        provider: QuarterlyEarningsAdapter,
+        repository: QuarterlyEarningsRepositoryAdapter,
         *,
         max_workers: int = _DEFAULT_SYNC_WORKERS,
         max_attempts: int = _DEFAULT_MAX_ATTEMPTS,

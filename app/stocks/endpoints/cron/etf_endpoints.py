@@ -4,11 +4,11 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.yfinance.etf_profile_adapter import (
-    YfinanceEtfProfileProvider,
+from app.stocks.adapters.yfinance.etf_profile_adapter_impl import (
+    EtfProfileAdapterImpl,
 )
-from app.stocks.adapters.yfinance.etf_screener_adapter import (
-    YfinanceEtfScreenerProvider,
+from app.stocks.adapters.yfinance.etf_screener_adapter_impl import (
+    EtfScreenerAdapterImpl,
 )
 from app.stocks.endpoints.cron.background_sync import (
     SyncRunner,
@@ -16,7 +16,7 @@ from app.stocks.endpoints.cron.background_sync import (
     trigger_sync,
 )
 from app.stocks.endpoints.cron.auth import require_cron_token
-from app.stocks.catalog.etfs.db_repository import SqlEtfRepository
+from app.stocks.catalog.etfs.repository_adapter_impl import EtfRepositoryAdapterImpl
 from app.stocks.catalog.etfs.use_cases import EtfSyncReport, SyncEtfs
 
 logger = logging.getLogger(__name__)
@@ -31,9 +31,9 @@ def run_etf_sync(limit: int | None) -> EtfSyncReport:
     db = SessionLocal()
     try:
         report = SyncEtfs(
-            YfinanceEtfScreenerProvider(),
-            SqlEtfRepository(db),
-            YfinanceEtfProfileProvider(),
+            EtfScreenerAdapterImpl(),
+            EtfRepositoryAdapterImpl(db),
+            EtfProfileAdapterImpl(),
         ).execute(limit=limit)
         if report.skipped:
             logger.warning(

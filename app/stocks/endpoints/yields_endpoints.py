@@ -2,11 +2,11 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.stocks.adapters.fred.yield_history_adapter import FredYieldHistoryProvider
-from app.stocks.adapters.treasury.yield_curve_adapter import TreasuryYieldCurveProvider
+from app.stocks.adapters.fred.yield_history_adapter_impl import YieldHistoryAdapterImpl
+from app.stocks.adapters.treasury.yield_curve_adapter_impl import YieldCurveAdapterImpl
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.yields.entities import YieldCurve, YieldHistory
-from app.stocks.market.yields.ports import YieldCurveProvider, YieldHistoryProvider
+from app.stocks.market.yields.interfaces import YieldCurveAdapter, YieldHistoryAdapter
 from app.stocks.market.yields.schemas import (
     YieldCurveResponse,
     YieldHistoryResponse,
@@ -20,25 +20,25 @@ router = APIRouter(tags=["market"])
 
 
 @lru_cache(maxsize=1)
-def get_yield_curve_provider() -> YieldCurveProvider:
+def get_yield_curve_provider() -> YieldCurveAdapter:
     # Keyless (Treasury.gov), so no 503 gate — unlike the Alpaca price feed.
-    return TreasuryYieldCurveProvider()
+    return YieldCurveAdapterImpl()
 
 
 @lru_cache(maxsize=1)
-def get_yield_history_provider() -> YieldHistoryProvider:
+def get_yield_history_provider() -> YieldHistoryAdapter:
     # Keyless (FRED), so no 503 gate.
-    return FredYieldHistoryProvider()
+    return YieldHistoryAdapterImpl()
 
 
 def get_yield_curve(
-    provider: YieldCurveProvider = Depends(get_yield_curve_provider),
+    provider: YieldCurveAdapter = Depends(get_yield_curve_provider),
 ) -> GetYieldCurve:
     return GetYieldCurve(provider)
 
 
 def get_yield_history(
-    provider: YieldHistoryProvider = Depends(get_yield_history_provider),
+    provider: YieldHistoryAdapter = Depends(get_yield_history_provider),
 ) -> GetYieldHistory:
     return GetYieldHistory(provider)
 

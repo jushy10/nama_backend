@@ -5,11 +5,11 @@ from dataclasses import dataclass
 from datetime import date
 
 from app.stocks.entities import base_ticker, is_canadian
-from app.stocks.seo.repository import (
+from app.stocks.seo.interfaces import (
     CongressPageTrade,
     EtfPageFacts,
     SectorStock,
-    SeoReadRepository,
+    SeoReadRepositoryAdapter,
     StockPageRef,
     TickerPageFacts,
 )
@@ -64,7 +64,7 @@ class GetTickerStockPage:
     # into a full ledger (the /congress board and the app carry the complete feed).
     CONGRESS_LIMIT = 12
 
-    def __init__(self, repository: SeoReadRepository) -> None:
+    def __init__(self, repository: SeoReadRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(self, ticker: str) -> TickerStockPage:
@@ -109,7 +109,7 @@ class GetSectorPage:
     # Enough to be a rich, link-dense page without an unbounded listing.
     LIMIT = 100
 
-    def __init__(self, repository: SeoReadRepository) -> None:
+    def __init__(self, repository: SeoReadRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(self, sector: str) -> SectorPage:
@@ -145,7 +145,7 @@ class EtfPage:
 
 
 class GetEtfPage:
-    def __init__(self, repository: SeoReadRepository) -> None:
+    def __init__(self, repository: SeoReadRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(self, ticker: str) -> EtfPage:
@@ -249,7 +249,7 @@ class ScreenPage:
 class GetScreenPage:
     LIMIT = 100
 
-    def __init__(self, repository: SeoReadRepository) -> None:
+    def __init__(self, repository: SeoReadRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(self, slug: str) -> ScreenPage:
@@ -285,7 +285,7 @@ class GetSitemap:
     # future truncation drops only the oldest).
     MAX_BRIEF_PAGES = 730
 
-    def __init__(self, repository: SeoReadRepository) -> None:
+    def __init__(self, repository: SeoReadRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(self) -> SitemapData:
@@ -311,7 +311,7 @@ class GetCongressBoardPage:
     # Enough to be a rich, link-dense page without an unbounded listing.
     LIMIT = 100
 
-    def __init__(self, repository: SeoReadRepository) -> None:
+    def __init__(self, repository: SeoReadRepositoryAdapter) -> None:
         self._repository = repository
 
     def execute(self) -> CongressBoardPage:

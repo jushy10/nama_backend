@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import seo_endpoints as endpoints
-from app.stocks.seo.repository import (
+from app.stocks.seo.interfaces import (
     EtfPageFacts,
     SectorStock,
     StockPageRef,

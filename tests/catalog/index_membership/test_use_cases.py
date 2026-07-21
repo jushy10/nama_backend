@@ -2,7 +2,7 @@ import pytest
 
 from app.stocks.exceptions import StockDataUnavailable
 from app.stocks.catalog.index_membership.entities import IndexMembershipSnapshot
-from app.stocks.catalog.index_membership.repository import IndexMembershipSyncCounts
+from app.stocks.catalog.index_membership.interfaces import IndexMembershipSyncCounts
 from app.stocks.catalog.index_membership.use_cases import SyncIndexMembership
 
 

@@ -36,7 +36,7 @@ from app.stocks.company.charts.use_cases import (
     GetStockSupportLevels,
     GetStockTrend,
 )
-from app.stocks.company.charts.ports import CandleProvider
+from app.stocks.company.charts.interfaces import CandleAdapter
 from app.stocks.entities import CandleSeries, Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.wiring import get_price_provider
@@ -45,41 +45,41 @@ router = APIRouter(tags=["charts"])
 
 
 def get_stock_candles(
-    # The market-routing provider implements CandleProvider, so one instance serves the chart
+    # The market-routing provider implements CandleAdapter, so one instance serves the chart
     # for either market — a US symbol reads Alpaca bars, a Canadian-suffixed one Yahoo bars.
-    provider: CandleProvider = Depends(get_price_provider),
+    provider: CandleAdapter = Depends(get_price_provider),
 ) -> GetStockCandles:
     return GetStockCandles(provider)
 
 
 def get_stock_ema(
-    # EMA rides on the same CandleProvider as candles — derived from the OHLC bars, so the
+    # EMA rides on the same CandleAdapter as candles — derived from the OHLC bars, so the
     # routing provider (US→Alpaca / CA→Yahoo) backs this endpoint too.
-    provider: CandleProvider = Depends(get_price_provider),
+    provider: CandleAdapter = Depends(get_price_provider),
 ) -> GetStockEma:
     return GetStockEma(provider)
 
 
 def get_stock_support_levels(
-    # Support levels ride on the same CandleProvider as candles — detected from the OHLC bars,
+    # Support levels ride on the same CandleAdapter as candles — detected from the OHLC bars,
     # so the routing provider backs this endpoint too.
-    provider: CandleProvider = Depends(get_price_provider),
+    provider: CandleAdapter = Depends(get_price_provider),
 ) -> GetStockSupportLevels:
     return GetStockSupportLevels(provider)
 
 
 def get_stock_trend(
-    # Trend rides on the same CandleProvider as candles — read from the OHLC bars (EMA slopes),
+    # Trend rides on the same CandleAdapter as candles — read from the OHLC bars (EMA slopes),
     # so the routing provider backs this endpoint too.
-    provider: CandleProvider = Depends(get_price_provider),
+    provider: CandleAdapter = Depends(get_price_provider),
 ) -> GetStockTrend:
     return GetStockTrend(provider)
 
 
 def get_stock_indicators(
-    # The indicator bundle rides on the same CandleProvider as candles — every indicator is
+    # The indicator bundle rides on the same CandleAdapter as candles — every indicator is
     # derived from the OHLCV bars, so the routing provider backs it too.
-    provider: CandleProvider = Depends(get_price_provider),
+    provider: CandleAdapter = Depends(get_price_provider),
 ) -> GetStockIndicators:
     return GetStockIndicators(provider)
 

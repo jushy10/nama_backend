@@ -2,18 +2,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db.db_only_insider_transactions_adapter import (
-    DbOnlyInsiderTransactionsProvider,
+from app.stocks.adapters.db.db_only_insider_transactions_adapter_impl import (
+    InsiderTransactionsAdapterImpl,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.company.insider_transactions.db_repository import (
-    SqlInsiderTransactionsRepository,
+from app.stocks.company.insider_transactions.insider_transactions_repository_adapter_impl import (
+    InsiderTransactionsRepositoryAdapterImpl,
 )
 from app.stocks.company.insider_transactions.entities import (
     InsiderActivity,
     InsiderTransaction,
 )
-from app.stocks.company.insider_transactions.ports import InsiderTransactionsProvider
+from app.stocks.company.insider_transactions.interfaces import InsiderTransactionsAdapter
 from app.stocks.company.insider_transactions.schemas import (
     InsiderActivityResponse,
     InsiderSummaryResponse,
@@ -26,14 +26,14 @@ router = APIRouter(tags=["insider-transactions"])
 
 def get_insider_transactions_provider(
     db: Session = Depends(get_db),
-) -> InsiderTransactionsProvider:
+) -> InsiderTransactionsAdapter:
     # DB-only read: serve the stored feed, never fetch live from SEC on a read. The weekly cron is
     # the sole populator, so the endpoint never walks the filings inside a user request.
-    return DbOnlyInsiderTransactionsProvider(SqlInsiderTransactionsRepository(db))
+    return InsiderTransactionsAdapterImpl(InsiderTransactionsRepositoryAdapterImpl(db))
 
 
 def get_insider_transactions_use_case(
-    provider: InsiderTransactionsProvider = Depends(get_insider_transactions_provider),
+    provider: InsiderTransactionsAdapter = Depends(get_insider_transactions_provider),
 ) -> GetInsiderTransactions:
     return GetInsiderTransactions(provider)
 

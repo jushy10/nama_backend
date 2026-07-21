@@ -10,9 +10,9 @@ from app.stocks.company.institutional_ownership.entities import (
     InstitutionalOwnership,
     OwnershipBreakdown,
 )
-from app.stocks.company.institutional_ownership.ports import InstitutionalOwnershipProvider
-from app.stocks.company.institutional_ownership.repository import (
-    InstitutionalOwnershipRepository,
+from app.stocks.company.institutional_ownership.interfaces import InstitutionalOwnershipAdapter
+from app.stocks.company.institutional_ownership.interfaces import (
+    InstitutionalOwnershipRepositoryAdapter,
     RefreshTarget,
 )
 from app.stocks.company.institutional_ownership.use_cases import (
@@ -124,7 +124,7 @@ def test_breakdown_is_empty_when_every_field_is_none():
     assert OwnershipBreakdown(60.0, None, None, None).is_empty is False
 
 
-class _FakeReadProvider(InstitutionalOwnershipProvider):
+class _FakeReadProvider(InstitutionalOwnershipAdapter):
     def __init__(self, ownership: InstitutionalOwnership) -> None:
         self._ownership = ownership
         self.calls: list[str] = []
@@ -152,7 +152,7 @@ def test_get_rejects_obviously_invalid_symbols():
     assert provider.calls == []  # rejected before the provider is touched
 
 
-class _FakeRepo(InstitutionalOwnershipRepository):
+class _FakeRepo(InstitutionalOwnershipRepositoryAdapter):
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = list(targets)
         self.upserts: list[tuple[str, str | None]] = []
@@ -169,7 +169,7 @@ class _FakeRepo(InstitutionalOwnershipRepository):
         return self._targets if limit is None else self._targets[:limit]
 
 
-class _FakeSyncProvider(InstitutionalOwnershipProvider):
+class _FakeSyncProvider(InstitutionalOwnershipAdapter):
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}

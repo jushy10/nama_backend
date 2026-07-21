@@ -4,18 +4,18 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.yfinance.classification_adapter import (
-    YfinanceClassificationProvider,
+from app.stocks.adapters.yfinance.company_classification_adapter_impl import (
+    CompanyClassificationAdapterImpl,
 )
-from app.stocks.adapters.yfinance.screener_adapter import YfinanceScreenerProvider
-from app.stocks.company.earnings.quarterly.db_repository import SqlQuarterlyEarningsRepository
+from app.stocks.adapters.yfinance.stock_screener_adapter_impl import StockScreenerAdapterImpl
+from app.stocks.company.earnings.quarterly.quarterly_earnings_repository_adapter_impl import QuarterlyEarningsRepositoryAdapterImpl
 from app.stocks.endpoints.cron.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
     trigger_sync,
 )
 from app.stocks.endpoints.cron.auth import require_cron_token
-from app.stocks.catalog.universe.db_repository import SqlUniverseRepository
+from app.stocks.catalog.universe.repository_adapter_impl import UniverseRepositoryAdapterImpl
 from app.stocks.catalog.universe.use_cases import SyncUniverse, UniverseSyncReport
 
 logger = logging.getLogger(__name__)
@@ -34,10 +34,10 @@ _REGIONS = ("us", "ca")
 
 def _run_universe_pass(db, *, region: str, limit: int) -> UniverseSyncReport:
     report = SyncUniverse(
-        YfinanceScreenerProvider(),
-        SqlUniverseRepository(db),
-        YfinanceClassificationProvider(),
-        SqlQuarterlyEarningsRepository(db),
+        StockScreenerAdapterImpl(),
+        UniverseRepositoryAdapterImpl(db),
+        CompanyClassificationAdapterImpl(),
+        QuarterlyEarningsRepositoryAdapterImpl(db),
         region=region,
     ).execute(limit=limit)
     if report.skipped:
