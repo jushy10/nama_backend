@@ -22,7 +22,9 @@ concurrency:
 jobs:
   validate:
     name: Validate build
-    runs-on: ubuntu-latest
+    # Same runner + platform as the real build in app-image.yml (ARM64/Graviton),
+    # so the PR check proves the image that will actually ship.
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
     steps:
@@ -30,4 +32,4 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build image (no push)
-        run: docker build -t "nama-dev:ci" .
+        run: docker build --platform linux/arm64 -t "nama-dev:ci" .

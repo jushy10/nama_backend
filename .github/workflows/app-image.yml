@@ -48,10 +48,15 @@ jobs:
     uses: ./.github/workflows/tests.yml
 
   # 2/4 — On merge to main (or a manual run): build the image and push it to ECR.
+  # Built for linux/arm64 on a native ARM runner (free for public repos, no QEMU
+  # emulation) because the ECS task definitions run on Graviton (ARM64) Fargate —
+  # ~20% cheaper per vCPU-hour. Keep the platform here in sync with the module's
+  # cpu_architecture (infra/modules/ecs-fargate-service): an x86 image on an ARM
+  # task def (or vice versa) crashes at container start with "exec format error".
   build:
     name: Build & push image
     needs: tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
     steps:
@@ -89,6 +94,7 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
           docker build \
+            --platform linux/arm64 \
             -t "$REGISTRY/$ECR_REPOSITORY:latest" \
             -t "$REGISTRY/$ECR_REPOSITORY:${{ github.sha }}" .
           docker push "$REGISTRY/$ECR_REPOSITORY:latest"

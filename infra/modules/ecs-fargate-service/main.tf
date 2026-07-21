@@ -407,6 +407,15 @@ resource "aws_ecs_task_definition" "this" {
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
+  # Graviton (ARM64) Fargate is ~20% cheaper per vCPU-hour than x86_64 at
+  # identical sizes. MUST match the architecture the CI-built image is compiled
+  # for (app-image.yml builds on an arm64 runner) — a mismatch crashes the
+  # container at start with "exec format error".
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = var.cpu_architecture
+  }
+
   # The "secrets" block injects SSM SecureStrings (DATABASE_URL plus any
   # extra_secrets) as env vars. Omitted entirely when there are none (e.g. a
   # static frontend), so nothing secret appears in the task definition.
@@ -479,6 +488,12 @@ resource "aws_ecs_task_definition" "sync" {
   memory                   = var.sync_memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task.arn
+
+  # Same architecture as the app task — it runs the same image.
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = var.cpu_architecture
+  }
 
   container_definitions = jsonencode([
     merge(
