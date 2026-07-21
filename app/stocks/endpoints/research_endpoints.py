@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.rate_limit import limiter
-from app.stocks.adapters.bedrock.bedrock_conversation_model_adapter import BedrockConversationModelAdapter
+from app.stocks.adapters.bedrock.conversation_model_adapter_impl import ConversationModelAdapterImpl
 from app.stocks.adapters.cnn.fear_greed_adapter import CnnFearGreedProvider
 from app.stocks.adapters.fred.vix_adapter import FredVixProvider
 from app.stocks.ai.agent.entities import ResearchResult
@@ -48,8 +48,8 @@ def get_conversation_model() -> ConversationModelAdapter:
     model_id = os.environ.get("BEDROCK_RESEARCH_MODEL_ID")
     try:
         if model_id:
-            return BedrockConversationModelAdapter(model_id=model_id, region=region)
-        return BedrockConversationModelAdapter(region=region)
+            return ConversationModelAdapterImpl(model_id=model_id, region=region)
+        return ConversationModelAdapterImpl(region=region)
     except ImportError as exc:
         raise HTTPException(
             503, "AI research is not configured (install the 'bedrock' extra)."

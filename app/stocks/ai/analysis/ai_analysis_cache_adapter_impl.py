@@ -46,7 +46,7 @@ _MUTABLE_COLUMNS = (
 )
 
 
-class DbAiAnalysisCacheAdapter(AiAnalysisCacheAdapter[T], Generic[T]):
+class AiAnalysisCacheAdapterImpl(AiAnalysisCacheAdapter[T], Generic[T]):
     def __init__(
         self,
         session: Session,
@@ -107,28 +107,28 @@ class DbAiAnalysisCacheAdapter(AiAnalysisCacheAdapter[T], Generic[T]):
 # private to this module). The router builds one per request session.
 
 
-def earnings_analysis_cache(session: Session) -> DbAiAnalysisCacheAdapter[EarningsAnalysis]:
-    return DbAiAnalysisCacheAdapter(session, "earnings", _earnings_to_row, _earnings_from_row)
+def earnings_analysis_cache(session: Session) -> AiAnalysisCacheAdapterImpl[EarningsAnalysis]:
+    return AiAnalysisCacheAdapterImpl(session, "earnings", _earnings_to_row, _earnings_from_row)
 
 
-def ratings_analysis_cache(session: Session) -> DbAiAnalysisCacheAdapter[RatingsAnalysis]:
-    return DbAiAnalysisCacheAdapter(session, "ratings", _ratings_to_row, _ratings_from_row)
+def ratings_analysis_cache(session: Session) -> AiAnalysisCacheAdapterImpl[RatingsAnalysis]:
+    return AiAnalysisCacheAdapterImpl(session, "ratings", _ratings_to_row, _ratings_from_row)
 
 
 def fundamentals_analysis_cache(
     session: Session,
-) -> DbAiAnalysisCacheAdapter[FundamentalsAnalysis]:
-    return DbAiAnalysisCacheAdapter(
+) -> AiAnalysisCacheAdapterImpl[FundamentalsAnalysis]:
+    return AiAnalysisCacheAdapterImpl(
         session, "fundamentals", _fundamentals_to_row, _fundamentals_from_row
     )
 
 
-def sector_analysis_cache(session: Session) -> DbAiAnalysisCacheAdapter[SectorAnalysis]:
-    return DbAiAnalysisCacheAdapter(session, "sector", _sector_to_row, _sector_from_row)
+def sector_analysis_cache(session: Session) -> AiAnalysisCacheAdapterImpl[SectorAnalysis]:
+    return AiAnalysisCacheAdapterImpl(session, "sector", _sector_to_row, _sector_from_row)
 
 
-def market_summary_cache(session: Session) -> DbAiAnalysisCacheAdapter[MarketSummary]:
-    return DbAiAnalysisCacheAdapter(session, "market", _market_to_row, _market_from_row)
+def market_summary_cache(session: Session) -> AiAnalysisCacheAdapterImpl[MarketSummary]:
+    return AiAnalysisCacheAdapterImpl(session, "market", _market_to_row, _market_from_row)
 
 
 def _utc(dt: datetime | None) -> datetime | None:

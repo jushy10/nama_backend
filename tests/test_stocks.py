@@ -4,18 +4,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.adapters.bedrock.bedrock_stock_scorecard_adapter import (
-    BedrockStockScorecardAdapter,
+from app.stocks.adapters.bedrock.stock_scorecard_adapter_impl import (
+    StockScorecardAdapterImpl,
     _SECTIONS as _SCORECARD_SECTIONS,
 )
-from app.stocks.adapters.bedrock.bedrock_earnings_analysis_adapter import (
-    BedrockEarningsAnalysisAdapter,
+from app.stocks.adapters.bedrock.earnings_analysis_adapter_impl import (
+    EarningsAnalysisAdapterImpl,
 )
-from app.stocks.adapters.bedrock.bedrock_market_summary_adapter import (
-    BedrockMarketSummaryAdapter,
+from app.stocks.adapters.bedrock.market_summary_adapter_impl import (
+    MarketSummaryAdapterImpl,
 )
-from app.stocks.adapters.bedrock.bedrock_sector_analysis_adapter import (
-    BedrockSectorAnalysisAdapter,
+from app.stocks.adapters.bedrock.sector_analysis_adapter_impl import (
+    SectorAnalysisAdapterImpl,
 )
 from app.stocks.company.charts.chart_window import ChartRange, resolve_window
 from app.stocks.ai.analysis.entities import (
@@ -2298,7 +2298,7 @@ def test_bedrock_adapter_parses_tool_call_into_entity():
             }
         )
     )
-    provider = BedrockStockScorecardAdapter(client=client, model_id="test-model")
+    provider = StockScorecardAdapterImpl(client=client, model_id="test-model")
     scorecard = provider.analyze(
         a_stock(metrics=a_key_metrics()), a_quarterly_timeline()
     )
@@ -2324,7 +2324,7 @@ def test_bedrock_adapter_parses_tool_call_into_entity():
 
 def test_bedrock_adapter_renders_figures_into_prompt():
     client = _StubClient(_tool_message())
-    BedrockStockScorecardAdapter(client=client).analyze(
+    StockScorecardAdapterImpl(client=client).analyze(
         a_stock(metrics=a_key_metrics()), a_quarterly_timeline()
     )
     prompt = client.calls[0]["messages"][0]["content"]
@@ -2339,7 +2339,7 @@ def test_bedrock_adapter_renders_forward_recommendations_and_annual_into_prompt(
     # The richer context — forward consensus (from estimates), the analyst
     # recommendations, and the annual timeline — each renders into its own section.
     client = _StubClient(_tool_message())
-    BedrockStockScorecardAdapter(client=client).analyze(
+    StockScorecardAdapterImpl(client=client).analyze(
         a_stock(metrics=a_key_metrics(), analyst_estimates=an_estimates()),
         a_quarterly_timeline(),
         an_annual_timeline(),
@@ -2360,7 +2360,7 @@ def test_bedrock_adapter_renders_industry_valuation_into_prompt():
     # The industry benchmark renders its own labelled block, so the model can weigh
     # the stock's own trailing P/E against its peers.
     client = _StubClient(_tool_message())
-    BedrockStockScorecardAdapter(client=client).analyze(
+    StockScorecardAdapterImpl(client=client).analyze(
         a_stock(metrics=a_key_metrics()),
         a_quarterly_timeline(),
         industry_valuation=IndustryValuation.from_pe_ratios(
@@ -2386,7 +2386,7 @@ def test_bedrock_adapter_renders_a_tier_scoped_cohort_as_same_size_peers():
         (8.0, MarketCapTier.MID),
         (9.0, MarketCapTier.MID),
     )
-    BedrockStockScorecardAdapter(client=client).analyze(
+    StockScorecardAdapterImpl(client=client).analyze(
         a_stock(metrics=a_key_metrics()),
         a_quarterly_timeline(),
         industry_valuation=IndustryValuation.for_stock_peers(
@@ -2401,7 +2401,7 @@ def test_bedrock_adapter_renders_a_tier_scoped_cohort_as_same_size_peers():
 def test_bedrock_adapter_omits_industry_valuation_block_when_absent():
     # No benchmark supplied -> no block (the section is skipped, not rendered empty).
     client = _StubClient(_tool_message())
-    BedrockStockScorecardAdapter(client=client).analyze(a_stock(metrics=a_key_metrics()))
+    StockScorecardAdapterImpl(client=client).analyze(a_stock(metrics=a_key_metrics()))
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Industry valuation benchmark" not in prompt
 
@@ -2409,25 +2409,25 @@ def test_bedrock_adapter_omits_industry_valuation_block_when_absent():
 def test_bedrock_adapter_raises_when_no_tool_call():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # model didn't call it
     with pytest.raises(StockDataUnavailable):
-        BedrockStockScorecardAdapter(client=client).analyze(a_stock())
+        StockScorecardAdapterImpl(client=client).analyze(a_stock())
 
 
 def test_bedrock_adapter_maps_client_error_to_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockStockScorecardAdapter(client=_BoomClient()).analyze(a_stock())
+        StockScorecardAdapterImpl(client=_BoomClient()).analyze(a_stock())
 
 
 def test_bedrock_adapter_rejects_offschema_value():
     client = _StubClient(_tool_message(recommendation="mega_buy"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
-        BedrockStockScorecardAdapter(client=client).analyze(a_stock())
+        StockScorecardAdapterImpl(client=client).analyze(a_stock())
 
 
 def test_bedrock_adapter_neutral_stance_when_section_stance_off_enum():
     # A section whose stance isn't a known value degrades to neutral rather than
     # sinking the whole scorecard (a cosmetic field, unlike the overall verdict).
     client = _StubClient(_tool_message(valuation=_section_payload(stance="wildly_off")))
-    scorecard = BedrockStockScorecardAdapter(client=client).analyze(a_stock())
+    scorecard = StockScorecardAdapterImpl(client=client).analyze(a_stock())
     valuation = next(s for s in scorecard.sections if s.key == "valuation")
     assert valuation.stance is SectionStance.NEUTRAL
 
@@ -2436,19 +2436,19 @@ def test_bedrock_adapter_confidence_reflects_data_coverage():
     # Confidence is the service's deterministic read of how many data sources resolved
     # (sections with real chips), not the model's guess. A full multi-source snapshot
     # reads HIGH, a fundamentals-only one MEDIUM, a bare quote LOW.
-    full = BedrockStockScorecardAdapter(client=_StubClient(_tool_message())).analyze(
+    full = StockScorecardAdapterImpl(client=_StubClient(_tool_message())).analyze(
         a_stock(metrics=a_key_metrics()),
         a_quarterly_timeline(),
         recommendations=an_analyst_recommendations(),
     )
     assert full.confidence is Confidence.HIGH
 
-    partial = BedrockStockScorecardAdapter(client=_StubClient(_tool_message())).analyze(
+    partial = StockScorecardAdapterImpl(client=_StubClient(_tool_message())).analyze(
         a_stock(metrics=a_key_metrics())  # fundamentals only — no earnings/analyst
     )
     assert partial.confidence is Confidence.MEDIUM
 
-    bare = BedrockStockScorecardAdapter(client=_StubClient(_tool_message())).analyze(
+    bare = StockScorecardAdapterImpl(client=_StubClient(_tool_message())).analyze(
         a_stock()  # a quote with no fundamentals, earnings, or analyst coverage
     )
     assert bare.confidence is Confidence.LOW
@@ -2471,7 +2471,7 @@ def test_bedrock_adapter_recovers_blank_sections_with_targeted_retry():
         ]
     )
 
-    scorecard = BedrockStockScorecardAdapter(client=client).analyze(
+    scorecard = StockScorecardAdapterImpl(client=client).analyze(
         a_stock(metrics=a_key_metrics())
     )
 
@@ -2494,7 +2494,7 @@ def test_bedrock_adapter_merge_keeps_a_section_the_first_pass_already_wrote():
     )
     client = _SeqStubClient([first, _sections_recovery_message()])
 
-    scorecard = BedrockStockScorecardAdapter(client=client).analyze(a_stock())
+    scorecard = StockScorecardAdapterImpl(client=client).analyze(a_stock())
 
     prof = next(s for s in scorecard.sections if s.key == "profitability")
     assert prof.label == "Exceptional"  # kept from the first pass, not the recovery
@@ -2507,10 +2507,10 @@ def test_bedrock_adapter_accepts_blank_sections_after_exhausting_retries():
     # view regenerates.
     client = _SeqStubClient([_blank_sections_message()])  # repeats the blank message
 
-    scorecard = BedrockStockScorecardAdapter(client=client).analyze(a_stock())
+    scorecard = StockScorecardAdapterImpl(client=client).analyze(a_stock())
 
     # initial call + the bounded retries, then accept
-    assert len(client.calls) == 1 + BedrockStockScorecardAdapter._MAX_INCOMPLETE_RETRIES
+    assert len(client.calls) == 1 + StockScorecardAdapterImpl._MAX_INCOMPLETE_RETRIES
     assert not scorecard.is_complete
     assert scorecard.thesis  # the overall verdict still comes through
 
@@ -2520,7 +2520,7 @@ def test_bedrock_adapter_does_not_retry_a_complete_scorecard():
     # returned after a single call.
     client = _SeqStubClient([_tool_message(), _sections_recovery_message()])
 
-    scorecard = BedrockStockScorecardAdapter(client=client).analyze(a_stock())
+    scorecard = StockScorecardAdapterImpl(client=client).analyze(a_stock())
 
     assert len(client.calls) == 1  # no recovery call
     assert scorecard.is_complete
@@ -3144,7 +3144,7 @@ def _a_board() -> list[SectorContext]:
 
 def test_sector_analysis_parses_tool_call_into_entity():
     client = _StubClient(_sector_tool_message())
-    provider = BedrockSectorAnalysisAdapter(client=client, model_id="test-model")
+    provider = SectorAnalysisAdapterImpl(client=client, model_id="test-model")
 
     analysis = provider.analyze(_a_board())
 
@@ -3167,7 +3167,7 @@ def test_sector_analysis_parses_tool_call_into_entity():
 def test_sector_analysis_renders_board_into_prompt():
     client = _StubClient(_sector_tool_message())
     board = [_ctx("Technology", "XLK", 10.0, performance=a_performance())]
-    BedrockSectorAnalysisAdapter(client=client).analyze(board)
+    SectorAnalysisAdapterImpl(client=client).analyze(board)
 
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Market sectors today" in prompt
@@ -3194,7 +3194,7 @@ def test_sector_analysis_renders_movers_breadth_and_headlines_into_prompt():
             ),
         )
     ]
-    BedrockSectorAnalysisAdapter(client=client).analyze(board)
+    SectorAnalysisAdapterImpl(client=client).analyze(board)
 
     prompt = client.calls[0]["messages"][0]["content"]
     assert "driven by: NVIDIA +6.20%; Broadcom +4.10%" in prompt
@@ -3212,7 +3212,7 @@ def test_sector_analysis_joins_movers_and_headlines_onto_the_highlight():
         _ctx("Energy", "XLE", -5.0),
     ]
 
-    analysis = BedrockSectorAnalysisAdapter(client=client).analyze(board)
+    analysis = SectorAnalysisAdapterImpl(client=client).analyze(board)
 
     leader = analysis.leaders[0]
     assert [m.ticker for m in leader.movers] == ["NVDA"]
@@ -3231,7 +3231,7 @@ def test_sector_analysis_joins_real_percent_and_drops_unknown_sector():
             ]
         )
     )
-    analysis = BedrockSectorAnalysisAdapter(client=client).analyze(_a_board())
+    analysis = SectorAnalysisAdapterImpl(client=client).analyze(_a_board())
     assert [h.sector for h in analysis.leaders] == ["Technology"]
     assert analysis.leaders[0].change_percent == 10.0
 
@@ -3240,25 +3240,25 @@ def test_sector_analysis_drops_a_highlight_without_a_note():
     client = _StubClient(
         _sector_tool_message(laggards=[{"sector": "Energy", "note": ""}])
     )
-    analysis = BedrockSectorAnalysisAdapter(client=client).analyze(_a_board())
+    analysis = SectorAnalysisAdapterImpl(client=client).analyze(_a_board())
     assert analysis.laggards == ()
 
 
 def test_sector_analysis_raises_when_model_does_not_call_the_tool():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
     with pytest.raises(StockDataUnavailable):
-        BedrockSectorAnalysisAdapter(client=client).analyze(_a_board())
+        SectorAnalysisAdapterImpl(client=client).analyze(_a_board())
 
 
 def test_sector_analysis_maps_a_client_error_to_a_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockSectorAnalysisAdapter(client=_BoomClient()).analyze(_a_board())
+        SectorAnalysisAdapterImpl(client=_BoomClient()).analyze(_a_board())
 
 
 def test_sector_analysis_rejects_an_offschema_tone():
     client = _StubClient(_sector_tool_message(tone="euphoric"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
-        BedrockSectorAnalysisAdapter(client=client).analyze(_a_board())
+        SectorAnalysisAdapterImpl(client=client).analyze(_a_board())
 
 
 def test_sector_analysis_retries_once_when_lists_come_back_empty():
@@ -3267,7 +3267,7 @@ def test_sector_analysis_retries_once_when_lists_come_back_empty():
     full = _sector_tool_message()
     client = _SeqStubClient([empty, full])
 
-    analysis = BedrockSectorAnalysisAdapter(client=client).analyze(_a_board())
+    analysis = SectorAnalysisAdapterImpl(client=client).analyze(_a_board())
 
     assert len(client.calls) == 2  # retried exactly once
     assert [h.sector for h in analysis.leaders] == ["Technology"]
@@ -3678,7 +3678,7 @@ def test_market_index_entity_change_and_percent():
 
 def test_market_summary_parses_tool_call_into_entity():
     client = _StubClient(_market_tool_message())
-    provider = BedrockMarketSummaryAdapter(client=client, model_id="test-model")
+    provider = MarketSummaryAdapterImpl(client=client, model_id="test-model")
 
     summary = provider.analyze(_a_market_board())
 
@@ -3710,7 +3710,7 @@ def test_market_summary_parses_tool_call_into_entity():
 
 def test_market_summary_renders_board_into_prompt():
     client = _StubClient(_market_tool_message())
-    BedrockMarketSummaryAdapter(client=client).analyze(_a_market_board())
+    MarketSummaryAdapterImpl(client=client).analyze(_a_market_board())
 
     prompt = client.calls[0]["messages"][0]["content"]
     assert "US market today" in prompt
@@ -3727,7 +3727,7 @@ def test_market_summary_keeps_a_period_even_without_a_note():
     client = _StubClient(
         _market_tool_message(periods=[{"period": "year", "note": "A strong year."}])
     )
-    summary = BedrockMarketSummaryAdapter(client=client).analyze(_a_market_board())
+    summary = MarketSummaryAdapterImpl(client=client).analyze(_a_market_board())
     assert [p.period for p in summary.periods] == [
         MarketPeriod.YEAR,
         MarketPeriod.MONTH,
@@ -3742,7 +3742,7 @@ def test_market_summary_builds_none_returns_without_history():
     # An index with no trailing performance still appears, with None returns.
     board = [a_market_index(name="S&P 500", symbol="SPY", performance=None)]
     client = _StubClient(_market_tool_message())
-    summary = BedrockMarketSummaryAdapter(client=client).analyze(board)
+    summary = MarketSummaryAdapterImpl(client=client).analyze(board)
     year = summary.periods[0]
     assert year.indexes[0].symbol == "SPY"
     assert year.indexes[0].change_percent is None
@@ -3751,18 +3751,18 @@ def test_market_summary_builds_none_returns_without_history():
 def test_market_summary_raises_when_model_does_not_call_the_tool():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
     with pytest.raises(StockDataUnavailable):
-        BedrockMarketSummaryAdapter(client=client).analyze(_a_market_board())
+        MarketSummaryAdapterImpl(client=client).analyze(_a_market_board())
 
 
 def test_market_summary_maps_a_client_error_to_a_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockMarketSummaryAdapter(client=_BoomClient()).analyze(_a_market_board())
+        MarketSummaryAdapterImpl(client=_BoomClient()).analyze(_a_market_board())
 
 
 def test_market_summary_rejects_an_offschema_tone():
     client = _StubClient(_market_tool_message(tone="euphoric"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
-        BedrockMarketSummaryAdapter(client=client).analyze(_a_market_board())
+        MarketSummaryAdapterImpl(client=client).analyze(_a_market_board())
 
 
 def test_market_summary_retries_once_when_periods_come_back_empty():
@@ -3771,7 +3771,7 @@ def test_market_summary_retries_once_when_periods_come_back_empty():
     full = _market_tool_message()
     client = _SeqStubClient([empty, full])
 
-    summary = BedrockMarketSummaryAdapter(client=client).analyze(_a_market_board())
+    summary = MarketSummaryAdapterImpl(client=client).analyze(_a_market_board())
 
     assert len(client.calls) == 2  # retried exactly once
     assert summary.periods[0].note == "A strong year for both indexes."
@@ -3810,7 +3810,7 @@ def _earnings_highlights_message(**input_overrides) -> _StubMessage:
 
 def test_earnings_analysis_parses_tool_call_into_entity():
     client = _StubClient(_earnings_tool_message())
-    provider = BedrockEarningsAnalysisAdapter(client=client, model_id="test-model")
+    provider = EarningsAnalysisAdapterImpl(client=client, model_id="test-model")
 
     analysis = provider.analyze(
         "aapl", a_quarterly_timeline(), an_annual_timeline()
@@ -3833,7 +3833,7 @@ def test_earnings_analysis_parses_tool_call_into_entity():
 
 def test_earnings_analysis_renders_timelines_into_prompt():
     client = _StubClient(_earnings_tool_message())
-    BedrockEarningsAnalysisAdapter(client=client).analyze(
+    EarningsAnalysisAdapterImpl(client=client).analyze(
         "AAPL", a_quarterly_timeline(), an_annual_timeline()
     )
 
@@ -3852,14 +3852,14 @@ def test_earnings_analysis_renders_timelines_into_prompt():
 def test_earnings_analysis_raises_when_model_does_not_call_the_tool():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
     with pytest.raises(StockDataUnavailable):
-        BedrockEarningsAnalysisAdapter(client=client).analyze(
+        EarningsAnalysisAdapterImpl(client=client).analyze(
             "AAPL", a_quarterly_timeline()
         )
 
 
 def test_earnings_analysis_maps_a_client_error_to_a_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockEarningsAnalysisAdapter(client=_BoomClient()).analyze(
+        EarningsAnalysisAdapterImpl(client=_BoomClient()).analyze(
             "AAPL", a_quarterly_timeline()
         )
 
@@ -3867,7 +3867,7 @@ def test_earnings_analysis_maps_a_client_error_to_a_domain_error():
 def test_earnings_analysis_rejects_an_offschema_trend():
     client = _StubClient(_earnings_tool_message(trend="exploding"))  # not in enum
     with pytest.raises(StockDataUnavailable):
-        BedrockEarningsAnalysisAdapter(client=client).analyze(
+        EarningsAnalysisAdapterImpl(client=client).analyze(
             "AAPL", a_quarterly_timeline()
         )
 
@@ -3879,7 +3879,7 @@ def test_earnings_analysis_retries_once_when_highlights_come_back_empty():
     highlights = _earnings_highlights_message()  # the targeted recovery call
     client = _SeqStubClient([empty, highlights])
 
-    analysis = BedrockEarningsAnalysisAdapter(client=client).analyze(
+    analysis = EarningsAnalysisAdapterImpl(client=client).analyze(
         "AAPL", a_quarterly_timeline()
     )
 
@@ -3900,7 +3900,7 @@ def test_earnings_analysis_drops_string_highlights_instead_of_char_splitting():
     leaked = '<parameter name="highlights">["Beat every quarter", "Profit climbing"]'
     client = _StubClient(_earnings_tool_message(highlights=leaked))
 
-    analysis = BedrockEarningsAnalysisAdapter(client=client).analyze(
+    analysis = EarningsAnalysisAdapterImpl(client=client).analyze(
         "AAPL", a_quarterly_timeline()
     )
 

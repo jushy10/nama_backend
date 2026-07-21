@@ -34,7 +34,7 @@ def _to_entity(row: MarketBriefRecord) -> MarketBrief:
     )
 
 
-class DbMarketBriefRepositoryAdapter(MarketBriefRepositoryAdapter):
+class MarketBriefRepositoryAdapterImpl(MarketBriefRepositoryAdapter):
     def __init__(self, session: Session) -> None:
         self._session = session
 

@@ -135,7 +135,7 @@ _SYSTEM_PROMPT = (
 )
 
 
-class BedrockSectorAnalysisAdapter(SectorAnalysisAdapter):
+class SectorAnalysisAdapterImpl(SectorAnalysisAdapter):
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock
     # (unlike us.anthropic.claude-sonnet-4-6), so the short form 400s with "invalid
     # model identifier". Verified ACTIVE + invokable in us-east-1.

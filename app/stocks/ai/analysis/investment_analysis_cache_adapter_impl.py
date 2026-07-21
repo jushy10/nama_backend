@@ -11,7 +11,7 @@ from app.stocks.ai.analysis.interfaces import InvestmentAnalysisCacheAdapter
 logger = logging.getLogger(__name__)
 
 
-class DbInvestmentAnalysisCacheAdapter(InvestmentAnalysisCacheAdapter):
+class InvestmentAnalysisCacheAdapterImpl(InvestmentAnalysisCacheAdapter):
     def __init__(self, session: Session, kind: str) -> None:
         self._session = session
         self._kind = kind

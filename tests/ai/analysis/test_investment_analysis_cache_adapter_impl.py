@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.stocks.ai.analysis.db_investment_analysis_cache_adapter import DbInvestmentAnalysisCacheAdapter
+from app.stocks.ai.analysis.investment_analysis_cache_adapter_impl import InvestmentAnalysisCacheAdapterImpl
 from app.stocks.ai.analysis.models import AnalysisCacheRecord
 from app.stocks.ai.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
 
@@ -36,11 +36,11 @@ def an_analysis(symbol: str = "AAPL", **overrides) -> InvestmentAnalysis:
 
 
 def test_get_on_empty_is_a_miss(session):
-    assert DbInvestmentAnalysisCacheAdapter(session, "stock").get("AAPL") is None
+    assert InvestmentAnalysisCacheAdapterImpl(session, "stock").get("AAPL") is None
 
 
 def test_put_then_get_round_trips_every_field(session):
-    cache = DbInvestmentAnalysisCacheAdapter(session, "stock")
+    cache = InvestmentAnalysisCacheAdapterImpl(session, "stock")
     cache.put(an_analysis())
     got = cache.get("AAPL")
     assert got == an_analysis()  # frozen dataclass equality covers every field
@@ -51,13 +51,13 @@ def test_put_then_get_round_trips_every_field(session):
 
 def test_kind_isolates_a_shared_ticker(session):
     # A stock and a fund can share a ticker; the two caches must not collide.
-    DbInvestmentAnalysisCacheAdapter(session, "stock").put(an_analysis())
-    assert DbInvestmentAnalysisCacheAdapter(session, "etf").get("AAPL") is None
-    assert DbInvestmentAnalysisCacheAdapter(session, "stock").get("AAPL") is not None
+    InvestmentAnalysisCacheAdapterImpl(session, "stock").put(an_analysis())
+    assert InvestmentAnalysisCacheAdapterImpl(session, "etf").get("AAPL") is None
+    assert InvestmentAnalysisCacheAdapterImpl(session, "stock").get("AAPL") is not None
 
 
 def test_put_overwrites_in_place(session):
-    cache = DbInvestmentAnalysisCacheAdapter(session, "stock")
+    cache = InvestmentAnalysisCacheAdapterImpl(session, "stock")
     cache.put(an_analysis(recommendation=Recommendation.BUY))
     cache.put(an_analysis(recommendation=Recommendation.SELL, thesis="Turned sour."))
     got = cache.get("AAPL")
@@ -87,21 +87,21 @@ def test_corrupt_enum_row_is_treated_as_a_miss(session):
         )
     )
     session.commit()
-    assert DbInvestmentAnalysisCacheAdapter(session, "stock").get("AAPL") is None
+    assert InvestmentAnalysisCacheAdapterImpl(session, "stock").get("AAPL") is None
 
 
 def test_get_is_best_effort_on_a_broken_session():
     # A read failure (here: a session with no schema at all) is a miss, not a raise.
     engine = create_engine("sqlite:///:memory:")  # no create_all -> table missing
     with Session(engine) as db:
-        assert DbInvestmentAnalysisCacheAdapter(db, "stock").get("AAPL") is None
+        assert InvestmentAnalysisCacheAdapterImpl(db, "stock").get("AAPL") is None
 
 
 def test_put_is_best_effort_and_never_raises():
     # A write failure (no schema) must be swallowed — the caller already has its answer.
     engine = create_engine("sqlite:///:memory:")
     with Session(engine) as db:
-        DbInvestmentAnalysisCacheAdapter(db, "stock").put(an_analysis())  # no exception
+        InvestmentAnalysisCacheAdapterImpl(db, "stock").put(an_analysis())  # no exception
 
 
 def test_naive_stored_stamp_reads_back_as_utc(session):
@@ -121,5 +121,5 @@ def test_naive_stored_stamp_reads_back_as_utc(session):
         )
     )
     session.commit()
-    got = DbInvestmentAnalysisCacheAdapter(session, "stock").get("MSFT")
+    got = InvestmentAnalysisCacheAdapterImpl(session, "stock").get("MSFT")
     assert got.generated_at == _NOW

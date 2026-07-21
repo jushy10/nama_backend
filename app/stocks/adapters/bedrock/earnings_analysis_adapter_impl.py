@@ -136,7 +136,7 @@ _HIGHLIGHTS_INSTRUCTION = (
 _KEY = "earnings-analysis"
 
 
-class BedrockEarningsAnalysisAdapter(EarningsAnalysisAdapter):
+class EarningsAnalysisAdapterImpl(EarningsAnalysisAdapter):
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on
     # Bedrock, so the short form 400s. Same default as the market/sector reads.
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"

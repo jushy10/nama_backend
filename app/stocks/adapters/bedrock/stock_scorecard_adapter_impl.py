@@ -334,7 +334,7 @@ _SECTIONS_INSTRUCTION = (
 )
 
 
-class BedrockStockScorecardAdapter(StockScorecardAdapter):
+class StockScorecardAdapterImpl(StockScorecardAdapter):
     # Defaults to the fast Haiku tier: this endpoint's output is short and plain by
     # design, so the extra reasoning of a larger model buys little here — and Haiku
     # generates markedly faster, the whole point of this endpoint. The id is a

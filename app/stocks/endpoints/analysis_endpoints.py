@@ -6,21 +6,21 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.rate_limit import limiter
-from app.stocks.adapters.bedrock.bedrock_stock_scorecard_adapter import BedrockStockScorecardAdapter
-from app.stocks.adapters.bedrock.bedrock_earnings_analysis_adapter import (
-    BedrockEarningsAnalysisAdapter,
+from app.stocks.adapters.bedrock.stock_scorecard_adapter_impl import StockScorecardAdapterImpl
+from app.stocks.adapters.bedrock.earnings_analysis_adapter_impl import (
+    EarningsAnalysisAdapterImpl,
 )
-from app.stocks.adapters.bedrock.bedrock_fundamentals_analysis_adapter import (
-    BedrockFundamentalsAnalysisAdapter,
+from app.stocks.adapters.bedrock.fundamentals_analysis_adapter_impl import (
+    FundamentalsAnalysisAdapterImpl,
 )
-from app.stocks.adapters.bedrock.bedrock_market_summary_adapter import (
-    BedrockMarketSummaryAdapter,
+from app.stocks.adapters.bedrock.market_summary_adapter_impl import (
+    MarketSummaryAdapterImpl,
 )
-from app.stocks.adapters.bedrock.bedrock_ratings_analysis_adapter import (
-    BedrockRatingsAnalysisAdapter,
+from app.stocks.adapters.bedrock.ratings_analysis_adapter_impl import (
+    RatingsAnalysisAdapterImpl,
 )
-from app.stocks.adapters.bedrock.bedrock_sector_analysis_adapter import (
-    BedrockSectorAnalysisAdapter,
+from app.stocks.adapters.bedrock.sector_analysis_adapter_impl import (
+    SectorAnalysisAdapterImpl,
 )
 from app.stocks.adapters.db.db_only_context_providers import (
     DbOnlyAnnualEarningsProvider,
@@ -29,7 +29,7 @@ from app.stocks.adapters.db.db_only_context_providers import (
     DbOnlyRecommendationsProvider,
 )
 from app.stocks.adapters.yfinance.eps_history_adapter import YfinanceEpsHistoryProvider
-from app.stocks.ai.analysis.db_ai_analysis_cache_adapter import (
+from app.stocks.ai.analysis.ai_analysis_cache_adapter_impl import (
     earnings_analysis_cache,
     fundamentals_analysis_cache,
     market_summary_cache,
@@ -58,7 +58,7 @@ from app.stocks.ai.analysis.interfaces import (
     StockScorecardCacheAdapter,
     StockScorecardAdapter,
 )
-from app.stocks.ai.analysis.db_stock_scorecard_cache_adapter import DbStockScorecardCacheAdapter
+from app.stocks.ai.analysis.stock_scorecard_cache_adapter_impl import StockScorecardCacheAdapterImpl
 from app.stocks.ai.analysis.schemas import (
     EarningsAnalysisResponse,
     FundamentalsAnalysisResponse,
@@ -163,10 +163,10 @@ def get_analysis_provider() -> StockScorecardAdapter:
     recovery = bedrock_recovery_model_id("BEDROCK_ANALYSIS_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockStockScorecardAdapter(
+            return StockScorecardAdapterImpl(
                 model_id=model_id, region=region, recovery_model_id=recovery
             )
-        return BedrockStockScorecardAdapter(region=region, recovery_model_id=recovery)
+        return StockScorecardAdapterImpl(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -180,7 +180,7 @@ def get_analysis_cache(
     # never collides with a fund of the same ticker). One row per symbol, refreshed
     # whenever a served read ages past the use case's TTL — best-effort, so a DB
     # problem degrades to a regeneration, never an error.
-    return DbStockScorecardCacheAdapter(db, "stock")
+    return StockScorecardCacheAdapterImpl(db, "stock")
 
 
 def get_stock_analysis(
@@ -225,10 +225,10 @@ def get_sector_analysis_provider() -> SectorAnalysisAdapter:
     recovery = bedrock_recovery_model_id("BEDROCK_SECTOR_ANALYSIS_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockSectorAnalysisAdapter(
+            return SectorAnalysisAdapterImpl(
                 model_id=model_id, region=region, recovery_model_id=recovery
             )
-        return BedrockSectorAnalysisAdapter(region=region, recovery_model_id=recovery)
+        return SectorAnalysisAdapterImpl(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -275,10 +275,10 @@ def get_market_summary_provider() -> MarketSummaryAdapter:
     recovery = bedrock_recovery_model_id("BEDROCK_MARKET_SUMMARY_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockMarketSummaryAdapter(
+            return MarketSummaryAdapterImpl(
                 model_id=model_id, region=region, recovery_model_id=recovery
             )
-        return BedrockMarketSummaryAdapter(region=region, recovery_model_id=recovery)
+        return MarketSummaryAdapterImpl(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -317,10 +317,10 @@ def get_earnings_analysis_provider() -> EarningsAnalysisAdapter:
     recovery = bedrock_recovery_model_id("BEDROCK_EARNINGS_ANALYSIS_RECOVERY_MODEL_ID")
     try:
         if model_id:
-            return BedrockEarningsAnalysisAdapter(
+            return EarningsAnalysisAdapterImpl(
                 model_id=model_id, region=region, recovery_model_id=recovery
             )
-        return BedrockEarningsAnalysisAdapter(region=region, recovery_model_id=recovery)
+        return EarningsAnalysisAdapterImpl(region=region, recovery_model_id=recovery)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -355,8 +355,8 @@ def get_ratings_analysis_provider() -> RatingsAnalysisAdapter:
     model_id = os.environ.get("BEDROCK_RATINGS_ANALYSIS_MODEL_ID")
     try:
         if model_id:
-            return BedrockRatingsAnalysisAdapter(model_id=model_id, region=region)
-        return BedrockRatingsAnalysisAdapter(region=region)
+            return RatingsAnalysisAdapterImpl(model_id=model_id, region=region)
+        return RatingsAnalysisAdapterImpl(region=region)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."
@@ -391,8 +391,8 @@ def get_fundamentals_analysis_provider() -> FundamentalsAnalysisAdapter:
     model_id = os.environ.get("BEDROCK_FUNDAMENTALS_ANALYSIS_MODEL_ID")
     try:
         if model_id:
-            return BedrockFundamentalsAnalysisAdapter(model_id=model_id, region=region)
-        return BedrockFundamentalsAnalysisAdapter(region=region)
+            return FundamentalsAnalysisAdapterImpl(model_id=model_id, region=region)
+        return FundamentalsAnalysisAdapterImpl(region=region)
     except ImportError as exc:
         raise HTTPException(
             503, "AI analysis is not configured (install the 'bedrock' extra)."

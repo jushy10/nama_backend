@@ -9,7 +9,7 @@ from app.stocks.adapters.bedrock.bedrock_etf_analysis_adapter import BedrockEtfA
 from app.stocks.adapters.yfinance.etf_profile_adapter import (
     YfinanceEtfProfileProvider,
 )
-from app.stocks.ai.analysis.db_investment_analysis_cache_adapter import DbInvestmentAnalysisCacheAdapter
+from app.stocks.ai.analysis.investment_analysis_cache_adapter_impl import InvestmentAnalysisCacheAdapterImpl
 from app.stocks.ai.analysis.entities import InvestmentAnalysis
 from app.stocks.catalog.etfs.db_repository import (
     SqlEtfLookupRepository,
@@ -151,7 +151,7 @@ def get_etf_analysis_cache(
 ) -> InvestmentAnalysisCacheAdapter:
     # The read-through result cache for the fund analysis (kind="etf", so it never collides with a
     # stock of the same ticker). Same table + best-effort contract as the stock analysis cache.
-    return DbInvestmentAnalysisCacheAdapter(db, "etf")
+    return InvestmentAnalysisCacheAdapterImpl(db, "etf")
 
 
 def get_etf_analysis_use_case(

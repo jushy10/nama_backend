@@ -14,7 +14,7 @@ from app.stocks.ai.analysis.entities import (
     StockScorecard,
 )
 from app.stocks.ai.analysis.models import AnalysisCacheRecord
-from app.stocks.ai.analysis.db_stock_scorecard_cache_adapter import DbStockScorecardCacheAdapter
+from app.stocks.ai.analysis.stock_scorecard_cache_adapter_impl import StockScorecardCacheAdapterImpl
 
 _NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -62,11 +62,11 @@ def a_scorecard(symbol: str = "AAPL", **overrides) -> StockScorecard:
 
 
 def test_get_on_empty_is_a_miss(session):
-    assert DbStockScorecardCacheAdapter(session).get("AAPL") is None
+    assert StockScorecardCacheAdapterImpl(session).get("AAPL") is None
 
 
 def test_put_then_get_round_trips_every_field(session):
-    cache = DbStockScorecardCacheAdapter(session)
+    cache = StockScorecardCacheAdapterImpl(session)
     cache.put(a_scorecard())
     got = cache.get("AAPL")
     assert got == a_scorecard()  # frozen dataclass equality covers sections + chips
@@ -78,13 +78,13 @@ def test_put_then_get_round_trips_every_field(session):
 def test_kind_isolates_from_the_etf_cache(session):
     # The scorecard (kind="stock") shares the table with the ETF analysis (kind="etf");
     # a read under the other kind must miss.
-    DbStockScorecardCacheAdapter(session, "stock").put(a_scorecard())
-    assert DbStockScorecardCacheAdapter(session, "etf").get("AAPL") is None
-    assert DbStockScorecardCacheAdapter(session, "stock").get("AAPL") is not None
+    StockScorecardCacheAdapterImpl(session, "stock").put(a_scorecard())
+    assert StockScorecardCacheAdapterImpl(session, "etf").get("AAPL") is None
+    assert StockScorecardCacheAdapterImpl(session, "stock").get("AAPL") is not None
 
 
 def test_put_overwrites_in_place(session):
-    cache = DbStockScorecardCacheAdapter(session)
+    cache = StockScorecardCacheAdapterImpl(session)
     cache.put(a_scorecard(recommendation=Recommendation.BUY))
     cache.put(a_scorecard(recommendation=Recommendation.SELL, thesis="Turned sour."))
     got = cache.get("AAPL")
@@ -111,7 +111,7 @@ def test_corrupt_enum_row_is_treated_as_a_miss(session):
         )
     )
     session.commit()
-    assert DbStockScorecardCacheAdapter(session).get("AAPL") is None
+    assert StockScorecardCacheAdapterImpl(session).get("AAPL") is None
 
 
 def test_null_sections_column_reads_as_no_sections(session):
@@ -130,7 +130,7 @@ def test_null_sections_column_reads_as_no_sections(session):
         )
     )
     session.commit()
-    got = DbStockScorecardCacheAdapter(session).get("MSFT")
+    got = StockScorecardCacheAdapterImpl(session).get("MSFT")
     assert got is not None
     assert got.sections == ()
 
@@ -154,7 +154,7 @@ def test_malformed_section_entry_is_skipped(session):
         )
     )
     session.commit()
-    got = DbStockScorecardCacheAdapter(session).get("NVDA")
+    got = StockScorecardCacheAdapterImpl(session).get("NVDA")
     assert [s.key for s in got.sections] == ["valuation"]  # the junk entry dropped
     assert got.sections[0].stance is SectionStance.NEUTRAL  # off-enum stance neutered
 
@@ -162,10 +162,10 @@ def test_malformed_section_entry_is_skipped(session):
 def test_get_is_best_effort_on_a_broken_session():
     engine = create_engine("sqlite:///:memory:")  # no create_all -> table missing
     with Session(engine) as db:
-        assert DbStockScorecardCacheAdapter(db).get("AAPL") is None
+        assert StockScorecardCacheAdapterImpl(db).get("AAPL") is None
 
 
 def test_put_is_best_effort_and_never_raises():
     engine = create_engine("sqlite:///:memory:")
     with Session(engine) as db:
-        DbStockScorecardCacheAdapter(db).put(a_scorecard())  # no exception
+        StockScorecardCacheAdapterImpl(db).put(a_scorecard())  # no exception

@@ -122,7 +122,7 @@ _SYSTEM_PROMPT = (
 )
 
 
-class BedrockMarketSummaryAdapter(MarketSummaryAdapter):
+class MarketSummaryAdapterImpl(MarketSummaryAdapter):
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock,
     # so the short form 400s with "invalid model identifier". Verified ACTIVE +
     # invokable in us-east-1. (Same default as the sector adapter.)

@@ -2,8 +2,8 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from app.stocks.adapters.bedrock.bedrock_fundamentals_analysis_adapter import (
-    BedrockFundamentalsAnalysisAdapter,
+from app.stocks.adapters.bedrock.fundamentals_analysis_adapter_impl import (
+    FundamentalsAnalysisAdapterImpl,
 )
 from app.stocks.ai.analysis.entities import Confidence, FundamentalsVerdict
 from app.stocks.entities import (
@@ -104,7 +104,7 @@ def _a_benchmark() -> IndustryValuation:
 
 def test_parses_tool_call_into_entity():
     client = _StubClient(_tool_message())
-    provider = BedrockFundamentalsAnalysisAdapter(client=client, model_id="test-model")
+    provider = FundamentalsAnalysisAdapterImpl(client=client, model_id="test-model")
 
     analysis = provider.analyze(_a_stock(), _a_benchmark())
 
@@ -125,13 +125,13 @@ def test_parses_tool_call_into_entity():
 def test_stamps_a_generated_at():
     client = _StubClient(_tool_message())
     before = datetime.now(timezone.utc)
-    analysis = BedrockFundamentalsAnalysisAdapter(client=client).analyze(_a_stock())
+    analysis = FundamentalsAnalysisAdapterImpl(client=client).analyze(_a_stock())
     assert analysis.generated_at >= before
 
 
 def test_renders_fundamentals_into_the_prompt():
     client = _StubClient(_tool_message())
-    BedrockFundamentalsAnalysisAdapter(client=client).analyze(_a_stock(), _a_benchmark())
+    FundamentalsAnalysisAdapterImpl(client=client).analyze(_a_stock(), _a_benchmark())
 
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Fundamentals for AAPL" in prompt
@@ -157,7 +157,7 @@ def test_renders_the_pe_history_signal_into_the_prompt():
         min_pe=12.0, max_pe=40.0, current_percentile=15.0,
         discount_to_median_percent=-25.0, signal=ValuationSignal.CHEAP, sample_size=16,
     )
-    BedrockFundamentalsAnalysisAdapter(client=client).analyze(
+    FundamentalsAnalysisAdapterImpl(client=client).analyze(
         _a_stock(), _a_benchmark(), stats
     )
     prompt = client.calls[0]["messages"][0]["content"]
@@ -169,7 +169,7 @@ def test_renders_the_pe_history_signal_into_the_prompt():
 
 def test_omits_the_pe_history_block_when_absent():
     client = _StubClient(_tool_message())
-    BedrockFundamentalsAnalysisAdapter(client=client).analyze(_a_stock(), _a_benchmark())
+    FundamentalsAnalysisAdapterImpl(client=client).analyze(_a_stock(), _a_benchmark())
     assert "Valuation vs its own history" not in client.calls[0]["messages"][0]["content"]
 
 
@@ -179,7 +179,7 @@ def test_omits_absent_blocks_from_the_prompt():
     client = _StubClient(_tool_message())
     bare = _a_stock(metrics=None, analyst_estimates=None, market_cap=None,
                     dividend_per_share=None, dividend_yield=None)
-    BedrockFundamentalsAnalysisAdapter(client=client).analyze(bare, None)
+    FundamentalsAnalysisAdapterImpl(client=client).analyze(bare, None)
 
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Fundamentals for AAPL" in prompt
@@ -190,21 +190,21 @@ def test_omits_absent_blocks_from_the_prompt():
 def test_raises_when_the_model_does_not_call_the_tool():
     client = _StubClient(_StubMessage([_StubBlock("text")]))  # no tool_use block
     with pytest.raises(StockDataUnavailable):
-        BedrockFundamentalsAnalysisAdapter(client=client).analyze(_a_stock(), _a_benchmark())
+        FundamentalsAnalysisAdapterImpl(client=client).analyze(_a_stock(), _a_benchmark())
 
 
 def test_maps_a_client_error_to_a_domain_error():
     with pytest.raises(StockDataUnavailable):
-        BedrockFundamentalsAnalysisAdapter(client=_BoomClient()).analyze(_a_stock())
+        FundamentalsAnalysisAdapterImpl(client=_BoomClient()).analyze(_a_stock())
 
 
 def test_rejects_an_offschema_verdict():
     client = _StubClient(_tool_message(verdict="very_strong"))  # not in the enum
     with pytest.raises(StockDataUnavailable):
-        BedrockFundamentalsAnalysisAdapter(client=client).analyze(_a_stock())
+        FundamentalsAnalysisAdapterImpl(client=client).analyze(_a_stock())
 
 
 def test_drops_string_findings_instead_of_char_splitting():
     client = _StubClient(_tool_message(findings="not a list"))
-    analysis = BedrockFundamentalsAnalysisAdapter(client=client).analyze(_a_stock())
+    analysis = FundamentalsAnalysisAdapterImpl(client=client).analyze(_a_stock())
     assert analysis.findings == ()  # a bare string yields no findings, not characters
