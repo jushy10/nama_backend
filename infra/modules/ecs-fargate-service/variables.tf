@@ -91,6 +91,17 @@ variable "apigw_throttle_burst_limit" {
   default     = 100
 }
 
+variable "cpu_architecture" {
+  description = "CPU architecture for BOTH Fargate task definitions (app + sync). ARM64 (Graviton) is ~20% cheaper per vCPU-hour than X86_64. Must match the architecture the pushed image was built for (see the build job in app-image.yml) — a mismatch fails at container start with 'exec format error'."
+  type        = string
+  default     = "ARM64"
+
+  validation {
+    condition     = contains(["ARM64", "X86_64"], var.cpu_architecture)
+    error_message = "cpu_architecture must be ARM64 or X86_64."
+  }
+}
+
 variable "cpu" {
   description = "Task CPU units (256 = 0.25 vCPU)."
   type        = number
