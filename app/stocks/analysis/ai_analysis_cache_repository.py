@@ -1,28 +1,3 @@
-"""Interface Adapter: the generic DB-backed AI-analysis result cache.
-
-Implements the ``AiAnalysisCache`` port over the shared ``investment_analysis_cache``
-table (``models.py``) for the five newer AI reads — earnings, ratings, fundamentals,
-sector and market — that the two hand-written caches (``SqlInvestmentAnalysisCache`` for
-the ETF analysis, ``SqlStockScorecardCache`` for the stock scorecard) don't cover.
-
-Rather than five more near-identical adapters, there is **one** generic
-``SqlAiAnalysisCache`` parameterized by a *kind* and a **codec** — a
-``(to_row, from_row)`` pair that maps a specific analysis entity to and from a cache
-row. The get/put/upsert skeleton (the same select-then-update/insert the two existing
-adapters duplicate) lives once here; each kind supplies only its column mapping. The
-codecs are the module-level ``_<kind>_to_row`` / ``_<kind>_from_row`` functions below.
-
-Being a cache, both operations are deliberately best-effort (the port's contract):
-
-- ``get`` treats *any* failure — a DB hiccup, or a row whose stored enum no longer
-  parses — as a miss and returns ``None``, so the caller cleanly regenerates.
-- ``put`` upserts by ``(kind, key)`` (select-then-update/insert, so it stays
-  dialect-agnostic across SQLite and Postgres) and swallows write failures — the
-  caller already holds the freshly-generated answer.
-
-Neither ever raises, so a cache problem can never sink an analysis request.
-"""
-
 import logging
 from datetime import datetime, timezone
 from typing import Callable, Generic, TypeVar
@@ -72,14 +47,6 @@ _MUTABLE_COLUMNS = (
 
 
 class SqlAiAnalysisCache(AiAnalysisCache[T], Generic[T]):
-    """Read-through cache storage for one *kind* of AI analysis, via an injected codec.
-
-    ``to_row`` builds a fresh ``AnalysisCacheRecord`` from ``(kind, key, analysis)``;
-    ``from_row`` maps a stored row back to the entity (or ``None`` if it no longer
-    parses). Bound to a *kind* so, e.g., an ``earnings`` read never collides with a
-    ``ratings`` one for the same symbol.
-    """
-
     def __init__(
         self,
         session: Session,
@@ -164,29 +131,19 @@ def market_summary_cache(session: Session) -> SqlAiAnalysisCache[MarketSummary]:
     return SqlAiAnalysisCache(session, "market", _market_to_row, _market_from_row)
 
 
-# --- shared helpers ---------------------------------------------------------------
-
-
 def _utc(dt: datetime | None) -> datetime | None:
-    """Re-attach UTC to a naive stamp. SQLite drops tzinfo (no native tz type) and the
-    figures are always stored in UTC, so the use case's age comparison needs it back."""
     if dt is not None and dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
 
 
 def _opt_float(value) -> float | None:
-    """Coerce a stored JSON number to ``float`` (or ``None``), tolerating a malformed
-    value — best-effort, like the rest of the cache."""
     if value is None:
         return None
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-# --- earnings ---------------------------------------------------------------------
 
 
 def _earnings_to_row(kind: str, key: str, a: EarningsAnalysis) -> AnalysisCacheRecord:
@@ -214,9 +171,6 @@ def _earnings_from_row(row: AnalysisCacheRecord) -> EarningsAnalysis | None:
         model=row.model,
         generated_at=_utc(row.generated_at),
     )
-
-
-# --- ratings ----------------------------------------------------------------------
 
 
 def _ratings_to_row(kind: str, key: str, a: RatingsAnalysis) -> AnalysisCacheRecord:
@@ -247,9 +201,6 @@ def _ratings_from_row(row: AnalysisCacheRecord) -> RatingsAnalysis | None:
         model=row.model,
         generated_at=_utc(row.generated_at),
     )
-
-
-# --- fundamentals -----------------------------------------------------------------
 
 
 def _fundamentals_to_row(
@@ -297,8 +248,6 @@ def _highlight_to_json(h: SectorHighlight) -> dict:
 
 
 def _highlights_from_json(raw) -> tuple[SectorHighlight, ...]:
-    """Rebuild the highlight tuple from stored JSON, skipping any malformed entry
-    (best-effort, mirroring ``_sections_from_json`` in the scorecard cache)."""
     if not isinstance(raw, list):
         return ()
     return tuple(
@@ -373,8 +322,6 @@ def _index_returns_from_json(raw) -> tuple[MarketIndexReturn, ...]:
 
 
 def _periods_from_json(raw) -> tuple[MarketPeriodHighlight, ...]:
-    """Rebuild the period-highlight tuple from stored JSON, skipping any entry whose
-    period enum no longer parses (best-effort)."""
     if not isinstance(raw, list):
         return ()
     out: list[MarketPeriodHighlight] = []

@@ -1,18 +1,3 @@
-"""Application Business Rules: the research-agent loop.
-
-``RunResearch`` owns the agentic loop end to end — the policy the model itself must not be
-trusted with: how many turns it may take (the step budget), how a requested tool is dispatched,
-what happens when a tool fails or the model names one that doesn't exist, and how the loop is
-forced to a close when the budget runs out. The model only decides *which* tool to call next;
-everything that bounds cost and keeps the loop honest lives here.
-
-Each iteration: ask the ``ConversationModel`` for a turn over the running transcript; if it
-wants tools, run each one, record it, and feed the results back; if it doesn't, that turn's text
-is the answer. If the loop hits ``max_steps`` still wanting tools, one final tool-free turn is
-forced so the read always resolves to an answer rather than an exhausted loop. Depends only on
-its two ports — the model and the tools — never a framework or a concrete provider.
-"""
-
 import logging
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -65,13 +50,6 @@ _EMPTY_ANSWER_FALLBACK = (
 
 
 class RunResearch:
-    """Use case: answer a plain-English stock-research question by driving a tool-use loop.
-
-    Holds the model and the tool registry (a tool's ``spec.name`` is how the model addresses
-    it). ``max_steps`` bounds the loop; ``system_prompt`` is overridable so a caller (or a test)
-    can vary the agent's instructions without touching the loop.
-    """
-
     def __init__(
         self,
         model: ConversationModel,
@@ -87,12 +65,6 @@ class RunResearch:
         self._system_prompt = system_prompt
 
     def execute(self, question: str) -> ResearchResult:
-        """Run the loop for ``question`` and return the finished read.
-
-        Raises:
-            ValueError: the question is blank (a 400 at the edge).
-            StockDataUnavailable: a model call failed (a 502 at the edge).
-        """
         question = (question or "").strip()
         if not question:
             raise ValueError("A research question must not be empty.")
@@ -123,10 +95,6 @@ class RunResearch:
         return self._result(question, answer, steps, model_id)
 
     def _run_tool(self, call: ToolCall, steps: list[AgentStep]) -> ToolOutcome:
-        """Dispatch one model-requested tool call, recording it in the transcript.
-
-        An unknown tool name or a tool that raises becomes an error outcome fed back to the
-        model (so it can recover), never an exception that sinks the loop."""
         tool = self._tools.get(call.name)
         if tool is None:
             content = f"Unknown tool '{call.name}'. Available tools: {', '.join(self._tools)}."

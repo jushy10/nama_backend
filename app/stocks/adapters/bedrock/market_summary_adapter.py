@@ -1,37 +1,3 @@
-"""Interface Adapter: AI market-overview summary via Claude on Amazon Bedrock.
-
-The whole-market sibling of ``sector_analysis_adapter.py`` (which reads
-the day's sector rotation). The only module — alongside its stock/ETF/sector
-cousins — that knows Bedrock (and the Anthropic SDK) exists. It takes the day's
-index board the use case gathered (the S&P 500 and the Nasdaq, each with its
-day move + trailing-window returns), renders it into a compact prompt, and asks
-Claude for a plain-language read of how the US market has moved over the past
-year, month and week. Swap models or vendors and only this file changes.
-
-The same two choices that keep the sector adapter robust apply here:
-
-* **Auth is the runtime's job, not ours.** Bedrock authenticates through the
-  process's AWS credentials (in production, the ECS task role), so there is no
-  API key to read or pass — only ``model_id`` and ``region``.
-* **Structured output via a forced tool call.** Claude must call
-  ``submit_market_summary``, so the model returns validated JSON arguments that
-  map straight onto the ``MarketSummary`` entity — no brittle prose parsing.
-
-One market-specific rule mirrors the sector adapter: the model never authors the
-numbers. It writes a plain note for each timeframe (year/month/week); the adapter
-builds the period rows itself from the board, attaching each index's *real*
-trailing return. So a figure on the card is always a true quote, never something
-the model recalled or invented — and all three timeframes always render (their
-numbers come from the board regardless of what the model chose to write about).
-
-The Anthropic SDK is imported lazily inside ``__init__`` so the app (and the
-offline test suite, which injects a stub client) imports cleanly without the
-``bedrock`` extra. Any Bedrock/SDK failure is translated to
-``StockDataUnavailable`` — the one error this port documents.
-
-Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
-"""
-
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
@@ -157,17 +123,6 @@ _SYSTEM_PROMPT = (
 
 
 class BedrockMarketSummaryProvider(MarketSummaryProvider):
-    """Generates a ``MarketSummary`` with Claude on Amazon Bedrock.
-
-    Structured exactly like ``BedrockSectorAnalysisProvider`` (its sector
-    sibling): defaults to the fast Haiku tier since the output is short and plain,
-    takes ``model_id``/``region`` as deploy-time config (the model id may be a
-    cross-region inference profile, env-overridable so a deploy can swap models
-    without a code change), and accepts a ``client`` injection seam so tests can
-    bypass the Anthropic SDK entirely. Otherwise the Bedrock client is built
-    lazily and authenticates through the process's AWS credentials.
-    """
-
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock,
     # so the short form 400s with "invalid model identifier". Verified ACTIVE +
     # invokable in us-east-1. (Same default as the sector adapter.)
@@ -246,12 +201,6 @@ class BedrockMarketSummaryProvider(MarketSummaryProvider):
     def _invoke(
         self, prompt: str, costs: CostAccumulator, *, model: str | None = None
     ) -> dict | None:
-        """One forced-tool call, returning the ``submit_market_summary`` arguments
-        (or ``None`` if the model somehow didn't call the tool). ``model`` overrides
-        which model runs (the retry escalates onto ``recovery_model_id``); defaults to
-        the primary. Any SDK/botocore failure is mapped to this port's documented
-        ``StockDataUnavailable``. The call's token usage is folded into ``costs`` under
-        the model that produced it, for the caller's single per-endpoint cost line."""
         chosen = model or self._model_id
         try:
             message = self._client.messages.create(
@@ -271,7 +220,6 @@ class BedrockMarketSummaryProvider(MarketSummaryProvider):
 
 
 def _tool_payload(message) -> dict | None:
-    """Pull the submit_market_summary arguments out of the tool call, if any."""
     for block in getattr(message, "content", None) or []:
         if (
             getattr(block, "type", None) == "tool_use"
@@ -286,14 +234,6 @@ def _tool_payload(message) -> dict | None:
 def _to_entity(
     indexes: list[MarketIndexPerformance], payload: dict, model_id: str
 ) -> MarketSummary:
-    """Map the validated tool arguments onto the domain entity.
-
-    The forced-tool schema constrains the shape, but a defensive guard keeps an
-    off-schema result (e.g. an unknown ``tone``) from leaking out as something
-    other than this port's documented ``StockDataUnavailable``. The period rows
-    are built here from the board so each index return is a real quote, never a
-    figure the model authored; the model only contributes the per-period note.
-    """
     try:
         summary = str(payload["summary"]).strip()
         tone = MarketTone(payload["tone"])
@@ -316,7 +256,6 @@ def _to_entity(
 
 
 def _notes_by_period(value) -> dict[str, str]:
-    """Index the model's per-period notes by period name (dropping blanks)."""
     if not isinstance(value, list):
         return {}
     out: dict[str, str] = {}
@@ -331,10 +270,6 @@ def _notes_by_period(value) -> dict[str, str]:
 
 
 def _missing_notes(payload: dict | None) -> bool:
-    """True when a returned tool result is present but carries no usable per-period
-    notes — the signal to retry. A ``None`` payload (the model didn't call the tool
-    at all) is left for the caller to surface as ``StockDataUnavailable``, not
-    retried, so the existing no-structured-result path is unchanged."""
     if payload is None:
         return False
     return not _notes_by_period(payload.get("periods"))
@@ -343,12 +278,6 @@ def _missing_notes(payload: dict | None) -> bool:
 def _period_highlight(
     period: MarketPeriod, note: str, indexes: list[MarketIndexPerformance]
 ) -> MarketPeriodHighlight:
-    """Build one timeframe's row: each index's real return over it, plus the note.
-
-    The returns are read straight off the board's trailing-window performance, so
-    they're true quotes; an index missing history simply carries a ``None``
-    return, the same best-effort stance the rest of the board takes.
-    """
     returns = tuple(
         MarketIndexReturn(
             name=index.name,
@@ -361,7 +290,6 @@ def _period_highlight(
 
 
 def _window_return(index: MarketIndexPerformance, period: MarketPeriod) -> float | None:
-    """The index's trailing return for one period, or ``None`` without history."""
     performance = index.performance
     if performance is None:
         return None
@@ -369,12 +297,6 @@ def _window_return(index: MarketIndexPerformance, period: MarketPeriod) -> float
 
 
 def _render_prompt(indexes: list[MarketIndexPerformance]) -> str:
-    """Render the index board into a compact, labelled block for the model.
-
-    One line per index, each carrying its day move and whatever trailing windows
-    are available (the week/month/year the summary reads over) — only present
-    figures are included, so an index missing history renders a shorter line.
-    """
     lines = ["US market today (each index read through the ETF that tracks it):"]
     for index in indexes:
         parts = [f"{index.name} ({index.symbol})"]
@@ -394,7 +316,6 @@ def _render_prompt(indexes: list[MarketIndexPerformance]) -> str:
 
 
 def _num(value: object) -> str:
-    """Format a numeric field readably; pass non-numbers through unchanged."""
     if isinstance(value, bool):  # bool is an int subclass — keep it as-is
         return str(value)
     if isinstance(value, float):

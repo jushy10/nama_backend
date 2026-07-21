@@ -1,11 +1,3 @@
-"""Tests for the read-through DB cache on AnnualEarningsProvider.
-
-Offline and DB-free: a hand-written fake repository (a dict) and fake inner provider stand in
-for the real ones, so this exercises only the decorator's policy — serve stored rows,
-fetch-and-store on a miss, don't cache an empty result, and stay resilient to a cache read or
-write failure — independent of SQLAlchemy.
-"""
-
 from datetime import date
 
 from app.stocks.adapters.db_cached_annual_earnings_adapter import (

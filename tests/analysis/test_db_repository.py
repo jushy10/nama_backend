@@ -1,13 +1,3 @@
-"""Tests for the DB-backed AI-analysis result cache (``SqlInvestmentAnalysisCache``).
-
-Offline: an in-memory SQLite database stands in for the real table. Verifies the
-round-trip (entity -> row -> entity) including the enum values, the JSON string
-lists, and UTC re-attachment on read; the ``(kind, symbol)`` isolation between the
-stock and ETF caches; upsert-overwrite (one row per key); and the best-effort
-contract — a clean miss, a corrupt row treated as a miss, and a write that never
-raises.
-"""
-
 from datetime import datetime, timedelta, timezone
 
 import pytest

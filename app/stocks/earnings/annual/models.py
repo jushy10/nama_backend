@@ -1,19 +1,3 @@
-"""Database model + queries for the annual-earnings cache.
-
-The persistence primitives for the slice: the SQLAlchemy model for the
-``stock_annual_earnings`` table this feature owns, plus simple, entity-free query
-functions over it. The shared ``stocks`` anchor these rows hang off of lives in its own
-slice, ``app/stocks/stocks/models.py`` (owned by no single feature), and is imported here.
-The concrete repository (``db_repository.py``) is the only caller; it maps these rows to
-and from the ``AnnualEarnings`` entity. Nothing here knows the domain entity — this layer
-deals only in rows and columns, so it stays a thin data-access layer.
-
-Like ``stock_quarterly_earnings``, this is a time series: many rows per stock, one per
-fiscal year, keyed unique on ``(stock_id, fiscal_year)``. A refresh rewrites a stock's
-whole window at once (delete-then-insert), so every row for a stock shares one
-``fetched_at``.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -41,15 +25,6 @@ from app.stocks.stocks.models import StockRecord, get_or_create_stock  # noqa: F
 
 
 class StockAnnualEarningsRecord(Base):
-    """One fiscal year of one stock's earnings — reported or upcoming.
-
-    ``eps_actual`` is ``NULL`` for a year that hasn't reported yet (an upcoming year), set
-    once it has. ``revenue_actual`` / ``net_income`` are only meaningful for reported years;
-    ``revenue_estimate`` / ``eps_estimate`` for the upcoming ones (the source publishes
-    forward consensus just a year or two out). Everything but the fiscal identity and
-    ``fetched_at`` is nullable, since coverage tapers toward the far future.
-    """
-
     __tablename__ = "stock_annual_earnings"
     __table_args__ = (
         UniqueConstraint(
@@ -84,8 +59,6 @@ class StockAnnualEarningsRecord(Base):
 
 
 def years_by_symbol(session: Session, symbol: str) -> list[StockAnnualEarningsRecord]:
-    """All stored year rows for ``symbol`` (joined through the ``stocks`` anchor), ordered
-    oldest→newest by fiscal year. Empty when nothing is stored for it yet."""
     return list(
         session.execute(
             select(StockAnnualEarningsRecord)
@@ -97,8 +70,6 @@ def years_by_symbol(session: Session, symbol: str) -> list[StockAnnualEarningsRe
 
 
 def delete_years_for_stock(session: Session, stock_id: uuid.UUID) -> None:
-    """Remove every stored year for a stock, so a refresh can rewrite the window wholesale
-    (delete-then-insert) rather than diffing rows."""
     session.execute(
         delete(StockAnnualEarningsRecord).where(
             StockAnnualEarningsRecord.stock_id == stock_id
@@ -109,15 +80,6 @@ def delete_years_for_stock(session: Session, stock_id: uuid.UUID) -> None:
 def stalest_symbols(
     session: Session, limit: int | None = None
 ) -> list[tuple[str, str | None]]:
-    """``(symbol, name)`` pairs from the ``stocks`` anchor, most in need of a refresh first.
-
-    A **LEFT JOIN**, so every anchor stock is included — even one with no year rows yet — and
-    the sync both *seeds* new coverage and renews stale rows. Ordering is **un-cached first**:
-    a never-fetched stock has a NULL min fetch stamp and is treated as infinitely stale, so it
-    sorts ahead of any cached stock; cached stocks then follow oldest-fetch first. ``limit``
-    caps the batch; ``None`` (the default) returns every stock, so one sweep can seed the whole
-    anchor. Lazy fill on first access still covers a symbol between sweeps.
-    """
     min_fetched = func.min(StockAnnualEarningsRecord.fetched_at)
     stmt = (
         select(StockRecord.ticker, StockRecord.name)

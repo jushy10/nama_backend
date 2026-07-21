@@ -1,11 +1,3 @@
-"""Tests for the database-backed AnnualEarningsRepository.
-
-Offline: an in-memory SQLite database stands in for the real table. Verifies the round-trip
-(entities -> rows -> entities) including the canonical chronological order, whole-window
-replace on upsert (no duplicate rows, other stocks untouched), the parent ``stocks`` row +
-name fill-but-don't-clobber, and a clean miss.
-"""
-
 from datetime import datetime, timedelta, timezone
 from datetime import date
 
@@ -183,7 +175,6 @@ def test_fills_a_missing_name_but_never_clobbers_a_known_one(session):
 
 
 def _stock_growth(session, ticker: str = "AAPL"):
-    """The (revenue_growth_yoy, eps_growth_yoy) snapshot written on the stocks anchor."""
     return session.execute(
         select(StockRecord.revenue_growth_yoy, StockRecord.eps_growth_yoy).where(
             StockRecord.ticker == ticker
@@ -211,7 +202,6 @@ def test_upsert_writes_the_latest_trailing_yoy_snapshot(session):
 
 
 def _stock_cash(session, ticker: str = "AAPL"):
-    """The (fcf_per_share, ocf_per_share, fcf_growth_yoy) snapshot on the stocks anchor."""
     return session.execute(
         select(
             StockRecord.fcf_per_share,
@@ -331,7 +321,6 @@ def test_eps_growth_snapshot_is_null_off_a_loss_year(session):
 
 
 def _stock_forward_growth(session, ticker: str = "AAPL"):
-    """The (forward_revenue_growth_yoy, forward_eps_growth_yoy) snapshot on the anchor."""
     return session.execute(
         select(
             StockRecord.forward_revenue_growth_yoy, StockRecord.forward_eps_growth_yoy

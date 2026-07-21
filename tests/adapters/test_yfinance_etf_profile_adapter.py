@@ -1,12 +1,3 @@
-"""Tests for the yfinance ETF profile adapter (fund profile from Ticker.info + funds_data).
-
-Offline: a fake Ticker (with a fake ``funds_data``) is injected through the adapter's
-``ticker_factory`` seam, so this exercises the field mapping, the per-field unit normalization
-(Yahoo mixes fractions and already-percent numbers — verified empirically against VOO), the
-holdings/sector shaping, and the failure contract — **raises on a hard ``.info`` read** (the sync's
-signal to skip and retry the fund), best-effort past that — without touching Yahoo.
-"""
-
 import pandas as pd
 import pytest
 
@@ -31,8 +22,6 @@ _VOO_INFO = {
 
 
 def _holdings_frame(rows):
-    """Build a ``top_holdings``-shaped DataFrame: indexed by holding symbol, with Name + Holding
-    Percent columns (the shape yfinance's funds_data returns)."""
     frame = pd.DataFrame(
         [{"Name": name, "Holding Percent": pct} for _, name, pct in rows],
         index=[sym for sym, _, _ in rows],
@@ -42,9 +31,6 @@ def _holdings_frame(rows):
 
 
 class _FakeFundsData:
-    """A stand-in for ``Ticker.funds_data``: canned description / top_holdings / sector_weightings
-    (or raising on attribute access to model a fund with no fund data)."""
-
     def __init__(self, *, description=None, top_holdings=None, sector_weightings=None, error=None):
         self._description = description
         self._top_holdings = top_holdings
@@ -72,14 +58,6 @@ class _FakeFundsData:
 
 
 class _RetryFundsData:
-    """Models a swallowed crumb 401 on the first ``funds_data`` fetch and success on the retry:
-    every attribute returns its empty value on its *first* access and the real value afterward.
-
-    The adapter reads all three attributes once per snapshot, so the first snapshot comes back
-    empty (the swallowed-401 signature) and the retried one — after ``yfinance_session.call``
-    refreshes the crumb — serves the real holdings/sectors. Stateless per-attribute counters, so it
-    makes no assumption about the order the adapter reads them in."""
-
     def __init__(self, *, description, top_holdings, sector_weightings):
         self._real = {
             "description": description,
@@ -106,9 +84,6 @@ class _RetryFundsData:
 
 
 class _FakeTicker:
-    """A stand-in for ``yf.Ticker`` exposing a canned ``.info`` + ``.funds_data`` (either may
-    raise on access)."""
-
     def __init__(self, info, funds_data=None, *, info_error=None, funds_error=None):
         self._info = info
         self._funds_data = funds_data if funds_data is not None else _FakeFundsData()

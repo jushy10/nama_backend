@@ -1,12 +1,3 @@
-"""Tests for the quarterly-earnings use cases: GetQuarterlyEarnings + SyncQuarterlyEarnings.
-
-Offline: hand-written fakes for the provider and repository ports, so this exercises only
-the orchestration — symbol normalization and timeline pass-through on the read side; which
-targets are refreshed, in what order, failure/empty handling, and the per-run limit on the
-sync side — independent of yfinance or the DB. Plus the timeline's pure TTM rule
-(``ttm_eps``), which the ticker card's trailing P/E leans on.
-"""
-
 from datetime import date
 
 import pytest
@@ -45,9 +36,6 @@ def _a_timeline(symbol: str) -> QuarterlyEarningsTimeline:
             ),
         ),
     )
-
-
-# ───────────────────────────── entity rules ─────────────────────────────
 
 
 def _reported(year: int, quarter: int, eps: float) -> QuarterlyEarnings:
@@ -99,9 +87,6 @@ def test_ttm_eps_is_none_with_fewer_than_four_reported_quarters():
     assert QuarterlyEarningsTimeline("MU", ()).ttm_eps is None
 
 
-# ───────────────────────────── GetQuarterlyEarnings ─────────────────────────────
-
-
 class _FakeReadProvider(QuarterlyEarningsProvider):
     def __init__(self, timeline: QuarterlyEarningsTimeline) -> None:
         self._timeline = timeline
@@ -137,12 +122,7 @@ def test_get_rejects_obviously_invalid_symbols():
     assert provider.calls == []
 
 
-# ───────────────────────────── SyncQuarterlyEarnings ─────────────────────────────
-
-
 class _FakeRepo(QuarterlyEarningsRepository):
-    """Serves a fixed target list (and optional stored timelines) and records upserts."""
-
     def __init__(
         self,
         targets: list[RefreshTarget],
@@ -167,8 +147,6 @@ class _FakeRepo(QuarterlyEarningsRepository):
 
 
 class _FakeSyncProvider(QuarterlyEarningsProvider):
-    """Returns a canned timeline per symbol, an empty one, or raises."""
-
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}
@@ -237,7 +215,6 @@ def test_sync_empty_live_result_is_skipped_not_stored():
     assert repo.upserts == [("AAPL", "Apple Inc.")]  # GONE never upserted
 
 
-
 def _reported_q(
     year: int, quarter: int, eps: float, revenue: float | None
 ) -> QuarterlyEarnings:
@@ -259,8 +236,6 @@ def _upcoming_q(year: int, quarter: int, eps: float) -> QuarterlyEarnings:
 
 
 class _TimelineSyncProvider(QuarterlyEarningsProvider):
-    """Returns one canned timeline regardless of symbol."""
-
     def __init__(self, timeline: QuarterlyEarningsTimeline) -> None:
         self._timeline = timeline
 
@@ -341,14 +316,7 @@ def test_sync_limit_is_passed_through_and_floored_at_one():
     assert repo.refresh_limit == 1  # a non-positive cap is floored to one
 
 
-# ──────────────────── SyncQuarterlyEarnings — transient-failure retries ────────────────────
-
-
 class _FlakyProvider(QuarterlyEarningsProvider):
-    """Fails each symbol its configured number of times with ``StockDataUnavailable`` (the
-    transient/retryable class), then serves a good timeline. A count of ``None`` never
-    succeeds — a symbol Yahoo blocks for the whole run."""
-
     def __init__(self, fail_counts: dict[str, int | None]) -> None:
         self._fail_counts = dict(fail_counts)
         self.calls: list[str] = []

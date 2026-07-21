@@ -1,15 +1,3 @@
-"""Tests for the ticker use case: GetTickerCard.
-
-Offline: hand-written fakes for the quote, performance and option-chain ports plus an
-in-memory anchor repository, so this exercises only the orchestration — symbol + include
-normalization, assembling the card, the primary-vs-enrichment split (only the quote
-propagates; the rest never sinks the card), and the pay-per-use rule (an unrequested
-block costs no provider call) — plus the entity rules the response leans on (the
-trailing-P/E guard; the options-chain derivations), independent of Alpaca, Yahoo, or
-the DB. The trailing fundamentals (margins + dividend) and the clean display name are
-now served off the ``stocks`` anchor (the ``_FakeRepo``), not a live vendor.
-"""
-
 from datetime import date, datetime, timezone
 
 import pytest
@@ -90,8 +78,6 @@ class _FakePerformance(StockPerformanceProvider):
 
 
 class _FakeStocks(StockDataProvider):
-    """The full-snapshot source the exchange lazy fill reads on a miss."""
-
     def __init__(self, exchange: str | None = "NASDAQ", error=None) -> None:
         self._exchange = exchange
         self._error = error
@@ -118,11 +104,6 @@ class _FakeStocks(StockDataProvider):
 
 
 class _FakeRepo(TickerRepository):
-    """In-memory anchor-facts store; records saves so tests can assert the fills.
-
-    Carries the read-only screen/growth facts too (the universe and annual syncs'
-    writes onto the anchor) so tests can assert they flow onto the card unchanged."""
-
     def __init__(
         self,
         name: str | None = None,
@@ -198,8 +179,6 @@ class _FakeRepo(TickerRepository):
 
 
 class _FakeEtfs(EtfLookupRepository):
-    """In-memory ETF-membership lookup for the card's asset_type; records the checks."""
-
     def __init__(self, is_member: bool = False) -> None:
         self._is_member = is_member
         self.calls: list[str] = []
@@ -305,9 +284,6 @@ def _options_provider() -> _FakeOptions:
         expirations=(date(2026, 7, 10), _NEAR, _FAR, date(2027, 1, 15)),
         chains={_NEAR: _near_chain(), _FAR: _far_chain()},
     )
-
-
-# ───────────────────────────── entity rules ─────────────────────────────
 
 
 def test_trailing_pe_divides_price_by_the_consensus_ttm():
@@ -477,9 +453,6 @@ def test_options_metrics_is_empty_at_a_non_positive_price():
     assert m == TickerOptionsMetrics(None, None, None, None, None, None)
 
 
-# ───────────────────────────── GetTickerCard ─────────────────────────────
-
-
 def test_assembles_the_full_card_when_everything_is_included():
     quotes = _FakeQuotes(price=100.0)
     repo = _FakeRepo(
@@ -600,9 +573,6 @@ def test_asset_type_is_equity_for_a_stock():
     card = GetTickerCard(_FakeQuotes(), etfs=etfs).execute("MU")
 
     assert card.asset_type == ASSET_TYPE_EQUITY
-
-
-# ───────────────────────────── ClassifyTicker ─────────────────────────────
 
 
 def test_classify_ticker_is_etf_for_a_fund():
@@ -924,9 +894,6 @@ def test_fcf_multiples_are_none_when_the_anchor_lacks_cash_figures():
     assert card.valuation.fcf_yield is None
     assert card.valuation.ocf_yield is None
     assert card.valuation.trailing_pe == pytest.approx(11.11)  # the card still serves
-
-
-# ──────────────────────── the options_metrics block ────────────────────────
 
 
 def _card_with_options(options: _FakeOptions, include=("options_metrics",)):

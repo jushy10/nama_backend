@@ -1,26 +1,3 @@
-"""Interface Adapter: a stock's recent news from Yahoo Finance (via ``yfinance``).
-
-``Ticker.news`` returns a small list of the stock's latest articles. Recent yfinance
-wraps each item as ``{"id": ..., "content": {...}}``, with the interesting fields nested
-under ``content``: ``title``, ``summary``, ``pubDate`` (ISO-8601 UTC), ``contentType``
-(``STORY`` / ``VIDEO``), ``provider.displayName`` (the outlet), ``canonicalUrl`` /
-``clickThroughUrl`` (the article link, each a ``{"url": ...}`` node), and
-``thumbnail.originalUrl``. The item's top-level ``id`` (Yahoo's UUID) is the stable
-identity the DB cache keys and dedupes on.
-
-This is the only module that knows ``yfinance``/Yahoo exists; swap it and nothing else
-changes. It is deliberately defensive — Yahoo is an unofficial, best-effort feed that
-reshapes payloads without notice and rate-limits data-centre IPs — so any vendor failure
-becomes ``StockDataUnavailable`` and a symbol Yahoo carries no news for yields an empty
-run rather than an error. Behind the persistent DB cache, a blocked live call just serves
-the stored articles. The fetch is routed through ``yfinance_session`` so a transient crumb
-401 — which yfinance can swallow into an empty list — is retried once with a fresh crumb.
-
-An article with no id, no title, or an unparseable publish time is dropped (there'd be no
-identity to key on or no time to order by); everything past those three fields is
-best-effort and simply left ``None`` when the payload omits it.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -34,8 +11,6 @@ from app.stocks.news.ports import NewsProvider
 
 
 class YfinanceNewsProvider(NewsProvider):
-    """Fetches a stock's recent news from Yahoo (no API key)."""
-
     def __init__(self, *, ticker_factory=None) -> None:
         # Injectable so tests supply a fake Ticker instead of reaching Yahoo; defaults to
         # the real thing.
@@ -56,11 +31,6 @@ class YfinanceNewsProvider(NewsProvider):
 
 
 def _parse_articles(items) -> list[NewsArticle]:
-    """The news list → entities, newest first.
-
-    Rows without an id, a title, or a parseable publish time are dropped, as is a
-    duplicate id (first wins). An empty/missing list — how Yahoo presents a symbol with no
-    news — yields an empty list, not an error. Keeps all payload-shape handling here."""
     if not items:
         return []
     seen: set[str] = set()
@@ -93,9 +63,6 @@ def _parse_articles(items) -> list[NewsArticle]:
 
 
 def _parse_published(value) -> datetime | None:
-    """A Yahoo ``pubDate`` (``"2026-07-08T20:04:28Z"``) → a timezone-aware UTC datetime;
-    ``None`` for a missing/blank/unparseable value. Accepts an already-parsed datetime
-    too (older payloads), normalizing a naive one to UTC."""
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     if not isinstance(value, str) or not value.strip():
@@ -110,9 +77,6 @@ def _parse_published(value) -> datetime | None:
 
 
 def _url(node, *, key: str = "url") -> str | None:
-    """The URL out of a Yahoo link/thumbnail node — a plain string, or a ``{key: url}``
-    dict (``canonicalUrl``/``clickThroughUrl`` use ``url``, ``thumbnail`` uses
-    ``originalUrl``). ``None`` for anything else or a blank value."""
     if isinstance(node, str):
         return node or None
     if isinstance(node, dict):
@@ -121,7 +85,6 @@ def _url(node, *, key: str = "url") -> str | None:
 
 
 def _provider_name(content) -> str | None:
-    """The outlet's display name from ``content.provider``, or ``None`` when absent."""
     provider = content.get("provider")
     if isinstance(provider, dict):
         return _clean(provider.get("displayName"))
@@ -129,7 +92,6 @@ def _provider_name(content) -> str | None:
 
 
 def _clean(value) -> str | None:
-    """A trimmed non-empty string, or ``None`` for a missing/blank/non-string value."""
     if not isinstance(value, str):
         return None
     text = value.strip()

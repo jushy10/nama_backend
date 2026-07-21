@@ -1,16 +1,3 @@
-"""industry column on stocks
-
-Adds ``industry`` to the ``stocks`` anchor, beside the ``sector`` column migration 0012
-added. Both are filled by the universe sync's enrichment pass from Yahoo's per-ticker
-``.info`` (the bulk screen carries neither), as snake_case slugs. Nullable, like the other
-anchor facts: a stock reaches the table with it unset and the enrichment fills it once.
-The ``stocks`` table already exists (created in 0002), so this only alters it.
-
-Revision ID: 0013_stocks_industry
-Revises: 0012_universe_on_stocks
-Create Date: 2026-07-04
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

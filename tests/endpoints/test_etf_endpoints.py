@@ -1,14 +1,3 @@
-"""Tests for the ETF read endpoints (GET /stocks/etfs, GET /stocks/etfs/categories, and
-GET /stocks/etf/{ticker}).
-
-Offline: the use cases are built over in-memory fakes and injected through dependency_overrides, so
-this checks the controllers + presenters + query binding — the search response envelope, the
-q/category/sort/order/paging params reaching the use case, the enum validation, the categories
-menu, and for the detail card: the JSON shape (quote + stored facts + stored profile), the
-404-for-non-ETF, the 502-on-quote-failure, the empty-profile serving, and the cache header — with
-no database, Alpaca, or Yahoo.
-"""
-
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
@@ -35,8 +24,6 @@ from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 
 
 class _FakeSearchRepo(EtfSearchRepository):
-    """Records the criteria it was handed and returns a page built from canned rows / categories."""
-
     def __init__(self, results=(), categories=()) -> None:
         self._results = tuple(results)
         self._categories = tuple(categories)
@@ -166,8 +153,6 @@ def test_categories_endpoint_returns_the_slugs():
 
 
 class _FakeAiScreen:
-    """Stands in for AiScreenEtfs; records the kwargs, returns an EtfScreenIntent (or raises)."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result if result is not None else EtfScreenIntent()
         self._error = error
@@ -249,9 +234,6 @@ def test_ai_search_sets_a_short_cache_header():
 
 
 class _FakeDetailUseCase:
-    """Stands in for GetEtfDetail; returns a canned detail or raises. Records the ``include`` it
-    was handed so the endpoint's query-param pass-through can be asserted."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error
@@ -506,9 +488,6 @@ def test_detail_quote_failure_is_a_502():
 
 
 class _FakeEtfAnalysisUseCase:
-    """Stands in for GetEtfAnalysis; returns a canned analysis or raises. Records the tickers it was
-    asked for so the endpoint's path-param pass-through can be asserted."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error

@@ -1,13 +1,3 @@
-"""Unit tests for the yfinance quarterly-earnings adapter.
-
-No network: a fake Ticker returns the pandas frames yfinance would, so this checks the
-mapping — the past quarters (reported EPS + a surprise computed from actual vs. estimate)
-from ``earnings_dates``, and the upcoming quarters (at most two: ``0q`` / ``+1q``) from the
-``earnings_estimate`` / ``revenue_estimate`` frames, with a scheduled report date attached
-when one lines up. Also: the calendar fiscal-period derivation, an uncovered symbol degrading
-to an empty timeline, and any vendor failure becoming a domain error.
-"""
-
 from datetime import date
 
 import pandas as pd
@@ -23,8 +13,6 @@ _NAN = float("nan")
 
 
 def _earnings_dates(rows: list[tuple[str, float, float]]) -> pd.DataFrame:
-    """A date-indexed frame like ``Ticker.earnings_dates``: rows of
-    ``(announce_date, EPS Estimate, Reported EPS)``; a NaN Reported EPS is a future date."""
     index = pd.DatetimeIndex([pd.Timestamp(d) for d, _, _ in rows])
     return pd.DataFrame(
         {
@@ -36,16 +24,12 @@ def _earnings_dates(rows: list[tuple[str, float, float]]) -> pd.DataFrame:
 
 
 def _estimate_frame(avgs: dict) -> pd.DataFrame:
-    """A period-indexed estimate frame like ``earnings_estimate`` / ``revenue_estimate``:
-    ``{"0q": 3.1, "+1q": 3.3}`` → rows keyed by period with an ``avg`` column."""
     return pd.DataFrame.from_dict(
         {label: {"avg": value} for label, value in avgs.items()}, orient="index"
     )
 
 
 def _income_stmt(revenue_by_date: dict) -> pd.DataFrame:
-    """A date-columned income statement like ``quarterly_income_stmt``:
-    ``{"2025-12-31": 5e9}`` → a frame with a ``Total Revenue`` row over period-end columns."""
     columns = pd.DatetimeIndex([pd.Timestamp(d) for d in revenue_by_date])
     return pd.DataFrame(
         [list(revenue_by_date.values())], index=["Total Revenue"], columns=columns
@@ -53,8 +37,6 @@ def _income_stmt(revenue_by_date: dict) -> pd.DataFrame:
 
 
 class FakeTicker:
-    """Stands in for ``yfinance.Ticker``; serves canned frames, or raises."""
-
     def __init__(
         self,
         *,
@@ -265,10 +247,6 @@ def test_reported_quarters_carry_revenue_actual():
 
 
 def _off_calendar_ticker(income_stmt) -> FakeTicker:
-    """An MU-like off-calendar filer: fiscal quarters ending late Feb/May/Aug/Nov, each
-    announced ~4 weeks later (late Mar/Jun/Sep/Dec). The calendar-derived label therefore
-    names the *previous* calendar quarter (e.g. the May-ended quarter, announced late June,
-    is labelled Q1 ending Mar 31)."""
     return FakeTicker(
         earnings_dates=_earnings_dates(
             [
@@ -376,8 +354,6 @@ def test_vendor_error_raises_unavailable():
 
 
 class _FxTicker:
-    """A Yahoo FX-pair ticker fake: exposes a ``fast_info`` last price (empty ⇒ unavailable)."""
-
     def __init__(self, rate):
         self.fast_info = {} if rate is None else {"last_price": rate}
 
@@ -385,8 +361,6 @@ class _FxTicker:
 def provider_with_currency(
     ticker: FakeTicker, *, fx_rate
 ) -> YfinanceQuarterlyEarningsProvider:
-    """A provider whose factory returns the fake for the issuer and an FX fake for the
-    ``{reporting}{trading}=X`` pair symbol the normalizer requests."""
     fx_ticker = _FxTicker(fx_rate)
 
     def factory(symbol):
@@ -396,8 +370,6 @@ def provider_with_currency(
 
 
 def _adr_info(*, financial_currency, forward_eps, currency="USD"):
-    """``info`` for a foreign ADR: the trading/reporting currencies plus the trading-currency
-    ``forwardEps`` the market-EPS detection compares the ``0y`` estimate against."""
     return {
         "currency": currency,
         "financialCurrency": financial_currency,
@@ -512,9 +484,6 @@ def test_domestic_issuer_makes_no_fx_call():
 
 
 def _earnings_dates_at(rows: list[tuple[str, str, float, float]]) -> pd.DataFrame:
-    """Like ``_earnings_dates`` but each row carries a tz-aware announcement *time*:
-    ``(announce_date, "HH:MM", tz, EPS Estimate, Reported EPS)`` — the input the session
-    classifier reads. ``tz`` is applied so the frame mirrors yfinance's localized index."""
     index = pd.DatetimeIndex(
         [pd.Timestamp(f"{d} {t}", tz=tz) for d, t, tz, _, _ in rows]
     )

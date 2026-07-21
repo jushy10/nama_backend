@@ -1,11 +1,3 @@
-"""Tests for the database-backed RevenueSegmentsRepository.
-
-Offline: an in-memory SQLite database stands in for the real table. Verifies the round-trip
-(entities -> rows -> entities), the merge-by-fiscal-year upsert (a new filing replaces its
-restated years and keeps earlier ones), the prune to the newest N years, the parent ``stocks``
-row + name fill-but-don't-clobber, stalest-first refresh targeting, and a clean miss.
-"""
-
 from datetime import date, datetime, timedelta, timezone
 
 import pytest

@@ -1,13 +1,3 @@
-"""Tests for the Bedrock fundamentals-analysis adapter.
-
-Offline: a stub client (matching the Anthropic SDK's ``message.content`` → blocks with
-``.type/.name/.input`` shape) is injected through the constructor seam, so the real adapter's
-prompt-building and parse/translate logic runs with no ``anthropic`` package and no network.
-Mirrors ``tests/adapters/test_bedrock_ratings_analysis_adapter.py``, but over the enriched stock
-snapshot (valuation / profitability / growth metrics + the industry-P/E benchmark) instead of the
-analyst-coverage context.
-"""
-
 from datetime import date, datetime, timezone
 
 import pytest
@@ -110,9 +100,6 @@ def _a_benchmark() -> IndustryValuation:
     return IndustryValuation.from_pe_ratios(
         "semiconductors", (10.0, 20.0, 30.0, 40.0, 50.0)
     )
-
-
-# --- Tests -------------------------------------------------------------------------------------
 
 
 def test_parses_tool_call_into_entity():

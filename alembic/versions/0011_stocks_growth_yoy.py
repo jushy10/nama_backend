@@ -1,18 +1,3 @@
-"""add trailing YoY growth to stocks
-
-Adds the stock's latest *trailing* year-over-year growth (percent) to the shared
-``stocks`` anchor: ``revenue_growth_yoy`` and ``eps_growth_yoy`` (the latter on the
-analyst-consensus/adjusted EPS basis). Unlike the fill-once identity facts (name,
-exchange), these are a moving snapshot the annual-earnings slice overwrites on every
-refresh — the newest reported fiscal year over the one before it — so a stock carries
-just the current pair, not a history. Both nullable: unset until the annual slice has
-two reported years cached. Batch mode so the ADD/DROP works on SQLite too.
-
-Revision ID: 0011_stocks_growth_yoy
-Revises: 0010_stocks_ticker
-Create Date: 2026-07-03
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

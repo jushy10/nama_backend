@@ -1,13 +1,3 @@
-"""Application Business Rules: the AI-analysis use cases.
-
-Every AI-generated read the API serves — the enriched stock snapshot that backs
-the analyses (``GetStockInfo``), the sectioned stock scorecard, the earnings /
-ratings / fundamentals reads, and the market-wide sector + summary. Orchestrate
-the flow: validate/normalize the symbol, gather the context through ports, and
-hand it to the analyser. Depend only on the entities and the ports — never on a
-framework or a concrete provider.
-"""
-
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -86,8 +76,6 @@ _MARKET_CACHE_KEY = "_MARKET_"
 
 
 def _analysis_is_fresh(generated_at: datetime | None, ttl: timedelta) -> bool:
-    """Whether a stored AI read is still within its TTL, so a cache hit can be served
-    without regenerating. Shared by every cached analysis use case."""
     if generated_at is None:
         return False
     if generated_at.tzinfo is None:  # a naive stamp (e.g. from SQLite) is UTC
@@ -96,33 +84,18 @@ def _analysis_is_fresh(generated_at: datetime | None, ttl: timedelta) -> bool:
 
 
 def _consensus_pe(price: float | None, ttm_eps: float | None) -> float | None:
-    """Trailing P/E on the analyst-consensus (adjusted) basis — the live price over the
-    quarterly slice's TTM consensus EPS, the exact figure ``TickerValuation.trailing_pe``
-    and the universe sync's valuation pass serve.
-
-    ``None`` on a non-positive/absent price or EPS (a trailing loss, or fewer than four
-    cached quarters), the same guard those use — so the scorecard's P/E is the canonical
-    consensus one or absent, never Finnhub's GAAP ``peTTM``, keeping it on the same basis
-    as the industry-median P/E it's weighed against.
-    """
     if price is None or ttm_eps is None or price <= 0 or ttm_eps <= 0:
         return None
     return round(price / ttm_eps, 2)
 
 
 def _price_multiple(price: float | None, per_share: float | None) -> float | None:
-    """A price-derived multiple — the live price over a stored per-share input (book value →
-    P/B, sales → P/S), the same "store the input, price it live" split the P/E and FCF yield
-    use. ``None`` on a non-positive/absent price or per-share figure (P/B off a negative book
-    value is meaningless, the same guard the consensus P/E uses on a loss)."""
     if price is None or per_share is None or price <= 0 or per_share <= 0:
         return None
     return round(price / per_share, 2)
 
 
 def _dividend_yield(dividend_per_share: float | None, price: float | None) -> float | None:
-    """Dividend yield (percent) — the stored annual dividend per share over the live price.
-    ``None`` without both, or a non-positive price."""
     if dividend_per_share is None or not price or price <= 0:
         return None
     return round(dividend_per_share / price * 100, 2)
@@ -135,14 +108,6 @@ def _ev_ebitda(
     cash: float | None,
     shares_outstanding: float | None,
 ) -> float | None:
-    """Trailing EV/EBITDA priced live off the quote — enterprise value (price × shares +
-    total debt − cash) over trailing EBITDA, the exact figure ``TickerValuation.ev_to_ebitda``
-    and the universe sync's valuation pass serve, so the scorecard reads the canonical multiple.
-
-    ``None`` on a non-positive/absent price, share count or EBITDA (a multiple off a non-positive
-    EBITDA is meaningless, the same guard ``_consensus_pe`` uses on a loss). A missing debt/cash
-    leg counts as ``0``; a net-cash negative enterprise value is kept (an informative "valued
-    below its net cash" reading, like the card's property), so only the denominator is guarded."""
     if (
         price is None
         or price <= 0
@@ -159,24 +124,6 @@ def _ev_ebitda(
 def _with_stored_fundamentals(
     stock: Stock, anchor: "AnchorMetrics", ttm_eps: float | None
 ) -> Stock:
-    """Overlay the anchor-materialized fundamentals onto the live snapshot, DB-only, so the
-    analysis reads the same canonical figures the ticker card and universe search show — never
-    a divergent live-vendor number. Replaces the retired live Finnhub fundamentals + profile
-    calls.
-
-    The trailing ratios (margins, ROE, current ratio, debt/equity, beta) and the annual slice's
-    cash/growth come straight off the anchor; the price-derived multiples are computed here on
-    the live quote — the consensus P/E from the quarterly TTM EPS (``ttm_eps``, ``None`` when no
-    quarterly context was gathered), P/B / P/S from the stored per-share book value / sales, and
-    EV/EBITDA from the stored enterprise-value inputs (shares/debt/cash/EBITDA).
-    ``eps`` is set to the same consensus TTM so the prompt's EPS sits on the P/E's basis. The
-    market cap, dividend (per share + a live-priced yield) and clean display name are filled off
-    the anchor too, falling back to the price feed's name when the anchor hasn't got one yet.
-
-    Overwrites each field (including to ``None``): an unsynced stock simply carries no
-    fundamentals — the thinner coverage reads as lower confidence — rather than a stale or
-    divergent figure. Leaves ``metrics`` ``None`` (not an empty block) when nothing resolved, so
-    the fundamentals-analysis no-data guard still fires."""
     price = stock.price
     overlay = {
         "gross_margin": anchor.gross_margin,
@@ -220,27 +167,10 @@ def _with_stored_fundamentals(
 
 
 def _normalize_symbol(symbol: str) -> str:
-    """The shared kernel guard — accepts a Canadian ``.TO``/``.V``/``.NE``/``.CN`` suffix and
-    preserves it so the price router can dispatch on it."""
     return normalize_symbol(symbol)
 
 
 class GetStockInfo:
-    """Use case: retrieve information about a single stock by its symbol.
-
-    The price snapshot is required; performance, the forward analyst estimates and
-    the all-time high are optional, best-effort enrichment. If those sources fail or
-    aren't configured, the stock is still returned with those fields left unset.
-
-    The trailing fundamentals (margins, valuation, dividend, market cap) and the
-    clean display name are **not** read here any more — they're materialized on the
-    ``stocks`` anchor by the fundamentals/universe syncs, and the callers (the AI
-    analyses, the only consumers of this use case) overlay them from that one anchor
-    read (:func:`_with_stored_fundamentals`). So the snapshot this returns carries
-    the live price + performance + forward estimates, and its fundamentals are filled
-    downstream from the DB rather than a live vendor.
-    """
-
     def __init__(
         self,
         provider: StockDataProvider,
@@ -315,27 +245,6 @@ class GetStockInfo:
 
 
 class GetStockAnalysis:
-    """Use case: an AI-generated buy/hold/sell read on a single stock.
-
-    Reuses ``GetStockInfo`` to assemble the enriched snapshot (price plus the
-    best-effort performance/fundamentals/trailing+forward valuation enrichment),
-    then best-effort layers on the same context the app's own views expose — the
-    quarterly and annual earnings timelines, the analyst recommendation trends, and
-    the stock's industry P/E benchmark (how its valuation sits against its peers) —
-    before asking the injected analyzer to weigh it all. The snapshot and the
-    analysis are the primary data — a bad/unknown symbol or a model failure
-    propagates — while every context source is best-effort, so a miss on any of
-    them leaves the analysis intact rather than failing it. The analyzer reasons
-    only over what it's handed; it fetches nothing itself.
-
-    A read-through result cache fronts the whole thing: a fresh stored analysis
-    (within ``cache_ttl`` of its ``generated_at``) is returned without gathering or
-    calling the model at all, and a freshly-generated one is stored on the way out.
-    The cache is optional (``None`` disables it) and best-effort — a read failure
-    is a miss and a write failure is swallowed — so it only ever makes the endpoint
-    faster, never wrong or unavailable.
-    """
-
     def __init__(
         self,
         stock_info: GetStockInfo,
@@ -485,24 +394,6 @@ class GetStockAnalysis:
 
 
 class GetEarningsAnalysis:
-    """Use case: an AI-generated, plain-language read of a stock's earnings story.
-
-    The earnings-focused sibling of ``GetStockAnalysis``. Gathers the quarterly and
-    annual earnings timelines — read **DB-only** (via the slices' repositories, not
-    their read-through providers), so a cache miss never triggers a synchronous,
-    rate-limited Yahoo fetch mid-request — and hands them to the injected analyzer.
-    The analysis is the primary data, so a model failure propagates; a symbol with
-    no earnings on file surfaces as ``StockDataUnavailable`` rather than an analysis
-    of nothing. The analyzer reasons only over what it's handed; it fetches nothing
-    itself.
-
-    A read-through result cache fronts the whole thing (like the per-stock analysis): a
-    fresh stored read within ``cache_ttl`` is served without gathering or calling the
-    model at all, and a freshly-generated one is stored on the way out. The cache is
-    optional (``None`` disables it) and best-effort — a read failure is a miss and a
-    write failure is swallowed — so it only ever makes the endpoint faster.
-    """
-
     def __init__(
         self,
         analyzer: EarningsAnalysisProvider,
@@ -567,21 +458,6 @@ class GetEarningsAnalysis:
 
 
 class GetRatingsFindings:
-    """Use case: an AI-generated, plain-language read of a stock's analyst coverage.
-
-    The analyst-ratings sibling of ``GetEarningsAnalysis``. Gathers the recommendation
-    consensus (trends + price targets) and the discrete rating-change events — both read
-    **DB-only** (via the recommendations slice's repositories, not their read-through
-    providers), so a cache miss never triggers a synchronous, rate-limited Yahoo fetch
-    mid-request — derives the most credible covering firms from the events, and hands the lot
-    to the injected analyzer. The analysis is the primary data, so a model failure propagates;
-    a symbol with no coverage to render (no consensus trends and no credible covering firm)
-    surfaces as ``StockDataUnavailable`` rather than an analysis of nothing. The analyzer
-    reasons only over what it's handed; it fetches nothing itself. Like the earnings read, a
-    best-effort read-through result cache fronts it — a fresh stored read within ``cache_ttl``
-    skips the whole gather + model call.
-    """
-
     # How many credible covering firms to surface for the model — matches the card's top-firms.
     _TOP_FIRMS = 10
 
@@ -654,25 +530,6 @@ class GetRatingsFindings:
 
 
 class GetFundamentalsAnalysis:
-    """Use case: an AI-generated, plain-language read of a stock's fundamentals.
-
-    The fundamentals-focused sibling of ``GetEarningsAnalysis`` and ``GetRatingsFindings``.
-    Reuses ``GetStockInfo`` to assemble the enriched snapshot — the trailing valuation/health
-    metrics, the forward analyst estimates, the dividend and market cap — then best-effort layers
-    on the stock's industry-P/E benchmark (the same peer anchor ``GetStockAnalysis`` uses, so a
-    valuation multiple reads against its peers rather than in a vacuum) before handing the lot to
-    the injected analyzer.
-
-    The snapshot is primary — a bad/unknown symbol or an upstream price failure propagates — but a
-    snapshot carrying *no* fundamentals at all (no metrics, no estimates, no dividend, no market
-    cap: an uncovered symbol or an unconfigured fundamentals vendor) surfaces as
-    ``StockDataUnavailable`` rather than asking the model to reason over a bare price. The industry
-    benchmark is best-effort, so a miss just omits it. Like the per-stock analysis, a best-effort
-    read-through result cache fronts it — a fresh stored read within ``cache_ttl`` skips the whole
-    snapshot gather + model call, matching the earnings and ratings reads. The analyzer reasons only
-    over what it's handed; it fetches nothing itself.
-    """
-
     def __init__(
         self,
         stock_info: GetStockInfo,
@@ -789,12 +646,6 @@ class GetFundamentalsAnalysis:
 
 
 def _has_fundamentals(stock: Stock) -> bool:
-    """Whether an enriched snapshot carries anything fundamental to analyse.
-
-    True when at least one fundamentals source contributed — the trailing metrics block, the
-    forward estimates, a dividend, or a market cap. A snapshot with none of these is a bare
-    price (an uncovered symbol or an unconfigured fundamentals vendor), which the use case
-    refuses to hand the model."""
     return (
         stock.metrics is not None
         or stock.analyst_estimates is not None
@@ -826,31 +677,6 @@ _SECTOR_NAME_TO_SLUG: dict[str, str] = {
 
 
 class GetSectorAnalysis:
-    """Use case: an AI-generated read of which market sectors are leading today — and *why*.
-
-    The market-wide sibling of ``GetStockAnalysis``. Reuses ``GetSectorPerformance`` to
-    assemble the day's ranked board, then **enriches each sector with the grounded drivers
-    behind its move** — the top constituent movers, the breadth of the move, and recent
-    headlines from those movers — before handing the enriched contexts to the analyzer, so
-    the model can explain a move rather than only describe it.
-
-    Two data stances, the slice's usual split:
-
-    * The **board and the analysis are primary** — an upstream board failure
-      (``StockNotFound``/``StockDataUnavailable``) or a model failure propagates rather
-      than yielding an analysis of nothing.
-    * The **attribution is best-effort context**, gathered exactly like the heat map (one
-      universe DB read over the S&P 500 members + one batched day-change quote call),
-      with headlines read **DB-only** (like the per-stock analysis context) so the read
-      path never triggers a synchronous, rate-limited fetch. Any of the three collaborators
-      being absent — or any of their reads failing — degrades to the plain board (no
-      movers), never sinking the analysis. Keeping the universe / quote / news data current
-      is the crons' job.
-
-    The analyzer reasons only over the contexts it's handed; it fetches nothing itself.
-    Takes no input — it reports on the whole market.
-    """
-
     # The S&P 500 is the SPDR Select Sector ETFs' own universe (they *are* the GICS sectors
     # of that index), so its members grouped by sector are the faithful constituent set. The
     # ceiling sits above the index's ~500 names so the whole thing lands in one DB read.
@@ -929,12 +755,6 @@ class GetSectorAnalysis:
                 )
 
     def _build_contexts(self, board: list) -> list[SectorContext]:
-        """Enrich each ranked board row with its movers, breadth and catalyst headlines.
-
-        Best-effort: without the constituents repo (or on any read failure) the movers map
-        is empty and every context is the plain board row, so the analysis degrades to its
-        prior behaviour rather than failing.
-        """
         movers_by_slug = self._movers_by_slug()
         contexts = [
             SectorContext.from_constituents(
@@ -952,13 +772,6 @@ class GetSectorAnalysis:
         return contexts
 
     def _log_attribution(self, contexts: list[SectorContext]) -> None:
-        """One diagnostic line decomposing the best-effort attribution actually gathered.
-
-        Answers "why did this read carry (or not carry) movers and headlines" without a
-        live debugger. A headline-less read is *expected* when the news cron hasn't seeded
-        a sector's movers — this line is how we tell that apart from a quote-feed outage
-        (no movers at all) or an unwired leg (``news=off``). ``sectors_with_headlines``
-        going to 0 while ``movers`` is healthy points at news coverage, not the model."""
         total_movers = sum(len(c.movers) for c in contexts)
         sectors_with_headlines = sum(1 for c in contexts if c.headlines)
         total_headlines = sum(len(c.headlines) for c in contexts)
@@ -974,13 +787,6 @@ class GetSectorAnalysis:
         )
 
     def _movers_by_slug(self) -> dict[str, list[SectorMover]]:
-        """Read the S&P 500 constituents and their live day-change, grouped by sector slug.
-
-        One universe DB read + one batched quote call (the heat map's two legs). Best-effort:
-        a missing repo or a read failure yields an empty map (no attribution); a quote-feed
-        failure leaves the movers with a ``None`` change (so they carry no weight and drop
-        out of the ranking). Only screened rows with a sector slug and a market cap are kept
-        — the two the ranking needs."""
         if self._constituents is None:
             return {}
         try:
@@ -1007,11 +813,6 @@ class GetSectorAnalysis:
         return by_slug
 
     def _changes(self, tickers: tuple[str, ...]) -> dict[str, float | None]:
-        """Each constituent's day-change percent, keyed by ticker — best-effort.
-
-        One batched quote call. A hard feed failure (or a missing provider) is swallowed to
-        an empty map, so the movers simply carry no change and drop from the ranking rather
-        than sinking the analysis — the same stance the heat map takes on its day colour."""
         if self._quotes is None or not tickers:
             return {}
         try:
@@ -1022,12 +823,6 @@ class GetSectorAnalysis:
         return {symbol: quote.change_percent for symbol, quote in quotes.items()}
 
     def _attach_headlines(self, contexts: list[SectorContext]) -> None:
-        """Attach each sector's catalyst headlines from its movers' recent news, DB-only.
-
-        Reads the news store (never a live fetch — this is a user-facing request path) for
-        the bounded set of movers that will appear, one headline per mover, capped per
-        sector. Best-effort: no news provider, or any per-ticker read failure, simply leaves
-        a sector without headlines. Mutates ``contexts`` in place."""
         if self._news is None:
             return
         tickers = {m.ticker for c in contexts for m in c.movers}
@@ -1061,9 +856,6 @@ class GetSectorAnalysis:
                 )
 
     def _criteria(self) -> StockSearchCriteria:
-        """The whole S&P 500, biggest cap first — the sector ETFs' own constituent universe.
-        Filters on the one index flag; every other axis is left open (the grouping by sector
-        happens in memory, one read for all sectors)."""
         return StockSearchCriteria(
             query=None,
             sectors=(),
@@ -1087,17 +879,6 @@ class GetSectorAnalysis:
 
 
 class GetMarketSummary:
-    """Use case: an AI-generated overview of how the US market has moved lately.
-
-    The market-wide sibling of ``GetSectorAnalysis``. Reuses ``GetMarketOverview``
-    to assemble the day's index board, then hands it to the injected analyzer.
-    Both the board and the summary are primary data — an upstream board failure
-    (``StockNotFound``/``StockDataUnavailable``) or a model failure propagates
-    rather than yielding a summary of nothing. The analyzer reasons only over the
-    board it's handed; it fetches nothing itself. Takes no input — it reports on
-    the whole market.
-    """
-
     def __init__(
         self,
         overview: GetMarketOverview,

@@ -1,13 +1,3 @@
-"""Tests for the database-backed InsiderTransactionsRepository.
-
-Offline: an in-memory SQLite database stands in for the real table. Verifies the round-trip
-(entities -> rows -> entities), the insert-only merge (a refresh adds only new transactions and
-never rewrites a stored one), the prune to the newest N, the parent ``stocks`` row + name
-fill-but-don't-clobber, the fetch stamp (refreshed across the whole feed on each upsert), the
-``refresh_targets`` staleness order the sweep walks (un-cached first, then least-recently
-refreshed), and a clean miss.
-"""
-
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -45,8 +35,6 @@ def repo(session, *, now=None) -> SqlInsiderTransactionsRepository:
 
 
 def _max_stamp(session, symbol: str) -> datetime | None:
-    """The newest ``fetched_at`` stored for ``symbol`` — read directly off the table so the tests
-    check the stamp the sweep's staleness order relies on without a dedicated repo method."""
     return session.execute(
         select(func.max(StockInsiderTransactionRecord.fetched_at))
         .join(StockRecord, StockInsiderTransactionRecord.stock_id == StockRecord.id)

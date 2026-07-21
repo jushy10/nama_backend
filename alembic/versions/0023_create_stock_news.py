@@ -1,20 +1,3 @@
-"""create stock_news
-
-The news cache: a time-series child of the ``stocks`` anchor holding a stock's recent
-news articles — many rows per stock, one per article, unique on ``(stock_id,
-article_id)`` (the source's stable article id). Mirrors app.stocks.news.models. Filled
-lazily on a miss and refreshed by the news cron endpoint (yfinance -> DB), so it starts
-empty. Like the recommendations table a refresh *merges* (a published article is a frozen
-fact), so the store accumulates a longer feed than the ~10 items Yahoo serves at once —
-but pruned to the newest N per stock (in the repository) so the higher-volume news history
-stays bounded. The ``stocks`` anchor already exists (created in 0002), so this migration
-only adds the child table.
-
-Revision ID: 0023_stock_news
-Revises: 0022_analysis_cache
-Create Date: 2026-07-08
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

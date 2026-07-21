@@ -1,11 +1,3 @@
-"""Tests for the Congressional-trades SEO surfaces.
-
-Offline: fake use cases injected through ``dependency_overrides`` + TestClient, so this checks the
-controller + presenter + template render — the /congress board page and the per-stock congress
-section on /stock/{ticker} — without a database. Asserts the SEO essentials: title/description,
-canonical + robots, the FAQ/Dataset JSON-LD, the visible ledger, and the empty-state.
-"""
-
 from datetime import date
 
 from fastapi import FastAPI

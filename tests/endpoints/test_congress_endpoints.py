@@ -1,11 +1,3 @@
-"""Tests for the Congressional-trades read endpoints.
-
-Offline: fake use cases injected through ``dependency_overrides`` + FastAPI's TestClient, so this
-checks only the controller + presenter — the JSON shape, the pagination envelope, the net
-buy-vs-sell summary, the window validation (400), the cache header, and empty results as a 200 —
-without touching the source or the database.
-"""
-
 from datetime import date
 
 from fastapi import FastAPI
@@ -101,9 +93,6 @@ def _leaderboard_client(fake) -> TestClient:
     return TestClient(app)
 
 
-# --- per-ticker read ---------------------------------------------------------------------
-
-
 def test_per_ticker_presents_activity_with_summary():
     resp = _ticker_client(_FakeTickerUseCase(_ACTIVITY)).get("/stocks/ticker/NVDA/congress-trades")
     assert resp.status_code == 200, resp.text
@@ -158,9 +147,6 @@ def test_per_ticker_rejects_out_of_range_limit():
     assert resp.status_code == 422
 
 
-# --- market-wide board -------------------------------------------------------------------
-
-
 def test_market_presents_the_board():
     result = CongressMarketActivity(
         trades=(_trade(member="Pelosi"), _trade(ticker="AAPL", member="Khanna", tx_type="Sale")),
@@ -203,9 +189,6 @@ def test_market_empty_is_a_200():
     resp = _market_client(fake).get("/market/congress-activity")
     assert resp.status_code == 200
     assert resp.json()["items"] == [] and resp.json()["total"] == 0
-
-
-# --- market-wide attention leaderboard ---------------------------------------------------
 
 
 def _entry(ticker="NVDA", members=3, trades=4, buy=3, sell=1, buy_value=24000.0, sell_value=8000.0):

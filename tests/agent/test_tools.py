@@ -1,10 +1,3 @@
-"""Tests for the research-agent tools.
-
-Offline: each tool is exercised with a fake backing use case, so this checks the tool's own
-job — advertising a well-formed schema, coercing the model's arguments onto the use case's
-parameters, and rendering the result as compact text — without a DB or a live source.
-"""
-
 from datetime import date, datetime, timezone
 
 from app.stocks.agent.tools import MarketSentimentTool, SearchStocksTool
@@ -24,8 +17,6 @@ from app.stocks.universe.entities import (
 
 
 class _FakeSearch:
-    """Stands in for SearchStocks; records the kwargs it was called with, returns a canned page."""
-
     def __init__(self, results=()) -> None:
         self._results = tuple(results)
         self.kwargs: dict | None = None
@@ -57,9 +48,6 @@ def _row(ticker="NVDA", **over) -> StockSearchResult:
     )
     base.update(over)
     return StockSearchResult(**base)
-
-
-# --- SearchStocksTool --------------------------------------------------------------------------
 
 
 def test_search_tool_schema_advertises_the_enum_vocabularies():
@@ -108,9 +96,6 @@ def test_search_tool_drops_absent_figures_from_a_row():
     out = SearchStocksTool(fake).run({"query": "NVDA"})
     assert "P/E" not in out and "rev growth" not in out
     assert "mktcap $3.4T" in out
-
-
-# --- MarketSentimentTool -----------------------------------------------------------------------
 
 
 class _FakeSentiment:

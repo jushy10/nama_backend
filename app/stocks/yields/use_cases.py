@@ -1,21 +1,8 @@
-"""Application Business Rules: the Treasury-yields use cases.
-
-Two whole-market reads with no input beyond an optional lookback: the current
-par-yield curve and the 2Y/10Y history. Each depends only on its port; the
-adapters behind them are keyless and live-per-request (no table, no cron).
-"""
-
 from app.stocks.yields.entities import YieldCurve, YieldHistory
 from app.stocks.yields.ports import YieldCurveProvider, YieldHistoryProvider
 
 
 class GetYieldCurve:
-    """Use case: the current US Treasury par-yield curve.
-
-    Takes no input — it reports the whole curve. Tenors come back shortest
-    maturity first, carrying the derived 2s10s spread and inversion flag.
-    """
-
     def __init__(self, provider: YieldCurveProvider) -> None:
         self._provider = provider
 
@@ -28,13 +15,6 @@ class GetYieldCurve:
 
 
 class GetYieldHistory:
-    """Use case: the 2Y and 10Y Treasury yields over a trailing window.
-
-    ``lookback_days`` is clamped to a sane range so a caller can't ask for a
-    negative window or a century of data; the default is ~3 years, enough to
-    show a full inversion cycle.
-    """
-
     _DEFAULT_LOOKBACK_DAYS = 365 * 3
     _MAX_LOOKBACK_DAYS = 365 * 30
 

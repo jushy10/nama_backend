@@ -1,19 +1,3 @@
-"""congressional stock trades cache table
-
-Adds ``stock_congress_trades`` — the persistence for the Congressional-trades slice: the buys and
-sells US Representatives and Senators disclose under the STOCK Act, one row per disclosed trade.
-
-A time series keyed unique on ``(stock_id, member, transaction_date, amount_range, chamber)`` — the
-identity of a Congressional disclosure. The slice's DB-only read serves stored rows; a weekly cron
-(``SyncCongressTrades``) fetches the whole market-wide feed once and distributes it, insert-only (a
-filed disclosure is a frozen fact) with the feed pruned to the newest N trades per stock. Hangs off
-the ``stocks`` anchor (from 0002) with an ``ON DELETE CASCADE`` foreign key.
-
-Revision ID: 0035_congress
-Revises: 0034_market_brief
-Create Date: 2026-07-14
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

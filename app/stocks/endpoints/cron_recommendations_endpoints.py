@@ -1,28 +1,3 @@
-"""HTTP API for invoking the recommendations refresh — the cron entrypoint.
-
-The refresh is a use case (``SyncRecommendations``) driven over HTTP: a scheduler (the
-sync-recommendations GitHub workflow, or any cron) POSTs here to kick it off.
-
-The sweep is **fire-and-forget**. Hundreds of sequential Yahoo calls take a while, but the
-API Gateway in front of the app has a hard 30s integration timeout — a synchronous run would
-504 at the gateway while the app kept working. So the endpoint schedules the sweep on a
-background thread and returns ``202`` at once; the shared ``background_sync`` helper owns the
-threading, the single-flight guard, and the exception handling (see it for the full rationale
-and the per-process-guard caveat). A partial run is safe: ``upsert`` commits per stock and the
-sweep is stalest-first, so an interrupted run just resumes on the next trigger.
-
-Wiring lives here, the composition-root way: ``run_recommendations_sync`` opens a fresh
-session and builds the live yfinance adapter + the SQL repository for the use case. yfinance
-reads Yahoo's public data with no API key, so there's no credential to gate on; the sync is
-always constructable. ``get_sync_runner`` is the DI seam tests override with a fake.
-
-Security: the trigger is guarded by a shared bearer token. The endpoint depends on
-``require_cron_token`` (see ``cron_auth``), which requires ``Authorization: Bearer
-$CRON_SYNC_TOKEN`` and is **fail-closed** — an unset token is a ``503``, a missing or wrong one
-a ``401``. The sync workflow no longer POSTs here (it runs the sweep as a one-off ECS task via
-``python -m app.sync``), so this guard only gates the manual / HTTP trigger.
-"""
-
 import logging
 import threading
 
@@ -59,13 +34,6 @@ _sync_lock = threading.Lock()
 
 
 def run_recommendations_sync(limit: int | None) -> RecommendationsSyncReport:
-    """Perform one full refresh run with its **own** DB session (the request-scoped
-    ``get_db`` one is closed by the time the background thread runs).
-
-    Wires the rating-change provider + repository alongside the recommendations pair, so the
-    single sweep also stores each renewed stock's upgrade/downgrade events (best-effort — see
-    ``SyncRecommendations``). Both live sources are keyless yfinance, so there's nothing to gate on.
-    """
     db = SessionLocal()
     try:
         report = SyncRecommendations(
@@ -87,7 +55,6 @@ def run_recommendations_sync(limit: int | None) -> RecommendationsSyncReport:
 
 
 def get_sync_runner() -> SyncRunner:
-    """DI seam for the sweep's unit of work; tests override it with a fake."""
     return run_recommendations_sync
 
 

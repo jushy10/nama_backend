@@ -1,17 +1,3 @@
-"""create stock_annual_earnings
-
-The annual-earnings cache: a time-series child of the ``stocks`` anchor holding a stock's
-recent reported fiscal years and its upcoming (estimated) ones — many rows per stock, one
-per fiscal year, unique on ``(stock_id, fiscal_year)``. Mirrors
-app.stocks.earnings.annual.models. Filled lazily on a miss and refreshed by the
-annual-earnings cron endpoint (yfinance -> DB), so it starts empty. The ``stocks`` anchor
-already exists (created in 0002), so this migration only adds the child table.
-
-Revision ID: 0005_stock_annual_earnings
-Revises: 0004_quarterly_revenue_actual
-Create Date: 2026-07-01
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

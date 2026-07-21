@@ -1,36 +1,3 @@
-"""Interface Adapter: AI fundamentals summary via Claude on Amazon Bedrock.
-
-The fundamentals-focused sibling of ``earnings_analysis_adapter.py`` (the earnings
-read) and ``ratings_analysis_adapter.py`` (the analyst-coverage read). The only
-module — alongside its stock/ETF/earnings/ratings/sector/market cousins — that knows
-Bedrock (and the Anthropic SDK) exists. It takes the enriched stock snapshot the use
-case assembled — the trailing and forward valuation multiples, the cash-flow yields, the
-profitability and balance-sheet metrics, the growth figures, the dividend and market cap —
-plus the best-effort industry-P/E benchmark and the stock's own P/E-history signal (where
-its current multiple sits versus its past), renders them into a compact prompt, and asks Claude
-for a plain-language read of the company's *fundamentals*: how profitable and sound the
-business is, whether it's growing, and whether the shares look reasonably priced against
-all that. Swap models or vendors and only this file changes.
-
-The same two choices that keep the ratings adapter robust apply here:
-
-* **Auth is the runtime's job, not ours.** Bedrock authenticates through the
-  process's AWS credentials (in production, the ECS task role), so there is no
-  API key to read or pass — only ``model_id`` and ``region``.
-* **Structured output via a forced tool call.** Claude must call
-  ``submit_fundamentals_findings``, so the model returns validated JSON arguments
-  that map straight onto the ``FundamentalsAnalysis`` entity — no prose parsing.
-
-The prompt carries the *real* figures (the multiples, margins, growth, the peer
-benchmark) and the model writes only plain prose over them — it never authors a number
-that reaches the card. The Anthropic SDK is imported lazily inside ``__init__`` so the
-app (and the offline test suite, which injects a stub client) imports cleanly without the
-``bedrock`` extra. Any Bedrock/SDK failure is translated to ``StockDataUnavailable`` —
-the one error this port documents.
-
-Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
-"""
-
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import log_model_cost
@@ -149,17 +116,6 @@ _KEY = "fundamentals-analysis"
 
 
 class BedrockFundamentalsAnalysisProvider(FundamentalsAnalysisProvider):
-    """Generates a ``FundamentalsAnalysis`` with Claude on Amazon Bedrock.
-
-    Structured exactly like ``BedrockRatingsAnalysisProvider`` (its analyst-coverage
-    sibling): defaults to the fast Haiku tier since the output is short and plain, takes
-    ``model_id``/``region`` as deploy-time config (the model id may be a cross-region
-    inference profile, env-overridable so a deploy can swap models without a code change),
-    and accepts a ``client`` injection seam so tests can bypass the Anthropic SDK entirely.
-    Otherwise the Bedrock client is built lazily and authenticates through the process's AWS
-    credentials.
-    """
-
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock, so the
     # short form 400s. Same default as the earnings/ratings/market/sector reads.
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -221,7 +177,6 @@ class BedrockFundamentalsAnalysisProvider(FundamentalsAnalysisProvider):
 
 
 def _tool_payload(message) -> dict | None:
-    """Pull the submit_fundamentals_findings arguments out of the tool call, if any."""
     for block in getattr(message, "content", None) or []:
         if (
             getattr(block, "type", None) == "tool_use"
@@ -234,12 +189,6 @@ def _tool_payload(message) -> dict | None:
 
 
 def _to_entity(symbol: str, payload: dict, model_id: str) -> FundamentalsAnalysis:
-    """Map the validated tool arguments onto the domain entity.
-
-    The forced-tool schema constrains the shape, but a defensive guard keeps an off-schema
-    result (e.g. an unknown ``verdict``) from leaking out as something other than this port's
-    documented ``StockDataUnavailable``.
-    """
     try:
         verdict = FundamentalsVerdict(payload["verdict"])
         confidence = Confidence(payload["confidence"])
@@ -261,21 +210,12 @@ def _to_entity(symbol: str, payload: dict, model_id: str) -> FundamentalsAnalysi
 
 
 def _string_tuple(value) -> tuple[str, ...]:
-    """Coerce the model's ``findings`` field into non-empty, stripped strings.
-
-    Guards against a non-list: the forced tool constrains the schema, but Bedrock does not
-    strictly enforce it, and Haiku occasionally returns a list field as a single string.
-    Iterating a ``str`` would split it into characters — a wall of one-character "findings" —
-    so anything that isn't a list yields none instead. Mirrors
-    ``ratings_analysis_adapter._string_tuple``.
-    """
     if not isinstance(value, list):
         return ()
     return tuple(text for item in value if (text := str(item).strip()))
 
 
 def _num(value: object) -> str:
-    """Format a numeric field readably; pass non-numbers through unchanged."""
     if isinstance(value, bool):  # bool is an int subclass — keep it as-is
         return str(value)
     if isinstance(value, float):
@@ -288,16 +228,6 @@ def _render_prompt(
     industry_valuation: IndustryValuation | None,
     pe_history: PeHistoryStats | None = None,
 ) -> str:
-    """Render the enriched snapshot's *fundamentals* into a compact, labelled block.
-
-    Only fields that are present are included, so the model is never handed a ``None`` to
-    reason about — thin coverage simply yields a shorter prompt. Deliberately narrower than
-    the full stock-analysis prompt: this is the fundamentals read, so it carries the
-    valuation / profitability / health / growth figures (the ticker card's metrics), the
-    cash-flow yields, the forward consensus, the dividend and size, the industry P/E benchmark
-    and the stock's own P/E history — but not the price-momentum, earnings-timeline or
-    analyst-recommendation blocks, which have their own dedicated analyses.
-    """
     metrics = stock.metrics
     fields: list[tuple[str, object]] = [
         ("Name", stock.name),
@@ -362,9 +292,6 @@ def _render_prompt(
 
 
 def _price_to_fcf(fcf_per_share: object, price: float | None) -> float | None:
-    """Price-to-free-cash-flow at the snapshot price. ``None`` for a non-positive FCF (an
-    undefined multiple, like a trailing-loss P/E) or a missing price — mirrors the ticker
-    card's ``TickerValuation.price_to_fcf`` so the two surfaces read the same figure."""
     if not isinstance(fcf_per_share, (int, float)) or isinstance(fcf_per_share, bool):
         return None
     if fcf_per_share <= 0 or not price or price <= 0:
@@ -373,9 +300,6 @@ def _price_to_fcf(fcf_per_share: object, price: float | None) -> float | None:
 
 
 def _cash_yield(per_share: object, price: float | None) -> float | None:
-    """A cash-flow yield (percent) at the snapshot price — per-share cash over price. Keeps
-    its sign (a cash-burner reads negative, an informative reading), guarding only on a live
-    price; mirrors the card's ``fcf_yield`` / ``ocf_yield``."""
     if not isinstance(per_share, (int, float)) or isinstance(per_share, bool):
         return None
     if not price or price <= 0:
@@ -384,12 +308,6 @@ def _cash_yield(per_share: object, price: float | None) -> float | None:
 
 
 def _render_pe_history(history: PeHistoryStats | None) -> str:
-    """Render where the stock's *current* trailing P/E sits within its own history — the
-    "cheap for this stock?" anchor that complements the peer benchmark ('cheap vs peers' vs
-    'cheap vs its own past'). '' when there's no read (a series too short to rank).
-
-    A ``NOT_MEANINGFUL`` signal (a cyclical earnings trough distorting the multiple) is passed
-    through verbatim so the model can caveat rather than call a trough "expensive"."""
     if history is None:
         return ""
     lines = [
@@ -409,11 +327,6 @@ def _render_pe_history(history: PeHistoryStats | None) -> str:
 
 
 def _render_industry_valuation(valuation: IndustryValuation | None) -> str:
-    """Render the industry P/E benchmark as a short labelled block (or '' if none) — the
-    peer-valuation anchor that turns the stock's own trailing P/E from an absolute number
-    into a relative one ("28 against an industry that trades near 21"). Mirrors
-    ``analysis_adapter._render_industry_valuation``; the use case only passes a benchmark
-    with at least one valued peer, so a present block always carries a median."""
     if valuation is None or valuation.count == 0 or valuation.median_pe is None:
         return ""
     peer_group = (

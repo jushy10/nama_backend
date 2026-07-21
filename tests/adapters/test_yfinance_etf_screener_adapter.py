@@ -1,12 +1,3 @@
-"""Unit tests for the yfinance ETF screener adapter (custom ETFQuery: US, AUM ≥ floor).
-
-No network: the per-page screen fetch is swapped for a fake returning canned pages. Verifies
-quotes map to ``ScreenedEtf`` (exchange code -> friendly name incl. PCX -> NYSE, name
-fallback, numeric coercion), the AUM floor is threaded to the page fetch, bad/non-fund rows are
-dropped, duplicate tickers across page seams are deduped, pagination stops at ``total``, and
-yfinance / payload failures become domain errors.
-"""
-
 import pytest
 
 from app.stocks.adapters.yfinance_etf_screener_adapter import (
@@ -19,9 +10,6 @@ _FLOOR = 1_000_000.0  # the AUM floor the sync passes; the fake pages ignore it 
 
 
 class FakePages:
-    """A fake screen-page fetch: returns canned pages by offset (or a fixed payload / error),
-    and records the (offset, size) of every call."""
-
     def __init__(self, pages=None, *, error=None, payload=None):
         self._pages = pages or []
         self._error = error

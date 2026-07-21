@@ -1,12 +1,3 @@
-"""Tests for the Bedrock AI-screener translator adapter.
-
-Offline: a stub client (matching the Anthropic SDK's ``message.content`` → blocks with
-``.type/.name/.input`` shape) is injected through the constructor seam, so the real adapter's
-tool-building and parse/translate logic runs with no ``anthropic`` package and no network.
-Mirrors the other Bedrock adapter tests, but the output is a ``ScreenIntent`` of filters
-rather than an analysis.
-"""
-
 import pytest
 
 from app.stocks.adapters.bedrock.screener_query_adapter import (
@@ -140,9 +131,6 @@ def test_omits_the_sector_field_when_the_vocabulary_is_empty():
     assert "market_cap_tiers" in props and "sort" in props
 
 
-# --- Defensive coercion ------------------------------------------------------------------------
-
-
 def test_drops_unknown_enum_values_and_a_bad_limit():
     intent = _translator(
         _tool_message(
@@ -172,9 +160,6 @@ def test_no_tool_call_yields_a_neutral_intent():
     )
     assert intent.sectors == ()
     assert intent.sort is None
-
-
-# --- Failure translation -----------------------------------------------------------------------
 
 
 def test_vendor_failure_becomes_stock_data_unavailable():

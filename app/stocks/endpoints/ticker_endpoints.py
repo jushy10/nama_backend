@@ -1,59 +1,3 @@
-"""HTTP API for the ticker resource — the single-stock card plus the universe search.
-
-``GET /stocks/ticker/{ticker}`` — the read endpoint for the ticker slice: the live
-quote (price + day move), the clean company name, and the anchor facts served straight
-from the ``stocks`` row — the listing exchange (learned once from the price feed) plus
-the universe screen's market cap, sector and industry — then **opt-in blocks**
-requested via ``?include=`` — ``dividend``, ``performance`` (trailing windows),
-``metrics`` (the trailing P/E — price over the quarterly slice's stored TTM EPS, on
-the analyst-consensus basis — the margins off the fundamentals call, and the annual
-slice's latest trailing YoY revenue/EPS growth off the same anchor read), and
-``options_metrics`` (the **options-market read**: ATM implied volatility, the priced-in
-expected move, the cost of a protective put, and the day's put/call lean — what the
-options market believes about the stock, for a buyer sizing an entry). Pay-per-use: a
-block that isn't requested costs no provider call — and market cap now riding the
-anchor, the fundamentals call is itself opt-in (only ``dividend``/``metrics`` pull it).
-Controller + presenter + wiring, the composition-root way, sitting in
-``app/stocks/endpoints/`` like the other slices' HTTP.
-
-Beside the card's *item* route live its *collection* and *filter menus*, reading the
-**universe slice** off the same ``stocks`` anchor (grouped here because they share the
-``/stocks/ticker`` resource, not the ticker slice's internals):
-
-- ``GET /stocks/ticker`` — a paginated search/filter/sort over the screened universe: a
-  free-text ``q`` matched case-insensitively against name *or* ticker (so "NV" surfaces
-  Nvidia and NVDA), ``sector``/``industry`` slug filters, the ``in_sp500``/``in_nasdaq100``
-  membership flags, a ``market_cap`` tier filter (mega/large/mid/small), and a ``sort`` (omit
-  for an unsorted A→Z by ticker, else market cap, trailing revenue/EPS growth or their blend,
-  the forward FY1→FY2 consensus counterparts, or trailing P/E) with an ``order``. Rows are DB
-  facts only — no live price; a
-  client opens ``{ticker}`` above for the live card. Pure DB read
-  (``SqlStockSearchRepository`` → ``SearchStocks``), no vendor or key, so the only request
-  error is a 400 (a bad ``sort``/``order`` is a 422 from the enum binding).
-- ``GET /stocks/classifications`` — the distinct sector + industry slugs, for the FE's
-  filter menus (``ListClassifications``).
-- ``GET /stocks/ticker/{ticker}/peers`` — the stock side-by-side with its industry,
-  cap-tier-scoped peers (same industry, scoped to its size class) on market cap, trailing P/E,
-  EV/EBITDA, FCF yield, net margin and trailing revenue growth, with the cohort medians
-  (``GetPeerComparison``). A per-ticker read grouped here with the universe collection because it
-  reads the same screened anchor — the named comparable-company table the industry-P/E benchmark
-  only summarized. Pure DB read; an unclassified stock is a 200 with an empty comparison.
-
-Wiring convention: this endpoint owns no vendor of its own — it reuses the composition
-root's factories. The quote and performance windows ride the ``@lru_cache``d Alpaca
-provider (whose missing-keys 503 gate the endpoint inherits: the quote is primary
-here), the name and fundamentals ride the optional Finnhub providers (best-effort,
-``None`` without a key), the estimates ride the annual-earnings projection
-(DB-only, no key), the trailing P/E's TTM sum rides the quarterly-earnings
-slice's read-through DB cache (keyless; live to Yahoo only on a cold miss,
-best-effort), and the options chain rides Yahoo via yfinance (keyless,
-best-effort even when requested — Yahoo intermittently blocks data-centre IPs, and
-a missing insight must not take the quote down). There's no cron or table behind
-this endpoint: the card is built around the live quote, so it's computed per
-request — freshness of the consensus legs is the annual-earnings slice's job
-(lazy fill + its sync cron).
-"""
-
 import os
 from functools import lru_cache
 
@@ -175,9 +119,6 @@ def _round2(value: float | None) -> float | None:
 def _dividend_yield(
     dividend_per_share: float | None, price: float | None
 ) -> float | None:
-    """Dividend yield (percent) priced on the live quote — the stored annual dividend per share
-    over the price. ``None`` without both, or a non-positive price (mirrors the analysis
-    overlay's rule so the card and the scorecard read the same yield)."""
     if dividend_per_share is None or not price or price <= 0:
         return None
     return round(dividend_per_share / price * 100, 2)
@@ -216,11 +157,6 @@ def _present_options_metrics(
 
 
 def _present_extended_hours(quote: Quote) -> ExtendedHoursResponse | None:
-    """Presenter: the quote's extended-hours split -> DTO, or ``None`` during the regular
-    session (the entity's ``extended_hours`` is ``None`` then). Serves the same raw
-    price / entity-rounded change treatment as the top-level card fields, so the primary
-    and extended numbers format identically on the client. The *day* move
-    (``regular_change``) lives on the quote, not the split, so it's read from there."""
     ext = quote.extended_hours
     if ext is None:
         return None
@@ -237,14 +173,6 @@ def _present_extended_hours(quote: Quote) -> ExtendedHoursResponse | None:
 
 
 def _present(card: TickerCard) -> TickerCardResponse:
-    """Presenter: ticker-card composition -> HTTP response DTO.
-
-    The domain speaks in ``symbol``; renaming it ``ticker`` is a JSON-shape choice
-    made here at the edge, like the DTOs' other shape concerns. Opt-in blocks are
-    emitted only when the card was asked to carry them — ``card.include`` gates the
-    dividend block and the metrics block; performance is already ``None`` when
-    unrequested. Every block is now served off the one anchor read (no live vendor
-    call), so ``null`` fields just mean the syncs haven't reached the stock yet."""
     dividend = None
     if "dividend" in card.include:
         # The dividend per share rides the anchor read (fundamentals slice); the yield is
@@ -363,10 +291,6 @@ def get_pe_history_use_case(
 
 
 def _present_pe_stats(stats: PeHistoryStats | None) -> PeHistoryStatsResponse | None:
-    """Presenter: the P/E-history valuation summary -> DTO. The entity already rounds every
-    figure (the percentiles, median/quartiles, the discount), so this just maps fields and
-    renders the signal enum as its string value. ``None`` passes through — a series too short
-    for a stable percentile carries no stats block."""
     if stats is None:
         return None
     return PeHistoryStatsResponse(
@@ -384,9 +308,6 @@ def _present_pe_stats(stats: PeHistoryStats | None) -> PeHistoryStatsResponse | 
 
 
 def _present_pe_history(history: PeHistory) -> PeHistoryResponse:
-    """Presenter: P/E-history entity -> HTTP response DTO. Rounds the display figures at
-    the edge (``pe`` is already 2-dp from the entity; price/EPS carry feed float noise), and
-    attaches the valuation-vs-history ``stats`` (``None`` for a series too short to rank)."""
     return PeHistoryResponse(
         ticker=history.symbol,
         count=len(history.points),
@@ -411,12 +332,6 @@ def get_pe_history_endpoint(
     response: Response,
     use_case: GetStockPeHistory = Depends(get_pe_history_use_case),
 ) -> PeHistoryResponse:
-    """A stock's trailing P/E sampled at each earnings release (oldest first): the close
-    on each announcement date over the trailing-twelve-month reported EPS then known. The
-    backward-looking companion to the card's live ``metrics.pe`` — how the multiple has
-    moved over time. The EPS leg is best-effort (keyless Yahoo, which blocks data-centre
-    IPs intermittently), so an uncovered or blocked symbol is a 200 with an empty
-    ``points``, never a 404/502; only the Alpaca price leg can raise."""
     try:
         history = use_case.execute(ticker)
     except ValueError as exc:
@@ -440,8 +355,6 @@ def get_peer_comparison_use_case(
 
 
 def _present_peer_company(company: PeerCompany) -> PeerCompanyResponse:
-    """Presenter: one peer row -> DTO. The metrics are already stored rounded (the materialized
-    snapshots and percents), so this just maps fields and carries the anchor flag."""
     return PeerCompanyResponse(
         ticker=company.ticker,
         name=company.name,
@@ -456,7 +369,6 @@ def _present_peer_company(company: PeerCompany) -> PeerCompanyResponse:
 
 
 def _present_peer_comparison(comparison: PeerComparison) -> PeerComparisonResponse:
-    """Presenter: the peer-comparison composition -> HTTP response DTO."""
     medians = comparison.medians
     return PeerComparisonResponse(
         ticker=comparison.ticker,
@@ -487,12 +399,6 @@ def get_peer_comparison_endpoint(
     response: Response,
     use_case: GetPeerComparison = Depends(get_peer_comparison_use_case),
 ) -> PeerComparisonResponse:
-    """A stock compared side-by-side with its industry, cap-tier-scoped peers — the anchor beside
-    the comparables most like it (same industry, scoped to its size class), each on market cap,
-    trailing P/E, EV/EBITDA, FCF yield, net margin and trailing revenue growth, with the cohort
-    medians as the reference. Pure DB read over the screened universe; every figure is the same
-    materialized one the search and ticker card serve. A stock the universe hasn't classified is a
-    200 with an empty comparison, not a 404."""
     try:
         comparison = use_case.execute(ticker)
     except ValueError as exc:
@@ -515,8 +421,6 @@ def get_ticker_type_endpoint(
     response: Response,
     use_case: ClassifyTicker = Depends(get_classify_ticker_use_case),
 ) -> TickerTypeResponse:
-    """Classify a ticker as an ETF or an equity — the cheap, quote-free counterpart
-    to the ticker card's ``asset_type`` (one indexed ETF-universe membership check)."""
     try:
         result = use_case.classify(ticker)
     except ValueError as exc:
@@ -552,7 +456,6 @@ def get_industry_valuation_use_case(
 
 
 def _present_search(page: StockSearchPage) -> StockSearchResponse:
-    """Presenter: search-page entity -> HTTP response DTO."""
     return StockSearchResponse(
         total=page.total,
         limit=page.limit,
@@ -585,7 +488,6 @@ def _present_search(page: StockSearchPage) -> StockSearchResponse:
 
 
 def _present_classifications(c: Classifications) -> ClassificationsResponse:
-    """Presenter: classifications entity -> HTTP response DTO."""
     return ClassificationsResponse(
         sectors=list(c.sectors), industries=list(c.industries)
     )
@@ -594,7 +496,6 @@ def _present_classifications(c: Classifications) -> ClassificationsResponse:
 def _present_industry_valuation(
     v: IndustryValuation,
 ) -> IndustryValuationResponse:
-    """Presenter: industry-valuation entity -> HTTP response DTO."""
     return IndustryValuationResponse(
         industry=v.industry,
         count=v.count,
@@ -748,7 +649,6 @@ def get_ai_search_use_case(
 
 
 def _present_ai_screen(intent: ScreenIntent) -> AiScreenResponse:
-    """Presenter: the AI's ScreenIntent -> HTTP response DTO (the interpreted filters)."""
     return AiScreenResponse(
         interpreted=AiScreenInterpretationResponse(
             query=intent.query,
@@ -780,8 +680,6 @@ def ai_search_stocks_endpoint(
     ),
     use_case: AiScreenStocks = Depends(get_ai_search_use_case),
 ) -> AiScreenResponse:
-    """Translate a natural-language request into screen filters. A blank request is a 400; a
-    translation failure (the model/vendor couldn't parse it) is a 502."""
     try:
         intent = use_case.execute(query=q)
     except ValueError as exc:
@@ -816,11 +714,6 @@ def industry_pe_endpoint(
     response: Response,
     use_case: GetIndustryValuation = Depends(get_industry_valuation_use_case),
 ) -> IndustryValuationResponse:
-    """The trailing-P/E benchmark for one industry — the median plus the interquartile range
-    of its **mid-cap-and-up** peers' P/Es (a $2B market-cap floor drops the noisy $1–2B
-    tail), for judging whether a stock's multiple is rich or cheap for its industry.
-    ``industry`` accepts the slug from /stocks/classifications (e.g. 'semiconductors') or
-    the raw label. An unknown industry is a 200 with count 0, not a 404."""
     try:
         valuation = use_case.execute(industry)
     except ValueError as exc:

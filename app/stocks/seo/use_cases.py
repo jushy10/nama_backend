@@ -1,15 +1,3 @@
-"""Application use case for the SEO slice.
-
-One read action per page type. ``GetTickerStockPage`` normalizes the ticker, pulls the
-DB-only facts through the ``SeoReadRepository`` port, and hands back a small view the
-endpoint renders — pure orchestration, no framework, no vendor, so it runs offline
-against a hand-written fake like every other slice.
-
-The view carries only *domain* judgements (is this page worth indexing? what's the
-display name?); the title/description/JSON-LD/HTML are presentation and belong at the
-edge (the endpoint + the Jinja2 template), not here.
-"""
-
 from __future__ import annotations
 
 import re
@@ -34,13 +22,6 @@ _TICKER_RE = re.compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
 
 
 def normalize_ticker(raw: str) -> str:
-    """Trim/upper-case the ticker and reject obvious junk — once, at the edge, so the layers
-    below see a clean symbol (the same stance the other slices' ``_normalize_symbol`` takes).
-
-    A Canadian venue suffix (``.TO``/``.V``/``.NE``/``.CN``) is **preserved** — that's the form
-    the universe stores, so the facts lookup keys on it (folding it to a hyphen would 404 every
-    Canadian page). A US dotted class suffix is still folded onto the stored hyphen form
-    (``BRK.B`` -> ``BRK-B``)."""
     text = (raw or "").strip().upper()
     if not text:
         raise ValueError("A ticker is required.")
@@ -57,42 +38,28 @@ def normalize_ticker(raw: str) -> str:
 
 @dataclass(frozen=True)
 class TickerStockPage:
-    """What the stock content page needs to render: the normalized ticker, its stored facts
-    (``None`` when the symbol is unknown to us), and its recent Congressional trades (empty when
-    Congress hasn't traded it, or it isn't seeded yet — the section is hidden in that case)."""
-
     ticker: str
     facts: TickerPageFacts | None
     congress: tuple[CongressPageTrade, ...] = ()
 
     @property
     def has_data(self) -> bool:
-        """Is there anything to show? A row with at least a name or a market cap is a real
-        page; an all-empty (or absent) row is a 404 rather than a soft, contentless 200."""
         return self.facts is not None and (
             self.facts.name is not None or self.facts.market_cap is not None
         )
 
     @property
     def indexable(self) -> bool:
-        """Only *screened* stocks (the universe sync filled ``market_cap``) carry the full
-        fact set worth putting in the index; anything else is served but ``noindex`` so a
-        thin page never dilutes the site."""
         return self.facts is not None and self.facts.market_cap is not None
 
     @property
     def display_name(self) -> str:
-        """The company name if we know it, else the ticker itself — so a header/title
-        always has something to render."""
         if self.facts is not None and self.facts.name:
             return self.facts.name
         return self.ticker
 
 
 class GetTickerStockPage:
-    """Use case: assemble a stock's content-page view from DB-only facts, including its recent
-    Congressional trades (a best-effort section — hidden when there are none)."""
-
     # A handful of recent trades — enough to make the section substantive without turning the page
     # into a full ledger (the /congress board and the app carry the complete feed).
     CONGRESS_LIMIT = 12
@@ -112,9 +79,6 @@ class GetTickerStockPage:
 
 
 def normalize_sector_slug(raw: str) -> str:
-    """Fold a URL sector slug onto the stored snake_case form: lower-case, and map the
-    URL-friendly hyphen back to the stored underscore (``consumer-electronics`` ->
-    ``consumer_electronics``). Rejects anything that isn't a plain slug."""
     slug = (raw or "").strip().lower().replace("-", "_")
     if not slug:
         raise ValueError("A sector is required.")
@@ -125,32 +89,23 @@ def normalize_sector_slug(raw: str) -> str:
 
 @dataclass(frozen=True)
 class SectorPage:
-    """What a sector content page renders: the sector (stored slug) and its top stocks."""
-
     slug: str  # stored snake_case form
     stocks: tuple[SectorStock, ...]
 
     @property
     def has_data(self) -> bool:
-        """A real sector has at least one screened stock; an unknown slug yields none and
-        is a 404 rather than an empty page."""
         return len(self.stocks) > 0
 
     @property
     def url_slug(self) -> str:
-        """The hyphenated form used in URLs (better for search than underscores)."""
         return self.slug.replace("_", "-")
 
     @property
     def label(self) -> str:
-        """A human sector label — ``consumer_electronics`` -> ``Consumer Electronics``."""
         return self.slug.replace("_", " ").title()
 
 
 class GetSectorPage:
-    """Use case: a sector's content-page view — its top stocks by market cap, from DB-only
-    facts. The listing is the internal-linking hub (sector -> each /stock/ page)."""
-
     # Enough to be a rich, link-dense page without an unbounded listing.
     LIMIT = 100
 
@@ -167,9 +122,6 @@ class GetSectorPage:
 
 @dataclass(frozen=True)
 class EtfPage:
-    """What an ETF content page renders: the normalized ticker and its stored fund facts
-    (``None`` when the symbol isn't one of our funds)."""
-
     ticker: str
     facts: EtfPageFacts | None
 
@@ -193,8 +145,6 @@ class EtfPage:
 
 
 class GetEtfPage:
-    """Use case: assemble an ETF's content-page view from DB-only facts."""
-
     def __init__(self, repository: SeoReadRepository) -> None:
         self._repository = repository
 
@@ -205,9 +155,6 @@ class GetEtfPage:
 
 @dataclass(frozen=True)
 class ScreenDef:
-    """A curated "best-of" screen: a titled listing of the top stocks by one metric. The
-    ``sort_key`` is the stable string the repository maps to an anchor column."""
-
     slug: str
     heading: str
     description: str  # meta description
@@ -281,8 +228,6 @@ SCREENS: dict[str, ScreenDef] = {
 
 
 def normalize_screen_slug(raw: str) -> str:
-    """Lower-case/trim a screen slug and reject non-slug input. Screen slugs are hyphenated
-    and matched against the ``SCREENS`` registry (an unknown-but-valid slug is a 404)."""
     slug = (raw or "").strip().lower()
     if not slug:
         raise ValueError("A screen is required.")
@@ -293,21 +238,15 @@ def normalize_screen_slug(raw: str) -> str:
 
 @dataclass(frozen=True)
 class ScreenPage:
-    """What a screen listing page renders: the screen definition and its top stocks."""
-
     screen: ScreenDef | None
     stocks: tuple[SectorStock, ...]
 
     @property
     def has_data(self) -> bool:
-        """A real screen (a known slug) with at least one stock; an unknown slug or an empty
-        universe is a 404."""
         return self.screen is not None and len(self.stocks) > 0
 
 
 class GetScreenPage:
-    """Use case: a "best-of" screen listing page, from DB-only facts."""
-
     LIMIT = 100
 
     def __init__(self, repository: SeoReadRepository) -> None:
@@ -331,9 +270,6 @@ class GetScreenPage:
 
 @dataclass(frozen=True)
 class SitemapData:
-    """Everything the sitemap lists: stock pages, ETF pages, sector pages, screen pages, and
-    the dated market-brief pages (each a fresh, durable URL — compounding SEO)."""
-
     stock_pages: tuple[StockPageRef, ...]
     etf_pages: tuple[StockPageRef, ...]
     sector_slugs: tuple[str, ...]
@@ -342,15 +278,6 @@ class SitemapData:
 
 
 class GetSitemap:
-    """Use case: the URLs for ``sitemap.xml`` — the index-worthy stock and ETF pages plus
-    the sector and screen pages.
-
-    Owns the per-file URL ceiling: a single sitemap file tops out at 50,000 URLs, so the
-    per-list caps keep us under it (the universe is a few thousand today; when it approaches
-    the limit this becomes a sitemap *index* of paginated children). Most-valuable-first
-    ordering means a future truncation drops only the smallest names.
-    """
-
     # The sitemaps.org per-file ceiling. Kept comfortably below in practice.
     MAX_URLS = 50_000
     # How far back the dated-brief pages are listed. A brief is written daily, so ~2 years of
@@ -373,11 +300,6 @@ class GetSitemap:
 
 @dataclass(frozen=True)
 class CongressBoardPage:
-    """What the /congress market-board content page renders: the most recent Congressional trades
-    market-wide. Unlike a per-entity page this landing page always renders (it's a keyword page with
-    substantial static explanation), so there's no ``has_data`` 404 gate — ``is_empty`` just lets
-    the template show a "refreshed weekly" note before the sync has seeded the store."""
-
     trades: tuple[CongressPageTrade, ...]
 
     @property
@@ -386,9 +308,6 @@ class CongressBoardPage:
 
 
 class GetCongressBoardPage:
-    """Use case: the /congress board's view — the most recent Congressional trades market-wide,
-    from DB-only facts (a crawler hit is one indexed read, never a live fetch)."""
-
     # Enough to be a rich, link-dense page without an unbounded listing.
     LIMIT = 100
 

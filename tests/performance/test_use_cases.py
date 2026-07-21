@@ -1,13 +1,3 @@
-"""Offline tests for the stock-performance sync use case.
-
-``SyncStockPerformance`` is driven through hand-written fakes for its two ports — the batched
-performance feed (``BulkPerformanceProvider``) and the persistence repository — so nothing
-touches Alpaca or SQLAlchemy. The batched-feed shape (one call for the whole work-list) is the
-key difference from the per-stock earnings/fundamentals sweeps, so the tests focus on: the
-single fetch over the work-list, the stale-first targets passing through, the skipped count for
-targets the feed returned no history for, and the swallowed total-outage.
-"""
-
 from __future__ import annotations
 
 from app.stocks.entities import StockPerformance
@@ -28,8 +18,6 @@ def _perf(one_year=None, **windows):
 
 
 class FakeRepo(PerformanceRepository):
-    """Serves a fixed stale-first work-list and records what was written."""
-
     def __init__(self, targets):
         self._targets = tuple(targets)
         self.written: dict[str, StockPerformance] | None = None

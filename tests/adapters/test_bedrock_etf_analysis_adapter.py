@@ -1,12 +1,3 @@
-"""Tests for the Bedrock ETF-analysis adapter.
-
-Offline: a stub client (matching the Anthropic SDK's ``message.content`` → blocks with
-``.type/.name/.input`` shape) is injected through the constructor seam, so the real adapter's
-prompt-building and parse/translate logic runs with no ``anthropic`` package and no network. Mirrors
-``tests/test_stocks.py``'s Bedrock adapter tests, but over an ``EtfDetail`` snapshot instead of a
-``Stock``.
-"""
-
 from datetime import datetime, timezone
 
 import pytest
@@ -65,9 +56,6 @@ class _BoomClient:
 
 
 class _SeqStubMessages:
-    """Returns a queued message per ``create`` call, repeating the last once the
-    queue is exhausted — lets a test drive the adapter's retry-on-empty path."""
-
     def __init__(self, messages, recorder):
         self._messages = list(messages)
         self._recorder = recorder
@@ -163,9 +151,6 @@ def _a_performance() -> StockPerformance:
         ytd=8.9,
         one_year=12.3,
     )
-
-
-# --- Tests -------------------------------------------------------------------------------------
 
 
 def test_parses_tool_call_into_entity():

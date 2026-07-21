@@ -1,21 +1,3 @@
-"""HTTP API for the AI-analysis reads.
-
-Every Claude-on-Bedrock endpoint: the per-stock sectioned scorecard, the
-earnings story, the analyst-coverage review, the fundamentals read, the sector
-rotation read, and the market summary. Controller + presenter + wiring, the
-composition-root way, sitting in ``app/stocks/endpoints/`` beside the other read
-endpoints.
-
-Wiring: each analyser is a Bedrock adapter singleton (no secret to gate on —
-Bedrock authenticates through the process's AWS credentials, so the IAM policy
-is what enables it; a missing 'bedrock' extra is a clean 503). Best-effort
-*context* is read **DB-only** (via the slices' repositories, not their
-read-through providers) so a cache miss never triggers a synchronous,
-rate-limited Yahoo fetch mid-request — keeping the caches current is the
-crons' job. Each read is fronted by its kind's read-through result cache, served
-until it ages past that kind's TTL (``wiring.analysis_cache_ttl``).
-"""
-
 import os
 from functools import lru_cache
 
@@ -466,10 +448,6 @@ _ANALYSIS_DISCLAIMER = (
 
 
 def _present_scorecard(scorecard: StockScorecard) -> InvestmentAnalysisResponse:
-    """Presenter: stock-scorecard entity -> HTTP response DTO.
-
-    The disclaimer is attached here, at the edge — it's a property of the service,
-    not something the model is trusted to author."""
     return InvestmentAnalysisResponse(
         symbol=scorecard.symbol,
         recommendation=scorecard.recommendation.value,
@@ -498,10 +476,6 @@ def _present_scorecard(scorecard: StockScorecard) -> InvestmentAnalysisResponse:
 def _present_earnings_analysis(
     analysis: EarningsAnalysis,
 ) -> EarningsAnalysisResponse:
-    """Presenter: earnings-analysis entity -> HTTP response DTO.
-
-    The disclaimer is attached here, at the edge — it's a property of the service,
-    not something the model is trusted to author."""
     return EarningsAnalysisResponse(
         symbol=analysis.symbol,
         summary=analysis.summary,
@@ -516,10 +490,6 @@ def _present_earnings_analysis(
 def _present_ratings_analysis(
     analysis: RatingsAnalysis,
 ) -> RatingsAnalysisResponse:
-    """Presenter: ratings-analysis entity -> HTTP response DTO.
-
-    The disclaimer is attached here, at the edge — it's a property of the service,
-    not something the model is trusted to author."""
     return RatingsAnalysisResponse(
         symbol=analysis.symbol,
         verdict=analysis.verdict.value,
@@ -535,10 +505,6 @@ def _present_ratings_analysis(
 def _present_fundamentals_analysis(
     analysis: FundamentalsAnalysis,
 ) -> FundamentalsAnalysisResponse:
-    """Presenter: fundamentals-analysis entity -> HTTP response DTO.
-
-    The disclaimer is attached here, at the edge — it's a property of the service,
-    not something the model is trusted to author."""
     return FundamentalsAnalysisResponse(
         symbol=analysis.symbol,
         verdict=analysis.verdict.value,
@@ -552,7 +518,6 @@ def _present_fundamentals_analysis(
 
 
 def _present_sector_mover(mover: SectorMover) -> SectorMoverResponse:
-    """Presenter: one sector mover entity -> HTTP response DTO."""
     return SectorMoverResponse(
         ticker=mover.ticker,
         name=mover.name,
@@ -562,7 +527,6 @@ def _present_sector_mover(mover: SectorMover) -> SectorMoverResponse:
 
 
 def _present_sector_headline(headline: SectorHeadline) -> SectorHeadlineResponse:
-    """Presenter: one sector catalyst headline entity -> HTTP response DTO."""
     return SectorHeadlineResponse(
         ticker=headline.ticker,
         title=headline.title,
@@ -573,8 +537,6 @@ def _present_sector_headline(headline: SectorHeadline) -> SectorHeadlineResponse
 
 
 def _present_sector_highlight(highlight: SectorHighlight) -> SectorHighlightResponse:
-    """Presenter: one sector highlight entity -> HTTP response DTO, with its grounded
-    driver chips (movers) and catalyst headlines."""
     return SectorHighlightResponse(
         sector=highlight.sector,
         symbol=highlight.symbol,
@@ -586,10 +548,6 @@ def _present_sector_highlight(highlight: SectorHighlight) -> SectorHighlightResp
 
 
 def _present_sector_analysis(analysis: SectorAnalysis) -> SectorAnalysisResponse:
-    """Presenter: sector-analysis entity -> HTTP response DTO.
-
-    Same shape as ``_present_scorecard`` — the disclaimer is attached here, at the
-    edge, since it's a property of the service, not something the model authors."""
     return SectorAnalysisResponse(
         summary=analysis.summary,
         tone=analysis.tone.value,
@@ -604,7 +562,6 @@ def _present_sector_analysis(analysis: SectorAnalysis) -> SectorAnalysisResponse
 def _present_market_index_return(
     index_return: MarketIndexReturn,
 ) -> MarketIndexReturnResponse:
-    """Presenter: one index's per-period return entity -> HTTP response DTO."""
     return MarketIndexReturnResponse(
         name=index_return.name,
         symbol=index_return.symbol,
@@ -613,7 +570,6 @@ def _present_market_index_return(
 
 
 def _present_market_period(period: MarketPeriodHighlight) -> MarketPeriodResponse:
-    """Presenter: one market-summary period entity -> HTTP response DTO."""
     return MarketPeriodResponse(
         period=period.period.value,
         indexes=[_present_market_index_return(r) for r in period.indexes],
@@ -622,11 +578,6 @@ def _present_market_period(period: MarketPeriodHighlight) -> MarketPeriodRespons
 
 
 def _present_market_summary(summary: MarketSummary) -> MarketSummaryResponse:
-    """Presenter: market-summary entity -> HTTP response DTO.
-
-    Same shape as ``_present_sector_analysis`` — the disclaimer is attached here,
-    at the edge, since it's a property of the service, not something the model
-    authors."""
     return MarketSummaryResponse(
         summary=summary.summary,
         tone=summary.tone.value,

@@ -1,10 +1,3 @@
-"""Tests for the stocks vertical slice: entity rules, use case, and the API.
-
-Everything here runs offline. The use case depends on the StockDataProvider
-port, so we inject a hand-written FakeProvider instead of mocking Alpaca or
-the network — that's the payoff of the clean-architecture layering.
-"""
-
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -141,8 +134,6 @@ from app.stocks.wiring import analysis_cache_ttl
 
 
 class FakeProvider(StockDataProvider):
-    """Returns/raises whatever the test configured; records calls."""
-
     def __init__(self, stock: Stock | None = None, raises: Exception | None = None):
         self._stock = stock
         self._raises = raises
@@ -157,8 +148,6 @@ class FakeProvider(StockDataProvider):
 
 
 class FakeLogoProvider(LogoProvider):
-    """Returns/raises whatever the test configured; records calls."""
-
     def __init__(self, logo: Logo | None = None, raises: Exception | None = None):
         self._logo = logo
         self._raises = raises
@@ -173,8 +162,6 @@ class FakeLogoProvider(LogoProvider):
 
 
 class FakePerformanceProvider(StockPerformanceProvider):
-    """Returns/raises whatever the test configured; records calls."""
-
     def __init__(self, performance=None, raises=None):
         self._performance = performance
         self._raises = raises
@@ -189,8 +176,6 @@ class FakePerformanceProvider(StockPerformanceProvider):
 
 
 class FakeAllTimeHighProvider(AllTimeHighProvider):
-    """Returns/raises whatever the test configured; records calls."""
-
     def __init__(self, all_time_high=None, raises=None):
         self._all_time_high = all_time_high
         self._raises = raises
@@ -205,8 +190,6 @@ class FakeAllTimeHighProvider(AllTimeHighProvider):
 
 
 class FakeEstimatesProvider(AnalystEstimatesProvider):
-    """Returns/raises whatever the test configured; records calls."""
-
     def __init__(self, estimates=None, raises=None):
         self._estimates = estimates
         self._raises = raises
@@ -221,8 +204,6 @@ class FakeEstimatesProvider(AnalystEstimatesProvider):
 
 
 class FakeCandleProvider(CandleProvider):
-    """Returns/raises whatever the test configured; records the call args."""
-
     def __init__(
         self, series: CandleSeries | None = None, raises: Exception | None = None
     ):
@@ -239,8 +220,6 @@ class FakeCandleProvider(CandleProvider):
 
 
 class FakeSectorProvider(SectorPerformanceProvider):
-    """Returns/raises whatever the test configured; counts calls."""
-
     def __init__(self, sectors=None, raises: Exception | None = None):
         self._sectors = sectors
         self._raises = raises
@@ -255,8 +234,6 @@ class FakeSectorProvider(SectorPerformanceProvider):
 
 
 class FakeMarketOverviewProvider(MarketOverviewProvider):
-    """Returns/raises whatever the test configured; counts calls."""
-
     def __init__(self, indexes=None, raises: Exception | None = None):
         self._indexes = indexes
         self._raises = raises
@@ -271,8 +248,6 @@ class FakeMarketOverviewProvider(MarketOverviewProvider):
 
 
 class FakeQuarterlyEarningsProvider(QuarterlyEarningsProvider):
-    """Returns/raises whatever the test configured for the quarterly timeline."""
-
     def __init__(self, timeline=None, raises: Exception | None = None):
         self._timeline = timeline
         self._raises = raises
@@ -285,8 +260,6 @@ class FakeQuarterlyEarningsProvider(QuarterlyEarningsProvider):
 
 
 class FakeAnnualEarningsProvider(AnnualEarningsProvider):
-    """Returns/raises whatever the test configured for the annual timeline."""
-
     def __init__(self, timeline=None, raises: Exception | None = None):
         self._timeline = timeline
         self._raises = raises
@@ -299,8 +272,6 @@ class FakeAnnualEarningsProvider(AnnualEarningsProvider):
 
 
 class FakeRecommendationProvider(RecommendationProvider):
-    """Returns/raises whatever the test configured for the recommendation trends."""
-
     def __init__(self, recommendations=None, raises: Exception | None = None):
         self._recommendations = recommendations
         self._raises = raises
@@ -313,16 +284,6 @@ class FakeRecommendationProvider(RecommendationProvider):
 
 
 class FakeSearchRepo(StockSearchRepository):
-    """The anchor reads the analysis path uses — the ticker's industry, its own cap
-    tier, and its industry's tier-tagged peers — configurable per test. ``search`` /
-    ``classifications`` are the search endpoint's job, not exercised here, so they
-    raise if ever called.
-
-    Two ways to set the peers: ``pe_ratios`` (a bare list; every peer and the anchor
-    default to ``MarketCapTier.MID``, so ``for_stock_peers`` yields one whole-industry
-    cohort — the pre-tier behaviour) or ``peers`` (explicit ``(pe, tier)`` pairs) plus
-    ``anchor_tier``, to exercise the tier scoping / widening."""
-
     def __init__(
         self,
         *,
@@ -413,10 +374,6 @@ class FakeSearchRepo(StockSearchRepository):
 
 
 class FakeAnalysisProvider(StockScorecardProvider):
-    """Returns/raises whatever the test configured; records (symbol, had_quarterly)
-    and stashes the last quarterly/annual/recommendations/industry context it was
-    handed."""
-
     def __init__(
         self,
         analysis: StockScorecard | None = None,
@@ -465,8 +422,6 @@ def a_section(**overrides) -> ScorecardSection:
 
 
 def an_analysis(**overrides) -> StockScorecard:
-    """A complete four-section scorecard (named ``an_analysis`` for continuity with the
-    context tests that only assert the overall verdict)."""
     base = dict(
         symbol="AAPL",
         recommendation=Recommendation.HOLD,
@@ -507,8 +462,6 @@ def an_analysis(**overrides) -> StockScorecard:
 
 
 class FakeAnalysisCache(StockScorecardCache):
-    """In-memory stand-in for the scorecard result cache; records what it stored."""
-
     def __init__(self, stored: StockScorecard | None = None) -> None:
         self._store = {stored.symbol: stored} if stored is not None else {}
         self.puts: list[StockScorecard] = []
@@ -522,10 +475,6 @@ class FakeAnalysisCache(StockScorecardCache):
 
 
 class FakeSectorAnalysisProvider(SectorAnalysisProvider):
-    """Returns/raises whatever the test configured; stashes the enriched contexts it
-    received (so a test can assert the use case handed over a *ranked* board and the
-    attribution it built)."""
-
     def __init__(
         self,
         analysis: SectorAnalysis | None = None,
@@ -561,9 +510,6 @@ def a_sector_analysis(**overrides) -> SectorAnalysis:
 
 
 class FakeMarketSummaryProvider(MarketSummaryProvider):
-    """Returns/raises whatever the test configured; stashes the board it received
-    (so a test can assert the use case handed over the index board)."""
-
     def __init__(
         self,
         summary: MarketSummary | None = None,
@@ -640,7 +586,6 @@ def a_series(candles=None, timeframe: Timeframe = Timeframe.DAY_1) -> CandleSeri
 def a_rising_series(
     n: int = 4, start_close: float = 100.0, timeframe: Timeframe = Timeframe.DAY_1
 ) -> CandleSeries:
-    """A series of strictly rising closes (each bar one dollar above the last)."""
     base = datetime(2026, 6, 1, tzinfo=timezone.utc)
     candles = tuple(
         a_candle(close=start_close + i, timestamp=base + timedelta(days=i))
@@ -650,8 +595,6 @@ def a_rising_series(
 
 
 def a_support_series(timeframe: Timeframe = Timeframe.DAY_1) -> CandleSeries:
-    """A double-bottom "W": swing lows at 3.0 with the series ending at 5.0 — one
-    clear support level (moderate, two touches) when detected with window=2."""
     lows = [5.0, 4.0, 3.0, 4.0, 5.0, 4.0, 3.0, 4.0, 5.0]
     base = datetime(2026, 6, 1, tzinfo=timezone.utc)
     candles = tuple(
@@ -1042,8 +985,6 @@ def test_resolve_window_ytd_starts_at_jan_1():
     assert end == now
 
 
-# --------------------------- use case ---------------------------
-
 def test_use_case_normalizes_symbol():
     fake = FakeProvider(stock=a_stock())
     GetStockInfo(fake).execute("  aapl ")
@@ -1297,8 +1238,6 @@ def test_candles_use_case_propagates_not_found():
         GetStockCandles(fake).execute("ZZZZ", Timeframe.DAY_1)
 
 
-# --------------------------- EMA use case ---------------------------
-
 def test_ema_use_case_warms_up_before_the_window():
     fake = FakeCandleProvider(series=a_rising_series())
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -1368,8 +1307,6 @@ def test_ema_use_case_computes_one_line_per_period():
     assert [line.period for line in result.lines] == [2, 3]
 
 
-# --------------------------- support-levels use case ---------------------------
-
 def test_support_levels_use_case_normalizes_symbol_and_forwards_window():
     fake = FakeCandleProvider(series=a_support_series())
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -1415,8 +1352,6 @@ def test_support_levels_use_case_detects_from_fetched_candles():
     assert result.levels[0].touches == 2
     assert result.levels[0].strength.value == "moderate"
 
-
-# --------------------------- trend use case ---------------------------
 
 def test_trend_use_case_normalizes_symbol_and_warms_up_before_the_window():
     fake = FakeCandleProvider(series=a_rising_series(n=20))
@@ -1490,8 +1425,6 @@ def test_trend_use_case_classifies_from_fetched_candles():
     assert result.reading is TrendReading.STRONG_UPTREND
 
 
-# --------------------------- sector use case ---------------------------
-
 def test_sector_entity_change_and_percent():
     s = a_sector(price=110.0, previous_close=100.0)
     assert s.change == 10.0
@@ -1519,8 +1452,6 @@ def test_sector_use_case_propagates_not_found():
     with pytest.raises(StockNotFound):
         GetSectorPerformance(fake).execute()
 
-
-# --------------------------- API ---------------------------
 
 @pytest.fixture
 def make_client():
@@ -1604,8 +1535,6 @@ def make_client():
     app.dependency_overrides.clear()
 
 
-# --------------------------- AI analysis ---------------------------
-
 # A stub Bedrock client so the real adapter's prompt-building and parse/translate
 # logic runs offline — no anthropic package, no network. Attribute shapes match
 # what the Anthropic SDK returns (message.content -> blocks with .type/.name/.input).
@@ -1647,9 +1576,6 @@ class _BoomClient:
 
 
 class _SeqStubMessages:
-    """Returns a queued message per ``create`` call, repeating the last once the
-    queue is exhausted — lets a test drive the adapter's retry-on-empty path."""
-
     def __init__(self, messages, recorder):
         self._messages = list(messages)
         self._recorder = recorder
@@ -1790,8 +1716,6 @@ _MARKET_KEY = "_MARKET_"
 
 
 class FakeAiAnalysisCache(AiAnalysisCache):
-    """In-memory stand-in for the generic AI-analysis result cache; records puts."""
-
     def __init__(self, stored=None, key=None):
         self._store = {key: stored} if stored is not None else {}
         self.puts: list[tuple] = []
@@ -1805,8 +1729,6 @@ class FakeAiAnalysisCache(AiAnalysisCache):
 
 
 class FakeEarningsAnalysisProvider(EarningsAnalysisProvider):
-    """Returns a canned earnings analysis (or raises); records the symbols it saw."""
-
     def __init__(self, result=None, *, raises=None):
         self._result = result
         self._raises = raises
@@ -1972,9 +1894,6 @@ def test_stock_info_gathers_the_enrichment_calls_concurrently():
     barrier = threading.Barrier(2)
 
     class _ConcurrentFake:
-        """One fake standing in for both enrichment ports; the two pooled reads each
-        rendezvous at the barrier, the required get_stock does not."""
-
         def get_stock(self, symbol):
             return a_stock()
 
@@ -2707,8 +2626,6 @@ def test_get_analysis_400_on_bad_symbol(make_client):
     assert client.get("/stocks/TOOLONG/analysis").status_code == 400
 
 
-# --------------------------- logo endpoint ---------------------------
-
 def test_get_logo_returns_png_bytes(make_client):
     client = make_client(logo_provider=FakeLogoProvider(a_logo(content=b"\x89PNG\r\n")))
     r = client.get("/stocks/AAPL/logo")
@@ -2750,8 +2667,6 @@ def test_get_logo_upstream_failure_502(make_client):
     client = make_client(logo_provider=fake)
     assert client.get("/stocks/AAPL/logo").status_code == 502
 
-
-# --------------------------- candles endpoint ---------------------------
 
 def test_get_candles_returns_200_with_chart_shape(make_client):
     up = a_candle(open=100.0, close=110.0, timestamp=datetime(2026, 6, 18, tzinfo=timezone.utc))
@@ -2834,8 +2749,6 @@ def test_get_candles_upstream_failure_502(make_client):
     assert client.get("/stocks/ticker/AAPL/candles").status_code == 502
 
 
-# --------------------------- EMA endpoint ---------------------------
-
 def test_get_ema_returns_200_with_one_line_per_period(make_client):
     client = make_client(ema_provider=FakeCandleProvider(a_rising_series()))
     r = client.get("/stocks/ticker/AAPL/ema", params={"period": [2, 3]})
@@ -2917,8 +2830,6 @@ def test_get_ema_upstream_failure_502(make_client):
     client = make_client(ema_provider=fake)
     assert client.get("/stocks/ticker/AAPL/ema").status_code == 502
 
-
-# --------------------------- support-levels endpoint ---------------------------
 
 def test_get_support_levels_returns_200_with_levels(make_client):
     client = make_client(support_levels_provider=FakeCandleProvider(a_support_series()))
@@ -3017,8 +2928,6 @@ def test_get_support_levels_upstream_failure_502(make_client):
     client = make_client(support_levels_provider=fake)
     assert client.get("/stocks/ticker/AAPL/support-levels").status_code == 502
 
-
-# --------------------------- trend endpoint ---------------------------
 
 def test_get_trend_returns_200_with_all_three_horizons(make_client):
     client = make_client(trend_provider=FakeCandleProvider(a_rising_series(n=20)))
@@ -3156,8 +3065,6 @@ def test_get_trend_upstream_failure_502(make_client):
     assert client.get("/stocks/ticker/AAPL/trend").status_code == 502
 
 
-# --------------------------- sectors endpoint ---------------------------
-
 def test_get_sectors_returns_200_ranked_with_computed_fields(make_client):
     tech = a_sector(sector="Technology", symbol="XLK", price=110.0, previous_close=100.0)
     energy = a_sector(sector="Energy", symbol="XLE", price=95.0, previous_close=100.0)
@@ -3199,8 +3106,6 @@ def test_get_sectors_upstream_failure_502(make_client):
     assert client.get("/sectors").status_code == 502
 
 
-# --------------------------- sector AI analysis ---------------------------
-
 # Reuses the Bedrock stub client defined in the AI-analysis section above, but
 # forces the sector tool (submit_sector_analysis) instead of submit_analysis.
 def _sector_tool_message(**input_overrides) -> _StubMessage:
@@ -3219,7 +3124,6 @@ def _sector_tool_message(**input_overrides) -> _StubMessage:
 def _ctx(
     sector, symbol, change_percent, *, performance=None, movers=(), headlines=()
 ) -> SectorContext:
-    """A SectorContext (the analyzer's input) — the board row plus best-effort attribution."""
     return SectorContext(
         sector=sector,
         symbol=symbol,
@@ -3386,9 +3290,6 @@ def test_sector_analysis_use_case_hands_over_a_ranked_board():
 
 
 class _FakeConstituentsRepo(StockSearchRepository):
-    """Serves a fixed page of screened constituents for ``search`` (records the criteria);
-    the rest of the read port isn't on the attribution path."""
-
     def __init__(self, results=(), *, raises=None):
         self._results = tuple(results)
         self.criteria: StockSearchCriteria | None = None
@@ -3428,9 +3329,6 @@ class _FakeConstituentsRepo(StockSearchRepository):
 
 
 class _FakeBulkQuotes:
-    """A ``BulkQuoteProvider`` fake: turns a {ticker: day-percent} map into Quotes; can raise
-    a whole-batch failure. Records the symbols it was asked for."""
-
     def __init__(self, change_by_ticker=None, *, raises=None):
         self._changes = change_by_ticker or {}
         self._raises = raises
@@ -3458,9 +3356,6 @@ class _FakeBulkQuotes:
 
 
 class _FakeNewsRepo(NewsRepository):
-    """A DB-only ``NewsRepository`` fake: ``get`` returns configured stored news and never
-    fetches live. Records the symbols read."""
-
     def __init__(self, news_by_symbol=None):
         self._news = news_by_symbol or {}
         self.requested: list[str] = []
@@ -3477,7 +3372,6 @@ class _FakeNewsRepo(NewsRepository):
 
 
 def _screened(ticker, sector, market_cap, *, name=None) -> StockSearchResult:
-    """A screened-universe row (only the fields attribution reads carry meaning)."""
     return StockSearchResult(
         ticker=ticker,
         name=name or f"{ticker} Inc.",
@@ -3744,8 +3638,6 @@ def test_get_sector_analysis_404_when_board_unavailable(make_client):
     assert client.get("/sectors/analysis").status_code == 404
 
 
-# --------------------------- market AI summary ---------------------------
-
 # Reuses the Bedrock stub client from the AI-analysis section, forcing the market
 # tool (submit_market_summary) with a note per timeframe.
 def _market_tool_message(**input_overrides) -> _StubMessage:
@@ -3884,8 +3776,6 @@ def test_market_summary_retries_once_when_periods_come_back_empty():
     assert len(client.calls) == 2  # retried exactly once
     assert summary.periods[0].note == "A strong year for both indexes."
 
-
-# ------------------------- earnings AI analysis -------------------------
 
 # Reuses the Bedrock stub client, forcing the earnings tool
 # (submit_earnings_analysis) with a plain summary, a trend, and highlights.
@@ -4079,8 +3969,6 @@ def test_get_market_summary_404_when_board_unavailable(make_client):
     )
     assert client.get("/market/summary").status_code == 404
 
-
-# --------------------------- CORS ---------------------------
 
 def test_cors_allows_configured_origin(make_client):
     client = make_client(logo_provider=FakeLogoProvider(a_logo(content=b"\x89PNG\r\n")))

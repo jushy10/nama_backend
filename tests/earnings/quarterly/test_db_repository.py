@@ -1,11 +1,3 @@
-"""Tests for the database-backed QuarterlyEarningsRepository.
-
-Offline: an in-memory SQLite database stands in for the real table. Verifies the
-round-trip (entities -> rows -> entities) including the canonical timeline order,
-whole-window replace on upsert (no duplicate rows, other stocks untouched), the parent
-``stocks`` row + name fill-but-don't-clobber, and a clean miss.
-"""
-
 from datetime import date, datetime, timedelta, timezone
 
 import pytest

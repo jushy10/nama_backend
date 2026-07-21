@@ -1,12 +1,3 @@
-"""Tests for the database-backed FundamentalsRepository.
-
-Offline: an in-memory SQLite database stands in for the real ``stocks`` table (fundamentals have
-no table of their own). Verifies ``upsert`` lands every figure on the anchor and stamps the sync
-time (creating an absent anchor, never clobbering a known name), overwrites a stale figure to
-``None``, and that ``refresh_targets`` orders the work-list un-synced-first then stalest, honours
-the cap, and carries each row's name.
-"""
-
 from datetime import datetime, timezone
 
 import pytest
@@ -39,9 +30,6 @@ def _at(*, day: int):
 
 
 def _synced(row) -> datetime:
-    """The row's sync stamp as tz-aware UTC. SQLite (unlike Postgres) drops the tzinfo on a
-    DateTime(timezone=True) round-trip, returning a naive UTC value — re-attach it so the
-    comparison is stable across both backends."""
     stamp = row.fundamentals_synced_at
     return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
 

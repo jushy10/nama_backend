@@ -1,19 +1,8 @@
-"""Transport convenience: turn a chart 'range' preset into a time window.
-
-A range like "6M" is a UX affordance ("show me the last six months"), not a
-domain concept — so it lives here at the edge, next to the controller, rather
-than in the use case. `now` is injected so the mapping stays pure and testable
-(no hidden clock).
-"""
-
 from datetime import datetime, timedelta
 from enum import Enum
 
 
 class ChartRange(str, Enum):
-    """How far back the chart should reach. String values double as the API's
-    accepted ``range`` query values."""
-
     DAY_1 = "1D"
     DAY_7 = "7D"
     MONTH_1 = "1M"
@@ -43,11 +32,6 @@ _LOOKBACKS: dict[ChartRange, timedelta] = {
 def resolve_window(
     range_: ChartRange, *, now: datetime
 ) -> tuple[datetime | None, datetime]:
-    """Return the ``(start, end)`` window for a range preset.
-
-    ``start`` is ``None`` for ``MAX`` — meaning "as far back as the data goes".
-    ``end`` is always ``now``.
-    """
     if range_ is ChartRange.MAX:
         return None, now
     if range_ is ChartRange.YTD:

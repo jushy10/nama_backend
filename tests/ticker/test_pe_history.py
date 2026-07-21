@@ -1,13 +1,3 @@
-"""Tests for the P/E-history entity and use case.
-
-Offline: the ``PeHistory.build`` derivation (rolling TTM, the as-of close match, the
-warm-up and loss guards) is exercised directly, and ``GetStockPeHistory`` runs against
-hand-written fakes for the two ports — so this checks only the orchestration (symbol
-normalization, the primary-vs-best-effort split between the reliable Alpaca closes and
-the best-effort Yahoo EPS, and the short-circuit when there aren't enough quarters),
-independent of Alpaca, Yahoo, or the DB.
-"""
-
 from datetime import date, datetime, timezone
 
 import pytest
@@ -71,9 +61,6 @@ class _FakeEpsHistory(EpsHistoryProvider):
         return self._eps
 
 
-# --- The entity: PeHistory.build --------------------------------------------------------
-
-
 def test_build_rolls_ttm_and_divides_the_close():
     eps = _quarters(
         [
@@ -128,8 +115,6 @@ def test_build_needs_a_full_trailing_year():
 
 
 def _history_from_pes(pes: list[float]) -> PeHistory:
-    """A PeHistory carrying the given P/Es, oldest first (the last is 'current'). Only ``pe``
-    feeds the stats, so the other point fields are placeholders."""
     points = tuple(
         PeHistoryPoint(report_date=date(2022, 1, 1), price=100.0, ttm_eps=5.0, pe=float(pe))
         for pe in pes
@@ -174,9 +159,6 @@ def test_stats_reads_a_mid_range_current_as_fair():
     assert stats.signal is ValuationSignal.FAIR
     assert 25 < stats.current_percentile < 75
     assert stats.median_pe == 25.0
-
-
-# --- The use case: GetStockPeHistory ----------------------------------------------------
 
 
 def _eps_5q() -> tuple[ReportedEps, ...]:
@@ -242,8 +224,6 @@ def test_bad_symbol_is_a_value_error():
 
 
 def _points_with(pairs: list[tuple[float, float]]) -> tuple[PeHistoryPoint, ...]:
-    """Points carrying explicit (ttm_eps, pe) — the two fields the spike filter and the trough
-    signal read; the rest are placeholders."""
     return tuple(
         PeHistoryPoint(report_date=date(2022, 1, 1), price=100.0, ttm_eps=t, pe=pe)
         for t, pe in pairs

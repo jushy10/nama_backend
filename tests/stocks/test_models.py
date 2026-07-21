@@ -1,9 +1,3 @@
-"""Tests for the shared ``stocks`` anchor model + get_or_create_stock.
-
-Offline, against in-memory SQLite: exercises the get-or-create semantics directly —
-one row per symbol, name filled but never clobbered — independent of any feature slice.
-"""
-
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session

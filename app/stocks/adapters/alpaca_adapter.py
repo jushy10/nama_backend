@@ -1,12 +1,3 @@
-"""Interface Adapter: the Alpaca-backed StockDataProvider.
-
-This is the only module that knows Alpaca exists. It translates Alpaca's
-SDK models into our Stock entity and Alpaca's failures into domain errors.
-Swap data vendors and only this file changes.
-
-SDK: https://alpaca.markets/sdks/python/
-"""
-
 import bisect
 import logging
 from datetime import datetime, timedelta, timezone
@@ -101,12 +92,6 @@ class AlpacaStockDataProvider(
     SectorPerformanceProvider,
     MarketOverviewProvider,
 ):
-    """Fetches stock data from Alpaca and maps it onto the Stock entity.
-
-    Also derives trailing-window performance and the all-time high from daily
-    bars, and historical OHLC candles for charting.
-    """
-
     # Symbols per batched snapshot request (get_quotes). One rejected symbol fails the
     # *whole* multi-symbol snapshot it rides in (see _to_alpaca_symbol for the class-share
     # case that first surfaced this), so this caps the blast radius of a bad name: with
@@ -227,14 +212,6 @@ class AlpacaStockDataProvider(
 
     @staticmethod
     def _to_alpaca_symbol(symbol: str) -> str:
-        """Map our stored ticker onto Alpaca's symbology.
-
-        Our universe carries Yahoo's convention, which writes a share class with a dash
-        (``BRK-B``, ``BF-B``); Alpaca's asset symbols use a dot (``BRK.B``, ``BF.B``). A
-        dash in a US ticker only ever marks a share class, so a straight ``-`` -> ``.`` is
-        safe and touches only those few names. Left unmapped, Alpaca rejects the dash form
-        and — since one bad symbol fails the whole multi-symbol snapshot — takes its entire
-        chunk down with it (the megacap ``BRK-B`` did exactly that to the S&P 500 board)."""
         return symbol.replace("-", ".")
 
     def get_performance(self, symbol: str) -> StockPerformance:
@@ -425,7 +402,6 @@ class AlpacaStockDataProvider(
         return snapshot
 
     def _fetch_asset_metadata(self, symbol: str) -> tuple[str | None, str | None]:
-        """Company name + listing exchange. Best-effort; never fatal."""
         try:
             asset = self._trading.get_asset(self._to_alpaca_symbol(symbol))
         except APIError:
@@ -434,7 +410,6 @@ class AlpacaStockDataProvider(
         return asset.name, exchange
 
     def _fetch_daily_bars(self, symbol: str):
-        """Daily bars over the lookback window (oldest first)."""
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=self._PERFORMANCE_LOOKBACK_DAYS)
         alpaca_symbol = self._to_alpaca_symbol(symbol)
@@ -453,14 +428,6 @@ class AlpacaStockDataProvider(
         return barset.data.get(alpaca_symbol, [])
 
     def _fetch_all_daily_bars(self, symbol: str):
-        """Every daily bar the feed carries for the symbol, for the all-time high.
-
-        Reads the SIP feed (full-market coverage and true intraday highs, the
-        same consolidated history the performance windows use) split-adjusted, so
-        old highs stay comparable to today's split-adjusted price. ``end`` is held
-        back from now by the SIP-on-free delay, like the performance fetch, and
-        ``start`` reaches back past Alpaca's data floor to capture all of it.
-        """
         alpaca_symbol = self._to_alpaca_symbol(symbol)
         try:
             request = StockBarsRequest(
@@ -477,11 +444,6 @@ class AlpacaStockDataProvider(
         return barset.data.get(alpaca_symbol, [])
 
     def _fetch_daily_bars_batch(self, symbols: list[str]) -> dict[str, list]:
-        """Daily bars over the lookback for several symbols in one request.
-
-        Best-effort: on failure returns an empty map so callers can still serve
-        a snapshot-only view without trailing-window performance.
-        """
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=self._PERFORMANCE_LOOKBACK_DAYS)
         try:
@@ -518,13 +480,6 @@ class AlpacaStockDataProvider(
     def _repair_bad_tick(
         cls, open_: float, high: float, low: float, close: float
     ) -> tuple[float, float]:
-        """Clamp an implausible wick (a bad tick) back to the candle body.
-
-        Returns the repaired ``(high, low)``. A ``low`` stranded more than
-        ``_MAX_WICK_FRACTION`` below the body — or a ``high`` that far above it —
-        is a corrupt print rather than a real move, so it's pulled in to the body
-        edge; a clean bar passes through unchanged.
-        """
         body_low = min(open_, close)
         body_high = max(open_, close)
         if body_low > 0 and low < body_low * (1 - cls._MAX_WICK_FRACTION):
@@ -612,11 +567,6 @@ class AlpacaStockDataProvider(
 
     @staticmethod
     def _to_all_time_high(bars) -> AllTimeHigh:
-        """Highest intraday high across the history, with when and how far back.
-
-        ``since`` is the earliest bar's date — the bound on "all-time," since the
-        feed's history may not reach the stock's listing.
-        """
         peak = max(bars, key=lambda bar: bar.high)
         earliest = min(bar.timestamp for bar in bars)
         return AllTimeHigh(
@@ -629,7 +579,6 @@ class AlpacaStockDataProvider(
 
     @classmethod
     def _compute_performance(cls, bars) -> StockPerformance:
-        """Percent change of the latest close vs the close starting each window."""
         if not bars:
             return StockPerformance(None, None, None, None, None, None)
         bars = sorted(bars, key=lambda b: b.timestamp)  # ascending; defensive
@@ -659,7 +608,6 @@ class AlpacaStockDataProvider(
 
     @staticmethod
     def _ytd(bars, dates, current, anchor_year) -> float | None:
-        """Percent change vs the previous year's final close."""
         for i in range(len(bars) - 1, -1, -1):
             if dates[i].year < anchor_year:  # most recent bar before this year
                 base = bars[i].close

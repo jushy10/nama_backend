@@ -1,11 +1,3 @@
-"""Unit tests for the insider-transactions entities (pure domain rules).
-
-Pins the intrinsic rules a client relies on for the "big buy / big sell" signal: the dollar
-``value`` (best-effort when a price leg is missing), the open-market P/S flags vs. the
-compensation codes, the ``role`` / ``code_label`` renderings, and the ``InsiderActivity``
-rollups (``open_market`` view + net buy-vs-sell ``summary``).
-"""
-
 from datetime import date
 
 from app.stocks.insider_transactions.entities import (

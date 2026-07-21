@@ -1,12 +1,3 @@
-"""Alembic migration environment.
-
-Resolves the target database from DATABASE_URL at run time (the same variable
-the app reads in app/db.py), so `alembic upgrade head` hits whatever database is
-configured — local SQLite by default, or the RDS Postgres in prod. The target
-metadata is the app's ORM Base, with the models imported so autogenerate sees
-every table.
-"""
-
 import os
 from logging.config import fileConfig
 
@@ -39,7 +30,6 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    """Emit SQL to stdout without a live connection (`alembic upgrade --sql`)."""
     context.configure(
         url=DATABASE_URL,
         target_metadata=target_metadata,
@@ -51,7 +41,6 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations against a live connection."""
     connectable = create_engine(DATABASE_URL, poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(

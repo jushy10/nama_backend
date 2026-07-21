@@ -1,10 +1,3 @@
-"""HTTP API for a stock's logo image.
-
-``GET /stocks/{symbol}/logo`` — controller + wiring, the composition-root way,
-sitting in ``app/stocks/endpoints/`` beside the other read endpoints. No
-presenter/DTO: the logo is served as raw image bytes.
-"""
-
 import os
 from functools import lru_cache
 

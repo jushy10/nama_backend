@@ -1,14 +1,3 @@
-"""HTTP API for the US Treasury yield curve.
-
-``GET /market/yield-curve`` — the current par-yield curve across every maturity
-(the snapshot), and ``GET /market/yield-history`` — the 2Y/10Y yields over time
-(the two-line series whose crossover marks an inversion). Controller + presenter
-+ wiring, the composition-root way, sitting in ``app/stocks/endpoints/`` beside
-the other market reads. Both are live-per-request off keyless sources (Treasury
-for the curve, FRED for the history), so there's no table, no cron, and — like
-the ``/sectors`` board — the wiring factories are local, keyless, and un-gated.
-"""
-
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -55,7 +44,6 @@ def get_yield_history(
 
 
 def _present_curve(curve: YieldCurve) -> YieldCurveResponse:
-    """Presenter: the curve entity -> HTTP response DTO."""
     return YieldCurveResponse(
         as_of=curve.as_of,
         two_year=curve.two_year,
@@ -71,7 +59,6 @@ def _present_curve(curve: YieldCurve) -> YieldCurveResponse:
 
 
 def _present_history(history: YieldHistory) -> YieldHistoryResponse:
-    """Presenter: the history entity -> HTTP response DTO."""
     return YieldHistoryResponse(
         latest_spread=history.latest_spread,
         is_inverted=history.is_inverted,

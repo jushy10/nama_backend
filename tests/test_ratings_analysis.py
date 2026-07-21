@@ -1,13 +1,3 @@
-"""Tests for the AI ratings-review: the GetRatingsFindings use case + its endpoint.
-
-Offline: hand-written fakes for the analyzer + the DB-only context providers, so the use-case
-tests exercise only the orchestration (symbol normalization, DB-only context gather, top-firm
-derivation, the no-coverage guard, and primary-vs-best-effort failure handling). The endpoint
-tests inject a fake use case through ``dependency_overrides`` over the stocks router, checking
-the controller + presenter (verdict/confidence/findings + service disclaimer, the cache header,
-and the error mapping) — no Bedrock, no Yahoo, no database.
-"""
-
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -32,9 +22,6 @@ from app.stocks.recommendations.ports import (
 )
 
 
-# --- fakes / fixtures --------------------------------------------------------------------------
-
-
 def _an_analysis(symbol="NVDA") -> RatingsAnalysis:
     return RatingsAnalysis(
         symbol=symbol,
@@ -48,8 +35,6 @@ def _an_analysis(symbol="NVDA") -> RatingsAnalysis:
 
 
 class _FakeAnalyzer(RatingsAnalysisProvider):
-    """Records what it was handed and returns a canned analysis (or raises)."""
-
     def __init__(self, result=None, *, error=None) -> None:
         self._result = result
         self._error = error
@@ -109,9 +94,6 @@ def _changes(symbol="NVDA") -> AnalystRatingChanges:
             ),
         ),
     )
-
-
-# --- use case ----------------------------------------------------------------------------------
 
 
 def test_gathers_coverage_and_derives_top_firms():
@@ -201,12 +183,7 @@ def test_rejects_invalid_symbols_before_touching_providers():
     assert analyzer.received == []
 
 
-# --- result cache ------------------------------------------------------------------------------
-
-
 class _FakeCache(AiAnalysisCache):
-    """In-memory stand-in for the generic AI-analysis result cache; records puts."""
-
     def __init__(self, stored: RatingsAnalysis | None = None, key: str = "NVDA") -> None:
         self._store = {key: stored} if stored is not None else {}
         self.puts: list[tuple[str, RatingsAnalysis]] = []
@@ -292,9 +269,6 @@ def test_incomplete_read_is_not_cached():
     ).execute("NVDA")
     assert result is incomplete  # still returned to the caller
     assert cache.puts == []  # but not stored
-
-
-# --- endpoint ----------------------------------------------------------------------------------
 
 
 class _FakeUseCase:

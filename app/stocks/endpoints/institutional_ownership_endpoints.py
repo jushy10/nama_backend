@@ -1,21 +1,3 @@
-"""HTTP API for reading a stock's institutional ownership.
-
-``GET /stocks/ticker/{ticker}/institutional-ownership`` — the read endpoint for the
-institutional-ownership slice: a stock's top 13F holders (institutions + funds) as of their most
-recent reported quarters, each flagged as a buyer or seller with the size of its position change,
-plus the "institutions own X%" ``breakdown`` and a net buy-vs-sell ``flow`` over the latest snapshot.
-Grouped under the ``/stocks/ticker/{ticker}`` resource (like the ticker card, analyst-info, and
-insider-transactions), since it's a per-ticker card the FE renders. Controller + presenter + wiring,
-the composition-root way, sitting in ``app/stocks/endpoints/`` beside the cron entrypoint
-(``cron_institutional_ownership_endpoints``).
-
-Wiring convention: the process-singleton live provider is memoized with ``@lru_cache`` while the DB
-cache is built per request (it needs the request session). A persistent DB cache (filled lazily on a
-miss, refreshed out of band by the cron endpoint) sits in front of Yahoo so the endpoint rarely calls
-it — Yahoo rate-limits, so the fewer live hits the better. yfinance needs no credential, so the
-endpoint is always wired.
-"""
-
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -91,7 +73,6 @@ def _present_holder(holder: InstitutionalHolder) -> InstitutionalHolderResponse:
 
 
 def _present(ownership: InstitutionalOwnership) -> InstitutionalOwnershipResponse:
-    """Presenter: institutional-ownership entity -> HTTP response DTO."""
     breakdown = ownership.breakdown
     flow = ownership.flow
     return InstitutionalOwnershipResponse(

@@ -1,35 +1,3 @@
-"""Interface Adapter: AI analysis of an ETF via Claude on Amazon Bedrock.
-
-The ETF sibling of ``analysis_adapter.py`` (the stock analyser) — the only
-module that knows Bedrock (and the Anthropic SDK) exists for the fund read. It takes the
-``EtfDetail`` the use case already assembled — the live quote, the fund's size (AUM), yearly cost
-(expense ratio), yield, NAV, its trailing and long-term returns, its top holdings, and its sector
-split — renders it into a compact prompt, and asks Claude for a balanced buy/hold/sell read written
-in plain, everyday language a non-expert can follow. Swap models or vendors and only this file
-changes.
-
-It duplicates the stock analyser's scaffolding (the forced-tool structured output, the lazy SDK
-import, the ``StockDataUnavailable`` error mapping) rather than sharing it: the hard rule is that an
-adapter never imports another adapter, and the two prompts genuinely differ — a fund is a basket, so
-its read weighs cost drag, diversification, and concentration where the stock read weighs earnings
-and valuation. The shared, asset-agnostic pieces are the *entities* (``InvestmentAnalysis`` /
-``Recommendation`` / ``Confidence``), which both adapters map onto.
-
-Two deliberate choices, the same as the stock analyser:
-
-* **Auth is the runtime's job, not ours.** Bedrock authenticates through the process's AWS
-  credentials (in production, the ECS task role), so there is no API key to read or pass.
-* **Structured output via a forced tool call.** Claude must call ``submit_analysis``, so it returns
-  the analysis as validated JSON arguments that map straight onto the ``InvestmentAnalysis`` entity —
-  no brittle prose parsing.
-
-The Anthropic SDK is imported lazily inside ``__init__`` so the app (and the offline test suite,
-which injects a stub client) imports cleanly without the ``bedrock`` extra installed. Any Bedrock/SDK
-failure is translated to ``StockDataUnavailable`` — the one error this port documents.
-
-Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
-"""
-
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
@@ -176,17 +144,6 @@ _BULLETS_INSTRUCTION = (
 
 
 class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
-    """Generates an ``InvestmentAnalysis`` of an ETF with Claude on Amazon Bedrock.
-
-    Defaults to the fast Haiku tier (``model_id``) since the analysis output is short and plain —
-    speed matters more than extra reasoning here. ``model_id`` and ``region`` are deploy-time config
-    (the model id may be a cross-region inference profile), so a deploy can swap in a larger model
-    via env without a code change. ``client`` is an injection seam: pass a ready-made client (e.g. a
-    test stub) to bypass the Anthropic SDK entirely; otherwise the Bedrock client is built lazily and
-    authenticates through the process's AWS credentials. Mirrors the stock ``BedrockScorecardProvider``
-    (same defaults, same env), so one deploy config drives both analysers.
-    """
-
     # Full versioned inference-profile id — Haiku 4.5 has no bare alias on Bedrock,
     # so the short us.anthropic.claude-haiku-4-5 400s with "invalid model identifier".
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -268,14 +225,6 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
         system: str = _SYSTEM_PROMPT,
         model: str | None = None,
     ) -> dict | None:
-        """One forced-tool call, returning the tool's arguments (or ``None`` if the
-        model somehow didn't call the forced tool). Defaults to the full analysis
-        tool; the retry path passes the lighter ``submit_bullets`` tool. ``model``
-        overrides which model runs (the retry escalates onto ``recovery_model_id``);
-        defaults to the primary. Any SDK/botocore failure is mapped to this port's
-        documented ``StockDataUnavailable``. The call's token usage is folded into
-        ``costs`` under the model that produced it, for the caller's single
-        per-endpoint cost line."""
         chosen = model or self._model_id
         try:
             message = self._client.messages.create(
@@ -296,12 +245,6 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
     def _recover_bullets(
         self, prompt: str, key: str, costs: CostAccumulator
     ) -> dict | None:
-        """One targeted retry that regenerates *only* the strengths/risks bullets,
-        grounded in the same figures the first pass saw — far fewer output tokens than
-        re-running the whole analysis. Escalated onto ``recovery_model_id`` when
-        configured. **Best-effort**: a failure on the recovery call is swallowed to
-        ``None`` so escalation can never sink an otherwise-usable read. Returns the
-        ``submit_bullets`` arguments, or ``None`` when the model didn't call the tool."""
         try:
             return self._invoke(
                 _BULLETS_INSTRUCTION + prompt,
@@ -317,7 +260,6 @@ class BedrockEtfAnalysisProvider(EtfAnalysisProvider):
 
 
 def _tool_payload(message, name: str) -> dict | None:
-    """Pull the named forced tool's arguments out of the model's tool call, if any."""
     for block in getattr(message, "content", None) or []:
         if (
             getattr(block, "type", None) == "tool_use"
@@ -330,9 +272,6 @@ def _tool_payload(message, name: str) -> dict | None:
 
 
 def _merge_bullets(payload: dict, recovered: dict) -> dict:
-    """Fill only the *empty* bullet lists from a targeted recovery call, leaving any
-    list the first pass already produced untouched — so a retry that recovers one side
-    (say, risks) never overwrites the good other side."""
     merged = dict(payload)
     for field in ("strengths", "risks"):
         if not _string_tuple(merged.get(field)) and _string_tuple(recovered.get(field)):
@@ -341,12 +280,6 @@ def _merge_bullets(payload: dict, recovered: dict) -> dict:
 
 
 def _to_entity(symbol: str, payload: dict, model_id: str) -> InvestmentAnalysis:
-    """Map the validated tool arguments onto the domain entity.
-
-    The forced-tool schema constrains the shape, but a defensive guard keeps an off-schema result
-    (e.g. an unknown enum value) from leaking out as something other than this port's documented
-    ``StockDataUnavailable``.
-    """
     try:
         recommendation = Recommendation(payload["recommendation"])
         confidence = Confidence(payload["confidence"])
@@ -368,17 +301,12 @@ def _to_entity(symbol: str, payload: dict, model_id: str) -> InvestmentAnalysis:
 
 
 def _string_tuple(value) -> tuple[str, ...]:
-    """Coerce the model's list field into a tuple of non-empty, stripped strings."""
     if not isinstance(value, list):
         return ()
     return tuple(text for item in value if (text := str(item).strip()))
 
 
 def _missing_bullets(payload: dict | None) -> bool:
-    """True when a returned tool result is present but missing either bullet list —
-    the signal to retry. A ``None`` payload (the model didn't call the tool at all)
-    is left for the caller to surface as ``StockDataUnavailable``, not retried, so
-    the existing no-structured-result path is unchanged."""
     if payload is None:
         return False
     return not _string_tuple(payload.get("strengths")) or not _string_tuple(
@@ -387,14 +315,6 @@ def _missing_bullets(payload: dict | None) -> bool:
 
 
 def _render_prompt(detail: EtfDetail) -> str:
-    """Render the assembled ETF detail into a compact, labelled block for the model.
-
-    Only fields that are present are included, so the model is never handed a ``None`` to reason
-    about — thin coverage simply yields a shorter prompt (and the model is told to lower its
-    confidence). The sections mirror what the detail card exposes: the identity + size/cost/yield
-    facts, the trailing and long-term returns, then the top holdings, the sector split, and the
-    fund's own description.
-    """
     quote = detail.quote
     profile = detail.profile
     perf = detail.performance
@@ -442,8 +362,6 @@ def _render_prompt(detail: EtfDetail) -> str:
 
 
 def _render_holdings(holdings) -> str:
-    """Render the fund's top holdings as a short labelled block (or '' if none) — the concentration
-    signal: how much of the fund sits in its biggest positions."""
     if not holdings:
         return ""
     lines = ["Top holdings (largest first, as a percent of the fund):"]
@@ -459,8 +377,6 @@ def _render_holdings(holdings) -> str:
 
 
 def _render_sectors(weights) -> str:
-    """Render the fund's sector split as a short labelled block (or '' if none) — how the money is
-    spread across the market, the other half of the diversification picture."""
     if not weights:
         return ""
     lines = ["Sector weightings (percent of the fund, largest first):"]
@@ -470,15 +386,12 @@ def _render_sectors(weights) -> str:
 
 
 def _render_description(description: object) -> str:
-    """Render the fund's own description as a short block (or '' if none) — plain-English context on
-    what the fund is trying to do, in the issuer's words."""
     if not isinstance(description, str) or not description.strip():
         return ""
     return f"Fund description:\n{description.strip()}"
 
 
 def _num(value: object) -> str:
-    """Format a numeric field readably; pass non-numbers through unchanged."""
     if isinstance(value, bool):  # bool is an int subclass — keep it as-is
         return str(value)
     if isinstance(value, float):

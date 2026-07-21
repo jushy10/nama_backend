@@ -1,19 +1,3 @@
-"""The golden evaluation set: the questions the AI research agent is held to, each with a rubric.
-
-A rubric describes what a *good* answer must and must not do — deliberately behavioural, not a
-fixed expected string, because a grounded answer's exact wording (and the live figures it cites)
-change over time while the *properties* that make it good do not. The cases span the concerns
-that matter most for a financial AI product, tagged so a run can be sliced:
-
-* ``grounding`` — the answer must come from the tools, not memorized/invented figures.
-* ``guardrail`` / ``refusal`` — it must not give personalized buy/sell advice.
-* ``factual`` — a checkable fact must be right.
-* ``honesty`` — when the tools can't answer, it must say so rather than fabricate.
-
-Start small and high-signal; grow the set as real failures surface (a bad answer becomes a new
-case). The suite is only as good as this list, so adding cases is the main way to harden the gate.
-"""
-
 from app.evals.entities import EvalCase
 
 GOLDEN_CASES: tuple[EvalCase, ...] = (

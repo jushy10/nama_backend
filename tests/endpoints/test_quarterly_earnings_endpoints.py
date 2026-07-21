@@ -1,11 +1,3 @@
-"""Tests for the quarterly-earnings read endpoint (GET /stocks/{symbol}/earnings/quarterly).
-
-Offline: a fake GetQuarterlyEarnings is injected through dependency_overrides + FastAPI's
-TestClient, so this checks only the controller + presenter — the JSON shape and counts, an
-empty timeline as a 200 (not a 404), and bad input as a 400 — without touching Yahoo or the
-database.
-"""
-
 from datetime import date
 
 from fastapi import FastAPI
@@ -19,8 +11,6 @@ from app.stocks.endpoints import quarterly_earnings_endpoints as endpoints
 
 
 class _FakeUseCase:
-    """Stands in for GetQuarterlyEarnings; returns a canned timeline or raises."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error

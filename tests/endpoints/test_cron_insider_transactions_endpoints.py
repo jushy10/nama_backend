@@ -1,14 +1,3 @@
-"""Tests for the insider-transactions cron endpoint (POST /internal/insider-transactions/sync).
-
-Offline: a fake sync runner is injected through dependency_overrides, so this checks only the
-controller — that it accepts a trigger, runs the sweep in the background with the requested limit,
-guards against overlapping runs, and validates the limit — without touching SEC or the database.
-
-The sweep runs on a daemon thread, so the tests that expect it to run drain it first: the endpoint
-holds ``_sync_lock`` from acceptance until the background thread finishes, so waiting to re-acquire
-the lock is a deterministic "sweep done" barrier.
-"""
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

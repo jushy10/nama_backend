@@ -1,26 +1,3 @@
-"""HTTP API for invoking the institutional-ownership refresh — the cron entrypoint.
-
-The refresh is a use case (``SyncInstitutionalOwnership``) driven over HTTP: a scheduler (the
-sync-institutional-ownership GitHub workflow, or any cron) POSTs here to kick it off.
-
-The sweep is **fire-and-forget**. Hundreds of sequential Yahoo calls take a while, but the API
-Gateway in front of the app has a hard 30s integration timeout — a synchronous run would 504 at the
-gateway while the app kept working. So the endpoint schedules the sweep on a background thread and
-returns ``202`` at once; the shared ``background_sync`` helper owns the threading, the single-flight
-guard, and the exception handling. A partial run is safe: ``upsert`` commits per stock and the sweep
-is stalest-first, so an interrupted run just resumes on the next trigger.
-
-Wiring lives here, the composition-root way: ``run_institutional_ownership_sync`` opens a fresh
-session and builds the live yfinance adapter + the SQL repository for the use case. yfinance reads
-Yahoo's public data with no API key, so there's no credential to gate on; the sync is always
-constructable. ``get_sync_runner`` is the DI seam tests override with a fake.
-
-Security: the trigger is guarded by a shared bearer token (``require_cron_token``) — fail-closed, a
-``503`` when the token is unset and a ``401`` on a missing/wrong one. The sync workflow no longer
-POSTs here (it runs the sweep as a one-off ECS task via ``python -m app.sync``), so this guard only
-gates the manual / HTTP trigger.
-"""
-
 import logging
 import threading
 
@@ -55,8 +32,6 @@ _sync_lock = threading.Lock()
 def run_institutional_ownership_sync(
     limit: int | None,
 ) -> InstitutionalOwnershipSyncReport:
-    """Perform one full refresh run with its **own** DB session (the request-scoped ``get_db`` one
-    is closed by the time the background thread runs)."""
     db = SessionLocal()
     try:
         report = SyncInstitutionalOwnership(
@@ -75,7 +50,6 @@ def run_institutional_ownership_sync(
 
 
 def get_sync_runner() -> SyncRunner:
-    """DI seam for the sweep's unit of work; tests override it with a fake."""
     return run_institutional_ownership_sync
 
 

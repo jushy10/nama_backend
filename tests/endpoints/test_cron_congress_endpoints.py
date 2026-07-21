@@ -1,14 +1,3 @@
-"""Tests for the Congressional-trades cron endpoint (POST /internal/congress/sync).
-
-Offline: a fake sync runner injected through ``dependency_overrides``, so this checks only the
-controller — that it accepts a trigger, runs the sweep in the background with the requested limit,
-guards against overlapping runs, and validates the limit — without touching the source or the DB.
-
-The sweep runs on a daemon thread, so the tests that expect it to run drain it first: the endpoint
-holds ``_sync_lock`` from acceptance until the background thread finishes, so re-acquiring the lock
-is a deterministic "sweep done" barrier.
-"""
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

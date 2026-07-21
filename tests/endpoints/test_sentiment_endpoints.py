@@ -1,13 +1,3 @@
-"""Tests for the market-sentiment read endpoint.
-
-``GET /market/sentiment`` — the combined VIX + Fear & Greed home-page read.
-Offline: a fake use case is injected through ``dependency_overrides`` +
-FastAPI's TestClient, so this checks only the controller + presenter — the derived
-reads surfaced top-level (VIX change/regime, Fear & Greed band/label), each leg
-being independently nullable, and the error mapping — without touching FRED, CNN,
-or the database.
-"""
-
 from datetime import date, datetime, timezone
 
 from fastapi import FastAPI

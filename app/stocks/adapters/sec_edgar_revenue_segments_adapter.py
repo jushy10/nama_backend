@@ -1,40 +1,3 @@
-"""Interface Adapter: revenue disaggregation from SEC EDGAR.
-
-The only module that knows SEC EDGAR backs the revenue-segments slice; swap it for another
-``RevenueSegmentsProvider`` and only this file changes. It translates a company's most recent
-annual report (10-K) into ``RevenueSegment`` entities — the segment note's revenue-by-segment,
-revenue-by-product, and revenue-by-geography.
-
-**Keyless**, like the Wikipedia index-membership source and unlike the paid segment APIs
-(Financial Modeling Prep gates this behind a subscription): EDGAR is a public government
-open-data service that welcomes programmatic reads from data-centre IPs — it works from Fargate
-where Yahoo's fundamentals endpoints block us. Its only ask is a descriptive ``User-Agent`` (a
-blank one is refused) and staying under ~10 requests/second, which the serial sync plus this
-adapter's request pacing both respect.
-
-Why the raw filing and not EDGAR's clean JSON APIs: the structured ``companyconcept`` /
-``companyfacts`` / ``frames`` endpoints return only the *consolidated* value of each concept —
-they drop the dimensional (segment) breakdown. A company's revenue-by-segment lives only in the
-filing's XBRL instance document, as facts whose context carries a segment-axis member. So the
-walk is: ticker -> CIK (``company_tickers.json``) -> latest 10-K (``submissions``) -> the
-filing's ``_htm.xml`` instance -> parse the dimensioned revenue facts.
-
-Three axes are read, mapped from the filer's XBRL axis onto our ``SegmentAxis``:
-
-- ``StatementBusinessSegmentsAxis`` -> ``BUSINESS`` (operating segments)
-- ``ProductOrServiceAxis`` -> ``PRODUCT`` (product / service lines)
-- ``StatementGeographicalAxis`` -> ``GEOGRAPHY`` (geographic markets)
-
-Only *single-axis*, *annual-duration* revenue facts are kept: a fact whose context has exactly
-one of those axis members (so the consolidated total, which has none, and cross-tabulated
-segment×geography facts, which have two, are both skipped) and whose period spans a full fiscal
-year (so quarterly facts a 10-K may also carry are skipped). Members are the filer's own
-labels — kept raw, since there's no cross-company segment taxonomy.
-
-The ``_http`` attribute is the fake seam the offline tests swap; ``_parse_revenue_segments`` is
-a pure function they exercise directly on a canned instance document.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -94,8 +57,6 @@ _DEFAULT_MIN_REQUEST_INTERVAL = 0.0
 
 @dataclass(frozen=True)
 class _Context:
-    """A parsed XBRL context: its dimension members and period bounds."""
-
     members: tuple[tuple[str, str], ...]  # (axis local-name, member local-name)
     start: date | None
     end: date | None
@@ -103,8 +64,6 @@ class _Context:
 
 
 class SecEdgarRevenueSegmentsProvider(RevenueSegmentsProvider):
-    """Reads a company's revenue disaggregation from its latest 10-K on SEC EDGAR (keyless)."""
-
     def __init__(
         self,
         *,
@@ -121,8 +80,6 @@ class SecEdgarRevenueSegmentsProvider(RevenueSegmentsProvider):
         # process once fetched, since it changes only as companies list/delist.
         self._ticker_cik: dict[str, int] | None = None
 
-    # ── the port ──────────────────────────────────────────────────────────────────────────
-
     def get_revenue_segments(self, symbol: str) -> RevenueSegmentation:
         cik = self._cik_for(symbol)  # raises StockNotFound when unmapped
         filing = self._latest_10k(cik)
@@ -137,11 +94,7 @@ class SecEdgarRevenueSegmentsProvider(RevenueSegmentsProvider):
         segments = _parse_revenue_segments(xml_bytes)
         return RevenueSegmentation(symbol=symbol, segments=segments)
 
-    # ── SEC walk steps ────────────────────────────────────────────────────────────────────
-
     def _cik_for(self, symbol: str) -> int:
-        """Resolve a ticker to its CIK via the cached ticker map. ``StockNotFound`` when the
-        ticker maps to no SEC filer (delisted, foreign-only, or simply absent)."""
         if self._ticker_cik is None:
             self._ticker_cik = self._load_ticker_map()
         cik = self._ticker_cik.get(symbol.upper())
@@ -150,8 +103,6 @@ class SecEdgarRevenueSegmentsProvider(RevenueSegmentsProvider):
         return cik
 
     def _load_ticker_map(self) -> dict[str, int]:
-        """Fetch ``company_tickers.json`` and build ``{ticker: cik}``. A failure here sinks the
-        request (the map is required to resolve any symbol), so it raises ``StockDataUnavailable``."""
         payload = self._get_json(_COMPANY_TICKERS_URL, "*")
         mapping: dict[str, int] = {}
         # The file is a JSON object of positional rows: {"0": {"cik_str", "ticker", "title"}, …}.
@@ -163,9 +114,6 @@ class SecEdgarRevenueSegmentsProvider(RevenueSegmentsProvider):
         return mapping
 
     def _latest_10k(self, cik: int) -> tuple[str, str] | None:
-        """The most recent 10-K's ``(accession, primary_document)``, or ``None`` when the filer
-        has no 10-K in its recent filings. ``submissions`` lists recent filings newest-first as
-        parallel arrays."""
         payload = self._get_json(_SUBMISSIONS_URL.format(cik=cik), str(cik))
         recent = payload.get("filings", {}).get("recent", {})
         forms = recent.get("form", [])
@@ -181,10 +129,6 @@ class SecEdgarRevenueSegmentsProvider(RevenueSegmentsProvider):
     def _instance_document(
         self, cik: int, accession: str, primary_document: str
     ) -> bytes | None:
-        """Fetch the filing's XBRL instance document (the ``_htm.xml`` beside the primary 10-K
-        HTML). Derives the conventional name from the primary document; on a 404 falls back to
-        the filing's ``index.json`` to locate the instance. ``None`` when no instance is found
-        (best-effort — a filing without inline XBRL simply yields no segments)."""
         base = _ARCHIVE_BASE.format(cik=cik, accession=accession.replace("-", ""))
         stem = primary_document.rsplit(".", 1)[0]
         derived_url = f"{base}/{stem}_htm.xml"
@@ -203,7 +147,6 @@ class SecEdgarRevenueSegmentsProvider(RevenueSegmentsProvider):
         return self._get(f"{base}/{instance_name}", str(cik)).content
 
     def _instance_name_from_index(self, base: str, label: str) -> str | None:
-        """The filing directory's ``_htm.xml`` instance file name, from its ``index.json``."""
         payload = self._get_json(f"{base}/index.json", label)
         items = payload.get("directory", {}).get("item", [])
         candidates = [
@@ -213,15 +156,9 @@ class SecEdgarRevenueSegmentsProvider(RevenueSegmentsProvider):
         ]
         return candidates[0] if candidates else None
 
-    # ── HTTP plumbing ─────────────────────────────────────────────────────────────────────
-
     def _get(
         self, url: str, label: str, *, allow_404: bool = False
     ) -> httpx.Response | None:
-        """GET ``url``, paced under EDGAR's rate ceiling. Maps transport failures and non-200
-        responses to ``StockDataUnavailable`` (``label`` is the symbol/CIK for the message).
-        When ``allow_404`` is set, a 404 returns the response instead of raising — the caller
-        uses that to fall back to the directory index."""
         self._pace()
         try:
             resp = self._http.get(url)
@@ -236,7 +173,6 @@ class SecEdgarRevenueSegmentsProvider(RevenueSegmentsProvider):
         return resp
 
     def _get_json(self, url: str, label: str) -> dict:
-        """GET ``url`` and parse it as a JSON object. A body that isn't JSON is a source failure."""
         resp = self._get(url, label)
         try:
             payload = resp.json()
@@ -245,8 +181,6 @@ class SecEdgarRevenueSegmentsProvider(RevenueSegmentsProvider):
         return payload if isinstance(payload, dict) else {}
 
     def _pace(self) -> None:
-        """Sleep just enough to keep successive SEC requests at/under the configured spacing —
-        a no-op when the interval is 0 (the test default)."""
         if self._min_interval <= 0:
             return
         elapsed = time.monotonic() - self._last_request
@@ -261,9 +195,6 @@ class SecEdgarRevenueSegmentsProvider(RevenueSegmentsProvider):
 
 @dataclass(frozen=True)
 class _Fact:
-    """One annual revenue fact: the fiscal year + period end it belongs to, the concept's
-    preference rank, its value, and its context's dimension members (axis -> member)."""
-
     year: int
     period_end: date | None
     rank: int
@@ -272,16 +203,6 @@ class _Fact:
 
 
 def _parse_revenue_segments(xml_bytes: bytes) -> tuple[RevenueSegment, ...]:
-    """Extract annual revenue disaggregation from a filing's XBRL instance document.
-
-    Builds a context table (id -> members + period), gathers every annual revenue-concept fact
-    with its dimension members, then resolves each of the three axes independently
-    (``_aggregate_axis``). The subtlety that single-axis parsing misses: filers commonly
-    disaggregate revenue **by product within a segment** — those facts carry *two* axes
-    (``ProductOrServiceAxis`` + ``StatementBusinessSegmentsAxis``), so a naive single-axis
-    filter drops the whole product breakdown. ``_aggregate_axis`` handles both the flat and the
-    segment-nested tagging (see it).
-    """
     try:
         root = ET.fromstring(xml_bytes)
     except ET.ParseError:
@@ -308,11 +229,6 @@ def _parse_revenue_segments(xml_bytes: bytes) -> tuple[RevenueSegment, ...]:
 def _annual_revenue_facts(
     root: ET.Element, contexts: dict[str, _Context]
 ) -> list[_Fact]:
-    """Every dimensioned, annual-duration revenue fact in the instance, as ``_Fact``s.
-
-    Keeps only revenue-concept facts whose context has at least one dimension member (the
-    consolidated total, with none, is not a breakdown) over a full-year period (dropping the
-    quarterly facts a 10-K can also carry). Axis resolution happens later, per axis."""
     facts: list[_Fact] = []
     for el in root.iter():
         rank = _REVENUE_TAGS.get(_local_tag(el.tag))
@@ -343,21 +259,6 @@ def _annual_revenue_facts(
 def _aggregate_axis(
     facts: list[_Fact], axis_xbrl: str
 ) -> list[tuple[int, str, date | None, float]]:
-    """Resolve one axis's ``(fiscal_year, member, period_end, value)`` breakdown.
-
-    A fact contributes to this axis when it carries the axis, and its *only* other dimension (if
-    any) is the business-segment axis — so a fact cross-tabulated with an unrelated axis is
-    excluded. For each (year, member):
-
-    - if the member is tagged **flat** (this axis only — e.g. Apple's ``iPhoneMember``), that
-      value is the total, taking the most-specific concept when several are tagged;
-    - otherwise the member is tagged **only within segments** (e.g. Google's
-      ``GoogleSearchOtherMember`` inside ``GoogleServicesMember``); its total is the sum of its
-      per-segment values (segments partition the company, so the sum is the member's revenue).
-
-    For the business axis itself, ``allowed`` collapses to just the business axis, so only the
-    flat segment totals qualify — segment×product facts are excluded from it.
-    """
     allowed = {axis_xbrl, _BUSINESS_AXIS}
     # (year, member) -> {"flat": [_Fact], "nested": {segment_member: [_Fact]}}
     groups: dict[tuple[int, str], dict] = {}
@@ -391,7 +292,6 @@ def _aggregate_axis(
 
 
 def _parse_contexts(root: ET.Element) -> dict[str, _Context]:
-    """Map every context id to its dimension members and period bounds."""
     contexts: dict[str, _Context] = {}
     for ctx in root.iter():
         if _local_tag(ctx.tag) != "context":
@@ -419,12 +319,10 @@ def _parse_contexts(root: ET.Element) -> dict[str, _Context]:
 
 
 def _local_tag(tag: str) -> str:
-    """The local name of an ElementTree tag (``{namespace}Local`` -> ``Local``)."""
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
 
 def _local_name(qname: str) -> str:
-    """The local part of a QName attribute/text value (``prefix:Local`` -> ``Local``)."""
     return qname.rsplit(":", 1)[-1] if ":" in qname else qname
 
 
@@ -438,8 +336,6 @@ def _parse_date(text: str | None) -> date | None:
 
 
 def _parse_number(text: str | None) -> float | None:
-    """A fact's numeric value. The extracted ``_htm.xml`` instance carries full (un-scaled)
-    values, so a plain parse suffices; a nil/blank/non-numeric fact yields ``None``."""
     if text is None:
         return None
     stripped = text.strip()

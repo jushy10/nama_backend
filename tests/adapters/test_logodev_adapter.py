@@ -1,11 +1,3 @@
-"""Unit tests for the Logo.dev logo adapter.
-
-No network: the httpx client is swapped for a fake. Verifies the adapter's two
-jobs — return a Logo on success, and translate HTTP failures into domain errors
-— plus that it calls the ticker endpoint with the token and the params that pin
-PNG output and 404-on-missing.
-"""
-
 from types import SimpleNamespace
 
 import httpx

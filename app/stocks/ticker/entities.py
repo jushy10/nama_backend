@@ -1,23 +1,3 @@
-"""Entities: a stock's valuation read (trailing + forward) and its options-market read.
-
-Slice-local domain objects (this sub-slice keeps its own ``entities`` rather than
-reaching into the shared ``app/stocks/entities.py``, the same convention as the
-earnings and recommendations sub-slices). Pure and vendor-agnostic — stdlib only.
-
-``TickerValuation`` models the card's trailing P/E on the analyst-consensus
-(adjusted) EPS basis — today's price over the sum of the 4 newest reported
-quarters' consensus-basis EPS (not a vendor's GAAP TTM read, so it lines up with
-the forward consensus figures the AI analysis context is built on).
-
-``OptionContract`` + ``TickerOptionsMetrics`` model what the options market says
-about the stock: how nervous it is (at-the-money implied volatility), how big a
-swing is priced in (the ATM straddle as a percent of spot), what downside
-protection costs (an ATM put a quarter out), and which way the day's bets lean
-(put/call volume). All are *reads on the underlying stock* for a buyer sizing up
-an entry — not a chain browser for options traders — which is why the card serves
-these four derived figures and not the contracts themselves.
-"""
-
 from __future__ import annotations
 
 import bisect
@@ -61,49 +41,6 @@ _OUTLIER_IQR_MULT = 3.0
 
 @dataclass(frozen=True)
 class TickerValuation:
-    """One symbol's trailing valuation multiples at today's price.
-
-    The per-share legs arrive precomputed (the use case derives ``ttm_eps`` from
-    the quarterly-earnings timeline and reads ``fcf_per_share`` / ``ocf_per_share``
-    off the ``stocks`` anchor, where the annual-earnings slice stores them); the
-    entity owns the rules that turn them into multiples. Each leg is optional — the
-    TTM sum needs four cached quarters, and the cash figures need the annual slice
-    to have reached the stock — so a symbol missing one simply carries ``None``
-    around a live price.
-
-    ``ttm_eps`` is deliberately on the *consensus (adjusted)* basis — the sum of
-    the 4 newest reported quarters' "Reported EPS" — not GAAP diluted, so the
-    trailing multiple sits on the same basis as the forward consensus figures the
-    AI analysis context is built on (a GAAP trailing leg would make any walk
-    between them a basis artifact rather than a story about growth).
-
-    ``fcf_per_share`` / ``ocf_per_share`` are the newest reported fiscal year's
-    free- and operating-cash-flow per share, sourced from the annual-earnings slice
-    (Yahoo cash-flow statement) and stored on the anchor. Pricing them here against
-    the card's *live* quote — rather than materializing a multiple at store time —
-    keeps the FCF/OCF reads on the current price, exactly as ``trailing_pe`` prices
-    the consensus EPS. The OCF yield sits beside the FCF yield so the gap between
-    them reads as the capex drag (a heavy capex-spender's OCF yield runs well above
-    its FCF yield).
-
-    ``book_value_per_share`` / ``sales_per_share`` are the fundamentals slice's
-    per-share *inputs* (Yahoo ``.info``, trading currency, off the anchor), priced
-    here against the live quote into ``pb`` / ``ps`` — the same "store the input,
-    price it live" split the cash-flow reads use, so P/B and P/S sit on the same
-    to-the-second price as the P/E. ``eps_growth_yoy`` is the annual slice's trailing
-    EPS growth (percent, consensus basis), carried only so the entity can form the
-    trailing ``peg`` (P/E over growth) from figures that already sit on one basis.
-
-    ``ebitda`` / ``total_debt`` / ``cash_and_equivalents`` (absolute, trading
-    currency) and ``shares_outstanding`` (a share count) are the fundamentals slice's
-    enterprise-value *inputs* (Yahoo ``.info``, off the anchor). ``enterprise_value``
-    is formed *live* from the quote — price × shares + debt − cash — rather than the
-    anchor's stored ``market_cap`` snapshot, so EV (and ``ev_to_ebitda`` over it)
-    moves with the price exactly as ``trailing_pe`` does; the anchor's materialized
-    ``ev_to_ebitda`` snapshot is a separate, screen-time figure the search/peer views
-    read, the same split ``pe_ratio`` (snapshot) and ``metrics.pe`` (live) already use.
-    """
-
     symbol: str
     price: float  # the live price the multiples were taken at
     ttm_eps: float | None = None  # trailing 12m EPS, consensus basis (4 reported quarters)
@@ -119,97 +56,42 @@ class TickerValuation:
 
     @property
     def trailing_pe(self) -> float | None:
-        """Trailing P/E on the consensus basis: price over ``ttm_eps``.
-
-        ``None`` unless both legs are positive — a loss-making trailing year (or
-        a broken quote) makes the multiple meaningless.
-        """
         if self.ttm_eps is None or self.ttm_eps <= 0 or self.price <= 0:
             return None
         return round(self.price / self.ttm_eps, 2)
 
     @property
     def price_to_fcf(self) -> float | None:
-        """Price-to-free-cash-flow: price over ``fcf_per_share`` — the cash-flow
-        analogue of ``trailing_pe``.
-
-        ``None`` unless both legs are *positive*. A non-positive FCF (a company
-        burning cash) makes the multiple meaningless in exactly the way a
-        loss-making year does for P/E — "24× cash flow" has no reading when the
-        cash flow is negative — so the same positivity guard applies. The signed
-        version of that same read is ``fcf_yield``, which stays informative for a
-        cash-burner.
-        """
         if self.fcf_per_share is None or self.fcf_per_share <= 0 or self.price <= 0:
             return None
         return round(self.price / self.fcf_per_share, 2)
 
     @property
     def fcf_yield(self) -> float | None:
-        """Free-cash-flow yield (percent): ``fcf_per_share`` over price — the
-        reciprocal of ``price_to_fcf``, and the "how much cash am I buying per
-        dollar of price" read that sits beside the dividend yield.
-
-        Unlike ``price_to_fcf`` this keeps its *sign*: a negative yield (a company
-        with negative free cash flow) is a real, informative reading, not a
-        meaningless one — so the only guard is a live price. When FCF is negative
-        the two figures deliberately diverge (a null P/FCF beside a negative
-        yield), which is the standard treatment.
-        """
         if self.fcf_per_share is None or self.price <= 0:
             return None
         return round(self.fcf_per_share / self.price * 100, 2)
 
     @property
     def ocf_yield(self) -> float | None:
-        """Operating-cash-flow yield (percent): ``ocf_per_share`` over price — the
-        *pre-capex* companion to ``fcf_yield``.
-
-        The gap between this and ``fcf_yield`` is what capital spending consumes: a
-        heavy capex-spender (a company mid-build-out) shows a healthy OCF yield and a
-        thin FCF yield, which separates "weak cash generation" from "generating cash
-        but reinvesting it". Like ``fcf_yield`` it keeps its sign and guards only on a
-        live price — operating cash flow can be negative for a genuinely cash-negative
-        business, and that reading is informative, not meaningless."""
         if self.ocf_per_share is None or self.price <= 0:
             return None
         return round(self.ocf_per_share / self.price * 100, 2)
 
     @property
     def pb(self) -> float | None:
-        """Price-to-book: price over ``book_value_per_share``.
-
-        ``None`` unless both legs are positive — a negative book value (accumulated
-        losses eroding equity) makes the multiple meaningless, the same guard
-        ``trailing_pe`` and ``price_to_fcf`` use.
-        """
         if self.book_value_per_share is None or self.book_value_per_share <= 0 or self.price <= 0:
             return None
         return round(self.price / self.book_value_per_share, 2)
 
     @property
     def ps(self) -> float | None:
-        """Price-to-sales: price over ``sales_per_share``.
-
-        ``None`` unless both legs are positive (revenue per share is always positive
-        for a going concern, so this mostly guards a missing input / broken quote).
-        """
         if self.sales_per_share is None or self.sales_per_share <= 0 or self.price <= 0:
             return None
         return round(self.price / self.sales_per_share, 2)
 
     @property
     def peg(self) -> float | None:
-        """Trailing PEG: the consensus-basis trailing P/E over trailing EPS growth
-        (percent) — a rough "is the multiple justified by the growth it's shown" read
-        (near 1 the price roughly matches growth, well above ~2 it doesn't).
-
-        Both legs sit on the analyst-consensus basis (``trailing_pe`` on the quarterly
-        TTM, ``eps_growth_yoy`` on the annual consensus figure), so the ratio is a
-        growth story rather than a GAAP-vs-adjusted artifact. ``None`` unless the P/E
-        resolves and growth is positive — a non-positive growth makes it meaningless,
-        the same guard the shared ``KeyMetrics.peg`` uses.
-        """
         pe = self.trailing_pe
         if pe is None or self.eps_growth_yoy is None or self.eps_growth_yoy <= 0:
             return None
@@ -217,17 +99,6 @@ class TickerValuation:
 
     @property
     def enterprise_value(self) -> float | None:
-        """Enterprise value at today's price: market cap (price × shares) plus total debt
-        less cash & equivalents — what it would cost to buy the whole business net of its
-        cash, the numerator EV/EBITDA divides by.
-
-        Computed *live* off the quote (via ``shares_outstanding``) rather than the anchor's
-        stored ``market_cap`` snapshot, so it tracks the price like ``trailing_pe`` does.
-        ``None`` unless a positive share count and a live price are both present (the debt and
-        cash legs default to ``0`` when Yahoo doesn't carry them — a debt-free, cash-light
-        name's EV is simply its market cap). Not rounded: it's a large dollar figure the
-        presenter rounds/scales, and ``ev_to_ebitda`` needs the unrounded value.
-        """
         if self.shares_outstanding is None or self.shares_outstanding <= 0 or self.price <= 0:
             return None
         market_cap = self.price * self.shares_outstanding
@@ -235,17 +106,6 @@ class TickerValuation:
 
     @property
     def ev_to_ebitda(self) -> float | None:
-        """EV/EBITDA at today's price: ``enterprise_value`` over trailing ``ebitda`` — the
-        capital-structure-neutral valuation multiple (it prices the whole enterprise against
-        pre-financing, pre-tax operating cash earnings, so it compares across companies with
-        different leverage the way P/E can't).
-
-        ``None`` unless enterprise value resolves and EBITDA is *positive* — EV/EBITDA off a
-        negative or zero EBITDA is meaningless (the same positivity guard ``trailing_pe`` uses
-        on a loss). A negative enterprise value (a net-cash company worth less than its cash)
-        is left to divide through: the resulting negative multiple is a real, informative "the
-        market values the operating business below its net cash" reading, not a degenerate one.
-        """
         ev = self.enterprise_value
         if ev is None or self.ebitda is None or self.ebitda <= 0:
             return None
@@ -254,14 +114,6 @@ class TickerValuation:
 
 @dataclass(frozen=True)
 class OptionContract:
-    """One listed option contract, as the market currently prices it.
-
-    The vendor-agnostic row of an options chain: a right to buy (call) or sell
-    (put) the stock at ``strike`` until ``expiration``. Prices/volume are optional
-    because thin contracts routinely trade without a live quote; the metrics
-    below simply skip what isn't there.
-    """
-
     expiration: date
     strike: float
     is_call: bool  # False -> a put
@@ -274,9 +126,6 @@ class OptionContract:
 
     @property
     def mid(self) -> float | None:
-        """The contract's fair price: the bid/ask midpoint when both sides are
-        live, else the last trade. ``None`` when neither exists — a price of 0
-        is a dead quote, not a price."""
         if self.bid is not None and self.ask is not None and self.bid > 0 and self.ask > 0:
             return (self.bid + self.ask) / 2
         if self.last_price is not None and self.last_price > 0:
@@ -286,21 +135,6 @@ class OptionContract:
 
 @dataclass(frozen=True)
 class TickerOptionsMetrics:
-    """The four options-market reads the ticker card serves, at today's price.
-
-    Each field is independently optional — a thin chain fills what it can:
-
-    - ``implied_volatility``: at-the-money IV (percent) at the ~1-month expiry —
-      the market's forward-looking "how nervous" gauge.
-    - ``expected_move_percent``: the ATM straddle (call + put) as a percent of
-      spot — the swing the market has priced in by ``expected_move_by``.
-    - ``insurance_cost_percent``: an ATM protective put at the ~3-month expiry
-      as a percent of spot — the market's literal price for downside protection
-      until ``insurance_expires``.
-    - ``put_call_ratio``: today's put volume over call volume across the sampled
-      expiries — above 1 the day's bets lean protective, below 1 optimistic.
-    """
-
     implied_volatility: float | None  # percent, ATM at the near expiry
     expected_move_percent: float | None  # ATM straddle / spot, percent
     expected_move_by: date | None  # the near (~1-month) expiry sampled
@@ -315,16 +149,6 @@ class TickerOptionsMetrics:
         near: Sequence[OptionContract],
         insurance: Sequence[OptionContract],
     ) -> TickerOptionsMetrics:
-        """Derive the four reads from two sampled chains (pure merge logic, like
-        the timelines' ``filled_from``).
-
-        ``near`` is the ~1-month expiry's contracts (IV + expected move),
-        ``insurance`` the ~3-month expiry's (the protective put). Either may be
-        empty, and they may be the *same* expiry when the listed dates are sparse —
-        the volume pool dedupes on expiration so a shared chain isn't counted
-        twice. A non-positive spot yields an all-``None`` read: every figure here
-        is a ratio to it.
-        """
         if price <= 0:
             return cls(None, None, None, None, None, None)
         calls = {c.strike: c for c in near if c.is_call}
@@ -380,33 +204,17 @@ class TickerOptionsMetrics:
 
 
 def _nearest_strike(side: dict[float, OptionContract], price: float) -> float:
-    """The strike closest to the money on one side of a chain."""
     return min(side, key=lambda strike: abs(strike - price))
 
 
 @dataclass(frozen=True)
 class ReportedEps:
-    """One quarter's reported (actual) EPS, keyed by its announcement date.
-
-    The raw material of a trailing-P/E walk: a chronological run of these sums into a
-    rolling trailing-twelve-month EPS. Announcement-dated (not fiscal-period-dated) on
-    purpose — the market re-prices the multiple the day the number is released, so that's
-    the date each P/E point is anchored to.
-    """
-
     report_date: date
     eps: float  # the reported (actual) diluted/consensus EPS for that quarter
 
 
 @dataclass(frozen=True)
 class PeHistoryPoint:
-    """The trailing P/E at one earnings release.
-
-    The close on the announcement date over the trailing-twelve-month EPS the market
-    knew then (the just-reported quarter plus the three before it). One dot on the P/E
-    line the FE draws.
-    """
-
     report_date: date  # the announcement date the P/E is anchored on
     price: float  # the close on/near the announcement date
     ttm_eps: float  # sum of the trailing 4 reported quarters
@@ -414,22 +222,6 @@ class PeHistoryPoint:
 
 
 class ValuationSignal(str, Enum):
-    """Where the current trailing P/E sits within the stock's own history — the one-word read.
-
-    ``CHEAP`` / ``EXPENSIVE`` when the current multiple is in the bottom / top quartile of its
-    own history (it has rarely been cheaper / dearer), ``FAIR`` in the middle half. Deliberately
-    a *relative* verdict — "cheap for this stock", not "cheap" outright: a structurally re-rated
-    business (slowing growth, a faded moat) can read CHEAP the whole way down, so the signal
-    anchors a judgement rather than making it. A ``str`` enum so the presenter serializes the
-    value directly.
-
-    ``NOT_MEANINGFUL`` is the escape hatch for a cyclical trough: when the *latest* release sits
-    on a near-zero trailing EPS (see ``_TROUGH_EPS_FRACTION``), the P/E balloons on a collapsing
-    denominator, so a percentile read would call a mid-cycle-cheap stock "expensive". Rather than
-    emit that false verdict, the signal reports no read — the FE shows "trailing P/E not
-    meaningful (trough earnings)" and the historical band is still there to eyeball.
-    """
-
     CHEAP = "cheap"
     FAIR = "fair"
     EXPENSIVE = "expensive"
@@ -438,29 +230,6 @@ class ValuationSignal(str, Enum):
 
 @dataclass(frozen=True)
 class PeHistoryStats:
-    """Where the *current* trailing P/E sits within the stock's own history.
-
-    The read that turns the raw P/E line into a valuation signal. The distribution of the
-    historical multiples — ``median_pe`` with the ``p25_pe``/``p75_pe`` interquartile band and
-    the ``min_pe``/``max_pe`` envelope — and where the latest reading falls in it:
-    ``current_percentile`` (0–100, the share of history at or below it) bucketed into ``signal``.
-    ``discount_to_median_percent`` is the current multiple's gap to its median (negative = below
-    its typical multiple, i.e. cheaper than usual). ``sample_size`` is how many releases the
-    distribution rests on — the confidence behind the verdict.
-
-    ``current_pe`` is the *latest sampled point* — the P/E at the most recent earnings release,
-    not a live tick (the card's ``metrics.pe`` is the to-the-second figure; this series is
-    fundamentals-sampled, so "current" moves only when a new quarter reports). Same "relative to
-    itself" caveat as ``ValuationSignal``: this says where the multiple is versus its own past,
-    which anchors "is it a good buy" without settling it alone.
-
-    When the latest release sits on a cyclical earnings trough, ``signal`` is
-    ``NOT_MEANINGFUL`` and the distribution fields (``median_pe`` … ``max_pe``) are drawn from
-    the rest of the history — the trough spike would otherwise blow out the envelope. ``current_pe``
-    still carries the real (distorted) multiple, so the FE can show it beside the "not meaningful"
-    note rather than hiding it.
-    """
-
     current_pe: float
     median_pe: float
     p25_pe: float
@@ -475,19 +244,6 @@ class PeHistoryStats:
 
 @dataclass(frozen=True)
 class PeHistory:
-    """A symbol's trailing P/E sampled at each earnings release — one point per reported
-    quarter, oldest first.
-
-    Pure derivation (``build``), the same stance as ``TickerOptionsMetrics.from_chains``:
-    the use case fetches the two legs (the reported-EPS run and the daily closes) and the
-    entity owns the rule that combines them. A quarter yields a point only when it has a
-    full trailing year of EPS behind it (the first ``TTM_QUARTERS - 1`` are warm-up), a
-    *positive* trailing sum (a trailing loss makes the multiple meaningless — the same
-    guard as ``TickerValuation.trailing_pe``), and a close on/near its announcement date
-    (early quarters outside the price feed's range are dropped). So the series can be
-    shorter than the EPS run — a 200 with an empty ``points`` is a valid "no coverage".
-    """
-
     # The fewest historical points a valuation signal may rest on. The series samples one
     # multiple per earnings release (~4 a year), so this is ~2 years — enough for a percentile
     # to mean "versus how it has traded" rather than versus two or three readings. Below it
@@ -508,13 +264,6 @@ class PeHistory:
         *,
         max_price_lag_days: int = _MAX_PRICE_LAG_DAYS,
     ) -> "PeHistory":
-        """Roll the reported-EPS run into a trailing-twelve-month series and divide each
-        release's close by it. ``eps`` in any order (sorted here); ``closes`` maps a
-        trading day to that day's close.
-
-        The raw series is then passed through ``_without_cyclical_spikes`` — a cyclical
-        trough (a near-zero trailing EPS ballooning the multiple) is dropped so it doesn't
-        clutter the chart, the same reason ``stats`` suppresses the trough signal."""
         ordered = sorted(eps, key=lambda e: e.report_date)
         trading_days = sorted(closes)
         points: list[PeHistoryPoint] = []
@@ -539,18 +288,6 @@ class PeHistory:
 
     @property
     def stats(self) -> PeHistoryStats | None:
-        """Summarize where the latest multiple sits in the series, or ``None`` for a thin
-        sample (fewer than ``MIN_POINTS_FOR_STATS`` points) where a percentile would be noise
-        rather than a signal.
-
-        Pure over ``points`` — every P/E in them is already positive (``build`` drops trailing
-        losses), so the distribution is well-formed and the median is a safe divisor. "Current"
-        is the newest point (``points`` is oldest-first), ranked against the whole series.
-
-        One special case: when the latest release sits on a cyclical earnings trough (its TTM
-        EPS below ``_TROUGH_EPS_FRACTION`` of the history's median), the multiple is distorted
-        by a collapsing denominator, so the signal is ``NOT_MEANINGFUL`` and the distribution is
-        measured from the rest of the history rather than let the spike blow out the envelope."""
         if len(self.points) < self.MIN_POINTS_FOR_STATS:
             return None
         current = self.points[-1]
@@ -588,10 +325,6 @@ def _close_asof(
     target: date,
     max_lag_days: int,
 ) -> float | None:
-    """The close on ``target`` or the most recent trading day before it, within
-    ``max_lag_days`` — a release can land on a weekend/holiday, and the prior session's
-    close is the price the market carried into it. ``None`` when nothing is near enough
-    (``trading_days`` must be sorted ascending)."""
     idx = bisect.bisect_right(trading_days, target)
     if idx == 0:
         return None
@@ -602,14 +335,6 @@ def _close_asof(
 
 
 def _percentile(sorted_values: Sequence[float], q: float) -> float | None:
-    """The ``q``-th percentile (0–100) of an already-sorted sequence, by linear interpolation
-    between the two nearest ranks (the "type 7" definition numpy defaults to). ``None`` for an
-    empty sample; rounded to 2 dp, the precision the P/E points carry.
-
-    Deliberately the same definition as the universe slice's industry benchmark
-    (``IndustryValuation._percentile``), so "P/E percentile" means one thing across the app —
-    reimplemented here rather than imported to keep the entity layer stdlib-only (an entity
-    never reaches into another slice)."""
     n = len(sorted_values)
     if n == 0:
         return None
@@ -623,13 +348,6 @@ def _percentile(sorted_values: Sequence[float], q: float) -> float | None:
 
 
 def _percentile_rank(sorted_values: Sequence[float], value: float) -> float:
-    """The rank of ``value`` within ``sorted_values`` as a 0–100 percentile — the inverse of
-    ``_percentile`` (value → rank, not rank → value).
-
-    The mid-rank ("mean") convention: ties split half-below, half-above, so a value equal to
-    the whole sample lands at 50 and the measure is symmetric between the minimum and the
-    maximum. ``sorted_values`` must be non-empty; the P/Es are 2-dp rounded, so equality is
-    exact. Rounded to 1 dp."""
     n = len(sorted_values)
     below = sum(1 for v in sorted_values if v < value)
     equal = sum(1 for v in sorted_values if v == value)
@@ -637,8 +355,6 @@ def _percentile_rank(sorted_values: Sequence[float], value: float) -> float:
 
 
 def _signal_for(percentile: float) -> ValuationSignal:
-    """Bucket a 0–100 percentile into the valuation signal: bottom quartile → cheap, top
-    quartile → expensive, the middle half → fair."""
     if percentile <= _CHEAP_PERCENTILE:
         return ValuationSignal.CHEAP
     if percentile >= _EXPENSIVE_PERCENTILE:
@@ -647,11 +363,6 @@ def _signal_for(percentile: float) -> ValuationSignal:
 
 
 def _cyclical_thresholds(points: Sequence[PeHistoryPoint]) -> tuple[float, float]:
-    """The two bounds that mark a trailing-P/E point as a cyclical distortion, derived from the
-    given reference points (the caller passes the history *excluding* the current point, and
-    guarantees it is non-empty): the *trough-earnings* EPS floor (``_TROUGH_EPS_FRACTION`` × the
-    median TTM EPS) and the *far-outlier* P/E fence (``Q3 + _OUTLIER_IQR_MULT`` × IQR). Both rest
-    on the median / quartiles, so a handful of spike points in the reference don't move them."""
     median_ttm = _percentile(sorted(p.ttm_eps for p in points), 50) or 0.0
     pes = sorted(p.pe for p in points)
     q1 = _percentile(pes, 25) or 0.0
@@ -662,15 +373,6 @@ def _cyclical_thresholds(points: Sequence[PeHistoryPoint]) -> tuple[float, float
 def _without_cyclical_spikes(
     points: tuple[PeHistoryPoint, ...]
 ) -> tuple[PeHistoryPoint, ...]:
-    """Drop the history's cyclical-trough / far-outlier P/E spikes (see ``_cyclical_thresholds``)
-    so they don't clutter the chart or distort the valuation band. The most recent point is kept
-    regardless — it's the current reading, distorted or not, and ``PeHistory.stats`` flags it
-    (``NOT_MEANINGFUL``) rather than hiding it. A no-op below ``MIN_POINTS_FOR_STATS`` points,
-    where the distribution is too thin to judge an outlier from — a fresh listing keeps its raw
-    series, and ``stats`` returns ``None`` there anyway.
-
-    Thresholds come from the history alone (the latest point excluded), so a current spike can't
-    define the fence that would then wave it through."""
     if len(points) < PeHistory.MIN_POINTS_FOR_STATS:
         return points
     trough_eps, pe_fence = _cyclical_thresholds(points[:-1])

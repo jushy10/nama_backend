@@ -1,11 +1,3 @@
-"""Unit tests for the CNN Fear & Greed adapter.
-
-No network: the httpx client is swapped for a fake returning a canned JSON payload
-(the ``_http`` seam). Verifies the ``fear_and_greed`` block parses into a snapshot
-with the derived band/label, the trailing comparisons carry through, a payload
-without a usable score/timestamp raises, and transport/non-200 failures raise.
-"""
-
 from datetime import datetime, timezone
 from types import SimpleNamespace
 

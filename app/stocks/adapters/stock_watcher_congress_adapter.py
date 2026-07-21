@@ -1,33 +1,3 @@
-"""Interface Adapter: Congressional stock trades from the community "stock watcher" datasets.
-
-The only module that knows which dataset backs the Congressional-trades slice; swap it for another
-``CongressTradesSource`` and only this file changes. It fetches the House and Senate disclosure
-feeds — keyless, community-maintained JSON mirrors of the trades members file under the STOCK Act —
-and translates their rows into ``CongressTrade`` entities, mapping each vendor's failures into our
-domain exceptions.
-
-**Keyless**, like the SEC sources and unlike the paid Congressional-trade APIs (Quiver, Capitol
-Trades' API): these are public GitHub-hosted JSON files, so there's no credential to gate on and no
-per-IP block to pace around. Its only ask is basic courtesy — a descriptive ``User-Agent`` and not
-hammering the host — which the adapter honours.
-
-The two chambers publish **different schemas** (the House feed keys the member as
-``representative`` and carries a ``disclosure_date``; the Senate feed keys ``senator`` and carries
-only the transaction date, splitting a sale into ``"Sale (Full)"`` / ``"Sale (Partial)"``), so each
-feed is described by a small ``_Feed`` profile and normalized onto one ``CongressTrade`` shape.
-Neither feed carries party, so ``party`` is left ``None`` — a best-effort field.
-
-Best-effort **per feed**: a single chamber's feed failing (transport / bad body) is logged and
-skipped so the other chamber still syncs; only when *every* feed fails does ``fetch_recent_trades``
-raise ``StockDataUnavailable``. ``_parse_feed`` is a pure function the tests drive on canned rows;
-``_http`` is the fake seam.
-
-> Data note: the House feed (``TattooedHead/house-stock-watcher-data``) is actively maintained and
-> current; the classic Senate mirror (``timothycarambat/senate-stock-watcher-data``) is a keyless
-> historical archive. Because this is the sole vendor-aware module, pointing either chamber at a
-> fresher mirror later is a one-line URL change here — nothing downstream moves.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -56,13 +26,6 @@ _USER_AGENT = "nama-backend/1.0 (congress-trades sync; +https://namainsights.com
 
 @dataclass(frozen=True)
 class _Feed:
-    """One chamber's feed profile: where to fetch it and how its rows are keyed.
-
-    Both feeds share ``ticker`` / ``asset_description`` / ``type`` / ``amount`` / ``owner`` /
-    ``transaction_date``; only the member key, the disclosure-date key, and the source-link key
-    differ between chambers.
-    """
-
     chamber: str
     url: str
     member_key: str
@@ -102,8 +65,6 @@ _URL_MAX = 512
 
 
 class StockWatcherCongressProvider(CongressTradesSource):
-    """Reads recent Congressional trades from the keyless House / Senate stock-watcher feeds."""
-
     def __init__(
         self,
         feeds: tuple[_Feed, ...] = _DEFAULT_FEEDS,
@@ -143,11 +104,7 @@ class StockWatcherCongressProvider(CongressTradesSource):
         trades.sort(key=lambda t: t.activity_date or date.min, reverse=True)
         return tuple(trades)
 
-    # ── HTTP plumbing ─────────────────────────────────────────────────────────────────────
-
     def _get_json(self, url: str, label: str) -> list:
-        """GET ``url`` and parse it as a JSON array (the feeds are a flat list of trade rows). A
-        transport failure, a non-200, or a non-JSON/non-array body is a source failure."""
         self._pace()
         try:
             resp = self._http.get(url)
@@ -166,8 +123,6 @@ class StockWatcherCongressProvider(CongressTradesSource):
         return payload if isinstance(payload, list) else []
 
     def _pace(self) -> None:
-        """Sleep just enough to keep successive downloads at/under the configured spacing — a no-op
-        when the interval is 0 (the test default)."""
         if self._min_interval <= 0:
             return
         elapsed = time.monotonic() - self._last_request
@@ -181,13 +136,6 @@ class StockWatcherCongressProvider(CongressTradesSource):
 
 
 def _parse_feed(payload: list, feed: _Feed) -> list[CongressTrade]:
-    """Translate one chamber feed's rows into ``CongressTrade`` entities.
-
-    Each row is best-effort: a row with no member or no recognisable stock ticker is dropped
-    (nothing to key or read it by); everything past those two is normalized and left ``None`` when
-    absent. A malformed row (a non-dict entry) is skipped rather than raising, so one bad record
-    can't sink the whole feed.
-    """
     trades: list[CongressTrade] = []
     for raw in payload:
         if not isinstance(raw, dict):
@@ -220,9 +168,6 @@ def _parse_feed(payload: list, feed: _Feed) -> list[CongressTrade]:
 
 
 def _normalize_tx_type(value: object) -> str:
-    """Fold both feeds' transaction wording onto the entity's small vocabulary: ``Purchase`` /
-    ``Sale`` (the Senate's ``"Sale (Full)"`` / ``"Sale (Partial)"`` both collapse here) /
-    ``Exchange`` / ``Other`` (receipts, gifts, and anything unrecognised)."""
     text = _text(value)
     if not text:
         return OTHER
@@ -237,10 +182,6 @@ def _normalize_tx_type(value: object) -> str:
 
 
 def _normalize_ticker(value: object) -> str | None:
-    """A stock ticker normalized to the anchor's convention (upper-case, a dotted class suffix
-    folded onto the stored hyphen form: ``BRK.B`` -> ``BRK-B``), or ``None`` for a placeholder
-    (``"--"``), a blank, or anything that isn't a plain 1–5 letter ticker (options, bonds, crypto
-    and other non-equity disclosures the feeds also carry)."""
     text = _text(value)
     if not text or text == "--":
         return None
@@ -254,7 +195,6 @@ def _normalize_ticker(value: object) -> str | None:
 
 
 def _text(value: object) -> str | None:
-    """A stripped string, or ``None`` for a blank / placeholder (``"--"``) / non-string value."""
     if not isinstance(value, str):
         return None
     stripped = value.strip()
@@ -264,17 +204,12 @@ def _text(value: object) -> str | None:
 
 
 def _clip(text: str | None, length: int) -> str | None:
-    """Bound a free-text field to its DB column width so an outlier can't overflow on Postgres.
-    ``None`` passes through unchanged."""
     if text is None:
         return None
     return text[:length]
 
 
 def _parse_date(value: object) -> date | None:
-    """Parse the feeds' ``MM/DD/YYYY`` date (or an ISO ``YYYY-MM-DD``), returning ``None`` for a
-    blank / placeholder / unparseable value. Implausible years (a garbled ``0009/06/08`` some raw
-    rows carry) are rejected as ``None`` so they can't poison the ordering."""
     text = _text(value)
     if not text:
         return None
@@ -291,7 +226,6 @@ def _parse_date(value: object) -> date | None:
 
 
 def _strptime_date(text: str, fmt: str) -> date:
-    """``datetime.strptime`` narrowed to a ``date`` (kept tiny so ``_parse_date`` stays readable)."""
     from datetime import datetime
 
     return datetime.strptime(text, fmt).date()

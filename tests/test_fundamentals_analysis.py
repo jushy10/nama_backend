@@ -1,15 +1,3 @@
-"""Tests for the AI fundamentals review: the GetFundamentalsAnalysis use case + its endpoint.
-
-Offline: the use-case tests build a real ``GetStockInfo`` over hand-written fakes (so the
-enriched snapshot the analyzer reasons over is assembled exactly as production does), plus a fake
-analyzer and a fake industry repository. They exercise only the orchestration — symbol
-normalization, the no-fundamentals guard, the best-effort industry-P/E benchmark, and
-primary-vs-best-effort failure handling. The endpoint tests inject a fake use case through
-``dependency_overrides`` over the stocks router, checking the controller + presenter
-(verdict/confidence/findings + service disclaimer, the cache header, and the error mapping) — no
-Bedrock, no Finnhub, no database.
-"""
-
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -33,9 +21,6 @@ from app.stocks.universe.entities import AnchorMetrics, MarketCapTier
 from app.stocks.universe.repository import StockSearchRepository
 
 
-# --- fixtures ----------------------------------------------------------------------------------
-
-
 def _a_stock(**overrides) -> Stock:
     base = dict(
         symbol="AAPL", name="Apple Inc.", exchange="NASDAQ", price=297.86,
@@ -48,8 +33,6 @@ def _a_stock(**overrides) -> Stock:
 
 
 def _an_anchor(**overrides) -> AnchorMetrics:
-    """The fundamentals the app materializes on the ``stocks`` anchor — the DB-only source
-    the analysis overlay now reads instead of a live Finnhub vendor."""
     base = dict(
         market_cap=3_120_000_000_000.0, dividend_per_share=1.0,
         gross_margin=44.0, operating_margin=30.0, net_margin=25.0,
@@ -83,9 +66,6 @@ def _an_analysis(symbol="AAPL") -> FundamentalsAnalysis:
     )
 
 
-# --- fakes -------------------------------------------------------------------------------------
-
-
 class _FakeProvider(StockDataProvider):
     def __init__(self, stock=None, *, raises=None):
         self._stock = stock
@@ -106,8 +86,6 @@ class _FakeEstimates(AnalystEstimatesProvider):
 
 
 class _FakeAnalyzer(FundamentalsAnalysisProvider):
-    """Records what it was handed and returns a canned analysis (or raises)."""
-
     def __init__(self, result=None, *, error=None) -> None:
         self._result = result
         self._error = error
@@ -125,9 +103,6 @@ class _FakeAnalyzer(FundamentalsAnalysisProvider):
 
 
 class _FakePeHistory:
-    """Stands in for GetStockPeHistory: returns an object exposing ``.stats`` (or raises the
-    way a Yahoo-blocked P/E-history read would)."""
-
     def __init__(self, stats=None, *, error=None) -> None:
         self._stats = stats
         self._error = error
@@ -139,13 +114,6 @@ class _FakePeHistory:
 
 
 class _FakeSearchRepo(StockSearchRepository):
-    """The anchor reads the analysis path uses — the ticker's fundamentals (overlaid onto the
-    snapshot via ``anchor_metrics_for_ticker``), its industry, its cap tier, and its peers —
-    configurable per test. Every peer defaults to the MID tier, so ``for_stock_peers`` yields
-    one whole-industry cohort. ``anchor`` seeds the overlaid fundamentals (an empty
-    ``AnchorMetrics`` by default — an unsynced stock). The screen/classification methods aren't
-    exercised here."""
-
     def __init__(self, *, industry=None, pe_ratios=(), anchor=None, raises=None):
         self._industry = industry
         self._peers = tuple((pe, MarketCapTier.MID) for pe in pe_ratios)
@@ -186,18 +154,10 @@ class _FakeSearchRepo(StockSearchRepository):
 
 
 def _enriched_info(**stock_overrides) -> GetStockInfo:
-    """A real GetStockInfo carrying the forward estimates the way the analyzer sees it in
-    production. The trailing fundamentals (metrics + market cap + dividend) are no longer read
-    here — they're overlaid from the ``stocks`` anchor by ``GetFundamentalsAnalysis`` — so a
-    snapshot from this alone carries the price + estimates, and its fundamentals fill from
-    whatever anchor the test wires as the ``industry_repository``."""
     return GetStockInfo(
         _FakeProvider(stock=_a_stock(**stock_overrides)),
         estimates_provider=_FakeEstimates(_an_estimates()),
     )
-
-
-# --- use case ----------------------------------------------------------------------------------
 
 
 def test_gathers_fundamentals_and_industry_benchmark():
@@ -393,12 +353,7 @@ def test_rejects_invalid_symbols_before_touching_providers():
     assert analyzer.received == []
 
 
-# --- result cache ------------------------------------------------------------------------------
-
-
 class _FakeCache(AiAnalysisCache):
-    """In-memory stand-in for the generic AI-analysis result cache; records puts."""
-
     def __init__(self, stored=None, key: str = "AAPL") -> None:
         self._store = {key: stored} if stored is not None else {}
         self.puts: list[tuple] = []
@@ -465,9 +420,6 @@ def test_incomplete_read_is_not_cached():
     result = GetFundamentalsAnalysis(_enriched_info(), analyzer, cache=cache).execute("AAPL")
     assert result is incomplete  # still returned to the caller
     assert cache.puts == []  # but not stored
-
-
-# --- endpoint ----------------------------------------------------------------------------------
 
 
 class _FakeUseCase:

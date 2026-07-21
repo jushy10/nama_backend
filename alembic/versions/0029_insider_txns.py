@@ -1,20 +1,3 @@
-"""insider transactions cache table
-
-Adds ``stock_insider_transactions`` — the persistence for the insider-transactions slice: a
-stock's recent SEC Form 4 non-derivative buys and sells (open-market purchases/sales plus the
-grant/exercise/tax transactions a Form 4 also reports), one row per reported transaction.
-
-A time series keyed unique on ``(stock_id, accession_number, line_index)`` — the SEC filing id
-plus the transaction's ordinal within that filing. The slice's read-through cache fills it on a
-miss and refreshes it on a TTL (there is no cron); a refresh is insert-only (a filed transaction
-is a frozen fact) and the feed is pruned to the newest N transactions per stock. Hangs off the
-``stocks`` anchor (from 0002) with an ``ON DELETE CASCADE`` foreign key.
-
-Revision ID: 0029_insider_txns
-Revises: 0028_scorecard_sections
-Create Date: 2026-07-11
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

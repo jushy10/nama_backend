@@ -1,16 +1,3 @@
-"""Interface Adapter: the SQLAlchemy-backed EarningsCalendarRepository.
-
-Implements ``repository.py`` with one indexed join across ``stock_quarterly_earnings`` (the
-scheduled dates) and the shared ``stocks`` anchor (name + sector). The slice owns no table —
-it's a projection of rows the quarterly-earnings sync already wrote — so this is the only file
-(alongside the models it reads) that knows those tables exist; the domain entities stay free
-of SQLAlchemy.
-
-The read is deliberately narrow: only *upcoming* quarters (``eps_actual IS NULL``) that carry
-a scheduled ``report_date`` inside the window, ordered by date then ticker so the use case can
-fold them into days without re-sorting.
-"""
-
 from __future__ import annotations
 
 from datetime import date
@@ -26,8 +13,6 @@ from app.stocks.stocks.models import StockRecord
 
 
 def _session_from_str(value: str | None) -> EarningsSession:
-    """A stored ``report_session`` string → the enum; ``NULL`` (a pre-column row) or any
-    unrecognized value degrades to ``UNKNOWN`` rather than raising on a bad read."""
     if value is None:
         return EarningsSession.UNKNOWN
     try:
@@ -37,8 +22,6 @@ def _session_from_str(value: str | None) -> EarningsSession:
 
 
 class SqlEarningsCalendarRepository(EarningsCalendarRepository):
-    """Reads the upcoming earnings calendar through a request-scoped session. Read-only."""
-
     def __init__(self, session: Session) -> None:
         self._session = session
 

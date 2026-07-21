@@ -1,12 +1,3 @@
-"""Tests for the database-backed RecommendationsRepository.
-
-Offline: an in-memory SQLite database stands in for the real table. Verifies the
-round-trip (entities -> rows -> entities) including the canonical newest-first order, the
-*merge* on upsert (fetched months replaced, earlier months kept — the accumulation that
-outlives Yahoo's ~4-month window), the parent ``stocks`` row + name fill-but-don't-clobber,
-a clean miss, and the last-refresh (max fetch stamp) ordering of refresh targets.
-"""
-
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -198,9 +189,6 @@ def test_refresh_targets_seeds_uncached_anchor_stocks_first(session):
     assert dict(targets)["NEWCO"] == "New Co"  # carries the anchor name
 
 
-# ───────────────────────────── price targets ─────────────────────────────
-
-
 def _targets(**kw) -> AnalystPriceTargets:
     return AnalystPriceTargets(
         mean=kw.get("mean"),
@@ -246,8 +234,6 @@ def test_missing_price_targets_read_back_as_none(session):
     )
     assert repo(session).get("AAPL").price_targets is None
 
-
-# ───────────────────────────── rating changes ─────────────────────────────
 
 _RC_NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 

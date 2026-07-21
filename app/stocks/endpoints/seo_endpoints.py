@@ -1,21 +1,3 @@
-"""HTTP API for the SEO / server-rendered content pages.
-
-``GET /stock/{ticker}`` — a public, crawlable HTML page for one stock, rendered
-server-side from **DB-only** facts (the shared ``stocks`` anchor) so search *and* AI
-crawlers that don't run JavaScript see real content. The React app stays the live,
-interactive experience; this is the indexable, citable surface that funnels into it.
-
-Why a *singular* ``/stock/`` prefix rather than ``/stocks/{ticker}``: the entire JSON
-API lives under ``/stocks/`` (plural), where a bare ``/stocks/{ticker}`` HTML route would
-shadow literals like ``/stocks/etfs`` / ``/stocks/classifications``. A distinct top-level
-prefix keeps the content surface collision-free and lets the edge (CloudFront) route
-``/stock/*`` to this origin with no path rewrite. See ``app/stocks/seo/README.md``.
-
-Controller + presenter + wiring, the composition-root way. The presenter is split between
-the small formatting helpers here and the Jinja2 template
-(``app/stocks/seo/templates/ticker.html``); the use case stays framework-free.
-"""
-
 from __future__ import annotations
 
 import json
@@ -79,8 +61,6 @@ def get_ticker_stock_page_use_case(
 
 
 def _humanize(slug: str | None) -> str | None:
-    """A snake_case classification slug -> a human label (``consumer_electronics`` ->
-    ``Consumer Electronics``)."""
     if not slug:
         return None
     return slug.replace("_", " ").replace("-", " ").title()
@@ -106,15 +86,12 @@ def _fmt_pct(value: float | None, *, signed: bool = False) -> str | None:
 
 
 def _join_and(parts: list[str]) -> str:
-    """``[a, b, c]`` -> ``"a, b and c"`` for a natural summary sentence."""
     if len(parts) == 1:
         return parts[0]
     return f"{', '.join(parts[:-1])} and {parts[-1]}"
 
 
 def _fmt_date(value) -> str:
-    """A stored date -> a short human label (``Jul 8, 2026``), or ``—`` when absent. Built without
-    ``strftime('%-d')`` (not portable to Windows) so it renders the same everywhere."""
     if value is None:
         return "—"
     return f"{value:%b} {value.day}, {value.year}"
@@ -133,9 +110,6 @@ _CONGRESS_DIR = {
 def _congress_rows(
     trades: tuple[CongressPageTrade, ...], site: str
 ) -> list[dict[str, str]]:
-    """Format Congressional trades into the template's rows — each linking its ticker to the
-    stock page. Shared by the /congress board and the per-stock section (the section ignores the
-    ``ticker``/``url`` keys)."""
     rows: list[dict[str, str]] = []
     for trade in trades:
         label, css = _CONGRESS_DIR.get(trade.tx_type, ("Other", "other"))
@@ -156,8 +130,6 @@ def _congress_rows(
 
 
 def _summary(name: str, ticker: str, facts: TickerPageFacts) -> str:
-    """A short, unique, fact-framed paragraph — placeholder for the richer Bedrock summary
-    (task 6), but already unique per page (thin/duplicate text is what gets suppressed)."""
     sector = _humanize(facts.sector)
     industry = _humanize(facts.industry)
     if sector and industry:
@@ -192,8 +164,6 @@ def _summary(name: str, ticker: str, facts: TickerPageFacts) -> str:
 
 
 def _description(name: str, ticker: str, facts: TickerPageFacts) -> str:
-    """The <=~160-char meta description: lead with the name/sector and the headline
-    numbers (the snippet an engine extracts), then the value prop."""
     sector = _humanize(facts.sector)
     lead = f"{name} ({ticker})" + (f" — {sector}" if sector else "")
     parts: list[str] = []
@@ -212,8 +182,6 @@ def _description(name: str, ticker: str, facts: TickerPageFacts) -> str:
 
 
 def _metrics(facts: TickerPageFacts) -> list[dict[str, str]]:
-    """The visible metrics table — every row present (missing values as ``—``) so the page
-    reads consistently across stocks."""
     rows = [
         ("Market cap", _fmt_cap(facts.market_cap)),
         ("Trailing P/E", _fmt_ratio(facts.pe_ratio)),
@@ -229,9 +197,6 @@ def _metrics(facts: TickerPageFacts) -> list[dict[str, str]]:
 
 
 def _jsonld(name: str, ticker: str, facts: TickerPageFacts, canonical: str, site: str) -> str:
-    """schema.org JSON-LD: a Corporation node (name + ticker for entity clarity) and a
-    breadcrumb trail. Serialized ASCII with ``<`` escaped so page data can't break out of
-    the <script> block."""
     corporation: dict = {
         "@context": "https://schema.org",
         "@type": "Corporation",
@@ -255,7 +220,6 @@ def _jsonld(name: str, ticker: str, facts: TickerPageFacts, canonical: str, site
 
 
 def _render(request: Request, page: TickerStockPage) -> Response:
-    """Build the template context from the page view and render it."""
     facts = page.facts
     assert facts is not None  # guarded by the endpoint's has_data check before calling
     site = _site_origin()
@@ -315,8 +279,6 @@ def stock_page_endpoint(
     request: Request,
     use_case: GetTickerStockPage = Depends(get_ticker_stock_page_use_case),
 ):
-    """A single stock's server-rendered content page. A malformed ticker is a 400; a symbol
-    we hold no data for is a 404 (no soft, contentless 200s in the index)."""
     try:
         page = use_case.execute(ticker)
     except ValueError as exc:
@@ -350,9 +312,6 @@ def _sector_description(page: SectorPage) -> str:
 
 
 def _listing_jsonld(list_name: str, stocks, canonical: str, site: str) -> str:
-    """schema.org JSON-LD for a stock listing (sector or screen): an ItemList of the stocks
-    (each linking to its page) + a breadcrumb. ``<`` escaped so data can't break out of the
-    <script> block."""
     item_list = {
         "@context": "https://schema.org",
         "@type": "ItemList",
@@ -384,8 +343,6 @@ def _sector_jsonld(page: SectorPage, canonical: str, site: str) -> str:
 
 
 def _listing_rows(stocks, site: str) -> list[dict[str, str]]:
-    """Format a run of stocks into the shared listing template's rows — each linking to its
-    /stock/ page. Used by both the sector and screen pages."""
     return [
         {
             "ticker": stock.ticker,
@@ -434,8 +391,6 @@ def sector_page_endpoint(
     request: Request,
     use_case: GetSectorPage = Depends(get_sector_page_use_case),
 ):
-    """A sector's server-rendered listing page. A malformed slug is a 400; a sector we hold
-    no screened stocks for is a 404."""
     try:
         page = use_case.execute(sector)
     except ValueError as exc:
@@ -488,8 +443,6 @@ def screen_page_endpoint(
     request: Request,
     use_case: GetScreenPage = Depends(get_screen_page_use_case),
 ):
-    """A "best-of" screen listing page. A malformed slug is a 400; an unknown screen (or an
-    empty universe) is a 404."""
     try:
         page = use_case.execute(slug)
     except ValueError as exc:
@@ -543,8 +496,6 @@ def _etf_summary(name: str, ticker: str, facts: EtfPageFacts) -> str:
 
 
 def _fmt_pct2(value: float | None) -> str | None:
-    """A percent to 2 decimals — for the small ETF figures (a 0.03% expense ratio would
-    round to 0.0% at 1 decimal)."""
     return None if value is None else f"{value:.2f}%"
 
 
@@ -626,8 +577,6 @@ def etf_page_endpoint(
     request: Request,
     use_case: GetEtfPage = Depends(get_etf_page_use_case),
 ):
-    """A single ETF's server-rendered content page. A malformed ticker is a 400; a symbol
-    that isn't one of our funds is a 404."""
     try:
         page = use_case.execute(ticker)
     except ValueError as exc:
@@ -692,9 +641,6 @@ _AI_SCREENER_FAQS = [
 
 
 def _ai_screener_jsonld(canonical: str, site: str) -> str:
-    """schema.org JSON-LD for the landing page: the tool (WebApplication), the FAQ (FAQPage —
-    strong for both rich results and AI citation), and a breadcrumb. ``<`` escaped so nothing
-    can break out of the <script> block."""
     web_app = {
         "@context": "https://schema.org",
         "@type": "WebApplication",
@@ -733,8 +679,6 @@ def _ai_screener_jsonld(canonical: str, site: str) -> str:
 
 @router.get("/ai-stock-screener")
 def ai_stock_screener_page(request: Request) -> Response:
-    """The AI-stock-screener landing page — a static, server-rendered marketing page that
-    targets the keyword and funnels into the app's plain-English screener."""
     site = _site_origin()
     canonical = f"{site}/ai-stock-screener"
     popular = [
@@ -813,7 +757,6 @@ _STOCK_SCREENER_FAQS = [
 
 
 def _stock_screener_jsonld(canonical: str, site: str) -> str:
-    """WebApplication + FAQPage + breadcrumb JSON-LD for the stock-screener page."""
     web_app = {
         "@context": "https://schema.org",
         "@type": "WebApplication",
@@ -852,8 +795,6 @@ def _stock_screener_jsonld(canonical: str, site: str) -> str:
 
 @router.get("/stock-screener")
 def stock_screener_page(request: Request) -> Response:
-    """The stock-screener landing page — targets "stock screener" / "free stock screener",
-    leading on the filter dimensions (distinct content from the AI-screener page)."""
     site = _site_origin()
     canonical = f"{site}/stock-screener"
     popular = [
@@ -931,9 +872,6 @@ def get_congress_board_page_use_case(
 
 
 def _congress_jsonld(canonical: str, site: str) -> str:
-    """schema.org JSON-LD for the board: the Dataset (entity clarity + citation), the FAQ (strong
-    for rich results and AI answers), and a breadcrumb. ``<`` escaped so nothing can break out of
-    the <script> block."""
     dataset = {
         "@context": "https://schema.org",
         "@type": "Dataset",
@@ -970,7 +908,6 @@ def _congress_jsonld(canonical: str, site: str) -> str:
 
 
 def _congress_stats(page: CongressBoardPage) -> list[dict[str, str]]:
-    """The headline counters above the ledger: how many recent trades, and the buy/sell split."""
     trades = page.trades
     buys = sum(1 for t in trades if t.tx_type == "Purchase")
     sells = sum(1 for t in trades if t.tx_type == "Sale")
@@ -1019,9 +956,6 @@ def congress_board_page(
     request: Request,
     use_case: GetCongressBoardPage = Depends(get_congress_board_page_use_case),
 ):
-    """The Congressional-trades board — a server-rendered landing page listing the most recently
-    disclosed House/Senate trades. Always renders (a keyword page with substantial static content);
-    before the sync seeds the store it shows an empty-state note rather than 404-ing."""
     return _render_congress(request, use_case.execute())
 
 
@@ -1140,9 +1074,6 @@ def get_sitemap_use_case(db: Session = Depends(get_db)) -> GetSitemap:
 
 
 def _sitemap_xml(data: SitemapData, site: str) -> str:
-    """Build the urlset XML: the homepage, one <url> per index-worthy stock page (with its
-    ``lastmod`` when known), and one per sector page. ``loc`` values are XML-escaped
-    (tickers/slugs are constrained, but escaping the origin-joined URL is correct/cheap)."""
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
@@ -1198,9 +1129,6 @@ def llms_txt() -> PlainTextResponse:
 
 @router.get("/sitemap.xml")
 def sitemap_xml(use_case: GetSitemap = Depends(get_sitemap_use_case)) -> Response:
-    """The sitemap of every index-worthy stock page, generated live from the screened
-    universe. Cached an hour — the universe is slow-moving and a crawler burst should
-    collapse onto one render."""
     xml = _sitemap_xml(use_case.execute(), _site_origin())
     return Response(
         content=xml,

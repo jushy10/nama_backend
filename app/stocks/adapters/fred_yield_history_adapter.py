@@ -1,20 +1,3 @@
-"""Interface Adapter: the 2Y/10Y Treasury yield history from FRED.
-
-The Federal Reserve Bank of St. Louis (FRED) publishes each constant-maturity
-Treasury yield as a daily series with full history: ``DGS2`` (2-year) and
-``DGS10`` (10-year). We fetch each as a plain CSV and read the trailing window
-into ``YieldSeries`` entities. It's the only module that knows FRED backs the
-history; swap it for another ``YieldHistoryProvider`` and only this file changes.
-
-**Keyless** — the CSV download endpoint needs no API key and, like Treasury.gov,
-serves data-centre IPs, so it works from Fargate where the Yahoo endpoints block
-us. We fetch the two series (one call each) and pair them into a ``YieldHistory``;
-because the whole point of the read is the 2Y-vs-10Y comparison, an empty or
-failed series is a real outage (``StockDataUnavailable``), not a soft-degrade.
-``_http`` is the fake seam the offline tests swap; ``_today`` is injectable so
-the trailing-window cutoff is deterministic in tests.
-"""
-
 from __future__ import annotations
 
 import csv
@@ -43,8 +26,6 @@ _HISTORY = "*"
 
 
 class FredYieldHistoryProvider(YieldHistoryProvider):
-    """Reads the 2Y and 10Y Treasury yield history from FRED (keyless)."""
-
     def __init__(self) -> None:
         self._http = httpx.Client(
             timeout=15.0,
@@ -86,13 +67,6 @@ class FredYieldHistoryProvider(YieldHistoryProvider):
 def _parse_series(
     text: str, cutoff: datetime.date
 ) -> tuple[YieldObservation, ...]:
-    """Parse a FRED CSV into chronological observations on/after ``cutoff``.
-
-    Pure function (the tested seam). FRED marks missing days with ``.``; those
-    rows are dropped. The date column is ISO (``YYYY-MM-DD``); the value column's
-    header is the series id, so we read by position (col 0 date, col 1 value)
-    rather than name.
-    """
     reader = csv.reader(StringIO(text))
     rows = iter(reader)
     next(rows, None)  # skip the header row

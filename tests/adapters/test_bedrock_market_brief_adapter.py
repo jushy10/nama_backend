@@ -1,11 +1,3 @@
-"""Tests for the Bedrock market-brief adapter.
-
-Offline: a stub client (matching the Anthropic SDK's ``message.content`` → blocks with
-``.type/.name/.input`` shape) is injected through the constructor seam, so the real adapter's
-prompt-building, retry, and parse/translate logic runs with no ``anthropic`` package and no
-network. Mirrors the other Bedrock adapter tests, over the assembled market snapshot.
-"""
-
 from datetime import date
 
 import pytest
@@ -38,9 +30,6 @@ class _StubMessage:
 
 
 class _StubMessages:
-    """Returns each queued message in turn (so the retry path can be exercised), repeating
-    the last one once exhausted."""
-
     def __init__(self, messages, recorder):
         self._messages = list(messages)
         self._recorder = recorder
@@ -105,9 +94,6 @@ def _context() -> MarketBriefContext:
 
 
 _D = date(2026, 7, 14)
-
-
-# --- Tests -------------------------------------------------------------------------------------
 
 
 def test_parses_tool_call_into_entity():

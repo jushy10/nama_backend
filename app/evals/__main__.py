@@ -1,18 +1,3 @@
-"""CLI composition root for the evals harness: ``python -m app.evals``.
-
-Wires a real subject (an HTTP answer endpoint) to a real judge (Claude on Bedrock), runs the
-golden set, prints the summary, optionally writes the JSON artifact, and — the point of a gate —
-exits non-zero when the pass rate drops below the threshold, so CI fails a regression.
-
-    python -m app.evals --base-url http://localhost:8080 --threshold 0.75
-    python -m app.evals --tags guardrail refusal --output evals.json
-
-Requires a running server at ``--base-url`` (the subject) and the ``bedrock`` extra plus AWS
-credentials (the judge). The harness itself is offline-testable — this module is only the
-wiring, so it lives outside the test suite; the loop, the judge translation, and the report are
-covered by ``tests/evals`` against fakes.
-"""
-
 import argparse
 import json
 import logging
@@ -66,7 +51,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def _select_cases(tags: list[str] | None) -> tuple[EvalCase, ...]:
-    """The golden cases, optionally narrowed to those carrying any of ``tags``."""
     if not tags:
         return GOLDEN_CASES
     wanted = set(tags)

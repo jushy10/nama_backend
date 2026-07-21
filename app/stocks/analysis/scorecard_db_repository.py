@@ -1,25 +1,3 @@
-"""Interface Adapter: the DB-backed stock-scorecard result cache.
-
-Implements ``StockScorecardCache`` over the shared ``investment_analysis_cache``
-table (``models.py``), mapping rows to and from the ``StockScorecard`` entity. The
-sectioned sibling of ``SqlInvestmentAnalysisCache`` (which caches the ETF analysis):
-same table, same best-effort contract, a different stored shape — the scorecard's
-overall verdict rides the ``recommendation`` / ``confidence`` / ``thesis`` columns and
-its graded sections ride the nullable ``sections`` JSON column, while the ETF's
-``strengths`` / ``risks`` columns are left empty. Bound to ``kind="stock"`` so a fund
-of the same ticker never collides.
-
-Being a cache, both operations are deliberately best-effort (the port's contract):
-
-- ``get`` treats *any* failure — a DB hiccup, or a row whose stored enum no longer
-  parses — as a miss and returns ``None``, so the caller cleanly regenerates.
-- ``put`` upserts by ``(kind, symbol)`` (select-then-update/insert, so it stays
-  dialect-agnostic across SQLite and Postgres) and swallows write failures — the
-  caller already holds the freshly-generated answer.
-
-Neither ever raises, so a cache problem can never sink an analysis request.
-"""
-
 import logging
 from datetime import timezone
 
@@ -41,8 +19,6 @@ logger = logging.getLogger(__name__)
 
 
 class SqlStockScorecardCache(StockScorecardCache):
-    """Read-through cache storage for the stock scorecard (``kind="stock"``)."""
-
     def __init__(self, session: Session, kind: str = "stock") -> None:
         self._session = session
         self._kind = kind
@@ -91,11 +67,6 @@ class SqlStockScorecardCache(StockScorecardCache):
 
 
 def _to_entity(row: AnalysisCacheRecord) -> StockScorecard | None:
-    """Map a stored row onto the entity, or ``None`` if it no longer parses.
-
-    A row written by an older build could carry a recommendation/confidence value
-    this build no longer knows; rather than raise, treat it as a miss so the caller
-    regenerates a valid one."""
     try:
         recommendation = Recommendation(row.recommendation)
         confidence = Confidence(row.confidence)
@@ -118,9 +89,6 @@ def _to_entity(row: AnalysisCacheRecord) -> StockScorecard | None:
 
 
 def _sections_from_json(raw) -> tuple[ScorecardSection, ...]:
-    """Rebuild the section tuple from the stored JSON, skipping any malformed entry
-    or off-enum stance rather than failing the whole read (best-effort, like the rest
-    of the cache)."""
     if not isinstance(raw, list):
         return ()
     out: list[ScorecardSection] = []
@@ -150,7 +118,6 @@ def _sections_from_json(raw) -> tuple[ScorecardSection, ...]:
 
 
 def _sections_to_json(sections: tuple[ScorecardSection, ...]) -> list:
-    """Serialize the section tuple into the plain JSON the column stores."""
     return [
         {
             "key": s.key,

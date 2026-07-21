@@ -1,12 +1,3 @@
-"""Tests for the universe use cases: SyncUniverse (write side) + SearchStocks /
-ListClassifications (read side).
-
-Offline: hand-written fakes for the screener, classifier, and repository ports, so this
-exercises only the orchestration — the upsert-vs-skip decision and the enrichment pass for the
-sync, and the edge normalization (trim/slug/clamp) and criteria pass-through for the search —
-independent of Yahoo or the DB.
-"""
-
 import pytest
 
 from app.stocks.earnings.quarterly.entities import (
@@ -73,15 +64,10 @@ def _stock(
 
 
 def _a_screen(n: int) -> tuple[ScreenedStock, ...]:
-    """A plausible screen of ``n`` distinct names, each above the floor (no price, so the
-    valuation pass skips them — the priced names a valuation test cares about are added on
-    top)."""
     return tuple(_stock(f"T{i:04d}", market_cap=5e9 + i) for i in range(n))
 
 
 def _four_quarter_timeline(symbol: str, ttm_eps: float) -> QuarterlyEarningsTimeline:
-    """A stored timeline whose ``ttm_eps`` is exactly ``ttm_eps`` — four reported quarters
-    each carrying a quarter of it (the shape the valuation pass reads through the port)."""
     per_q = ttm_eps / 4
     quarters = tuple(
         QuarterlyEarnings(
@@ -102,9 +88,6 @@ def _four_quarter_timeline(symbol: str, ttm_eps: float) -> QuarterlyEarningsTime
 
 
 class _FakeQuarterlyRepo(QuarterlyEarningsRepository):
-    """Serves a canned TTM EPS per ticker for the valuation pass; a ticker absent from the map
-    reads as un-cached (``get`` returns ``None``)."""
-
     def __init__(self, ttm_by_ticker=None) -> None:
         self._ttm = dict(ttm_by_ticker or {})
         self.gets: list[str] = []
@@ -123,8 +106,6 @@ class _FakeQuarterlyRepo(QuarterlyEarningsRepository):
 
 
 class _FakeScreener(StockScreener):
-    """Returns a canned screen, or raises the given error."""
-
     def __init__(self, stocks=(), *, error=None) -> None:
         self._stocks = tuple(stocks)
         self._error = error
@@ -140,8 +121,6 @@ class _FakeScreener(StockScreener):
 
 
 class _FakeClassifier(CompanyClassificationProvider):
-    """Maps ticker -> classification; raises StockDataUnavailable for tickers in ``errors``."""
-
     def __init__(self, mapping=None, *, errors=()) -> None:
         self._mapping = dict(mapping or {})
         self._errors = set(errors)
@@ -155,8 +134,6 @@ class _FakeClassifier(CompanyClassificationProvider):
 
 
 class _FakeRepo(UniverseRepository):
-    """Records the upsert input and the classifications written; serves a canned work-list."""
-
     def __init__(
         self,
         *,
@@ -638,9 +615,6 @@ _RESULT = StockSearchResult(
 
 
 class _FakeSearchRepo(StockSearchRepository):
-    """Records the criteria it was handed and returns a canned page / classifications /
-    per-industry P/E list."""
-
     def __init__(
         self,
         *,
@@ -907,9 +881,6 @@ def test_peer_comparison_rejects_a_blank_ticker():
 
 
 class _FakeTranslator(ScreenerQueryTranslator):
-    """Records the request + allowed vocabulary it was handed and returns a canned intent
-    (or raises, to drive the failure path)."""
-
     def __init__(self, *, intent: ScreenIntent | None = None, boom: bool = False) -> None:
         self._intent = intent or ScreenIntent()
         self._boom = boom
@@ -927,8 +898,6 @@ class _FakeTranslator(ScreenerQueryTranslator):
 
 
 def _ai_use_case(translator, repo):
-    """Wire an AiScreenStocks over the fake read repo (used only for the translator's
-    allowed vocabulary — the use case does not run the search)."""
     return AiScreenStocks(translator, repo)
 
 

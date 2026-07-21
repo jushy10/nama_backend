@@ -1,20 +1,3 @@
-"""Tests for the ticker endpoints module (GET /stocks/ticker/{ticker}, GET /stocks/ticker,
-GET /stocks/classifications).
-
-Offline: fake use cases injected through dependency_overrides + FastAPI's TestClient, so this
-checks only the controllers + presenters — without touching Alpaca, Finnhub, or the database.
-Two groups, since this module hosts both the ticker card and the universe read side that
-shares the ``/stocks/ticker`` resource:
-
-- the card (``GET /stocks/ticker/{ticker}``): the JSON shape (symbol renamed to ``ticker``,
-  the day move, the opt-in ``dividend``/``performance``/``metrics`` blocks with the
-  ``1w``/``1m`` performance aliases), the include pass-through, the cache header,
-  unrequested/unavailable blocks as nulls (not a 404), and the error mapping;
-- the search + filter menus (``GET /stocks/ticker`` / ``GET /stocks/classifications``): the
-  JSON shape, the query-param → use-case pass-through, FastAPI's enum/bounds validation (422),
-  the ValueError → 400 mapping, and the cache headers.
-"""
-
 from dataclasses import replace
 from datetime import date, datetime, timezone
 
@@ -46,8 +29,6 @@ from app.stocks.universe.entities import (
 
 
 class _FakeUseCase:
-    """Stands in for GetTickerCard; returns a canned card or raises."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error
@@ -70,8 +51,6 @@ def _client(fake: _FakeUseCase) -> TestClient:
 def _a_card(
     *, include: frozenset[str] = frozenset(), asset_type: str = "equity"
 ) -> TickerCard:
-    """A canned card; the opt-in blocks are populated only when in ``include``,
-    the way the use case builds it."""
     return TickerCard(
         quote=Quote(
             symbol="MU",
@@ -402,8 +381,6 @@ def test_upstream_failure_is_a_502():
 
 
 class _FakeClassify:
-    """Stands in for ClassifyTicker; echoes a canned classification or raises."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error
@@ -454,8 +431,6 @@ def test_type_endpoint_bad_symbol_is_a_400():
 
 
 class _FakeSearch:
-    """Stands in for SearchStocks; records the kwargs it was called with, returns a page."""
-
     def __init__(self, *, page=None, error=None) -> None:
         self._page = page
         self._error = error
@@ -469,8 +444,6 @@ class _FakeSearch:
 
 
 class _FakeClassifications:
-    """Stands in for ListClassifications; returns a canned Classifications."""
-
     def __init__(self, result: Classifications) -> None:
         self._result = result
 
@@ -479,9 +452,6 @@ class _FakeClassifications:
 
 
 class _FakeIndustryValuation:
-    """Stands in for GetIndustryValuation; records the industry, returns a canned benchmark
-    (or raises)."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error
@@ -828,8 +798,6 @@ def test_industry_pe_sets_a_short_cache_header():
 
 
 class _FakeAiScreen:
-    """Stands in for AiScreenStocks; records the kwargs, returns a ScreenIntent (or raises)."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result if result is not None else ScreenIntent()
         self._error = error
@@ -913,9 +881,6 @@ def test_ai_search_sets_a_short_cache_header():
 
 
 class _FakePeerComparison:
-    """Stands in for GetPeerComparison; records the ticker, returns a canned comparison
-    (or raises)."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error

@@ -1,34 +1,3 @@
-"""Interface Adapter: plain-English stock screening via Claude on Amazon Bedrock.
-
-The only module that knows Bedrock (and the Anthropic SDK) exists for the AI
-screener. It takes a user's request ("mega-cap technology stocks", "top S&P 500
-names by revenue growth") plus the universe's current sector/industry vocabulary,
-and asks Claude to fill in the screen's own filters — returning a ``ScreenIntent``
-the use case feeds straight into the ordinary ``SearchStocks``. The model only
-*chooses filters*; it never names stocks, so an AI screen can only ever surface
-real screened rows. Swap models or vendors and only this file changes.
-
-It mirrors the analysis adapters on every axis that matters:
-
-* **Auth is the runtime's job.** Bedrock authenticates through the process's AWS
-  credentials (the ECS task role in production) — no API key to read or pass.
-* **Structured output via a forced tool call.** Claude must call one
-  ``build_screen`` tool, so the response is validated JSON arguments mapping onto
-  ``ScreenIntent``, not prose to parse.
-* **Constrained vocabulary.** The sector/industry slugs currently in the universe
-  are injected as ``enum`` lists on the tool schema *per call*, so the model can
-  only pick values the search can actually match — an invented industry can't leak
-  through. (The use case re-normalizes anyway, so it degrades to "matches nothing"
-  even if one did.)
-
-The Anthropic SDK is imported lazily inside ``__init__`` so the app and the offline
-tests import cleanly without the ``bedrock`` extra; a test injects a stub client
-through the same seam. Any Bedrock/SDK failure is translated to
-``StockDataUnavailable`` — the one error the port documents (a 502 at the edge).
-
-Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
-"""
-
 from collections.abc import Sequence
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
@@ -72,17 +41,6 @@ _SYSTEM_PROMPT = (
 
 
 class BedrockScreenerQueryTranslator(ScreenerQueryTranslator):
-    """Translates a plain-English screen request into a ``ScreenIntent`` with Claude on
-    Amazon Bedrock.
-
-    Defaults to the fast Haiku tier (``model_id``): the output is a short, structured filter
-    set, so speed matters more than extra reasoning. ``model_id`` / ``region`` are deploy-time
-    config (the id may be a cross-region inference profile), env-overridable so a deploy can
-    swap models without a code change. ``client`` is an injection seam — pass a ready-made
-    client (a test stub) to bypass the Anthropic SDK entirely; otherwise the Bedrock client is
-    built lazily and authenticates through the process's AWS credentials.
-    """
-
     # The same fast Haiku tier the analysis adapters default to; the full versioned id
     # (the short alias 400s on Bedrock). Env-overridable via BEDROCK_SCREENER_MODEL_ID.
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -127,9 +85,6 @@ class BedrockScreenerQueryTranslator(ScreenerQueryTranslator):
             costs.log(label="ai screen", model_id=self._model_id, key=query[:48])
 
     def _invoke(self, query: str, tool: dict, costs: CostAccumulator) -> dict | None:
-        """One forced-tool call, returning the ``build_screen`` arguments (or ``None`` if the
-        model somehow didn't call the tool). Any SDK/botocore failure is mapped to this port's
-        documented ``StockDataUnavailable``; the call's token usage folds into ``costs``."""
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -148,10 +103,6 @@ class BedrockScreenerQueryTranslator(ScreenerQueryTranslator):
 
 
 def _build_tool(sectors: Sequence[str], industries: Sequence[str]) -> dict:
-    """Build the forced ``build_screen`` tool, pinning the sector/industry fields to the
-    universe's *current* slugs (as ``enum`` lists) so the model can only choose values the
-    search can match. When a vocabulary is empty (nothing classified yet) its filter is
-    omitted rather than offered as an empty ``enum`` the model couldn't satisfy."""
     properties: dict = {
         "query": {
             "type": "string",
@@ -234,7 +185,6 @@ def _build_tool(sectors: Sequence[str], industries: Sequence[str]) -> dict:
 
 
 def _tool_payload(message) -> dict | None:
-    """Pull the build_screen arguments out of the model's tool call, if any."""
     for block in getattr(message, "content", None) or []:
         if (
             getattr(block, "type", None) == "tool_use"
@@ -247,12 +197,6 @@ def _tool_payload(message) -> dict | None:
 
 
 def _to_intent(payload: dict | None) -> ScreenIntent:
-    """Map the validated tool arguments onto the domain ``ScreenIntent``.
-
-    Defensive throughout: the forced-tool schema constrains the shape, but a stray or
-    off-schema value never raises — an unknown enum is dropped, a non-list field is treated as
-    empty, a non-positive limit as unset — so a screen request always yields a usable intent
-    (an all-unset one is a neutral browse). The use case re-normalizes on top of this."""
     if not payload:
         return ScreenIntent()
     query = payload.get("query")
@@ -272,14 +216,12 @@ def _to_intent(payload: dict | None) -> ScreenIntent:
 
 
 def _string_tuple(value) -> tuple[str, ...]:
-    """Coerce a list field into a tuple of non-empty, stripped strings (else empty)."""
     if not isinstance(value, list):
         return ()
     return tuple(text for item in value if (text := str(item).strip()))
 
 
 def _enum_tuple(enum_cls, value) -> tuple:
-    """Coerce a list field into a tuple of ``enum_cls`` members, dropping unknown values."""
     out = []
     for item in _string_tuple(value):
         member = _enum_or_none(enum_cls, item)
@@ -289,7 +231,6 @@ def _enum_tuple(enum_cls, value) -> tuple:
 
 
 def _enum_or_none(enum_cls, value):
-    """The ``enum_cls`` member for ``value``, or ``None`` when it's missing/unknown."""
     if not isinstance(value, str):
         return None
     try:
@@ -299,13 +240,10 @@ def _enum_or_none(enum_cls, value):
 
 
 def _bool_or_none(value) -> bool | None:
-    """Pass a real bool through; anything else (including a stray string) is 'unset'."""
     return value if isinstance(value, bool) else None
 
 
 def _positive_int_or_none(value) -> int | None:
-    """A positive int (the requested count), or ``None`` for missing/zero/negative/non-int.
-    A bool is rejected — it's an int subclass but never a valid count here."""
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     return value if value > 0 else None

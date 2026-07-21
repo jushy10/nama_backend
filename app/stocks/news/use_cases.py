@@ -1,17 +1,3 @@
-"""Application use cases for the news slice.
-
-Two actions, both pure orchestration over the ports so they run offline in tests against
-hand-written fakes and know nothing of yfinance, HTTP, or SQLAlchemy:
-
-- ``GetStockNews`` — the read path. Normalizes the symbol and returns the articles
-  through the ``NewsProvider`` (wired in production as the DB cache over yfinance, so the
-  read hits Yahoo only on a miss).
-- ``SyncStockNews`` — the out-of-band refresh. Walks the already-stored rows
-  least-recently-refreshed first (un-cached first, so it also *seeds* new coverage) and
-  renews them from the live provider, so users see fresh headlines without a request ever
-  waiting on a vendor round-trip. Invoked by the cron endpoint.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -28,18 +14,10 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_symbol(symbol: str) -> str:
-    """Trim/upper-case the ticker and reject obvious junk, once, at the edge of the use
-    case — so every layer below sees a clean symbol. Mirrors the stocks slice's guard."""
     return normalize_symbol(symbol)
 
 
 class GetStockNews:
-    """Use case: retrieve a stock's recent news headlines by its symbol.
-
-    Best-effort: a symbol the source carries no news for yields an empty run rather than
-    an error, so the endpoint can present an empty result instead of a 404.
-    """
-
     def __init__(self, provider: NewsProvider) -> None:
         self._provider = provider
 
@@ -49,28 +27,17 @@ class GetStockNews:
 
 @dataclass(frozen=True)
 class NewsSyncReport:
-    """The outcome of one refresh run: how many stocks were renewed, how many the
-    provider couldn't serve this run (or returned empty for), and the per-run cap
-    (``None`` when the run was uncapped)."""
-
     refreshed: int
     failed: int
     limit: int | None
 
 
 class SyncStockNews:
-    """Renew stored news from the live source, most-stale stocks first — and **seed**
-    stocks not yet cached (never-fetched anchor stocks come first)."""
-
     def __init__(self, provider: NewsProvider, repository: NewsRepository) -> None:
         self._provider = provider
         self._repository = repository
 
     def execute(self, *, limit: int | None = None) -> NewsSyncReport:
-        """Refresh up to ``limit`` stocks most in need of it (un-cached first, then stalest);
-        ``limit=None`` (the default) processes every stock in the anchor. Returns a summary.
-        Never raises for a single symbol's failure — the run continues and the failure is
-        counted, so one bad symbol doesn't abort the whole sweep."""
         effective = None if limit is None else max(1, limit)
         refreshed = 0
         failed = 0

@@ -1,16 +1,3 @@
-"""create etfs
-
-The top-ETFs cache: a standalone table (not a child of the ``stocks`` anchor — an ETF is not a
-company, so it gets its own table rather than a ``stocks`` row that would leak funds into the
-stock universe search) holding the screened top US ETF set — one row per fund, unique on
-``ticker``. Filled and refreshed by the ETF cron endpoint (yfinance ``top_etfs_us`` -> DB), so
-it starts empty. Mirrors app.stocks.etfs.models.
-
-Revision ID: 0016_create_etfs
-Revises: 0015_drop_index_constituents
-Create Date: 2026-07-05
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

@@ -1,11 +1,3 @@
-"""Tests for the SEO content-page endpoints (GET /stock/{ticker}).
-
-Offline: a fake use case injected through ``dependency_overrides`` + FastAPI's TestClient,
-so this checks the controller + presenter + template render — without a database. Asserts
-the SEO essentials that make these pages worth shipping: a unique title/description, the
-canonical + robots directives, the JSON-LD block, the visible facts, and the error mapping.
-"""
-
 from datetime import date
 
 import pytest
@@ -31,8 +23,6 @@ from app.stocks.seo.use_cases import (
 
 
 class _FakeUseCase:
-    """Stands in for GetTickerStockPage; returns a canned page or raises."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error
@@ -153,12 +143,7 @@ def test_normalize_ticker_preserves_a_canadian_suffix_but_folds_a_us_class_suffi
             normalize_ticker(bad)
 
 
-# --- Crawler files -----------------------------------------------------------------------
-
-
 class _FakeSitemap:
-    """Stands in for GetSitemap; returns canned SitemapData."""
-
     def __init__(self, data) -> None:
         self._data = data
 
@@ -227,12 +212,7 @@ def test_sitemap_lists_stock_and_sector_pages() -> None:
     )
 
 
-# --- Sector pages ------------------------------------------------------------------------
-
-
 class _FakeSectorUseCase:
-    """Stands in for GetSectorPage; returns a canned page or raises."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error
@@ -338,9 +318,6 @@ def test_unknown_screen_is_404() -> None:
     page = ScreenPage(screen=None, stocks=())
     resp = _screen_client(_FakeScreenUseCase(result=page)).get("/screen/not-a-screen")
     assert resp.status_code == 404
-
-
-# --- ETF pages ---------------------------------------------------------------------------
 
 
 class _FakeEtfUseCase:

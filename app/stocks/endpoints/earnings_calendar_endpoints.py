@@ -1,15 +1,3 @@
-"""HTTP API for the market-wide earnings calendar.
-
-``GET /market/earnings-calendar?from=&to=`` — which companies are scheduled to report earnings
-on which upcoming days, aggregated across the screened universe and grouped by day. Served
-**DB-only** from the scheduled dates the quarterly-earnings sync already stores, so a read is
-one indexed query, never a vendor call. Controller + presenter + wiring, the composition-root
-way.
-
-Best-effort: an empty or quiet window is a 200 with no days, not a 404. ``from``/``to`` default
-to a two-week look-ahead and the window is clamped in the use case; an inverted window is a 400.
-"""
-
 from __future__ import annotations
 
 from datetime import date
@@ -44,8 +32,6 @@ def get_earnings_calendar_use_case(
 
 
 def _present(calendar: EarningsCalendar) -> EarningsCalendarResponse:
-    """Presenter: calendar entity -> HTTP response DTO (each item's ``report_date`` -> ``when``,
-    ``session`` -> its string value)."""
     return EarningsCalendarResponse(
         from_=calendar.from_date,
         to=calendar.to_date,
@@ -89,7 +75,6 @@ def get_earnings_calendar_endpoint(
     ),
     use_case: GetEarningsCalendar = Depends(get_earnings_calendar_use_case),
 ) -> EarningsCalendarResponse:
-    """The upcoming earnings calendar. An inverted window (``to`` before ``from``) is a 400."""
     try:
         calendar = use_case.execute(from_, to)
     except ValueError as exc:

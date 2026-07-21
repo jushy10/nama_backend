@@ -1,19 +1,3 @@
-"""Unit tests for the yfinance annual-earnings adapter.
-
-No network: a fake Ticker returns the pandas frames yfinance would, so this checks the
-mapping — the reported years (Diluted/Basic EPS + Total Revenue + Net Income) from
-``income_stmt``, the consensus-basis annual actual (the sum of the year's four quarterly
-"Reported EPS" values from the ``get_earnings_dates`` history, incl. the off-calendar
-fiscal-year matching and the all-four-quarters guard), and the upcoming years (at most two:
-``0y`` / ``+1y``) from the ``earnings_estimate`` / ``revenue_estimate`` frames, labelled by
-the fiscal-year-end from ``info``. Also: the chronological ordering, the
-calendar/off-calendar fiscal-year derivation, the income-statement failure degrading to a
-forward-only timeline (the production case where Yahoo IP-gates the fundamentals endpoint),
-the announcement-history failure degrading to no consensus actuals, an uncovered symbol
-degrading to an empty timeline, and any vendor failure on the primary surfaces becoming a
-domain error.
-"""
-
 from datetime import date, datetime, timezone
 
 import pandas as pd
@@ -37,8 +21,6 @@ def _income_stmt(
     diluted_average_shares=None,
     basic_average_shares=None,
 ) -> pd.DataFrame:
-    """An annual income statement like ``Ticker.income_stmt``: metrics as rows, fiscal-year-end
-    dates as columns. Each metric arg is a list aligned to ``periods``."""
     columns = pd.DatetimeIndex([pd.Timestamp(p) for p in periods])
     data = {}
     if diluted_eps is not None:
@@ -62,8 +44,6 @@ def _cash_flow(
     free_cash_flow=None,
     operating_cash_flow=None,
 ) -> pd.DataFrame:
-    """An annual cash-flow statement like ``Ticker.cashflow``: rows keyed by concept,
-    fiscal-year-end dates as columns (the same columns as ``income_stmt``)."""
     columns = pd.DatetimeIndex([pd.Timestamp(p) for p in periods])
     data = {}
     if free_cash_flow is not None:
@@ -74,17 +54,12 @@ def _cash_flow(
 
 
 def _estimate_frame(avgs: dict) -> pd.DataFrame:
-    """A period-indexed estimate frame like ``earnings_estimate`` / ``revenue_estimate``:
-    ``{"0y": 6.5, "+1y": 7.0}`` → rows keyed by period with an ``avg`` column."""
     return pd.DataFrame.from_dict(
         {label: {"avg": value} for label, value in avgs.items()}, orient="index"
     )
 
 
 def _earnings_dates(rows: dict[str, float | None]) -> pd.DataFrame:
-    """An announcement history like ``Ticker.get_earnings_dates``: rows indexed by the
-    announcement timestamp, with a ``Reported EPS`` column (``None`` ⇒ a scheduled future
-    announcement, NaN in the real frame)."""
     index = pd.DatetimeIndex(
         [pd.Timestamp(day, tz="America/New_York") for day in rows]
     )
@@ -97,13 +72,10 @@ def _epoch(day: date) -> int:
 
 
 def _info(next_fiscal_year_end: date) -> dict:
-    """``Ticker.info`` carrying just the ``nextFiscalYearEnd`` the adapter anchors ``0y`` on."""
     return {"nextFiscalYearEnd": _epoch(next_fiscal_year_end)}
 
 
 class FakeTicker:
-    """Stands in for ``yfinance.Ticker``; serves canned frames, or raises."""
-
     def __init__(
         self,
         *,
@@ -542,8 +514,6 @@ def test_vendor_error_raises_unavailable():
 
 
 class _FxTicker:
-    """A Yahoo FX-pair ticker fake: exposes a ``fast_info`` last price (empty ⇒ unavailable)."""
-
     def __init__(self, rate):
         self.fast_info = {} if rate is None else {"last_price": rate}
 
@@ -551,8 +521,6 @@ class _FxTicker:
 def provider_with_currency(
     ticker: FakeTicker, *, fx_rate
 ) -> YfinanceAnnualEarningsProvider:
-    """A provider whose factory returns the fake for the issuer and an FX fake for the
-    ``{reporting}{trading}=X`` pair symbol the normalizer requests."""
     fx_ticker = _FxTicker(fx_rate)
 
     def factory(symbol):
@@ -562,8 +530,6 @@ def provider_with_currency(
 
 
 def _adr_info(next_fiscal_year_end: date, *, financial_currency, forward_eps, currency="USD"):
-    """``info`` for a foreign ADR: the fiscal-year-end anchor plus the trading/reporting
-    currencies and the trading-currency ``forwardEps`` reference the normalizer needs."""
     return {
         "nextFiscalYearEnd": _epoch(next_fiscal_year_end),
         "currency": currency,

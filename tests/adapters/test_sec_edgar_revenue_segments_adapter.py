@@ -1,16 +1,3 @@
-"""Unit tests for the SEC EDGAR revenue-segments adapter.
-
-No network: the httpx client is swapped for a fake returning canned per-URL bodies (the same
-``_http`` seam the Wikipedia/Finnhub adapters use), and ``_parse_revenue_segments`` is exercised
-directly on a hand-built XBRL instance.
-
-The parser tests are the important ones — they pin the two tricky behaviours: single-axis facts
-(business segments, geography) *and* segment-nested facts (products tagged with both the
-product axis and the business-segment axis, which a naive single-axis filter would drop), plus
-excluding the consolidated total and quarterly facts, preferring the most-specific revenue
-concept, and summing a product that spans segments.
-"""
-
 from datetime import date
 from types import SimpleNamespace
 
@@ -196,8 +183,6 @@ class _Resp:
 
 
 class FakeHttp:
-    """Fake httpx client: canned response per URL, optional transport errors. Records requests."""
-
     def __init__(self, responses, *, errors=()):
         self._responses = responses
         self._errors = set(errors)

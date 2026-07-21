@@ -1,15 +1,3 @@
-"""Tests for the generic DB-backed AI-analysis result cache (``SqlAiAnalysisCache``).
-
-Offline: an in-memory SQLite database stands in for the real
-``investment_analysis_cache`` table. Covers all five codecs (earnings / ratings /
-fundamentals / sector / market) — the entity -> row -> entity round-trip including enum
-values, the JSON takeaway lists, and the market-wide nested structures; UTC
-re-attachment on read; ``(kind, key)`` isolation; upsert-overwrite (one row per key);
-the column mapping (the newer kinds ride ``verdict`` / ``findings`` / ``details`` and
-leave the stock/ETF columns null); and the best-effort contract — a clean miss, a
-corrupt row treated as a miss, and reads/writes that never raise.
-"""
-
 from datetime import datetime, timezone
 
 import pytest
@@ -52,9 +40,6 @@ def session():
     Base.metadata.create_all(engine)
     with Session(engine) as db:
         yield db
-
-
-# --- sample entities per kind -----------------------------------------------------
 
 
 def an_earnings(symbol="AAPL", **o) -> EarningsAnalysis:
@@ -169,9 +154,6 @@ def test_market_round_trips_nested_periods(session):
     assert cache.get(_MARKET) == a_market()
 
 
-# --- column mapping ----------------------------------------------------------------
-
-
 def test_earnings_writes_generic_columns_and_leaves_stock_columns_null(session):
     earnings_analysis_cache(session).put("AAPL", an_earnings())
     row = session.execute(select(AnalysisCacheRecord)).scalar_one()
@@ -201,9 +183,6 @@ def test_sector_stores_leaders_and_laggards_under_details(session):
     assert row.symbol == _MARKET
     assert set(row.details) == {"leaders", "laggards"}
     assert row.details["leaders"][0]["symbol"] == "XLK"
-
-
-# --- isolation, upsert, best-effort ------------------------------------------------
 
 
 def test_kind_isolates_a_shared_symbol(session):

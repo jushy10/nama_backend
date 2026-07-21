@@ -1,23 +1,3 @@
-"""Database model + queries for the insider-transactions cache.
-
-The persistence primitives for the slice: the SQLAlchemy model for the
-``stock_insider_transactions`` table this feature owns, plus simple, entity-free query functions
-over it. The shared ``stocks`` anchor these rows hang off of lives in its own slice,
-``app/stocks/stocks/models.py`` (owned by no single feature), and is imported here. The concrete
-repository (``db_repository.py``) is the only caller; it maps these rows to and from the
-``InsiderTransaction`` entity. Nothing here knows the domain entity — this layer deals only in
-rows and columns, so it stays a thin data-access layer.
-
-A time series: many rows per stock, one per reported transaction, keyed unique on
-``(stock_id, accession_number, line_index)`` — the filing's accession number plus the
-transaction's ordinal within that filing. Like the rating-changes slice a refresh is
-*insert-only* (a filed transaction is a frozen fact), and like the news feed the accumulated
-history is **pruned** to the newest ``keep`` transactions per stock so it stays bounded.
-``fetched_at`` is a cache-bookkeeping stamp — the as-of time of the last fetch that covered the
-stock, refreshed on every upsert so the out-of-band sweep (``stalest_symbols``) can order stocks
-by how recently they were confirmed against the source.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -48,15 +28,6 @@ from app.stocks.stocks.models import StockRecord, get_or_create_stock  # noqa: F
 
 
 class StockInsiderTransactionRecord(Base):
-    """One insider's one reported transaction in a stock (a Form 4 non-derivative line).
-
-    ``accession_number`` (the SEC filing id) + ``line_index`` (the transaction's ordinal within
-    that filing) form the row's unique key alongside ``stock_id``. ``transaction_code`` is the
-    raw Form 4 code (``P``/``S``/``M``/``F``/…) and ``acquired_disposed`` is ``A`` or ``D``.
-    ``shares`` / ``price_per_share`` are nullable — a Form 4 sometimes reports a price only in a
-    footnote — so the derived dollar value is best-effort.
-    """
-
     __tablename__ = "stock_insider_transactions"
     __table_args__ = (
         UniqueConstraint(
@@ -96,11 +67,6 @@ class StockInsiderTransactionRecord(Base):
 
 
 def _order_newest_first() -> tuple:
-    """The canonical serving/pruning order: newest transaction first, falling back to the filing
-    date when a transaction date is missing, then a stable tiebreak so the order is deterministic
-    across rows sharing a date. Kept **identical** to the SEC adapter's own sort so a live-served
-    and a cache-served response are the same regardless of cache state — the last leg keeps a
-    filing's transactions in document order (``line_index`` ascending)."""
     return (
         func.coalesce(
             StockInsiderTransactionRecord.transaction_date,
@@ -115,8 +81,6 @@ def _order_newest_first() -> tuple:
 def transactions_by_symbol(
     session: Session, symbol: str
 ) -> list[StockInsiderTransactionRecord]:
-    """All stored transaction rows for ``symbol`` (joined through the ``stocks`` anchor), newest
-    first. Empty when nothing is stored for it yet."""
     return list(
         session.execute(
             select(StockInsiderTransactionRecord)
@@ -133,17 +97,6 @@ def transactions_by_symbol(
 def stalest_symbols(
     session: Session, limit: int | None = None
 ) -> list[tuple[str, str | None]]:
-    """``(symbol, name)`` pairs from the ``stocks`` anchor, most in need of a refresh first.
-
-    A **LEFT JOIN**, so every anchor stock is included — even one with no transaction rows yet —
-    and the sweep both *seeds* new coverage and renews stale rows. Cached stocks are ordered by
-    the *newest* fetch stamp among their rows: the insert-only merge refreshes every row's stamp
-    to the same as-of time on each upsert (``touch_fetched_at``), so the max is when the stock was
-    last actually confirmed against the source. Ordering is **un-cached first**: a never-fetched
-    stock has a NULL max stamp and sorts ahead of any cached stock. ``limit`` caps the batch;
-    ``None`` (the default) returns every stock, so one sweep can seed the whole anchor. Lazy fill
-    on first access still covers a symbol between sweeps.
-    """
     max_fetched = func.max(StockInsiderTransactionRecord.fetched_at)
     stmt = (
         select(StockRecord.ticker, StockRecord.name)
@@ -163,8 +116,6 @@ def stalest_symbols(
 def existing_keys_for_stock(
     session: Session, stock_id: uuid.UUID
 ) -> set[tuple[str, int]]:
-    """The ``(accession_number, line_index)`` keys already stored for ``stock_id`` — what the
-    insert-only upsert diffs the fresh transactions against."""
     rows = session.execute(
         select(
             StockInsiderTransactionRecord.accession_number,
@@ -177,10 +128,6 @@ def existing_keys_for_stock(
 def touch_fetched_at(
     session: Session, stock_id: uuid.UUID, now: datetime
 ) -> None:
-    """Refresh every stored row's ``fetched_at`` for ``stock_id`` to ``now`` — the as-of time of
-    this fetch. Called on every upsert (even one that inserts no new rows) so a quiet stock the
-    source confirmed with no new activity still reads as fresh, and a repeat view within the TTL
-    is served from the DB rather than re-fetched from EDGAR."""
     session.execute(
         update(StockInsiderTransactionRecord)
         .where(StockInsiderTransactionRecord.stock_id == stock_id)
@@ -189,9 +136,6 @@ def touch_fetched_at(
 
 
 def prune_to_newest(session: Session, stock_id: uuid.UUID, keep: int) -> None:
-    """Delete all but the ``keep`` newest transactions for ``stock_id`` so the accumulated feed
-    stays bounded. Selects the row ids in serving order and deletes the surplus tail — portable
-    across SQLite/Postgres."""
     ids = list(
         session.execute(
             select(StockInsiderTransactionRecord.id)

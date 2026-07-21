@@ -1,12 +1,3 @@
-"""Tests for the recommendations use cases: GetStockAnalystInfo + SyncRecommendations.
-
-Offline: hand-written fakes for the provider and repository ports, so this exercises only
-the orchestration — symbol normalization, the two-leg compose, and primary-vs-best-effort
-failure handling on the read side; which targets are refreshed, failure/empty handling, and
-the per-run limit on the sync side — plus the entity rules the slice's responses lean on
-(score, consensus bands, direction), independent of yfinance or the DB.
-"""
-
 from datetime import date, datetime, timezone
 
 import pytest
@@ -52,9 +43,6 @@ def _a_run(symbol: str) -> AnalystRecommendations:
     return AnalystRecommendations(
         symbol, (_a_trend(date(2026, 6, 1), strong_buy=13, buy=24, hold=7),)
     )
-
-
-# ───────────────────────────── entity rules ─────────────────────────────
 
 
 def test_trend_total_score_and_consensus():
@@ -104,9 +92,6 @@ def test_empty_run_has_no_latest_or_direction():
     assert recs.direction is None
 
 
-# ───────────────────────────── price targets ─────────────────────────────
-
-
 def test_price_targets_upside_percent():
     targets = AnalystPriceTargets(mean=315.0, high=400.0, low=215.0, median=315.0)
     # (315 - 300) / 300 * 100 = 5.0
@@ -124,9 +109,6 @@ def test_price_targets_upside_percent_guards():
 def test_price_targets_is_empty():
     assert AnalystPriceTargets().is_empty
     assert not AnalystPriceTargets(mean=315.0).is_empty
-
-
-# ───────────────────────────── rating changes ─────────────────────────────
 
 
 def test_rating_change_direction_flags():
@@ -147,12 +129,7 @@ def test_rating_changes_latest_and_empty():
     assert empty.is_empty and empty.latest is None
 
 
-# ───────────────────────────── GetStockAnalystInfo ─────────────────────────────
-
-
 class _FakeRecommendationReadProvider(RecommendationProvider):
-    """Returns a canned run, or raises the given error when one is set."""
-
     def __init__(self, recommendations=None, *, error=None) -> None:
         self._recommendations = recommendations
         self._error = error
@@ -166,8 +143,6 @@ class _FakeRecommendationReadProvider(RecommendationProvider):
 
 
 class _FakeRatingChangeReadProvider(RatingChangeProvider):
-    """Returns a canned run, or raises the given error when one is set."""
-
     def __init__(self, rating_changes=None, *, error=None) -> None:
         self._rating_changes = rating_changes
         self._error = error
@@ -238,9 +213,6 @@ def test_analyst_info_rejects_invalid_symbols_before_touching_the_providers():
         with pytest.raises(ValueError):
             use_case.execute(bad)
     assert recs_provider.calls == [] and rc_provider.calls == []
-
-
-# ───────────────────────────── top credible firms ─────────────────────────────
 
 
 def _change(firm, published_at, *, to_grade="Buy", action="main", target=None):
@@ -362,12 +334,7 @@ def test_analyst_info_top_firms_empty_without_credible_coverage():
     assert info.top_firms == ()
 
 
-# ───────────────────────────── SyncRecommendations ─────────────────────────────
-
-
 class _FakeRepo(RecommendationsRepository):
-    """Serves a fixed target list and records what got upserted."""
-
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = list(targets)
         self.upserts: list[tuple[str, str | None]] = []
@@ -385,8 +352,6 @@ class _FakeRepo(RecommendationsRepository):
 
 
 class _FakeSyncProvider(RecommendationProvider):
-    """Returns a canned run per symbol, an empty one, or raises."""
-
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}
@@ -468,12 +433,7 @@ def test_sync_limit_is_passed_through_and_floored_at_one():
     assert repo.refresh_limit == 1  # a non-positive cap is floored to one
 
 
-# ─────────────────────── SyncRecommendations + rating changes ───────────────────────
-
-
 class _FakeRatingChangeProvider(RatingChangeProvider):
-    """Returns a canned rating-change run per symbol, an empty one, or raises."""
-
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}

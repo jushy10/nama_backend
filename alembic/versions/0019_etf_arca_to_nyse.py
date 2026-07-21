@@ -1,20 +1,3 @@
-"""fold etfs.exchange NYSEARCA into NYSE
-
-Data-only backfill for the ``etfs`` table. The ETF screener used to map Yahoo's
-``PCX`` code to ``NYSEARCA``; it now folds NYSE Arca into its parent ``NYSE`` so
-``exchange`` stays inside the same four-value vocabulary the stock screen uses
-(``NASDAQ``/``NYSE``/``AMEX``/``BATS``). Because ``exchange`` is written *fill-once*
-on upsert (a settled value is never clobbered), already-stored ``NYSEARCA`` rows
-would keep that value forever, so this rewrites them in place. No schema change.
-
-The downgrade can't faithfully restore which ``NYSE`` rows were Arca (the fold is
-lossy), so it's a deliberate no-op.
-
-Revision ID: 0019_etf_arca_nyse
-Revises: 0018_stocks_forward_growth
-Create Date: 2026-07-06
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

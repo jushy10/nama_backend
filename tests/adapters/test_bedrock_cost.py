@@ -1,12 +1,3 @@
-"""Tests for the shared Bedrock cost helper.
-
-Pure and offline: the cost math is a plain function, and the log line is captured
-via a handler attached directly to the module's own logger — not pytest's ``caplog``,
-which the Alembic-driven migration tests can disable (the project's log-assertion
-note). The handler capture also forces ``logger.disabled = False`` in case an earlier
-test left it disabled.
-"""
-
 import logging
 
 import pytest
@@ -34,7 +25,6 @@ class _Message:
 
 
 def _capture_logs(fn):
-    """Run ``fn`` with a handler attached to the cost logger; return the records."""
     records: list[logging.LogRecord] = []
     handler = logging.Handler()
     handler.emit = records.append  # type: ignore[method-assign]

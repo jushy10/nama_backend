@@ -1,11 +1,3 @@
-"""Tests for the options-flow slice: the entity derivations and the GetOptionsFlow use case.
-
-Offline — a hand-written fake implements the ``OptionsChainProvider`` port, so nothing
-touches Yahoo. The entity tests pin the domain rules (mid price, dollar premium, the
-unusual-activity tell, the per-side aggregates and the flow lean); the use-case tests pin
-the orchestration (expiry selection, the no-coverage empty read, and error propagation).
-"""
-
 from datetime import date
 
 import pytest
@@ -31,9 +23,6 @@ def _c(strike, option_type=OptionType.CALL, **kw) -> OptionContract:
         option_type=option_type,
         **kw,
     )
-
-
-# --- Entity: OptionContract derivations ---------------------------------------------------
 
 
 def test_mid_prefers_bid_ask_midpoint():
@@ -78,9 +67,6 @@ def test_unusual_needs_known_open_interest():
     assert fresh.volume_oi_ratio is None  # undefined over zero, but still flagged
 
 
-# --- Entity: OptionsFlowSummary + ExpiryChain ---------------------------------------------
-
-
 def test_summary_aggregates_per_side_and_derives_lean():
     contracts = [
         _c(100, OptionType.CALL, bid=1.9, ask=2.1, volume=100, open_interest=1000),  # mid 2.0
@@ -118,9 +104,6 @@ def test_expiry_chain_sorts_sides_and_ranks_unusual_by_premium():
     # Unusual, most money first: put (550k) > big call (500k) > small call (20k); calm excluded.
     assert [c.strike for c in chain.unusual] == [95, 120, 100]
     assert chain.summary.total_volume == 200 + 1000 + 10 + 5000
-
-
-# --- Use case: GetOptionsFlow -------------------------------------------------------------
 
 
 class _FakeProvider(OptionsChainProvider):

@@ -1,12 +1,3 @@
-"""Unit tests for the yfinance upgrades/downgrades adapter.
-
-No network: a fake Ticker (canned pandas frame) is injected through the factory. Verifies
-the adapter maps Yahoo's rating-action rows to entities, reads the date from the index (or a
-GradeDate column), orders newest-first, drops firmless/undated/duplicate rows, coerces junk
-targets to None, caps the stored window, treats an uncovered symbol as empty coverage (not an
-error), and turns vendor failures into domain errors.
-"""
-
 import pandas as pd
 import pytest
 
@@ -36,7 +27,6 @@ def provider_with(frame=None, error=None) -> YfinanceRatingChangeProvider:
 
 
 def _dated_frame(rows: list[tuple[str, dict]]) -> pd.DataFrame:
-    """rows: (GradeDate string, column dict) — mirrors Yahoo's date-indexed frame."""
     index = pd.to_datetime([when for when, _ in rows])
     index.name = "GradeDate"
     return pd.DataFrame([cols for _, cols in rows], index=index)

@@ -1,12 +1,3 @@
-"""Tests for the community stock-watcher Congressional-trades adapter.
-
-Offline: ``_parse_feed`` is exercised directly on canned House/Senate rows (its real shapes), and
-``fetch_recent_trades`` is driven with a fake ``_http`` so no network is touched. Covers the
-schema normalization (member key, disclosure date, sale-variant folding), ticker filtering
-(placeholders / non-equities dropped, dotted class suffix folded), the best-effort-per-feed
-degradation (one chamber down still returns the other), and the total-outage exception.
-"""
-
 from datetime import date
 
 import httpx
@@ -140,9 +131,6 @@ def test_parse_date_rejects_implausible_years():
 
 
 class _FakeHttp:
-    """A stand-in for httpx.Client: maps each feed URL to a canned (status, json) response, or an
-    error to raise."""
-
     def __init__(self, responses):
         self._responses = responses  # url -> (status, payload) | Exception
 

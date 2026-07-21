@@ -1,19 +1,3 @@
-"""HTTP API for the combined market-sentiment read.
-
-``GET /market/sentiment`` — the home page's at-a-glance "market mood": the VIX
-(from FRED) and the CNN Fear & Greed score (from CNN), in one payload. Controller
-+ presenter + wiring, the composition-root way, sitting in ``app/stocks/endpoints/``
-beside the other market reads. Both sources are keyless and live-per-request, so
-there's no table, no cron, and — like the ``/sectors`` and yield-curve reads — the
-wiring factories are local, keyless, and un-gated.
-
-Each leg is best-effort: the use case drops a failed source to ``null`` and only
-raises when *both* are unavailable, so a CNN block can't take the VIX down with
-it. The response is cached generously (15 min) — this backs a widget every home
-visitor hits, and both inputs move slowly (the VIX is an end-of-day close), so a
-burst of viewers collapses onto one upstream fetch.
-"""
-
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -82,7 +66,6 @@ def _present_fear_greed(fear_greed: FearGreedSnapshot) -> FearGreedResponse:
 
 
 def _present_sentiment(sentiment: MarketSentiment) -> MarketSentimentResponse:
-    """Presenter: the combined entity -> HTTP response DTO (either leg may be null)."""
     return MarketSentimentResponse(
         vix=_present_vix(sentiment.vix) if sentiment.vix is not None else None,
         fear_greed=(

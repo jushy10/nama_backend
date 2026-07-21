@@ -1,17 +1,3 @@
-"""create stock_quarterly_earnings
-
-The quarterly-earnings cache: a time-series child of the ``stocks`` anchor holding a
-stock's recent reported quarters and its upcoming ones — many rows per stock, one per
-fiscal quarter, unique on ``(stock_id, fiscal_year, fiscal_quarter)``. Mirrors
-app.stocks.earnings.quarterly.models. Filled lazily on a miss and refreshed by the
-quarterly-earnings cron endpoint (yfinance -> DB), so it starts empty. The ``stocks``
-anchor already exists (created in 0002), so this migration only adds the child table.
-
-Revision ID: 0003_stock_quarterly_earnings
-Revises: 0002_stocks_analyst_estimates
-Create Date: 2026-07-01
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

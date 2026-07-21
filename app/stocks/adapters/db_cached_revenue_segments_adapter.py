@@ -1,25 +1,3 @@
-"""Interface Adapter: a read-through database cache in front of any RevenueSegmentsProvider.
-
-The read path calls the database first; only on a **miss** (no stored rows for the symbol) does
-it hit SEC EDGAR, store the result, and return it. A symbol that already has rows is always
-served straight from the DB — the read never re-fetches based on age. Keeping stored rows
-current is entirely the out-of-band cron's job (``SyncRevenueSegments``), which merges each
-stock's newest filing on its schedule. This keeps the endpoint off EDGAR — a multi-request
-filing walk under a ~10 req/s ceiling — for all but the first view of a symbol.
-
-It implements ``RevenueSegmentsProvider``, so it slots into the wiring exactly where the bare
-SEC provider would, with the use case none the wiser.
-
-Resilience:
-
-- A cache *read* failure (DB hiccup) is treated as a miss, so a database problem falls through
-  to the live source rather than sinking the (best-effort) segments.
-- A cache *write* failure is swallowed: the caller still gets the freshly-fetched segmentation.
-- An empty live result is not stored (there'd be nothing to store), so a company with no
-  disaggregation simply re-checks the live source on its next view rather than being cached as
-  empty.
-"""
-
 import logging
 
 from app.stocks.revenue_segments.entities import RevenueSegmentation
@@ -30,8 +8,6 @@ logger = logging.getLogger(__name__)
 
 
 class DbCachedRevenueSegmentsProvider(RevenueSegmentsProvider):
-    """A read-through DB cache: serve stored rows, else fetch from the inner provider and store."""
-
     def __init__(
         self,
         inner: RevenueSegmentsProvider,

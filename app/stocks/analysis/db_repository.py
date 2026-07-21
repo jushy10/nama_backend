@@ -1,23 +1,3 @@
-"""Interface Adapter: the DB-backed AI-analysis result cache.
-
-Implements ``InvestmentAnalysisCache`` over the ``investment_analysis_cache`` table
-(``models.py``), mapping rows to and from the ``InvestmentAnalysis`` entity. Now the
-**ETF** analysis's cache — the stock endpoint moved to the sectioned
-``SqlStockScorecardCache`` (same table, ``sections`` column). One instance is bound to
-a *kind* (``"etf"`` in practice) and the request session, so a fund never collides
-with a stock of the same ticker.
-
-Being a cache, both operations are deliberately best-effort (the port's contract):
-
-- ``get`` treats *any* failure — a DB hiccup, or a row whose stored enum no longer
-  parses — as a miss and returns ``None``, so the caller cleanly regenerates.
-- ``put`` upserts by ``(kind, symbol)`` (select-then-update/insert, so it stays
-  dialect-agnostic across SQLite and Postgres) and swallows write failures — the
-  caller already holds the freshly-generated answer.
-
-Neither ever raises, so a cache problem can never sink an analysis request.
-"""
-
 import logging
 from datetime import timezone
 
@@ -32,8 +12,6 @@ logger = logging.getLogger(__name__)
 
 
 class SqlInvestmentAnalysisCache(InvestmentAnalysisCache):
-    """Read-through cache storage for one *kind* of analysis (stock or ETF)."""
-
     def __init__(self, session: Session, kind: str) -> None:
         self._session = session
         self._kind = kind
@@ -79,11 +57,6 @@ class SqlInvestmentAnalysisCache(InvestmentAnalysisCache):
 
 
 def _to_entity(row: AnalysisCacheRecord) -> InvestmentAnalysis | None:
-    """Map a stored row onto the entity, or ``None`` if it no longer parses.
-
-    A row written by an older build could carry a recommendation/confidence value
-    this build no longer knows; rather than raise, treat it as a miss so the caller
-    regenerates a valid one."""
     try:
         recommendation = Recommendation(row.recommendation)
         confidence = Confidence(row.confidence)

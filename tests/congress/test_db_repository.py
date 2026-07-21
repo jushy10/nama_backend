@@ -1,12 +1,3 @@
-"""Tests for the database-backed CongressTradesRepository.
-
-Offline: an in-memory SQLite database stands in for the real table. Verifies the round-trip
-(entities -> rows -> entities), the insert-only merge (a refresh adds only new trades and never
-rewrites a stored one, de-duping within a batch too), the prune to the newest N, the parent
-``stocks`` row + name fill-but-don't-clobber, the fetch stamp, the ``refresh_targets`` staleness
-order the sweep walks, the market-wide windowed read, and a clean miss.
-"""
-
 from datetime import date, datetime, timedelta, timezone
 
 import pytest

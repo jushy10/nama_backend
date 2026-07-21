@@ -1,29 +1,3 @@
-"""Database models + queries for the ETF slice.
-
-The ``etfs`` table this feature owns and its two child tables, plus simple, entity-free helpers
-over them. Unlike the earnings tables — child time-series hanging off the shared ``stocks``
-anchor — ``etfs`` is a **standalone anchor**: an ETF is not a company, so it lives in its own
-table rather than as a ``stocks`` row (which would leak funds into the stock universe search).
-``get_or_create_etf`` mirrors ``get_or_create_stock``'s fill-but-don't-clobber contract.
-
-``etfs`` carries three groups of columns:
-- identity (fill-once): ``ticker`` / ``name`` / ``exchange``;
-- the screen figures (refreshed every screen run): ``net_assets`` / ``expense_ratio`` /
-  ``screened_at``;
-- the per-fund *profile* the enrichment pass fills (``category`` + ``fund_family`` /
-  ``dividend_yield`` / ``description`` / ``nav``), stamped by ``profile_fetched_at``. The
-  trailing-return ladder is deliberately **not** stored — the detail card reads those live from
-  Yahoo (see ``EtfProfile``).
-
-The profile's list-valued halves live in their own child tables — ``etf_sector_weightings`` and
-``etf_top_holdings`` — each a delete-then-insert-per-fund set hanging off ``etfs`` with ON DELETE
-CASCADE. The concrete repository (``db_repository.py``) is the only caller; it maps these rows to
-and from the slice entities, so this layer deals only in rows and columns.
-
-The schema is created by migrations 0016 (``etfs``) and 0020 (the profile columns + child tables);
-0021 later drops the trailing-return ladder, which is served live from Yahoo instead of stored.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -47,25 +21,6 @@ from app.db import Base
 
 
 class EtfRecord(Base):
-    """A US ETF as stored — one row per fund, the screened top-ETF set.
-
-    ``id`` is a surrogate UUID; ``ticker`` is what everything is looked up by (unique). ``name``
-    and ``exchange`` are fill-once identity facts (nullable until the first screen that carries
-    them). ``net_assets`` (AUM, whole dollars) and ``expense_ratio`` (percent) are the screen
-    figures — a moving snapshot refreshed on every screen run; both nullable, since a given screen
-    may omit a figure. ``screened_at`` is when the last screen that included the fund ran.
-
-    The rest is the per-fund **profile** the enrichment pass fills from Yahoo's per-ticker surfaces
-    (the screen carries none of it): ``category`` is the classification slug (e.g. ``large_growth``);
-    ``fund_family`` / ``description`` are near-static facts; ``dividend_yield`` (a percent) and
-    ``nav`` (a raw per-share price) drift, so the enrichment pass refreshes them. The trailing-return
-    ladder (YTD / 3y / 5y) is **not** a column here — those drift the most and only the detail
-    card's ``performance`` block surfaces them, so the read path fetches them live from Yahoo
-    instead. ``profile_fetched_at`` stamps the last successful profile refresh (null until the
-    enrichment pass first reaches the fund) and orders the stalest-first refresh queue. The profile's
-    list halves (sector weightings, top holdings) live in the child tables below.
-    """
-
     __tablename__ = "etfs"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -89,14 +44,6 @@ class EtfRecord(Base):
 
 
 class EtfSectorWeightingRecord(Base):
-    """One sector's weight in one fund — a child of the ``etfs`` anchor.
-
-    Many rows per fund (one per sector), unique on ``(etf_id, sector)``. ``sector`` is the vendor's
-    sector key (a slug, e.g. ``technology``); ``weight`` is a percent of the fund. The enrichment
-    pass rewrites a fund's whole set at once (delete-then-insert), so every row for a fund shares
-    one ``fetched_at``.
-    """
-
     __tablename__ = "etf_sector_weightings"
     __table_args__ = (
         UniqueConstraint(
@@ -114,15 +61,6 @@ class EtfSectorWeightingRecord(Base):
 
 
 class EtfTopHoldingRecord(Base):
-    """One of a fund's largest positions — a child of the ``etfs`` anchor.
-
-    Many rows per fund, unique on ``(etf_id, position)`` — ``position`` is the largest-first rank
-    (0-based), the stable key here since a holding's ``ticker`` can be absent for an odd row.
-    ``ticker`` / ``name`` identify the holding and ``weight`` is its percent of the fund (all
-    nullable — a row contributes whatever it carries). Rewritten per-fund (delete-then-insert), so
-    every row shares one ``fetched_at``.
-    """
-
     __tablename__ = "etf_top_holdings"
     __table_args__ = (
         UniqueConstraint(
@@ -142,12 +80,6 @@ class EtfTopHoldingRecord(Base):
 
 
 def get_or_create_etf(session: Session, ticker: str, name: str | None) -> EtfRecord:
-    """Return the ``etfs`` row for ``ticker``, creating it if absent.
-
-    Fills a missing name when one is supplied, but never clobbers a known name with ``None`` —
-    the same fill-once contract ``get_or_create_stock`` applies. The new row is flushed so its
-    ``id`` is available within the same unit of work.
-    """
     etf = session.execute(
         select(EtfRecord).where(EtfRecord.ticker == ticker)
     ).scalar_one_or_none()
@@ -163,16 +95,6 @@ def get_or_create_etf(session: Session, ticker: str, name: str | None) -> EtfRec
 def profile_refresh_targets(
     session: Session, limit: int | None = None
 ) -> list[str]:
-    """The tickers whose profile most needs a refresh, stalest first — the enrichment pass's
-    work-list.
-
-    Every screened fund is a target (the profile figures drift, so there's no "done" state, unlike
-    the old fill-once category pass). Ordered **never-fetched first** (a NULL ``profile_fetched_at``
-    sorts ahead of any stamped fund), then oldest-refresh first, with ``ticker`` as a stable
-    tiebreak — so a capped, rate-limited run spends its budget on the funds most out of date and
-    successive capped runs round-robin the whole set rather than starving the tail. ``limit`` caps
-    the batch; ``None`` (the default) returns every fund, so one uncapped run refreshes all of them.
-    """
     stmt = (
         select(EtfRecord.ticker)
         .order_by(
@@ -189,8 +111,6 @@ def profile_refresh_targets(
 def sector_weightings_for_etf(
     session: Session, ticker: str
 ) -> list[EtfSectorWeightingRecord]:
-    """A fund's stored sector weightings (joined through the ``etfs`` anchor), weight descending.
-    Empty when nothing is stored for it yet."""
     return list(
         session.execute(
             select(EtfSectorWeightingRecord)
@@ -204,8 +124,6 @@ def sector_weightings_for_etf(
 def top_holdings_for_etf(
     session: Session, ticker: str
 ) -> list[EtfTopHoldingRecord]:
-    """A fund's stored top holdings (joined through the ``etfs`` anchor), largest first by stored
-    ``position``. Empty when nothing is stored for it yet."""
     return list(
         session.execute(
             select(EtfTopHoldingRecord)
@@ -217,8 +135,6 @@ def top_holdings_for_etf(
 
 
 def delete_sector_weightings_for_etf(session: Session, etf_id: uuid.UUID) -> None:
-    """Remove a fund's stored sector weightings, so a refresh can rewrite the set wholesale
-    (delete-then-insert) rather than diffing rows."""
     session.execute(
         delete(EtfSectorWeightingRecord).where(
             EtfSectorWeightingRecord.etf_id == etf_id
@@ -227,8 +143,6 @@ def delete_sector_weightings_for_etf(session: Session, etf_id: uuid.UUID) -> Non
 
 
 def delete_top_holdings_for_etf(session: Session, etf_id: uuid.UUID) -> None:
-    """Remove a fund's stored top holdings, so a refresh can rewrite the set wholesale
-    (delete-then-insert) rather than diffing rows."""
     session.execute(
         delete(EtfTopHoldingRecord).where(EtfTopHoldingRecord.etf_id == etf_id)
     )

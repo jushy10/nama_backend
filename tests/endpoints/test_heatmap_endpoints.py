@@ -1,10 +1,3 @@
-"""Endpoint tests for GET /market/heatmap.
-
-Offline: a fake use case injected through dependency_overrides + FastAPI's TestClient, so the
-route's controller/presenter/validation are exercised with no DB or vendor. The use case itself
-is unit-tested in tests/heatmap/test_heatmap.py.
-"""
-
 from __future__ import annotations
 
 from fastapi.testclient import TestClient

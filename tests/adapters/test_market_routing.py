@@ -1,10 +1,3 @@
-"""Unit tests for the market-routing price provider.
-
-No vendor: two recording fakes stand in for the US and CA feeds, so this checks only the
-dispatch — a Canadian-suffixed symbol goes to the CA feed, everything else to US — across all
-four per-symbol ports.
-"""
-
 from datetime import datetime, timezone
 
 import pytest
@@ -60,9 +53,6 @@ def test_base_ticker(symbol, expected):
 
 
 class _RecordingFeed:
-    """Records every symbol it was asked for and returns a tagged stub, so a test can prove
-    which feed a call was routed to."""
-
     def __init__(self, tag: str) -> None:
         self.tag = tag
         self.calls: list[tuple[str, str]] = []

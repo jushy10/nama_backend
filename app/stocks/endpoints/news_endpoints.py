@@ -1,17 +1,3 @@
-"""HTTP API for reading a stock's recent news.
-
-``GET /stocks/{symbol}/news`` — the read endpoint for the news slice: the stock's latest
-headlines, served from the DB cache over yfinance. Controller + presenter + wiring, the
-composition-root way, sitting in ``app/stocks/endpoints/`` beside the cron entrypoint
-(``cron_news_endpoints``) so all of the slice's HTTP lives in one place.
-
-Wiring convention: the process-singleton live provider is memoized with ``@lru_cache``
-while the DB cache is built per request (it needs the request session). A persistent DB
-cache (filled lazily on a miss, refreshed out of band by the cron endpoint) sits in front
-of Yahoo so the endpoint rarely calls it — Yahoo rate-limits, so the fewer live hits the
-better. yfinance needs no credential, so the endpoint is always wired.
-"""
-
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -65,7 +51,6 @@ def _present_article(article: NewsArticle) -> NewsArticleResponse:
 
 
 def _present(news: StockNews) -> StockNewsResponse:
-    """Presenter: stock-news entity -> HTTP response DTO."""
     latest = news.latest
     return StockNewsResponse(
         symbol=news.symbol,

@@ -1,25 +1,3 @@
-"""Batch CLI for the stock-data sync sweeps — ``python -m app.sync <slice> [limit]``.
-
-Runs one sync sweep to completion in the current process and exits (``0`` = success, non-zero
-= failure), so a sweep can be launched as a one-off ECS task instead of behind the HTTP API.
-It's the same work the ``/internal/*/sync`` cron endpoints trigger — but run directly, with no
-API Gateway 30s clock, so none of the endpoints' background-thread / single-flight machinery
-is needed: a one-off task is a single sweep by construction, and its exit code is the success
-signal.
-
-Like ``app.main`` (the web entrypoint) this is a composition-root/edge: it wires nothing new,
-it just dispatches to the per-slice ``run_*_sync`` runners the cron endpoints already expose,
-so both entrypoints share one tested implementation.
-
-``limit`` is optional and mirrors the cron endpoints' ``limit`` query param: omit it to process
-every stock (the default — earnings/recs seed the whole anchor un-cached-first; universe screens
-in full and enriches its own default cap; etfs screens in full and categorises every
-still-uncategorised fund), or pass a value to cap a single run.
-
-    python -m app.sync universe
-    python -m app.sync quarterly-earnings 500
-"""
-
 from __future__ import annotations
 
 import logging
@@ -80,7 +58,6 @@ RUNNERS: dict[str, Callable[[int | None], object]] = {
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Parse ``<slice> [limit]``, run that sweep, and return a process exit code."""
     args = list(sys.argv[1:] if argv is None else argv)
 
     if not args or args[0] not in RUNNERS:

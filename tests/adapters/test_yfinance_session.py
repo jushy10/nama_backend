@@ -1,20 +1,9 @@
-"""Tests for the shared yfinance retry/pacing helper.
-
-Offline: ``reset_crumb`` is re-patched in each test to a counter (overriding the conftest
-no-op stub) so nothing touches Yahoo's real singleton, and the wrapped ``fn`` is a plain
-callable. Backoff/pacing default to 0 (env unset), so these run instantly. Verifies the
-single crumb-refresh retry on both the swallowed-empty path and the raised-401 path, and
-that unrelated errors aren't retried.
-"""
-
 import pytest
 
 from app.stocks.adapters import yfinance_session
 
 
 def _count_resets(monkeypatch) -> list:
-    """Patch ``reset_crumb`` to append to (and return) a list, so a test can assert how many
-    fresh-crumb refreshes happened."""
     resets: list = []
     monkeypatch.setattr(yfinance_session, "reset_crumb", lambda: resets.append(1))
     return resets

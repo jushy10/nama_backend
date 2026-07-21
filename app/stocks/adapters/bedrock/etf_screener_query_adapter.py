@@ -1,35 +1,3 @@
-"""Interface Adapter: plain-English ETF screening via Claude on Amazon Bedrock.
-
-The only module that knows Bedrock (and the Anthropic SDK) exists for the AI ETF
-screener. It takes a user's request ("cheap S&P 500 index funds", "high-yield
-dividend ETFs", "gold funds by size") plus the stored set's current category
-vocabulary, and asks Claude to fill in the screen's own filters — returning an
-``EtfScreenIntent`` the use case hands back to the client to apply to the ordinary
-``GET /stocks/etfs`` search. The model only *chooses filters*; it never names funds,
-so an AI screen can only ever surface real screened rows. Swap models or vendors and
-only this file changes.
-
-The ETF sibling of ``screener_query_adapter.py`` (the stock screener) — same shape on
-every axis:
-
-* **Auth is the runtime's job.** Bedrock authenticates through the process's AWS
-  credentials (the ECS task role in production) — no API key to read or pass.
-* **Structured output via a forced tool call.** Claude must call one
-  ``build_etf_screen`` tool, so the response is validated JSON arguments mapping onto
-  ``EtfScreenIntent``, not prose to parse.
-* **Constrained vocabulary.** The category slugs currently in the stored set are
-  injected as an ``enum`` list on the tool schema *per call*, so the model can only
-  pick values the search can actually match. (The use case re-normalizes anyway, so it
-  degrades to "matches nothing" even if one leaked through.)
-
-The Anthropic SDK is imported lazily inside ``__init__`` so the app and the offline
-tests import cleanly without the ``bedrock`` extra; a test injects a stub client
-through the same seam. Any Bedrock/SDK failure is translated to
-``StockDataUnavailable`` — the one error the port documents (a 502 at the edge).
-
-Docs: https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
-"""
-
 from collections.abc import Sequence
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
@@ -61,18 +29,6 @@ _SYSTEM_PROMPT = (
 
 
 class BedrockEtfScreenerQueryTranslator(EtfScreenerQueryTranslator):
-    """Translates a plain-English ETF-screen request into an ``EtfScreenIntent`` with Claude on
-    Amazon Bedrock.
-
-    Defaults to the fast Haiku tier (``model_id``): the output is a short, structured filter set,
-    so speed matters more than extra reasoning. ``model_id`` / ``region`` are deploy-time config
-    (the id may be a cross-region inference profile), env-overridable so a deploy can swap models
-    without a code change. It shares the stock screener's ``BEDROCK_SCREENER_MODEL_ID`` env (one
-    screener-model config drives both). ``client`` is an injection seam — pass a ready-made client
-    (a test stub) to bypass the Anthropic SDK entirely; otherwise the Bedrock client is built
-    lazily and authenticates through the process's AWS credentials.
-    """
-
     # The same fast Haiku tier the analysis adapters default to; the full versioned id (the short
     # alias 400s on Bedrock). Env-overridable via BEDROCK_SCREENER_MODEL_ID (shared with the stock
     # screener — one screener-model config for both).
@@ -117,9 +73,6 @@ class BedrockEtfScreenerQueryTranslator(EtfScreenerQueryTranslator):
             costs.log(label="ai etf screen", model_id=self._model_id, key=query[:48])
 
     def _invoke(self, query: str, tool: dict, costs: CostAccumulator) -> dict | None:
-        """One forced-tool call, returning the ``build_etf_screen`` arguments (or ``None`` if the
-        model somehow didn't call the tool). Any SDK/botocore failure is mapped to this port's
-        documented ``StockDataUnavailable``; the call's token usage folds into ``costs``."""
         try:
             message = self._client.messages.create(
                 model=self._model_id,
@@ -138,10 +91,6 @@ class BedrockEtfScreenerQueryTranslator(EtfScreenerQueryTranslator):
 
 
 def _build_tool(categories: Sequence[str]) -> dict:
-    """Build the forced ``build_etf_screen`` tool, pinning the category field to the stored set's
-    *current* slugs (as an ``enum`` list) so the model can only choose values the search can match.
-    When the vocabulary is empty (nothing categorised yet) the field is omitted rather than offered
-    as an empty ``enum`` the model couldn't satisfy."""
     properties: dict = {
         "query": {
             "type": "string",
@@ -198,7 +147,6 @@ def _build_tool(categories: Sequence[str]) -> dict:
 
 
 def _tool_payload(message) -> dict | None:
-    """Pull the build_etf_screen arguments out of the model's tool call, if any."""
     for block in getattr(message, "content", None) or []:
         if (
             getattr(block, "type", None) == "tool_use"
@@ -211,12 +159,6 @@ def _tool_payload(message) -> dict | None:
 
 
 def _to_intent(payload: dict | None) -> EtfScreenIntent:
-    """Map the validated tool arguments onto the domain ``EtfScreenIntent``.
-
-    Defensive throughout: the forced-tool schema constrains the shape, but a stray or off-schema
-    value never raises — an unknown enum is dropped, a non-list field is treated as empty, a
-    non-positive limit as unset — so a screen request always yields a usable intent (an all-unset
-    one is a neutral browse). The use case re-normalizes on top of this."""
     if not payload:
         return EtfScreenIntent()
     query = payload.get("query")
@@ -232,8 +174,6 @@ def _to_intent(payload: dict | None) -> EtfScreenIntent:
 
 
 def _string_tuple(value) -> tuple[str, ...]:
-    """Coerce a list field into a tuple of non-empty, stripped strings (else empty), de-duplicated
-    with first-seen order kept."""
     if not isinstance(value, list):
         return ()
     return tuple(
@@ -242,7 +182,6 @@ def _string_tuple(value) -> tuple[str, ...]:
 
 
 def _enum_or_none(enum_cls, value):
-    """The ``enum_cls`` member for ``value``, or ``None`` when it's missing/unknown."""
     if not isinstance(value, str):
         return None
     try:
@@ -252,8 +191,6 @@ def _enum_or_none(enum_cls, value):
 
 
 def _positive_int_or_none(value) -> int | None:
-    """A positive int (the requested count), or ``None`` for missing/zero/negative/non-int.
-    A bool is rejected — it's an int subclass but never a valid count here."""
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     return value if value > 0 else None

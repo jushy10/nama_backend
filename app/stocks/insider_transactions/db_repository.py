@@ -1,14 +1,3 @@
-"""Interface Adapter: the SQLAlchemy-backed InsiderTransactionsRepository.
-
-Implements the ``repository.py`` port against the database. Its job is the mapping the read
-path must not see: it converts the ``InsiderTransaction`` entities to and from the ORM rows, and
-delegates every query to ``models.py``. Only this layer (and models) knows the tables exist; the
-domain entities stay free of SQLAlchemy. ``upsert`` is *insert-only* (adds only transactions not
-already stored — a filed transaction is a frozen fact), refreshes the fetch stamp on the stock's
-whole feed, prunes the history back to the newest ``_MAX_STORED_TRANSACTIONS``, and commits its
-own write, so a successful cache fill is durable independent of the request.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -53,13 +42,6 @@ def _to_entity(row: StockInsiderTransactionRecord) -> InsiderTransaction:
 
 
 class SqlInsiderTransactionsRepository(InsiderTransactionsRepository):
-    """Reads and writes the insider-transactions cache through a request-scoped session.
-
-    Holds the session the endpoint injects via ``get_db``, maps rows to and from the
-    ``InsiderTransaction`` entities, and delegates every query to ``models``. ``upsert`` commits
-    its own write so a successful cache fill is durable independent of the surrounding request.
-    """
-
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the fetch stamp deterministic in tests.

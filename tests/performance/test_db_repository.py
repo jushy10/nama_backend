@@ -1,13 +1,3 @@
-"""Tests for the database-backed stock-performance repository.
-
-Offline: an in-memory SQLite database stands in for the real ``stocks`` table (performance has
-no table of its own — the six window figures are denormalized columns on the anchor). Covers
-the stale-first, screened-only work-list ordering (un-synced first, then oldest) with its limit,
-and the ``set_performance`` write: the six windows + the freshness stamp, the skip of a ticker
-with no anchor row, the overwrite-to-``None`` of a window that lost history, and the written
-count.
-"""
-
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -58,9 +48,6 @@ def _perf(one_year=None, **windows):
     )
 
 
-# --- refresh_targets -----------------------------------------------------------------------
-
-
 def test_refresh_targets_unsynced_first_then_stalest(session):
     day = timedelta(days=1)
     _add(session, "FRESH", synced_at=_NOW)
@@ -86,9 +73,6 @@ def test_refresh_targets_respects_the_limit(session):
     _add(session, "C", synced_at=None)
 
     assert len(_repo(session).refresh_targets(2)) == 2
-
-
-# --- set_performance -----------------------------------------------------------------------
 
 
 def test_set_performance_writes_windows_and_stamp(session):

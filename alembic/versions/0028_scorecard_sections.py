@@ -1,20 +1,3 @@
-"""scorecard sections column
-
-Adds ``sections`` (nullable JSON) to ``investment_analysis_cache`` — the stock
-analysis endpoint moved from the flat ``strengths``/``risks`` bullet lists to a
-sectioned ``StockScorecard`` (business quality / valuation / earnings / analyst
-view), stored here for ``kind="stock"`` rows. Nullable: the ETF rows
-(``kind="etf"``) keep using ``strengths``/``risks`` and leave this null, and — being
-a cache — any pre-existing stock rows simply miss and regenerate into the new shape.
-
-The table already exists (``investment_analysis_cache`` from 0022), so this only
-alters it.
-
-Revision ID: 0028_scorecard_sections
-Revises: 0027_fcf
-Create Date: 2026-07-11
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

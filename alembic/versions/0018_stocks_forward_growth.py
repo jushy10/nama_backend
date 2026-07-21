@@ -1,19 +1,3 @@
-"""add forward YoY growth to stocks
-
-Adds the stock's latest *forward* year-over-year growth (percent) to the shared
-``stocks`` anchor: ``forward_revenue_growth_yoy`` and ``forward_eps_growth_yoy`` — the
-analyst-consensus FY1 -> FY2 change, the forward mirror of the trailing pair 0011 added
-(feeding the universe search's forward-growth sorts and the AI analysis context). Like the
-trailing snapshot, the annual-earnings slice overwrites these on every refresh, so a stock carries
-just the current pair. Both nullable: unset until the annual slice has two *upcoming*
-years cached (Yahoo often publishes only FY1, so this is frequently null). Batch mode so
-the ADD/DROP works on SQLite too.
-
-Revision ID: 0018_stocks_forward_growth
-Revises: 0017_stock_pe
-Create Date: 2026-07-06
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

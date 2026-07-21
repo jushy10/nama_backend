@@ -1,13 +1,3 @@
-"""Unit tests for the shared yfinance currency normalizer.
-
-No network: a fake ticker factory serves a canned FX-pair rate. Covers the reliable
-reporting→trading conversion (income-statement rows + revenue_estimate), the once-per-issuer
-detection of the *market* EPS currency (``earnings_dates`` + ``earnings_estimate``, from the
-``0y`` estimate against ``info['forwardEps']``) with its near-parity guard, and the
-best-effort identity fallbacks — a domestic issuer, missing/unreadable ``info``, and an
-unavailable FX rate — that keep this never-worse-than-doing-nothing.
-"""
-
 import pytest
 
 from app.stocks.adapters import yfinance_currency
@@ -15,16 +5,11 @@ from app.stocks.adapters.yfinance_currency import CurrencyNormalizer
 
 
 class _FxTicker:
-    """A Yahoo FX-pair ticker fake: exposes a ``fast_info`` last price (empty ⇒ unavailable)."""
-
     def __init__(self, rate=None):
         self.fast_info = {} if rate is None else {"last_price": rate}
 
 
 def _factory(rate):
-    """A ticker factory that returns an FX fake for the ``=X`` pair symbol (and asserts it's
-    only ever asked for that)."""
-
     fx_ticker = _FxTicker(rate)
 
     def factory(symbol):
@@ -110,9 +95,6 @@ def test_build_leaves_market_eps_on_trading_currency_without_a_sample():
         _factory(0.03125), _info("TWD"), market_eps_sample=None, market_eps_reference=20.0
     )
     assert normalizer.fx == 0.03125 and normalizer.market_fx == 1.0
-
-
-# --- the two conversions -----------------------------------------------------------------
 
 
 def test_to_trading_converts_reliable_fields_and_passes_none_through():

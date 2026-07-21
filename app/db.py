@@ -1,13 +1,3 @@
-"""Database setup: engine, session factory, Base, and the get_db dependency.
-
-The target comes from the DATABASE_URL environment variable, so the app runs on
-local SQLite by default and on PostgreSQL (RDS) when that variable is set, e.g.
-
-    postgresql+psycopg://user:pass@host:5432/nama?sslmode=require
-
-Tests don't set it, so they stay on fast in-memory SQLite.
-"""
-
 import os
 from collections.abc import Iterator
 
@@ -45,11 +35,10 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 
 class Base(DeclarativeBase):
-    """Base class for ORM models."""
+    pass
 
 
 def get_db() -> Iterator[Session]:
-    """Yield a request-scoped session and close it afterwards."""
     db = SessionLocal()
     try:
         yield db

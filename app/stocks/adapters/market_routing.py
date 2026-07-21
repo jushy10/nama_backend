@@ -1,18 +1,3 @@
-"""Interface Adapter: route a per-symbol price read to the right market's feed.
-
-Alpaca serves US equities in real time; it carries no Canadian (TSX/TSXV) data. So a per-symbol
-price view — the ticker card and the charts — dispatches by the symbol's market: a Canadian
-suffix (``.TO`` / ``.V`` / ``.NE`` / ``.CN``, Yahoo's convention, the same form the universe
-screen stores) routes to the Yahoo feed, everything else to Alpaca.
-
-This is a composition adapter, not a vendor one: it knows *no* vendor, only the two ports it
-delegates to (injected), so it stays swappable and testable like everything else. It implements
-the per-symbol price ports at once (quote / candles / performance / all-time-high / full
-snapshot) because the card, the chart, and the analysis-context use cases inject one provider
-that plays several of those roles — the same way the Alpaca singleton does. The batched board/bulk feeds (sectors, market, heat-map quotes)
-are US-only and keep using the Alpaca provider directly; only the per-symbol reads route.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime
@@ -44,15 +29,6 @@ class MarketRoutingPriceProvider(
     AllTimeHighProvider,
     CandleProvider,
 ):
-    """Dispatches each per-symbol price read to the US (Alpaca) or CA (Yahoo) feed by suffix.
-
-    ``us`` and ``ca`` each implement all five per-symbol price ports; this picks one per call.
-    A US symbol behaves exactly as before (straight to ``us``), so routing is transparent to
-    the existing US path; a Canadian-suffixed symbol goes to ``ca``. Implementing
-    ``AllTimeHighProvider`` too matters: the analysis context reads the injected provider as
-    one, so a router missing it would silently drop the all-time high for *US* symbols as well.
-    """
-
     def __init__(self, *, us, ca) -> None:
         self._us = us
         self._ca = ca

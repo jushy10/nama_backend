@@ -1,21 +1,3 @@
-"""Shared bearer-token guard for the fire-and-forget cron sync endpoints.
-
-Every ``/internal/*/sync`` endpoint writes the database (and hits Yahoo / Wikipedia) and is
-reachable over the public internet through the API Gateway, so each one depends on
-``require_cron_token`` to gate the trigger behind a shared secret. The GitHub sync workflows
-do **not** come through here — they run each sweep as a one-off ECS task via
-``python -m app.sync <slice>``, calling the ``run_*_sync`` runners directly — so this guard only
-protects the HTTP surface, which is now a manual / emergency trigger.
-
-The secret is ``CRON_SYNC_TOKEN``, read from the environment the composition-root way (like
-every other credential in this app; see the ``get_*`` factories in ``app/stocks/wiring.py``). The
-guard is deliberately **fail-closed**: if the token isn't configured the endpoints return
-``503`` and nothing can trigger a sync — the same "missing required credential -> 503" shape the
-router uses for the vendor keys. A caller whose bearer token is missing or wrong gets ``401``.
-The comparison is constant-time so a wrong token can't be recovered byte-by-byte from response
-timing.
-"""
-
 import os
 import secrets
 
@@ -35,13 +17,6 @@ _bearer = HTTPBearer(
 def require_cron_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> None:
-    """FastAPI dependency: allow the request only if it carries the shared cron token.
-
-    Raises ``503`` when ``CRON_SYNC_TOKEN`` is unset (fail-closed — an unconfigured guard blocks
-    everything rather than silently allowing it) and ``401`` when the caller's bearer token is
-    missing or doesn't match. Used as a route ``dependencies=[...]`` entry, so it injects nothing
-    into the handler; it only gates whether the handler runs.
-    """
     expected = os.environ.get("CRON_SYNC_TOKEN")
     if not expected:
         raise HTTPException(

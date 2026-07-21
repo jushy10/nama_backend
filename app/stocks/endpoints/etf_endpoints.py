@@ -1,43 +1,3 @@
-"""HTTP API for the ETF collection — the top-ETFs search, the category filter menu, and one
-fund's detail card.
-
-- ``GET /stocks/etfs`` — a paginated search/filter/sort over the screened top-ETF set stored in
-  the ``etfs`` table: a free-text ``q`` matched case-insensitively against name *or* ticker, a
-  ``category`` slug filter (the fund type), and a ``sort`` (net assets — the "top" default — or
-  expense ratio) with an ``order``. Rows are stored facts only — no live price; a client opens
-  ``GET /stocks/etf/{ticker}`` (below) for a live ETF quote (Alpaca serves ETFs too).
-- ``GET /stocks/etfs/categories`` — the distinct category slugs, for the FE's filter menu.
-- ``GET /stocks/etf/{ticker}`` — one fund's detail card: the **live quote** (Alpaca, primary —
-  the same Alpaca feed every price view uses, so a quote failure is a 502), the stored
-  ``etfs``-table facts (name/exchange/category), and the stored profile (fund family, description,
-  top holdings, sector weightings) read straight from the DB — populated out-of-band by the sync,
-  so the base card makes no live Yahoo call. Then **opt-in blocks** via ``?include=`` (repeat
-  or comma-separate; an unknown value is a 400): ``metrics`` (expense ratio, NAV, net assets),
-  ``dividends`` (yield), and ``performance`` (the ``1w``/``1m``/``3m``/``6m``/``ytd``/``1y``
-  trailing returns — the same gains format the stock endpoints serve — plus the 3y/5y annualized
-  returns, which are no longer stored and so come from a live Yahoo read made only for this block).
-  A symbol that isn't in the stored ETF universe is a **404** ("not an ETF"). A fund the sync
-  hasn't enriched yet just serves null/empty profile fields on a 200. Pay-per-use bites on
-  ``performance`` alone — it makes two live calls (the Alpaca windows + the Yahoo return ladder),
-  both best-effort; ``metrics``/``dividends`` ride the DB-read profile + stored facts, no extra call.
-- ``GET /stocks/etf/{ticker}/analysis`` — a plain-language, AI-generated buy/hold/sell read on the
-  fund (the ETF sibling of ``GET /stocks/{symbol}/analysis``). Assembles the fund's snapshot (the
-  same quote + stored facts + profile the detail card shows, with the trailing/long-term returns)
-  and asks Claude on Bedrock for a balanced read grounded only in those figures. Same error map as
-  the detail card (400 bad ticker / 404 not-an-ETF / 502 failed quote or model call), plus a 503
-  from the wiring when the optional ``bedrock`` extra isn't installed. Cached 5 min — model calls
-  are slow and metered.
-
-The two list routes are pure DB reads (``SqlEtfSearchRepository`` → ``SearchEtfs`` /
-``ListEtfCategories``), no vendor or key, so their only request error is a 400 (a bad
-``sort``/``order`` is a 422 from the enum binding). The detail route reuses the composition root's
-Alpaca provider (whose missing-keys 503 it inherits — the quote is primary) for both the quote and
-the opt-in trailing-return windows (it implements both ports), a DB read of the stored profile, and
-the keyless Yahoo profile provider that backs the performance block's live 3y/5y returns. The
-refresh that populates the table + profile (screen + profile enrichment) is the separate cron
-endpoint (``POST /internal/etfs/sync``).
-"""
-
 import os
 from functools import lru_cache
 
@@ -209,7 +169,6 @@ def get_etf_analysis_use_case(
 
 
 def _present_search(page: EtfSearchPage) -> EtfSearchResponse:
-    """Presenter: search-page entity -> HTTP response DTO."""
     return EtfSearchResponse(
         total=page.total,
         limit=page.limit,
@@ -231,12 +190,10 @@ def _present_search(page: EtfSearchPage) -> EtfSearchResponse:
 
 
 def _present_categories(categories: EtfCategories) -> EtfCategoriesResponse:
-    """Presenter: categories entity -> HTTP response DTO."""
     return EtfCategoriesResponse(categories=list(categories.categories))
 
 
 def _present_ai_etf_screen(intent: EtfScreenIntent) -> AiEtfScreenResponse:
-    """Presenter: the AI's EtfScreenIntent -> HTTP response DTO (the interpreted filters)."""
     return AiEtfScreenResponse(
         interpreted=AiEtfScreenInterpretationResponse(
             query=intent.query,
@@ -249,7 +206,6 @@ def _present_ai_etf_screen(intent: EtfScreenIntent) -> AiEtfScreenResponse:
 
 
 def _present_metrics(detail: EtfDetail) -> EtfMetricsResponse:
-    """The ``metrics`` block: the stored size/cost facts + Yahoo's NAV."""
     return EtfMetricsResponse(
         expense_ratio=detail.expense_ratio,
         nav=detail.profile.nav,
@@ -258,14 +214,10 @@ def _present_metrics(detail: EtfDetail) -> EtfMetricsResponse:
 
 
 def _present_dividends(detail: EtfDetail) -> EtfDividendsResponse:
-    """The ``dividends`` block: the fund's distribution yield (best-effort, off the profile)."""
     return EtfDividendsResponse(yield_percentage=detail.profile.dividend_yield)
 
 
 def _present_performance(detail: EtfDetail) -> EtfPerformanceResponse:
-    """The ``performance`` block: the Alpaca trailing windows (null when that best-effort read was
-    blocked) plus Yahoo's 3y/5y annualized returns — the latter overlaid onto the profile by the
-    use case from a live Yahoo read (no longer stored), likewise null when that read was blocked."""
     perf = detail.performance
     p = detail.profile
     return EtfPerformanceResponse(
@@ -281,15 +233,6 @@ def _present_performance(detail: EtfDetail) -> EtfPerformanceResponse:
 
 
 def _present_detail(detail: EtfDetail) -> EtfDetailResponse:
-    """Presenter: the assembled ETF detail -> HTTP response DTO.
-
-    The live quote's move (change/change_percent) rides its entity's derived properties — the same
-    rule as every other price view — while the stored facts and the profile's percent figures are
-    passed through already normalized by the use case / adapter (no rounding here: the figures are
-    the vendor's own, and rounding a percent like an expense ratio would lose precision). The
-    always-on Yahoo enrichment (fund family, description, holdings, sector weightings) is served
-    regardless; the metrics/dividends/performance blocks are emitted only when ``detail.include``
-    says they were requested (``null`` otherwise)."""
     quote = detail.quote
     p = detail.profile
     return EtfDetailResponse(
@@ -330,11 +273,6 @@ _ANALYSIS_DISCLAIMER = (
 
 
 def _present_etf_analysis(analysis: InvestmentAnalysis) -> EtfAnalysisResponse:
-    """Presenter: the AI analysis entity -> HTTP response DTO.
-
-    Maps the entity's ``symbol`` onto the ETF slice's ``ticker`` field, unpacks the enums to their
-    string values, turns the strengths/risks tuples into lists, and attaches the service-authored
-    disclaimer (the model never sees or controls it)."""
     return EtfAnalysisResponse(
         ticker=analysis.symbol,
         recommendation=analysis.recommendation.value,
@@ -434,8 +372,6 @@ def ai_search_etfs_endpoint(
     ),
     use_case: AiScreenEtfs = Depends(get_ai_etf_search_use_case),
 ) -> AiEtfScreenResponse:
-    """Translate a natural-language request into ETF-screen filters. A blank request is a 400; a
-    translation failure (the model/vendor couldn't parse it) is a 502."""
     try:
         intent = use_case.execute(query=q)
     except ValueError as exc:
@@ -487,14 +423,6 @@ def get_etf_analysis_endpoint(
     response: Response,
     use_case: GetEtfAnalysis = Depends(get_etf_analysis_use_case),
 ) -> EtfAnalysisResponse:
-    """A plain-language, AI-generated buy/hold/sell read on one fund — the ETF sibling of
-    ``GET /stocks/{symbol}/analysis``. Builds the fund's snapshot (the same quote + stored facts +
-    profile the detail card shows, plus the trailing/long-term returns) and asks Claude on Bedrock
-    for a balanced read grounded only in those figures.
-
-    Same error map as the detail card: a bad ticker is a 400, a non-ETF a 404, and a failed primary
-    (the live quote) or a failed model call a 502. A missing bedrock extra is a 503 from the wiring.
-    """
     try:
         analysis = use_case.execute(ticker)
     except ValueError as exc:

@@ -1,15 +1,7 @@
-"""Presenters for an ``EvalReport``: a human-readable summary and a machine-readable dict.
-
-Kept out of the entities (which stay pure data) and out of the use case (which stays policy):
-rendering is an edge concern. ``render_summary`` is what the CLI prints; ``to_dict`` is the JSON
-artifact a run writes for a dashboard or a diff against a previous run.
-"""
-
 from app.evals.entities import CaseResult, EvalReport
 
 
 def to_dict(report: EvalReport) -> dict:
-    """The report as plain JSON-serializable data: the run-level totals plus every case."""
     return {
         "total": report.total,
         "passed": report.passed,
@@ -35,8 +27,6 @@ def _case_to_dict(result: CaseResult) -> dict:
 
 
 def render_summary(report: EvalReport) -> str:
-    """A compact text report: a per-case pass/fail table then the run-level totals. The failing
-    cases carry the judge's reasoning inline so a reviewer sees *why* without opening the JSON."""
     lines = ["", "Eval results", "=" * 60]
     for result in report.results:
         mark = "PASS" if result.grade.passed else "FAIL"

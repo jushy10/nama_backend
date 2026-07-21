@@ -1,10 +1,3 @@
-"""Tests for the yfinance classification adapter (sector + industry + domicile from Ticker.info).
-
-Offline: a fake Ticker is injected through the adapter's ``ticker_factory`` seam, so this
-exercises the mapping (Yahoo display labels → snake_case slugs, country → ISO-2 domicile) and the
-vendor-error and missing-data handling without touching Yahoo.
-"""
-
 import pytest
 
 from app.stocks.adapters.yfinance_classification_adapter import (
@@ -15,8 +8,6 @@ from app.stocks.universe.entities import CompanyClassification
 
 
 class _FakeTicker:
-    """A stand-in for ``yf.Ticker`` exposing a canned ``.info`` (or raising on access)."""
-
     def __init__(self, info, *, error=None) -> None:
         self._info = info
         self._error = error

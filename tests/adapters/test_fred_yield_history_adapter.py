@@ -1,12 +1,3 @@
-"""Unit tests for the FRED 2Y/10Y yield history adapter.
-
-No network: the httpx client is swapped for a fake returning canned per-URL CSV
-text (the ``_http`` seam), and ``_today`` is pinned so the trailing-window cutoff
-is deterministic. Verifies both series parse into chronological observations, the
-``.``-missing rows and out-of-window dates drop, the two series pair into one
-``YieldHistory``, and an empty/failed series raises the domain error.
-"""
-
 from datetime import date
 from types import SimpleNamespace
 

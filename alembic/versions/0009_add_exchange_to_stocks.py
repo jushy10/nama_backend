@@ -1,17 +1,3 @@
-"""add exchange to stocks
-
-Adds the listing exchange (e.g. "NASDAQ") to the shared ``stocks`` anchor. Like
-``name``, it's anchor-level data any feature may fill — the ticker card fills it
-lazily from the Alpaca snapshot on first view and serves it from the DB after,
-because a stock's exchange effectively never changes, so one fetch per symbol is
-enough. Nullable — a lazily-created row starts without it. Batch mode so the
-ADD/DROP works on SQLite too.
-
-Revision ID: 0009_stocks_exchange
-Revises: 0008_annual_eps_consensus
-Create Date: 2026-07-03
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

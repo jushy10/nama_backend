@@ -1,17 +1,3 @@
-"""universe columns on stocks
-
-The searchable ≥$1B universe is folded straight into the ``stocks`` anchor rather than a
-separate membership table: this adds the three screen facts the universe sync fills —
-``sector``, ``market_cap`` and ``screened_at`` (the last-screen stamp). All nullable: a
-stock that reached ``stocks`` some other way (a ticker-card lookup, an earnings refresh)
-simply has them null, and search treats ``market_cap IS NOT NULL`` as "is a screened
-member". The ``stocks`` table already exists (created in 0002), so this only alters it.
-
-Revision ID: 0012_universe_on_stocks
-Revises: 0011_stocks_growth_yoy
-Create Date: 2026-07-04
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

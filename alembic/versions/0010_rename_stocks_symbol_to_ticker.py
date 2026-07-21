@@ -1,16 +1,3 @@
-"""rename stocks.symbol to ticker
-
-Renames the anchor's lookup column to the table vocabulary the API's card endpoint
-uses ("ticker"). A pure rename — data, uniqueness and the child tables' foreign keys
-(which point at ``stocks.id``, not the symbol) are untouched. The domain layers keep
-saying "symbol"; only the ORM attribute and column change. Batch mode so the rename
-works on SQLite too (Postgres gets a plain RENAME COLUMN).
-
-Revision ID: 0010_stocks_ticker
-Revises: 0009_stocks_exchange
-Create Date: 2026-07-03
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

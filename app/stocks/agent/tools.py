@@ -1,20 +1,3 @@
-"""The concrete tools the research agent can call.
-
-Each tool is a thin ``Tool`` over one of the app's existing read use cases: it advertises a
-``ToolSpec`` (name, purpose, argument schema) to the model, coerces the model's arguments onto
-the use case's parameters, runs it, and renders the result as compact plain text the model can
-read. Because every tool is backed by a real read of the screened universe or the live
-market-sentiment sources, the agent can only ever surface real data — it cannot reach a stock
-outside the universe or invent a figure.
-
-These sit at use-case level: like ``analysis`` orchestrating ``GetMarketOverview`` and
-``GetSectorPerformance``, they compose other slices' use cases (never a framework, pydantic, or
-a vendor SDK). Coercion is defensive throughout — an off-schema argument degrades to "unset"
-rather than raising, so a stray model value yields a neutral read, not a crashed loop.
-
-Adding a capability is one ``Tool`` subclass here plus one line in the endpoint's registry.
-"""
-
 from collections.abc import Sequence
 
 from app.stocks.agent.entities import ToolSpec
@@ -35,10 +18,6 @@ _MAX_SCREEN_ROWS = 15
 
 
 class SearchStocksTool(Tool):
-    """Screen the stored universe by sector, size, index membership, and a growth/value sort —
-    or look one ticker up by symbol/name via the free-text ``query``. Backed by ``SearchStocks``
-    (a pure DB read over the anchor), so it returns only real, screened rows."""
-
     def __init__(self, search: SearchStocks) -> None:
         self._search = search
 
@@ -135,9 +114,6 @@ class SearchStocksTool(Tool):
 
 
 class MarketSentimentTool(Tool):
-    """Read the current market mood — the VIX (volatility "fear gauge") and the CNN Fear &
-    Greed score. Backed by ``GetMarketSentiment`` (live keyless sources), takes no arguments."""
-
     def __init__(self, sentiment: GetMarketSentiment) -> None:
         self._sentiment = sentiment
 
@@ -176,13 +152,7 @@ class MarketSentimentTool(Tool):
         )
 
 
-# --- Row formatting ---------------------------------------------------------------------------
-
-
 def _format_row(row: StockSearchResult) -> str:
-    """One screened row as a compact, model-readable line: ticker, name, and whichever of the
-    anchor figures are present (a null figure is dropped, so thin coverage yields a shorter
-    line rather than a row full of 'N/A')."""
     bits: list[str] = [f"- {row.ticker}"]
     if row.name:
         bits.append(f"({row.name})")
@@ -201,7 +171,6 @@ def _format_row(row: StockSearchResult) -> str:
 
 
 def _human_usd(value: float) -> str:
-    """A market cap as a short human string ($1.2T / $340.0B / $12.3B / $850M)."""
     if value >= 1_000_000_000_000:
         return f"${value / 1_000_000_000_000:.1f}T"
     if value >= 1_000_000_000:

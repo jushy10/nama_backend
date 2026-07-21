@@ -1,18 +1,3 @@
-"""create stock_market_brief
-
-The daily-market-brief store: one row per calendar date holding an AI-written, plain-language
-read of how the whole US market moved that day — a headline ``tone``, a ``summary`` lede, and
-an ordered list of narrative ``sections`` (JSON). Unlike the other feature tables it hangs off
-**no** ``stocks`` anchor (a brief is about the market, not one company), so it's a standalone
-table keyed by ``brief_date`` (the primary key) — a brief is a durable, dated fact, written once
-per day by the sync-market-brief cron and served straight from here (never regenerated on a
-read). Mirrors app.stocks.brief.models.
-
-Revision ID: 0034_market_brief
-Revises: 0033_stock_performance
-Create Date: 2026-07-14
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

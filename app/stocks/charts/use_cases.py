@@ -1,11 +1,3 @@
-"""Application Business Rules: the chart use cases.
-
-Candles, EMA overlays and support levels — all derived from the same OHLC
-bars through the one ``CandleProvider`` port. The indicator math is pure
-domain logic (``indicators.py``); these use cases only fetch the window and
-delegate.
-"""
-
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -29,14 +21,10 @@ from app.stocks.entities import CandleSeries, Timeframe, normalize_symbol
 
 
 def _normalize_symbol(symbol: str) -> str:
-    """The shared kernel guard — accepts a Canadian ``.TO``/``.V``/``.NE``/``.CN`` suffix and
-    preserves it so the price router can dispatch on it."""
     return normalize_symbol(symbol)
 
 
 class GetStockCandles:
-    """Use case: retrieve historical OHLC candles for charting."""
-
     def __init__(self, provider: CandleProvider) -> None:
         self._provider = provider
 
@@ -78,30 +66,10 @@ _WARMUP_FACTOR = 3
 
 
 def _warmup_span(timeframe: Timeframe, max_period: int) -> timedelta:
-    """How far before the visible window to start fetching so an indicator needing
-    ``max_period`` bars of history is already computed by that window's first bar.
-    Shared by EMA, trend and the indicator bundle."""
     return _BAR_SPAN.get(timeframe, timedelta(days=1)) * max_period * _WARMUP_FACTOR
 
 
 class GetStockEma:
-    """Use case: compute EMA overlay line(s) for a symbol from its price history.
-
-    Reuses the CandleProvider port — EMA is derived from the same OHLC bars the
-    chart endpoint uses, so no extra data source is needed. The indicator math is
-    pure domain logic (``ema_series``); this use case only fetches the window and
-    delegates. One or more periods can be requested in a single call (e.g. the
-    9/21/50 overlay), each returned as its own line.
-
-    **Warmup.** An EMA's first value only lands ``period - 1`` bars in, so fetching
-    exactly the visible ``[start, end]`` would leave the chart's left edge bare
-    (and a deep period blank). So the fetch reaches an extra ``max(period)`` bars
-    *before* ``start``, computes over the longer series, then trims the result back
-    to the visible window — every on-screen candle then carries a value. A ``start``
-    of ``None`` (MAX) already pulls all available history, so there's nothing
-    earlier to warm from and nothing to trim.
-    """
-
     def __init__(self, provider: CandleProvider) -> None:
         self._provider = provider
 
@@ -140,17 +108,6 @@ class GetStockEma:
 
 
 class GetStockSupportLevels:
-    """Use case: detect horizontal support levels for a symbol from its price
-    history.
-
-    Reuses the CandleProvider port — support is read from the same OHLC bars the
-    chart endpoint uses, so no extra data source is needed. The detection math is
-    pure domain logic (``support_levels``); this use case only fetches the window
-    and delegates. Too little history (or no swing low below the current price)
-    yields an empty series rather than an error: the symbol exists, there just
-    isn't a level to draw.
-    """
-
     def __init__(self, provider: CandleProvider) -> None:
         self._provider = provider
 
@@ -184,26 +141,6 @@ _DEFAULT_LONG_PERIOD = 200
 
 
 class GetStockTrend:
-    """Use case: classify a symbol's short- and long-term trend from its price
-    history.
-
-    Reuses the CandleProvider port — trend is read from the same OHLC bars the chart
-    endpoint uses, so no extra data source is needed. The classification is pure
-    domain logic (``assess_trend``: the slope of a short and a long EMA); this use
-    case validates the horizons, fetches enough history to warm the long EMA, and
-    delegates.
-
-    **Warmup.** The long EMA's slope is measured over ``long_period`` bars, so it
-    needs roughly ``2 × long_period`` closes to exist. Like ``GetStockEma`` the fetch
-    reaches an extra ``long_period`` bars *before* ``start`` so the read is
-    well-formed even when the requested window is short — the trend as of ``end``
-    shouldn't depend on the chart's zoom (the same reasoning support levels use). The
-    long period is the deepest of the three, so warming it warms the medium and short
-    horizons too. A ``start`` of ``None`` (MAX) already pulls all history, so there's
-    nothing to reach back for. Unlike EMA there's no trim: trend is a single
-    point-in-time read, not a line drawn across the visible window.
-    """
-
     def __init__(self, provider: CandleProvider) -> None:
         self._provider = provider
 
@@ -246,30 +183,6 @@ class GetStockTrend:
 
 
 class GetStockIndicators:
-    """Use case: compute a requested set of technical indicators for a symbol from
-    its price history — the one endpoint that serves the whole indicator catalogue
-    (RSI, MACD, Bollinger, ATR, Stochastic, ADX, OBV, VWAP, Williams %R, CCI, ROC,
-    MFI, SMA, EMA).
-
-    Reuses the CandleProvider port — every indicator is derived from the same OHLCV
-    bars the chart endpoint uses, so no extra data source is needed. The math is pure
-    domain logic (``build_indicators``); this use case fetches the window **once** for
-    the whole set and delegates.
-
-    **Warmup + trim.** Like ``GetStockEma``, a smoothed indicator's first value lands
-    several bars in, so fetching exactly the visible ``[start, end]`` would leave the
-    left edge bare. The fetch reaches back the *deepest* requested indicator's warmup
-    (``indicator_warmup_bars``) before ``start``, computes over the longer series, then
-    trims each line back to the visible window. One fetch covers all requested
-    indicators — no matter how many, the provider is hit once. A ``start`` of ``None``
-    (MAX) already pulls all history, so there's nothing to reach back for or trim.
-
-    Note: the cumulative indicators (OBV/VWAP) anchor at the *fetched* window's first
-    bar, so requesting them alongside a deeper indicator shifts their anchor earlier —
-    harmless (OBV is read for slope; VWAP is a running average) and documented at the
-    endpoint.
-    """
-
     def __init__(self, provider: CandleProvider) -> None:
         self._provider = provider
 

@@ -1,11 +1,3 @@
-"""Offline tests for the fundamentals slice's use case (SyncFundamentals).
-
-The sync is driven through hand-written fakes for the two ports (the live source and the
-persistence repository), so nothing touches Yahoo or SQLAlchemy. Verifies the sweep walks the
-repository's stale-first work-list, writes each served snapshot, is best-effort per stock (a
-source failure is counted and skipped, never aborting), and skips a served-but-hollow snapshot.
-"""
-
 from __future__ import annotations
 
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
@@ -15,8 +7,6 @@ from app.stocks.fundamentals.use_cases import SyncFundamentals
 
 
 class FakeProvider:
-    """Returns a canned snapshot per symbol, or raises what the test configured for it."""
-
     def __init__(self, by_symbol: dict[str, Fundamentals | Exception]) -> None:
         self._by_symbol = by_symbol
         self.requested: list[str] = []
@@ -30,8 +20,6 @@ class FakeProvider:
 
 
 class FakeRepo(FundamentalsRepository):
-    """Serves a fixed work-list and records every upsert (symbol, name, snapshot)."""
-
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = targets
         self.requested_limit: int | None = "unset"  # type: ignore[assignment]
@@ -122,10 +110,6 @@ def test_sync_over_an_empty_worklist_is_a_noop():
 
 
 class SequenceProvider:
-    """Returns queued results per symbol in order (raising Exceptions), so a test can make a
-    symbol fail on the first pass and recover on a later one. The last queued result repeats for
-    any further calls."""
-
     def __init__(self, by_symbol: dict[str, list]) -> None:
         self._by_symbol = {k: list(v) for k, v in by_symbol.items()}
         self.requested: list[str] = []

@@ -1,19 +1,3 @@
-"""HTTP API for reading a stock's per-quarter earnings timeline.
-
-``GET /stocks/{symbol}/earnings/quarterly`` — the read endpoint for the quarterly-earnings
-slice: a stock's recent reported quarters plus its upcoming ones, served from the DB cache
-over yfinance. Controller + presenter + wiring, the composition-root way, sitting in
-``app/stocks/endpoints/`` beside the cron entrypoint (``cron_quarterly_earnings_endpoints``)
-so all of the slice's HTTP lives in one place.
-
-Wiring convention: the process-singleton live provider is memoized with
-``@lru_cache`` while the DB cache is built per request (it needs the request session). A
-persistent DB cache (filled lazily on a miss, refreshed out of band by the cron endpoint)
-sits in front of Yahoo so the endpoint rarely calls it — Yahoo rate-limits, so the fewer
-live hits the better. yfinance needs no credential, so the endpoint is always wired; a cold
-cache on a host Yahoo blocks just yields an empty timeline (best-effort).
-"""
-
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -86,7 +70,6 @@ def _present_quarter(quarter: QuarterlyEarnings) -> QuarterlyEarningsQuarterResp
 
 
 def _present(timeline: QuarterlyEarningsTimeline) -> QuarterlyEarningsResponse:
-    """Presenter: quarterly-earnings timeline entity -> HTTP response DTO."""
     return QuarterlyEarningsResponse(
         symbol=timeline.symbol,
         count=len(timeline.quarters),

@@ -1,20 +1,3 @@
-"""create stock_revenue_segments
-
-The revenue-segments cache: a time-series child of the ``stocks`` anchor holding a company's
-revenue disaggregation — many rows per stock, one per ``(fiscal_year, axis, member)`` figure,
-unique on those. Mirrors app.stocks.revenue_segments.models. Filled lazily on a miss and
-refreshed by the revenue-segments cron endpoint (SEC EDGAR 10-K -> DB), so it starts empty.
-Like the recommendations/news tables a refresh *merges* (a reported year's disaggregation is a
-frozen fact): it replaces the fiscal years the newest filing restated and keeps earlier years,
-so the store accumulates a longer history than any single 10-K shows — pruned to the newest N
-years per stock (in the repository) so it stays bounded. The ``stocks`` anchor already exists
-(created in 0002), so this migration only adds the child table.
-
-Revision ID: 0026_revenue_segments
-Revises: 0025_analyst_rating_changes
-Create Date: 2026-07-09
-
-"""
 from typing import Sequence, Union
 
 from alembic import op

@@ -1,11 +1,3 @@
-"""Tests for the news read endpoint (GET /stocks/{symbol}/news).
-
-Offline: a fake GetStockNews is injected through dependency_overrides + FastAPI's
-TestClient, so this checks only the controller + presenter — the JSON shape (fields,
-is_video, latest, count), the cache header, empty coverage as a 200 (not a 404), and the
-error mapping — without touching Yahoo or the database.
-"""
-
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
@@ -17,8 +9,6 @@ from app.stocks.news.entities import NewsArticle, StockNews
 
 
 class _FakeUseCase:
-    """Stands in for GetStockNews; returns a canned run or raises."""
-
     def __init__(self, *, result=None, error=None) -> None:
         self._result = result
         self._error = error

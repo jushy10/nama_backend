@@ -1,11 +1,3 @@
-"""Tests for the options-flow endpoint (GET /stocks/ticker/{ticker}/options).
-
-Offline: a fake use case injected through dependency_overrides + FastAPI's TestClient, so
-this checks only the controller + presenter — the JSON shape (symbol renamed to ``ticker``,
-IV rendered as a percent, the per-contract premium/unusual fields), the expiry pass-through,
-the unusual-list cap, the cache header, the no-coverage empty read, and the error mapping.
-"""
-
 from datetime import date
 
 import pytest

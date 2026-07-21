@@ -1,13 +1,3 @@
-"""Unit tests for the Treasury par-yield curve adapter.
-
-No network: the httpx client is swapped for a fake returning canned per-URL CSV
-text (the ``_http`` seam), and ``_today`` is pinned so the requested year is
-deterministic. Verifies the latest row is chosen regardless of row order,
-columns map to labelled tenors sorted shortest-first, blank cells and unknown
-columns are dropped, an empty current-year file falls back to the prior year,
-and transport/non-200 failures raise the domain error.
-"""
-
 from datetime import date
 from types import SimpleNamespace
 
@@ -24,8 +14,6 @@ def _url(year: int) -> str:
 
 
 class FakeHttpClient:
-    """Fake httpx client: canned CSV text per requested URL, optional status/error overrides."""
-
     def __init__(self, *, pages=None, status=None, errors=()):
         self._pages = pages or {}
         self._status = status or {}

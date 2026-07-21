@@ -1,13 +1,3 @@
-"""Tests for the yfinance fundamentals adapter (trailing fundamentals from Ticker.info).
-
-Offline: a fake Ticker (canned ``.info``) is injected through the adapter's ``ticker_factory``
-seam, so this exercises the field mapping, the per-field unit normalization (margins/ROE are
-fractions, debtToEquity is a percent, currentRatio/beta are plain figures), the per-share
-inputs, the foreign-ADR currency normalization of the reporting-currency figures, and the
-failure contract — **raises on a hard/empty ``.info`` read**, best-effort per field past that —
-without touching Yahoo.
-"""
-
 import pytest
 
 from app.stocks.adapters.yfinance_fundamentals_adapter import (
@@ -38,8 +28,6 @@ _AAPL_INFO = {
 
 
 class _FakeTicker:
-    """A stand-in for ``yf.Ticker`` exposing a canned ``.info`` (may raise on access)."""
-
     def __init__(self, info, *, info_error=None, fast_info=None):
         self._info = info
         self._info_error = info_error

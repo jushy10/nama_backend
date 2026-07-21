@@ -1,13 +1,3 @@
-"""Unit tests for the Wikipedia index-membership adapter.
-
-No network: the httpx client is swapped for a fake returning canned per-URL page HTML (the same
-``_http`` seam the Finnhub adapter test used). Verifies both rosters are parsed + normalized
-(``BRK.B`` -> ``BRK-B``); the ticker column is chosen by header (``Symbol`` / ``Ticker``) so the
-page's *changes* table is ignored; the larger roster wins when two candidate tables exist; a
-single failing page degrades to empty (the other still syncs); and both failing raises the domain
-error.
-"""
-
 from types import SimpleNamespace
 
 import httpx
@@ -21,7 +11,6 @@ from app.stocks.exceptions import StockDataUnavailable
 
 
 def _roster_table(header: str, tickers) -> str:
-    """A constituents table whose ticker column is headed ``header`` (``Symbol`` or ``Ticker``)."""
     rows = "".join(f"<tr><td>{t}</td><td>{t} Inc</td><td>Tech</td></tr>" for t in tickers)
     return (
         f"<table><tr><th>{header}</th><th>Security</th><th>Sector</th></tr>{rows}</table>"
@@ -41,9 +30,6 @@ def _page(*tables: str) -> str:
 
 
 class FakeHttpClient:
-    """Fake httpx client: returns canned page HTML per requested URL. Per URL you can supply the
-    body, a status_code override, or a transport error. Records every URL fetched."""
-
     def __init__(self, *, pages=None, status=None, errors=()):
         self._pages = pages or {}  # url -> html
         self._status = status or {}  # url -> status_code

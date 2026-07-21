@@ -1,12 +1,3 @@
-"""Tests for the market-brief cron endpoint (POST /internal/market-brief/sync).
-
-Offline: a fake sync runner is injected through dependency_overrides, so this checks only the
-controller — it accepts a trigger, runs the generation in the background, and guards against
-overlapping runs — without touching Alpaca, Bedrock, or the database. Mirrors
-test_cron_news_endpoints.py; the ``limit`` is accepted but ignored (the brief is a single unit
-of work).
-"""
-
 from datetime import date
 
 from fastapi import FastAPI

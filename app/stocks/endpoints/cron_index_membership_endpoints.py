@@ -1,37 +1,3 @@
-"""HTTP API for invoking the index-membership refresh — the cron entrypoint.
-
-The refresh is a use case (``SyncIndexMembership``) driven over HTTP: a scheduler (the
-sync-index-membership GitHub workflow, or any cron) POSTs here to kick it off. The workflow now
-launches this as a one-off ECS task via ``python -m app.sync index-membership`` (reusing
-``run_index_membership_sync`` below), the same shape as the other sync sweeps; this endpoint
-stays as the runner's source and for a manual/HTTP trigger.
-
-The run is **fire-and-forget**, the same shape as the earnings/recommendations crons: it
-schedules the work on a background thread and returns ``202`` at once, so it can't 504 at the
-API Gateway's hard 30s integration timeout. The shared ``background_sync`` helper owns the
-threading, the single-flight guard, and the exception handling (see it for the full rationale).
-
-Unlike the per-symbol earnings sweeps there is **no stalest-N ``limit``**: the reconcile always
-processes the whole membership set (it's a full mark/clear against both index lists), so the
-endpoint exposes no ``limit`` query param and passes ``0`` to the shared helper. The ``limit: 0``
-that then appears in the ``202`` body is a cosmetic artefact of the shared ``SyncTriggerResponse``
-shape; it means nothing here.
-
-Wiring lives here, the composition-root way: ``run_index_membership_sync`` opens a fresh session
-and builds the Wikipedia adapter + the SQL repository for the use case. The membership source is
-Wikipedia's S&P 500 / Nasdaq-100 rosters — **keyless** (this replaced Finnhub's paid, and
-403-gated, ``/index/constituents``), so there is no credential to gate on and the sync is always
-constructable, like the universe sweep. A source failure (e.g. Wikipedia unreachable, or a page
-whose roster can't be parsed) surfaces later as a logged failure inside ``background_sync``, not
-a startup error.
-
-Security: the trigger is guarded by a shared bearer token. The endpoint depends on
-``require_cron_token`` (see ``cron_auth``), which requires ``Authorization: Bearer
-$CRON_SYNC_TOKEN`` and is **fail-closed** — an unset token is a ``503``, a missing or wrong one
-a ``401``. The sync workflow no longer POSTs here (it runs the reconcile as a one-off ECS task
-via ``python -m app.sync``), so this guard only gates the manual / HTTP trigger.
-"""
-
 import logging
 import threading
 
@@ -62,11 +28,6 @@ _sync_lock = threading.Lock()
 
 
 def run_index_membership_sync(_limit: int) -> IndexMembershipSyncReport:
-    """Perform one full reconcile with its **own** DB session (the request-scoped ``get_db`` one
-    is closed by the time the background thread runs). The ``_limit`` from the shared runner
-    signature is ignored — this reconcile is always a full mark/clear against both index lists,
-    not a stalest-N sweep. The Wikipedia source is keyless, so there's nothing to read from the
-    env."""
     db = SessionLocal()
     try:
         report = SyncIndexMembership(
@@ -90,10 +51,6 @@ def run_index_membership_sync(_limit: int) -> IndexMembershipSyncReport:
 
 
 def get_sync_runner() -> SyncRunner:
-    """DI seam for the reconcile's unit of work; tests override it with a fake.
-
-    The Wikipedia source is keyless, so — unlike the old Finnhub wiring — there's no API key to
-    gate on: the runner is always available (the same shape as the universe sweep)."""
     return run_index_membership_sync
 
 

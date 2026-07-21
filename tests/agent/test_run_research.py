@@ -1,12 +1,3 @@
-"""Tests for the research-agent loop (RunResearch).
-
-Offline and vendor-free: a scripted fake ``ConversationModel`` returns a canned sequence of
-model turns (recording what it was asked each call), and fake tools return canned output or
-raise. This exercises the whole loop policy — direct answers, single- and multi-tool rounds,
-the transcript fed back to the model, unknown-tool and tool-error recovery, and the forced final
-turn when the step budget is spent — with no Bedrock and no network.
-"""
-
 import pytest
 
 from app.stocks.agent.entities import ModelTurn, ToolCall, ToolSpec
@@ -18,9 +9,6 @@ from app.stocks.agent.use_cases import (
 
 
 class _ScriptedModel:
-    """Returns the next scripted ModelTurn each call, recording the (system, messages, tools)
-    it was handed so the test can assert on the transcript and the tool offering."""
-
     def __init__(self, turns) -> None:
         self._turns = list(turns)
         self.calls: list[dict] = []
@@ -34,8 +22,6 @@ class _ScriptedModel:
 
 
 class _FakeTool(Tool):
-    """A tool with a fixed name that returns canned output or raises."""
-
     def __init__(self, name, *, output="ok", raises=None) -> None:
         self._name = name
         self._output = output
@@ -178,9 +164,6 @@ def test_empty_forced_answer_falls_back_to_a_message():
     )
     result = RunResearch(model, [_FakeTool("echo")], max_steps=1).execute("q")
     assert result.answer == _EMPTY_ANSWER_FALLBACK
-
-
-# --- Input validation --------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("blank", ["", "   ", "\n\t"])

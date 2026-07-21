@@ -1,13 +1,3 @@
-"""Interface Adapter: the SQLAlchemy-backed PerformanceRepository.
-
-Implements ``repository.py`` against the shared ``stocks`` anchor — trailing performance has
-no table of its own, so the six window figures are written straight onto ``stocks`` (the
-``perf_*`` columns plus the ``performance_synced_at`` stamp). Only this layer touches
-SQLAlchemy. ``set_performance`` commits its own write, so a successful refresh is durable
-independent of the surrounding request; ``refresh_targets`` is the stale-first read the sweep
-drives off.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -22,10 +12,6 @@ from app.stocks.stocks.models import StockRecord
 
 
 class SqlPerformanceRepository(PerformanceRepository):
-    """Reads the stale-first work-list and writes trailing performance onto the ``stocks``
-    anchor through a request-scoped session. ``set_performance`` commits its own write so a
-    successful refresh is durable independent of the surrounding request."""
-
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the sync stamp deterministic in tests.

@@ -1,20 +1,3 @@
-"""HTTP API for reading a company's revenue disaggregation.
-
-``GET /stocks/{symbol}/revenue-segments`` — the read endpoint for the revenue-segments slice: a
-company's revenue broken down by operating segment, product/service line, and geography, newest
-fiscal year first, served from the DB cache over SEC EDGAR. Controller + presenter + wiring, the
-composition-root way, sitting in ``app/stocks/endpoints/`` beside the cron entrypoint
-(``cron_revenue_segments_endpoints``) so all of the slice's HTTP lives in one place.
-
-Wiring mirrors the earnings read paths: the process-singleton live provider is memoized with
-``@lru_cache`` while the DB cache is built per request (it needs the request session). A
-persistent DB cache (filled lazily on a miss, refreshed out of band by the cron endpoint) sits
-in front of EDGAR so the endpoint rarely walks the filing — SEC asks clients to stay under ~10
-req/s, so the fewer live hits the better. EDGAR needs no credential, so the endpoint is always
-wired; a cold cache for a company that reports no disaggregation (or a foreign 20-F filer) just
-yields an empty list (best-effort).
-"""
-
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -86,7 +69,6 @@ def _present_segment(segment: RevenueSegment) -> RevenueSegmentResponse:
 
 
 def _present(segmentation: RevenueSegmentation) -> RevenueSegmentationResponse:
-    """Presenter: revenue-segmentation entity -> HTTP response DTO."""
     return RevenueSegmentationResponse(
         symbol=segmentation.symbol,
         count=len(segmentation.segments),

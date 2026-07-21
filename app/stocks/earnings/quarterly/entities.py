@@ -1,19 +1,3 @@
-"""Entities: a stock's per-quarter earnings timeline.
-
-Slice-local domain objects (this sub-slice keeps its own ``entities`` rather than
-reaching into the shared ``app/stocks/entities.py``). Pure and vendor-agnostic — they
-import stdlib only and model both halves of the timeline in one shape:
-
-- **Reported** quarters carry the actual EPS, the consensus estimate that preceded it,
-  and the surprise (``eps_actual`` is set).
-- **Upcoming** quarters carry the forward consensus (``eps_actual`` is ``None`` — not yet
-  reported) and, for the nearest quarters, a forward revenue estimate.
-
-``eps_actual is None`` is the single discriminator between the two — one shape unions
-an actual with the estimate that preceded it. Any field beyond the fiscal identity may
-be ``None`` when the source didn't cover it.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -22,19 +6,6 @@ from enum import Enum
 
 
 class EarningsSession(str, Enum):
-    """When in the US trading day a company announces earnings, relative to the session.
-
-    The market-timing signal a trader wants: a *before-market-open* report is priced in
-    at that morning's open, an *after-market-close* one at the next open. Derived from the
-    announcement's time-of-day (Yahoo carries it in Eastern time on the ``earnings_dates``
-    index), so it's a fact about the announcement, not the vendor — the boundaries live
-    here as domain, while the adapter handles the timezone normalization that feeds them.
-
-    ``UNKNOWN`` is the honest default when no usable time is published (Yahoo's placeholder
-    is midnight, not a real 00:00 announcement) — kept distinct from a real intraday
-    ``DURING`` so a client can tell "we don't know" from "mid-session".
-    """
-
     BMO = "bmo"  # before market open (< 9:30 ET)
     AMC = "amc"  # after market close (>= 16:00 ET)
     DURING = "during"  # intraday, between the open and close (rare)
@@ -42,12 +13,6 @@ class EarningsSession(str, Enum):
 
     @classmethod
     def from_local_time(cls, when: time | None) -> "EarningsSession":
-        """Classify an Eastern-time announcement time into its session.
-
-        ``None`` or midnight (Yahoo's "time not supplied" placeholder — no company
-        announces at exactly 00:00 ET) yields ``UNKNOWN``; otherwise the regular-session
-        boundaries 9:30 / 16:00 ET split before-open / intraday / after-close.
-        """
         if when is None or when == time(0, 0):
             return cls.UNKNOWN
         if when < time(9, 30):
@@ -59,17 +24,6 @@ class EarningsSession(str, Enum):
 
 @dataclass(frozen=True)
 class QuarterlyEarnings:
-    """One fiscal quarter: the estimate going in and, once reported, the actual.
-
-    ``fiscal_year`` / ``fiscal_quarter`` are the quarter's identity (and the row's
-    unique key). ``eps_actual`` is ``None`` until the quarter is reported, so it also
-    tells reported quarters apart from upcoming ones. ``revenue_actual`` is the reported
-    revenue for a past quarter and ``revenue_estimate`` the forward consensus for an
-    upcoming one, so the two are naturally exclusive: a reported quarter carries the
-    actual, an upcoming one the estimate (populated only for the nearest quarters Yahoo
-    publishes). All revenue figures are raw (e.g. USD).
-    """
-
     fiscal_year: int
     fiscal_quarter: int  # 1–4
     period_end: date | None  # fiscal period end
@@ -86,16 +40,10 @@ class QuarterlyEarnings:
 
     @property
     def is_reported(self) -> bool:
-        """Whether the quarter has been reported (``eps_actual`` is known)."""
         return self.eps_actual is not None
 
     @property
     def beat(self) -> bool | None:
-        """Whether the quarter met or beat its estimate (``actual >= estimate``).
-
-        Meeting counts as a beat. ``None`` when either side is missing (e.g. an
-        upcoming quarter), so an unknowable quarter stays distinct from a real miss.
-        """
         if self.eps_actual is None or self.eps_estimate is None:
             return None
         return self.eps_actual >= self.eps_estimate
@@ -103,45 +51,23 @@ class QuarterlyEarnings:
 
 @dataclass(frozen=True)
 class QuarterlyEarningsTimeline:
-    """A stock's recent reported quarters plus its upcoming ones.
-
-    ``quarters`` runs in chronological order — ascending by ``(fiscal_year,
-    fiscal_quarter)``, so the oldest reported quarter leads through to the furthest
-    upcoming one. The ``past`` / ``future`` views split it on ``is_reported`` while
-    preserving that order (past = oldest→newest reported, future = soonest→furthest
-    upcoming). Best-effort: an uncovered symbol yields an empty (``is_empty``) timeline
-    rather than an error, the same contract the annual slice uses.
-    """
-
     symbol: str
     quarters: tuple[QuarterlyEarnings, ...]
 
     @property
     def is_empty(self) -> bool:
-        """True when no quarter — reported or upcoming — is carried."""
         return not self.quarters
 
     @property
     def past(self) -> tuple[QuarterlyEarnings, ...]:
-        """The reported quarters, oldest first."""
         return tuple(q for q in self.quarters if q.is_reported)
 
     @property
     def future(self) -> tuple[QuarterlyEarnings, ...]:
-        """The upcoming (not-yet-reported) quarters, soonest first."""
         return tuple(q for q in self.quarters if not q.is_reported)
 
     @property
     def ttm_eps(self) -> float | None:
-        """Trailing-twelve-month EPS: the sum of the 4 newest reported quarters'
-        ``eps_actual``.
-
-        On the analyst-consensus (adjusted) basis, since that's the basis
-        ``eps_actual`` is quoted on — which makes it the trailing anchor
-        comparable with the forward consensus estimates. ``None`` with fewer
-        than 4 reported quarters: a partial sum understates the year and would
-        poison any multiple built on it.
-        """
         reported = self.past
         if len(reported) < 4:
             return None
@@ -150,24 +76,6 @@ class QuarterlyEarningsTimeline:
     def filled_from(
         self, stored: "QuarterlyEarningsTimeline | None"
     ) -> "QuarterlyEarningsTimeline":
-        """This (freshly fetched) timeline with its holes filled from a stored one.
-
-        The refresh guard: Yahoo intermittently blocks parts of a fetch from
-        data-centre IPs (the income-statement revenue hardest), and a refresh
-        rewrites a stock's whole window — so without this, a degraded fetch would
-        overwrite good stored figures with ``None``. Reported figures never change
-        once published, so carrying the stored value forward is always correct:
-
-        - a fresh quarter's missing figures are taken from the stored quarter with
-          the same fiscal key (a reported quarter's estimate fields excluded —
-          ``revenue_estimate`` stays an upcoming-quarter concept);
-        - a stored *reported* quarter is never downgraded — it wins outright over a
-          fresh not-yet-reported row for the same key;
-        - stored *reported* quarters absent from the fresh window are retained,
-          capped to the newest ``max(fresh, stored)`` reported counts so outage
-          protection never grows the served window run over run (stored *upcoming*
-          quarters are not retained — consensus legitimately rolls off).
-        """
         if stored is None or stored.is_empty:
             return self
         stored_by_key = {(q.fiscal_year, q.fiscal_quarter): q for q in stored.quarters}
@@ -198,17 +106,12 @@ class QuarterlyEarningsTimeline:
 def _session_or(
     fresh: EarningsSession, stored: EarningsSession
 ) -> EarningsSession:
-    """Fresh session wins unless it's UNKNOWN, in which case carry the stored one forward
-    — a fetch that came back without a usable time must not wipe a known session."""
     return fresh if fresh is not EarningsSession.UNKNOWN else stored
 
 
 def _merged_quarter(
     fresh: QuarterlyEarnings, stored: QuarterlyEarnings | None
 ) -> QuarterlyEarnings:
-    """One fiscal quarter merged for a refresh: fresh values win, stored values fill
-    the holes. A stored reported quarter beats a fresh not-yet-reported one outright
-    (a published actual never un-reports)."""
     if stored is None:
         return fresh
     if stored.is_reported and not fresh.is_reported:

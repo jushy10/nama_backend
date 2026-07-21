@@ -1,13 +1,3 @@
-"""Tests for the database-backed InstitutionalOwnershipRepository.
-
-Offline: an in-memory SQLite database stands in for the real tables. Verifies the round-trip
-(entities -> rows -> entities) including the canonical newest-quarter-first order, the *merge* on
-upsert (a re-served snapshot replaced by (type, quarter), earlier quarters kept, a dropped holder
-removed), the retention *cap* that bounds the accumulated history, the single overwritten breakdown
-row, the parent ``stocks`` row + name fill-but-don't-clobber, a clean miss, and the last-refresh
-(max fetch stamp) ordering of refresh targets.
-"""
-
 from datetime import date, datetime, timedelta, timezone
 
 import pytest

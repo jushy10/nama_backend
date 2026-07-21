@@ -1,11 +1,3 @@
-"""Tests for the revenue-segments use cases: GetRevenueSegments + SyncRevenueSegments.
-
-Offline: hand-written fakes for the provider and repository ports, so this exercises only the
-orchestration — symbol normalization and pass-through on the read side; which targets are
-refreshed, in what order, failure/empty handling, and the per-run limit on the sync side —
-independent of SEC or the DB.
-"""
-
 from datetime import date
 
 import pytest
@@ -35,9 +27,6 @@ def _segmentation(symbol: str) -> RevenueSegmentation:
             RevenueSegment(2024, date(2024, 12, 31), SegmentAxis.BUSINESS, "A", 100e9),
         ),
     )
-
-
-# ───────────────────────────── GetRevenueSegments ─────────────────────────────
 
 
 class _FakeReadProvider(RevenueSegmentsProvider):
@@ -73,9 +62,6 @@ def test_get_rejects_obviously_invalid_symbols():
     assert provider.calls == []
 
 
-# ───────────────────────────── SyncRevenueSegments ─────────────────────────────
-
-
 class _FakeRepo(RevenueSegmentsRepository):
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = list(targets)
@@ -96,8 +82,6 @@ class _FakeRepo(RevenueSegmentsRepository):
 
 
 class _FakeSyncProvider(RevenueSegmentsProvider):
-    """Returns a canned segmentation per symbol, an empty one, or raises."""
-
     def __init__(self, *, empty=(), errors=None) -> None:
         self._empty = set(empty)
         self._errors = errors or {}

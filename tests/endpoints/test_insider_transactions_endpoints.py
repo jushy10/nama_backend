@@ -1,12 +1,3 @@
-"""Tests for the insider-transactions read endpoint (GET /stocks/ticker/{ticker}/insider-transactions).
-
-Offline: a fake GetInsiderTransactions is injected through dependency_overrides + FastAPI's
-TestClient, so this checks only the controller + presenter — the JSON shape (open-market flags,
-derived value/role/code_label, the net buy-vs-sell summary), the ``?open_market_only`` filter,
-the cache header, empty activity as a 200 (not a 404), and the error mapping — without touching
-SEC or the database.
-"""
-
 from datetime import date
 
 from fastapi import FastAPI
