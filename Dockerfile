@@ -1,8 +1,5 @@
 # Container image for the FastAPI app, run on ECS Fargate.
-#
-# Bumping this interpreter? Bump .github/workflows/tests.yml's python-version
-# with it — CI runs the suite on its own runner, not in this image, so the two
-# only stay aligned by hand.
+# Bumping the interpreter? Bump .github/workflows/tests.yml's python-version with it.
 FROM python:3.12-slim
 
 WORKDIR /app

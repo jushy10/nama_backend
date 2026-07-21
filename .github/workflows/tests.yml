@@ -1,22 +1,8 @@
 name: Tests
 run-name: Tests · ${{ github.ref_name }}
 
-# The offline pytest suite, run two ways:
-#
-#   1. on every pull request -> the gating check before merge
-#   2. as a reusable workflow (workflow_call) -> the first job of the
-#      build/migrate/deploy pipeline in app-image.yml, so a merge to main can
-#      never deploy a red suite
-#
-# Deliberately no `paths:` filter on the pull_request trigger, unlike the
-# sibling Validate App Build workflow. Two reasons: a change anywhere (tests,
-# conftest, pyproject) can break the suite and it runs in well under a minute;
-# and this is a *required* status check on main, which a path filter would
-# quietly break — a required check that never runs never reports, leaving an
-# unrelated PR unmergeable rather than green.
-#
-# The suite is fully offline (in-memory SQLite, hand-written fakes through the
-# ports), so this needs no secrets, no AWS credentials, and no network.
+# The offline pytest suite: the PR check, and (via workflow_call) the gate on app-image.yml's deploy.
+# No `paths:` filter — it's a required check, and a required check that never runs never reports.
 
 on:
   pull_request:
@@ -27,8 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The job id is the status-check name main's branch protection requires —
-  # renaming it means updating that setting too.
+  # Job id = the required status-check name on main; renaming it means updating branch protection.
   pytest:
     runs-on: ubuntu-latest
     permissions:
@@ -45,9 +30,7 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      # Only the dev extra: the suite never touches Postgres or Bedrock (the
-      # adapters import those SDKs lazily and the tests drive fakes), so the
-      # heavy [postgres,bedrock] extras stay out of CI.
+      # Dev extra only — the suite drives fakes, so the postgres/bedrock SDKs stay out of CI.
       - name: Install the app and test dependencies
         run: pip install -e ".[dev]"
 

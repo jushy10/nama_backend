@@ -6,12 +6,10 @@ run-name: Build & deploy app · ${{ github.ref_name }}
 #
 #   tests  ->  build  ->  migrate  ->  deploy
 #
-# (Pull requests are validated by the separate Validate App Build workflow and run the
-# same suite via Tests, so neither check appears on main commits twice.)
+# (Pull requests are validated by the separate Validate App Build workflow, so the
+# validate check never appears on main commits.)
 #
-# `tests` calls the reusable Tests workflow (tests.yml) rather than duplicating it, so
-# the pre-merge PR check and this post-merge gate are the exact same suite. A red suite
-# on main therefore never reaches ECR.
+# `tests` calls tests.yml, the same suite the PR check runs, so a red main never reaches ECR.
 #
 # The image build has to come first: the migration runs as a one-off ECS task *inside
 # the VPC* (RDS is private, unreachable from the GitHub runner) on the image just pushed,
@@ -44,8 +42,7 @@ env:
   ECS_SERVICE: nama-dev
 
 jobs:
-  # 1/4 — Prove the offline suite is green on the merged commit before anything is
-  # built or shipped. Reuses tests.yml, the same workflow the PR check runs.
+  # 1/4 — Prove the suite is green on the merged commit before anything is built or shipped.
   tests:
     name: Tests
     uses: ./.github/workflows/tests.yml
