@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 
 from app.stocks.adapters.bedrock.market_brief_adapter import BedrockMarketBriefProvider
-from app.stocks.brief.entities import (
+from app.stocks.ai.brief.entities import (
     BriefHeadline,
     BriefIndexMove,
     BriefMover,

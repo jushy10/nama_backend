@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.stocks.adapters.logodev_adapter import LogoDevProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.logo.ports import LogoProvider
-from app.stocks.logo.use_cases import GetStockLogo
+from app.stocks.company.logo.ports import LogoProvider
+from app.stocks.company.logo.use_cases import GetStockLogo
 
 router = APIRouter(tags=["stocks"])
 

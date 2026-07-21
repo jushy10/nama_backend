@@ -1,16 +1,16 @@
 from datetime import date
 
-from app.stocks.adapters.db_cached_revenue_segments_adapter import (
+from app.stocks.adapters.db.db_cached_revenue_segments_adapter import (
     DbCachedRevenueSegmentsProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.revenue_segments.entities import (
+from app.stocks.company.revenue_segments.entities import (
     RevenueSegment,
     RevenueSegmentation,
     SegmentAxis,
 )
-from app.stocks.revenue_segments.ports import RevenueSegmentsProvider
-from app.stocks.revenue_segments.repository import RevenueSegmentsRepository
+from app.stocks.company.revenue_segments.ports import RevenueSegmentsProvider
+from app.stocks.company.revenue_segments.repository import RevenueSegmentsRepository
 
 
 def _seg(symbol: str, value: float) -> RevenueSegmentation:

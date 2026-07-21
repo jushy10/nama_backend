@@ -7,14 +7,14 @@ from datetime import date
 
 import httpx
 
-from app.stocks.congress.entities import (
+from app.stocks.company.congress.entities import (
     EXCHANGE,
     OTHER,
     PURCHASE,
     SALE,
     CongressTrade,
 )
-from app.stocks.congress.ports import CongressTradesSource
+from app.stocks.company.congress.ports import CongressTradesSource
 from app.stocks.exceptions import StockDataUnavailable
 
 logger = logging.getLogger(__name__)

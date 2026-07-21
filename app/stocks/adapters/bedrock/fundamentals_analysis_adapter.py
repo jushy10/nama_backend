@@ -1,16 +1,16 @@
 from datetime import datetime, timezone
 
 from app.stocks.adapters.bedrock.cost import log_model_cost
-from app.stocks.analysis.entities import (
+from app.stocks.ai.analysis.entities import (
     Confidence,
     FundamentalsAnalysis,
     FundamentalsVerdict,
 )
-from app.stocks.analysis.ports import FundamentalsAnalysisProvider
+from app.stocks.ai.analysis.ports import FundamentalsAnalysisProvider
 from app.stocks.entities import Stock
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ticker.entities import PeHistoryStats
-from app.stocks.universe.entities import IndustryValuation
+from app.stocks.company.ticker.entities import PeHistoryStats
+from app.stocks.catalog.universe.entities import IndustryValuation
 
 # A single forced tool pins the model to structured output: Claude must call
 # submit_fundamentals_findings, so the response comes back as validated JSON arguments

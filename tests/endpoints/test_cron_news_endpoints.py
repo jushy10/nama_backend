@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import cron_news_endpoints as cron
-from app.stocks.news.use_cases import NewsSyncReport
+from app.stocks.endpoints.cron import news_endpoints as cron
+from app.stocks.company.news.use_cases import NewsSyncReport
 
 
 class _FakeRunner:

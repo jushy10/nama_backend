@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import revenue_segments_endpoints as endpoints
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.revenue_segments.entities import (
+from app.stocks.company.revenue_segments.entities import (
     RevenueSegment,
     RevenueSegmentation,
     SegmentAxis,

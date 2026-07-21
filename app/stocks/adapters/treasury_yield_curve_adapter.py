@@ -8,8 +8,8 @@ from io import StringIO
 import httpx
 
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.yields.entities import YieldCurve, YieldTenor
-from app.stocks.yields.ports import YieldCurveProvider
+from app.stocks.market.yields.entities import YieldCurve, YieldTenor
+from app.stocks.market.yields.ports import YieldCurveProvider
 
 logger = logging.getLogger(__name__)
 

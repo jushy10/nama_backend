@@ -5,9 +5,9 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.stocks.brief.models import recent_brief_dates
-from app.stocks.congress.models import StockCongressTradeRecord, _order_newest_first
-from app.stocks.etfs.models import EtfRecord
+from app.stocks.ai.brief.models import recent_brief_dates
+from app.stocks.company.congress.models import StockCongressTradeRecord, _order_newest_first
+from app.stocks.catalog.etfs.models import EtfRecord
 from app.stocks.seo.repository import (
     CongressPageTrade,
     EtfPageFacts,
@@ -16,7 +16,7 @@ from app.stocks.seo.repository import (
     StockPageRef,
     TickerPageFacts,
 )
-from app.stocks.stocks.models import StockRecord
+from app.stocks.catalog.anchor.models import StockRecord
 
 # The "best-of" screens sort by one of these anchor columns; the use-case registry names the
 # key, the adapter owns the column mapping (so the use case never imports the model).

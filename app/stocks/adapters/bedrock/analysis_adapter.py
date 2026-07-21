@@ -2,7 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from app.stocks.analysis.entities import (
+from app.stocks.ai.analysis.entities import (
     Confidence,
     Recommendation,
     ScorecardSection,
@@ -10,14 +10,14 @@ from app.stocks.analysis.entities import (
     SectionStance,
     StockScorecard,
 )
-from app.stocks.analysis.ports import StockScorecardProvider
+from app.stocks.ai.analysis.ports import StockScorecardProvider
 from app.stocks.adapters.bedrock.cost import CostAccumulator
-from app.stocks.earnings.annual.entities import AnnualEarningsTimeline
-from app.stocks.earnings.quarterly.entities import QuarterlyEarningsTimeline
+from app.stocks.company.earnings.annual.entities import AnnualEarningsTimeline
+from app.stocks.company.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.stocks.entities import Stock
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.recommendations.entities import AnalystRecommendations
-from app.stocks.universe.entities import IndustryValuation
+from app.stocks.company.recommendations.entities import AnalystRecommendations
+from app.stocks.catalog.universe.entities import IndustryValuation
 
 
 @dataclass(frozen=True)

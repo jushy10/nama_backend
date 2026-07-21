@@ -5,9 +5,9 @@ import pytest
 from app.stocks.adapters.bedrock.ratings_analysis_adapter import (
     BedrockRatingsAnalysisProvider,
 )
-from app.stocks.analysis.entities import Confidence, RatingsVerdict
+from app.stocks.ai.analysis.entities import Confidence, RatingsVerdict
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.recommendations.entities import (
+from app.stocks.company.recommendations.entities import (
     AnalystPriceTargets,
     AnalystRecommendations,
     FirmRating,

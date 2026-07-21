@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.adapters import fred_yield_history_adapter as fred
-from app.stocks.adapters.fred_yield_history_adapter import FredYieldHistoryProvider
+from app.stocks.adapters.fred import yield_history_adapter as fred
+from app.stocks.adapters.fred.yield_history_adapter import FredYieldHistoryProvider
 from app.stocks.exceptions import StockDataUnavailable
 
 

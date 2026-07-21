@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.stocks.entities import Candle, CandleSeries, Timeframe
-from app.stocks.charts.indicators import (
+from app.stocks.company.charts.indicators import (
     HorizonTrend,
     IndicatorSpec,
     SupportStrength,

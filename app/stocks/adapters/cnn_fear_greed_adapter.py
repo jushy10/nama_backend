@@ -7,8 +7,8 @@ from typing import Any
 import httpx
 
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.sentiment.entities import FearGreedSnapshot
-from app.stocks.sentiment.ports import FearGreedProvider
+from app.stocks.market.sentiment.entities import FearGreedSnapshot
+from app.stocks.market.sentiment.ports import FearGreedProvider
 
 logger = logging.getLogger(__name__)
 

@@ -1,6 +1,6 @@
 import pytest
 
-from app.stocks.adapters.yfinance_fundamentals_adapter import (
+from app.stocks.adapters.yfinance.fundamentals_adapter import (
     YfinanceFundamentalsProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable

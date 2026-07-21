@@ -2,14 +2,14 @@ from datetime import date
 
 import pytest
 
-from app.stocks.adapters.annual_earnings_estimates_adapter import (
+from app.stocks.adapters.db.annual_earnings_estimates_adapter import (
     AnnualEarningsEstimatesProvider,
 )
-from app.stocks.earnings.annual.entities import (
+from app.stocks.company.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.stocks.earnings.annual.repository import AnnualEarningsRepository
+from app.stocks.company.earnings.annual.repository import AnnualEarningsRepository
 from app.stocks.exceptions import StockDataUnavailable
 
 

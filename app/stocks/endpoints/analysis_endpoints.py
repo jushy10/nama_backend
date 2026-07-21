@@ -22,21 +22,21 @@ from app.stocks.adapters.bedrock.ratings_analysis_adapter import (
 from app.stocks.adapters.bedrock.sector_analysis_adapter import (
     BedrockSectorAnalysisProvider,
 )
-from app.stocks.adapters.db_only_context_providers import (
+from app.stocks.adapters.db.db_only_context_providers import (
     DbOnlyAnnualEarningsProvider,
     DbOnlyQuarterlyEarningsProvider,
     DbOnlyRatingChangesProvider,
     DbOnlyRecommendationsProvider,
 )
-from app.stocks.adapters.yfinance_eps_history_adapter import YfinanceEpsHistoryProvider
-from app.stocks.analysis.ai_analysis_cache_repository import (
+from app.stocks.adapters.yfinance.eps_history_adapter import YfinanceEpsHistoryProvider
+from app.stocks.ai.analysis.ai_analysis_cache_repository import (
     earnings_analysis_cache,
     fundamentals_analysis_cache,
     market_summary_cache,
     ratings_analysis_cache,
     sector_analysis_cache,
 )
-from app.stocks.analysis.entities import (
+from app.stocks.ai.analysis.entities import (
     EarningsAnalysis,
     FundamentalsAnalysis,
     MarketIndexReturn,
@@ -49,7 +49,7 @@ from app.stocks.analysis.entities import (
     SectorMover,
     StockScorecard,
 )
-from app.stocks.analysis.ports import (
+from app.stocks.ai.analysis.ports import (
     EarningsAnalysisProvider,
     FundamentalsAnalysisProvider,
     MarketSummaryProvider,
@@ -58,8 +58,8 @@ from app.stocks.analysis.ports import (
     StockScorecardCache,
     StockScorecardProvider,
 )
-from app.stocks.analysis.scorecard_db_repository import SqlStockScorecardCache
-from app.stocks.analysis.schemas import (
+from app.stocks.ai.analysis.scorecard_db_repository import SqlStockScorecardCache
+from app.stocks.ai.analysis.schemas import (
     EarningsAnalysisResponse,
     FundamentalsAnalysisResponse,
     InvestmentAnalysisResponse,
@@ -74,7 +74,7 @@ from app.stocks.analysis.schemas import (
     SectorHighlightResponse,
     SectorMoverResponse,
 )
-from app.stocks.analysis.use_cases import (
+from app.stocks.ai.analysis.use_cases import (
     GetEarningsAnalysis,
     GetFundamentalsAnalysis,
     GetMarketSummary,
@@ -83,9 +83,9 @@ from app.stocks.analysis.use_cases import (
     GetStockAnalysis,
     GetStockInfo,
 )
-from app.stocks.ticker.use_cases import GetStockPeHistory
-from app.stocks.earnings.annual.db_repository import SqlAnnualEarningsRepository
-from app.stocks.earnings.quarterly.db_repository import (
+from app.stocks.company.ticker.use_cases import GetStockPeHistory
+from app.stocks.company.earnings.annual.db_repository import SqlAnnualEarningsRepository
+from app.stocks.company.earnings.quarterly.db_repository import (
     SqlQuarterlyEarningsRepository,
 )
 from app.stocks.endpoints.market_endpoints import (
@@ -93,19 +93,19 @@ from app.stocks.endpoints.market_endpoints import (
     get_sector_performance,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
-from app.stocks.news.db_repository import SqlNewsRepository
+from app.stocks.market.boards.use_cases import GetMarketOverview, GetSectorPerformance
+from app.stocks.company.news.db_repository import SqlNewsRepository
 from app.stocks.ports import (
     AllTimeHighProvider,
     AnalystEstimatesProvider,
     StockDataProvider,
     StockPerformanceProvider,
 )
-from app.stocks.recommendations.db_repository import (
+from app.stocks.company.recommendations.db_repository import (
     SqlRatingChangesRepository,
     SqlRecommendationsRepository,
 )
-from app.stocks.universe.db_repository import SqlStockSearchRepository
+from app.stocks.catalog.universe.db_repository import SqlStockSearchRepository
 from app.stocks.wiring import (
     analysis_cache_ttl,
     bedrock_recovery_model_id,

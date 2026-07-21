@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.earnings.quarterly.use_cases import QuarterlyEarningsSyncReport
-from app.stocks.endpoints import cron_quarterly_earnings_endpoints as cron
+from app.stocks.company.earnings.quarterly.use_cases import QuarterlyEarningsSyncReport
+from app.stocks.endpoints.cron import quarterly_earnings_endpoints as cron
 
 
 class _FakeRunner:

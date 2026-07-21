@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import institutional_ownership_endpoints as endpoints
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.institutional_ownership.entities import (
+from app.stocks.company.institutional_ownership.entities import (
     HOLDER_TYPE_INSTITUTION,
     HOLDER_TYPE_MUTUAL_FUND,
     InstitutionalHolder,

@@ -3,7 +3,7 @@ import pytest
 from app.stocks.adapters.bedrock.etf_screener_query_adapter import (
     BedrockEtfScreenerQueryTranslator,
 )
-from app.stocks.etfs.entities import EtfSort, SortDirection
+from app.stocks.catalog.etfs.entities import EtfSort, SortDirection
 from app.stocks.exceptions import StockDataUnavailable
 
 

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.adapters.fred_vix_adapter import FredVixProvider, _parse_observations
+from app.stocks.adapters.fred.vix_adapter import FredVixProvider, _parse_observations
 from app.stocks.exceptions import StockDataUnavailable
 
 

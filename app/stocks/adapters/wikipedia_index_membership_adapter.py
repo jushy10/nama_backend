@@ -8,8 +8,8 @@ import httpx
 import pandas
 
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.index_membership.entities import IndexMembershipSnapshot
-from app.stocks.index_membership.ports import IndexMembershipSource
+from app.stocks.catalog.index_membership.entities import IndexMembershipSnapshot
+from app.stocks.catalog.index_membership.ports import IndexMembershipSource
 
 logger = logging.getLogger(__name__)
 

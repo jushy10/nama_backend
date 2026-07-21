@@ -2,13 +2,13 @@ from collections.abc import Sequence
 
 from app.stocks.adapters.bedrock.cost import CostAccumulator
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.universe.entities import (
+from app.stocks.catalog.universe.entities import (
     MarketCapTier,
     ScreenIntent,
     SortDirection,
     StockSort,
 )
-from app.stocks.universe.ports import ScreenerQueryTranslator
+from app.stocks.catalog.universe.ports import ScreenerQueryTranslator
 
 _SYSTEM_PROMPT = (
     "You convert a plain-English stock-screen request into a set of structured "

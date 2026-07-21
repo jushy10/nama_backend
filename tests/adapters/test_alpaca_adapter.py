@@ -6,7 +6,7 @@ from alpaca.common.exceptions import APIError
 from alpaca.data.enums import Adjustment, DataFeed
 
 from app.stocks.adapters.alpaca_adapter import AlpacaStockDataProvider
-from app.stocks.charts.ports import CandleProvider
+from app.stocks.company.charts.ports import CandleProvider
 from app.stocks.entities import (
     AllTimeHigh,
     Candle,
@@ -15,7 +15,7 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
-from app.stocks.market.ports import MarketOverviewProvider, SectorPerformanceProvider
+from app.stocks.market.boards.ports import MarketOverviewProvider, SectorPerformanceProvider
 from app.stocks.ports import (
     AllTimeHighProvider,
     BulkQuoteProvider,

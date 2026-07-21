@@ -2,9 +2,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.stocks.adapters.db_cached_news_adapter import DbCachedNewsProvider
+from app.stocks.adapters.db.db_cached_news_adapter import DbCachedNewsProvider
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.news.entities import NewsArticle, StockNews
+from app.stocks.company.news.entities import NewsArticle, StockNews
 
 
 def _a_run(symbol: str) -> StockNews:

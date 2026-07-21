@@ -4,23 +4,23 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db_cached_quarterly_earnings_adapter import (
+from app.stocks.adapters.db.db_cached_quarterly_earnings_adapter import (
     DbCachedQuarterlyEarningsProvider,
 )
-from app.stocks.adapters.yfinance_quarterly_earnings_adapter import (
+from app.stocks.adapters.yfinance.quarterly_earnings_adapter import (
     YfinanceQuarterlyEarningsProvider,
 )
-from app.stocks.earnings.quarterly.db_repository import SqlQuarterlyEarningsRepository
-from app.stocks.earnings.quarterly.entities import (
+from app.stocks.company.earnings.quarterly.db_repository import SqlQuarterlyEarningsRepository
+from app.stocks.company.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
-from app.stocks.earnings.quarterly.schemas import (
+from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.company.earnings.quarterly.schemas import (
     QuarterlyEarningsQuarterResponse,
     QuarterlyEarningsResponse,
 )
-from app.stocks.earnings.quarterly.use_cases import GetQuarterlyEarnings
+from app.stocks.company.earnings.quarterly.use_cases import GetQuarterlyEarnings
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 
 router = APIRouter(tags=["quarterly-earnings"])

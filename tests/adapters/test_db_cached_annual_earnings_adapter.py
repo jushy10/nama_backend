@@ -1,14 +1,14 @@
 from datetime import date
 
-from app.stocks.adapters.db_cached_annual_earnings_adapter import (
+from app.stocks.adapters.db.db_cached_annual_earnings_adapter import (
     DbCachedAnnualEarningsProvider,
 )
-from app.stocks.earnings.annual.entities import (
+from app.stocks.company.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.stocks.earnings.annual.ports import AnnualEarningsProvider
-from app.stocks.earnings.annual.repository import AnnualEarningsRepository
+from app.stocks.company.earnings.annual.ports import AnnualEarningsProvider
+from app.stocks.company.earnings.annual.repository import AnnualEarningsRepository
 from app.stocks.exceptions import StockDataUnavailable
 
 

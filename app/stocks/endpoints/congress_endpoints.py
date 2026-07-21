@@ -2,15 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.congress.db_repository import SqlCongressTradesRepository
-from app.stocks.congress.entities import (
+from app.stocks.company.congress.db_repository import SqlCongressTradesRepository
+from app.stocks.company.congress.entities import (
     CongressLeaderboard,
     CongressLeaderboardEntry,
     CongressMarketActivity,
     CongressSummary,
     CongressTrade,
 )
-from app.stocks.congress.schemas import (
+from app.stocks.company.congress.schemas import (
     CongressActivityResponse,
     CongressLeaderboardEntryResponse,
     CongressLeaderboardResponse,
@@ -18,7 +18,7 @@ from app.stocks.congress.schemas import (
     CongressSummaryResponse,
     CongressTradeResponse,
 )
-from app.stocks.congress.use_cases import (
+from app.stocks.company.congress.use_cases import (
     GetCongressActivity,
     GetCongressLeaderboard,
     GetCongressTrades,

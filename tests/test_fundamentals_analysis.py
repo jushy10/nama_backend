@@ -5,20 +5,20 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.analysis.entities import (
+from app.stocks.ai.analysis.entities import (
     Confidence,
     FundamentalsAnalysis,
     FundamentalsVerdict,
 )
-from app.stocks.analysis.ports import AiAnalysisCache, FundamentalsAnalysisProvider
-from app.stocks.analysis.use_cases import GetFundamentalsAnalysis, GetStockInfo
+from app.stocks.ai.analysis.ports import AiAnalysisCache, FundamentalsAnalysisProvider
+from app.stocks.ai.analysis.use_cases import GetFundamentalsAnalysis, GetStockInfo
 from app.stocks.endpoints import analysis_endpoints as stocks_router
 from app.stocks.entities import AnalystEstimates, Stock
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.ports import AnalystEstimatesProvider, StockDataProvider
-from app.stocks.ticker.entities import PeHistoryStats, ValuationSignal
-from app.stocks.universe.entities import AnchorMetrics, MarketCapTier
-from app.stocks.universe.repository import StockSearchRepository
+from app.stocks.company.ticker.entities import PeHistoryStats, ValuationSignal
+from app.stocks.catalog.universe.entities import AnchorMetrics, MarketCapTier
+from app.stocks.catalog.universe.repository import StockSearchRepository
 
 
 def _a_stock(**overrides) -> Stock:

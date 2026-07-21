@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.logo.entities import Logo
+from app.stocks.company.logo.entities import Logo
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.adapters.logodev_adapter import LogoDevProvider
 

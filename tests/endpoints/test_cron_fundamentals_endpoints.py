@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import cron_fundamentals_endpoints as cron
-from app.stocks.fundamentals.use_cases import FundamentalsSyncReport
+from app.stocks.endpoints.cron import fundamentals_endpoints as cron
+from app.stocks.catalog.fundamentals.use_cases import FundamentalsSyncReport
 
 
 class _FakeRunner:

@@ -4,11 +4,11 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yfinance_options_flow_adapter import (
+from app.stocks.adapters.yfinance.options_flow_adapter import (
     YfinanceOptionsChainProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.options.entities import OptionType
+from app.stocks.company.options.entities import OptionType
 
 _EXPIRY = date(2026, 7, 31)
 

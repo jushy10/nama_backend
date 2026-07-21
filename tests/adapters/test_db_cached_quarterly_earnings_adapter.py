@@ -1,14 +1,14 @@
 from datetime import date
 
-from app.stocks.adapters.db_cached_quarterly_earnings_adapter import (
+from app.stocks.adapters.db.db_cached_quarterly_earnings_adapter import (
     DbCachedQuarterlyEarningsProvider,
 )
-from app.stocks.earnings.quarterly.entities import (
+from app.stocks.company.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.stocks.earnings.quarterly.ports import QuarterlyEarningsProvider
-from app.stocks.earnings.quarterly.repository import QuarterlyEarningsRepository
+from app.stocks.company.earnings.quarterly.ports import QuarterlyEarningsProvider
+from app.stocks.company.earnings.quarterly.repository import QuarterlyEarningsRepository
 from app.stocks.exceptions import StockDataUnavailable
 
 

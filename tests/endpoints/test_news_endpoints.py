@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import news_endpoints as endpoints
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.news.entities import NewsArticle, StockNews
+from app.stocks.company.news.entities import NewsArticle, StockNews
 
 
 class _FakeUseCase:

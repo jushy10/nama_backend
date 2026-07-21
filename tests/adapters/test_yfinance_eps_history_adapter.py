@@ -3,7 +3,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yfinance_eps_history_adapter import (
+from app.stocks.adapters.yfinance.eps_history_adapter import (
     YfinanceEpsHistoryProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable

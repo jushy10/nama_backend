@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.stocks.charts.ports import CandleProvider
+from app.stocks.company.charts.ports import CandleProvider
 from app.stocks.entities import (
     AllTimeHigh,
     CandleSeries,

@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import sentiment_endpoints as endpoints
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.sentiment.entities import (
+from app.stocks.market.sentiment.entities import (
     FearGreedSnapshot,
     MarketSentiment,
     VixSnapshot,

@@ -10,7 +10,7 @@ from alpaca.data.requests import StockBarsRequest, StockSnapshotRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 
-from app.stocks.charts.ports import CandleProvider
+from app.stocks.company.charts.ports import CandleProvider
 from app.stocks.entities import (
     AllTimeHigh,
     Candle,
@@ -21,8 +21,8 @@ from app.stocks.entities import (
     Timeframe,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.market.entities import MarketIndexPerformance, SectorPerformance
-from app.stocks.market.ports import MarketOverviewProvider, SectorPerformanceProvider
+from app.stocks.market.boards.entities import MarketIndexPerformance, SectorPerformance
+from app.stocks.market.boards.ports import MarketOverviewProvider, SectorPerformanceProvider
 from app.stocks.ports import (
     AllTimeHighProvider,
     BulkPerformanceProvider,

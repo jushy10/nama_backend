@@ -2,11 +2,11 @@ from datetime import date
 
 import pytest
 
-from app.stocks.adapters.db_cached_institutional_holders_adapter import (
+from app.stocks.adapters.db.db_cached_institutional_holders_adapter import (
     DbCachedInstitutionalOwnershipProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.institutional_ownership.entities import (
+from app.stocks.company.institutional_ownership.entities import (
     HOLDER_TYPE_INSTITUTION,
     InstitutionalHolder,
     InstitutionalOwnership,

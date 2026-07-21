@@ -4,24 +4,24 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.db_cached_revenue_segments_adapter import (
+from app.stocks.adapters.db.db_cached_revenue_segments_adapter import (
     DbCachedRevenueSegmentsProvider,
 )
-from app.stocks.adapters.sec_edgar_revenue_segments_adapter import (
+from app.stocks.adapters.sec_edgar.revenue_segments_adapter import (
     SecEdgarRevenueSegmentsProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.revenue_segments.db_repository import SqlRevenueSegmentsRepository
-from app.stocks.revenue_segments.entities import (
+from app.stocks.company.revenue_segments.db_repository import SqlRevenueSegmentsRepository
+from app.stocks.company.revenue_segments.entities import (
     RevenueSegment,
     RevenueSegmentation,
 )
-from app.stocks.revenue_segments.ports import RevenueSegmentsProvider
-from app.stocks.revenue_segments.schemas import (
+from app.stocks.company.revenue_segments.ports import RevenueSegmentsProvider
+from app.stocks.company.revenue_segments.schemas import (
     RevenueSegmentationResponse,
     RevenueSegmentResponse,
 )
-from app.stocks.revenue_segments.use_cases import GetRevenueSegments
+from app.stocks.company.revenue_segments.use_cases import GetRevenueSegments
 
 router = APIRouter(tags=["revenue-segments"])
 

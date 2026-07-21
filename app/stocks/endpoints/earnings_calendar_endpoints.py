@@ -6,14 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.earnings_calendar.db_repository import SqlEarningsCalendarRepository
-from app.stocks.earnings_calendar.entities import EarningsCalendar
-from app.stocks.earnings_calendar.schemas import (
+from app.stocks.market.earnings_calendar.db_repository import SqlEarningsCalendarRepository
+from app.stocks.market.earnings_calendar.entities import EarningsCalendar
+from app.stocks.market.earnings_calendar.schemas import (
     EarningsCalendarDayResponse,
     EarningsCalendarItemResponse,
     EarningsCalendarResponse,
 )
-from app.stocks.earnings_calendar.use_cases import GetEarningsCalendar
+from app.stocks.market.earnings_calendar.use_cases import GetEarningsCalendar
 
 router = APIRouter(tags=["earnings-calendar"])
 

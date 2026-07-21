@@ -3,12 +3,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.stocks.adapters.alpaca_adapter import AlpacaStockDataProvider
 from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.market.entities import SectorPerformance
-from app.stocks.market.schemas import (
+from app.stocks.market.boards.entities import SectorPerformance
+from app.stocks.market.boards.schemas import (
     SectorBoardResponse,
     SectorPerformanceResponse,
 )
-from app.stocks.market.use_cases import GetMarketOverview, GetSectorPerformance
+from app.stocks.market.boards.use_cases import GetMarketOverview, GetSectorPerformance
 from app.stocks.schemas import StockPerformanceResponse
 from app.stocks.wiring import get_provider
 

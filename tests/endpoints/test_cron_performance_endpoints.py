@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import cron_performance_endpoints as cron
-from app.stocks.performance.use_cases import PerformanceSyncReport
+from app.stocks.endpoints.cron import performance_endpoints as cron
+from app.stocks.catalog.performance.use_cases import PerformanceSyncReport
 
 
 class _FakeRunner:

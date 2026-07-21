@@ -6,7 +6,7 @@ from app.main import app
 from app.stocks.entities import StockPerformance
 from app.stocks.endpoints import heatmap_endpoints as endpoints
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.heatmap.entities import HeatMap, HeatMapRow, HeatMapScope
+from app.stocks.market.heatmap.entities import HeatMap, HeatMapRow, HeatMapScope
 
 
 class _FakeUseCase:

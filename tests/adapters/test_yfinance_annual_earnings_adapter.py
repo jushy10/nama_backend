@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yfinance_annual_earnings_adapter import (
+from app.stocks.adapters.yfinance.annual_earnings_adapter import (
     YfinanceAnnualEarningsProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable

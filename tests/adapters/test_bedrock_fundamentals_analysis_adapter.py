@@ -5,15 +5,15 @@ import pytest
 from app.stocks.adapters.bedrock.fundamentals_analysis_adapter import (
     BedrockFundamentalsAnalysisProvider,
 )
-from app.stocks.analysis.entities import Confidence, FundamentalsVerdict
+from app.stocks.ai.analysis.entities import Confidence, FundamentalsVerdict
 from app.stocks.entities import (
     AnalystEstimates,
     KeyMetrics,
     Stock,
 )
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.ticker.entities import PeHistoryStats, ValuationSignal
-from app.stocks.universe.entities import IndustryValuation
+from app.stocks.company.ticker.entities import PeHistoryStats, ValuationSignal
+from app.stocks.catalog.universe.entities import IndustryValuation
 
 
 # --- Stub Bedrock client (same shape as the other adapters') -----------------------------------

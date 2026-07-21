@@ -5,18 +5,18 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import analysis_endpoints
-from app.stocks.analysis.entities import Confidence, RatingsAnalysis, RatingsVerdict
-from app.stocks.analysis.ports import AiAnalysisCache, RatingsAnalysisProvider
-from app.stocks.analysis.use_cases import GetRatingsFindings
+from app.stocks.ai.analysis.entities import Confidence, RatingsAnalysis, RatingsVerdict
+from app.stocks.ai.analysis.ports import AiAnalysisCache, RatingsAnalysisProvider
+from app.stocks.ai.analysis.use_cases import GetRatingsFindings
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.recommendations.entities import (
+from app.stocks.company.recommendations.entities import (
     AnalystPriceTargets,
     AnalystRatingChanges,
     AnalystRecommendations,
     RatingChange,
     RecommendationTrend,
 )
-from app.stocks.recommendations.ports import (
+from app.stocks.company.recommendations.ports import (
     RatingChangeProvider,
     RecommendationProvider,
 )

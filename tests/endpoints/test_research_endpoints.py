@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.agent.entities import AgentStep, ResearchResult
+from app.stocks.ai.agent.entities import AgentStep, ResearchResult
 from app.stocks.endpoints import research_endpoints as endpoints
 from app.stocks.exceptions import StockDataUnavailable
 

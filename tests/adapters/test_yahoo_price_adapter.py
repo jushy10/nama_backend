@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yahoo_price_adapter import YahooPriceProvider
+from app.stocks.adapters.yfinance.price_adapter import YahooPriceProvider
 from app.stocks.entities import Timeframe
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 

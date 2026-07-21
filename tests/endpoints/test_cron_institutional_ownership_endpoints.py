@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import cron_institutional_ownership_endpoints as cron
-from app.stocks.institutional_ownership.use_cases import (
+from app.stocks.endpoints.cron import institutional_ownership_endpoints as cron
+from app.stocks.company.institutional_ownership.use_cases import (
     InstitutionalOwnershipSyncReport,
 )
 

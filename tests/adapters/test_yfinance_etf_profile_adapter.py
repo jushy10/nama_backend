@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yfinance_etf_profile_adapter import (
+from app.stocks.adapters.yfinance.etf_profile_adapter import (
     YfinanceEtfProfileProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable

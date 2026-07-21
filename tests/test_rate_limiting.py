@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from starlette.testclient import TestClient
 
 from app.main import app, limiter
-from app.stocks.analysis.entities import MarketSummary, MarketTone, SectorAnalysis
+from app.stocks.ai.analysis.entities import MarketSummary, MarketTone, SectorAnalysis
 from app.stocks.endpoints.analysis_endpoints import (
     _AI_ANALYSIS_RATE_LIMIT,
     get_market_summary,

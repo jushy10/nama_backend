@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.stocks.adapters.sec_edgar_insider_transactions_adapter import (
+from app.stocks.adapters.sec_edgar.insider_transactions_adapter import (
     SecEdgarInsiderTransactionsProvider,
     _parse_form4,
 )
@@ -285,7 +285,7 @@ def test_live_order_matches_db_serving_order():
     from sqlalchemy.orm import Session
 
     from app.db import Base
-    from app.stocks.insider_transactions.db_repository import (
+    from app.stocks.company.insider_transactions.db_repository import (
         SqlInsiderTransactionsRepository,
     )
 

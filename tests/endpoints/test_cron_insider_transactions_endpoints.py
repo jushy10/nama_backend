@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import cron_insider_transactions_endpoints as cron
-from app.stocks.insider_transactions.use_cases import InsiderTransactionsSyncReport
+from app.stocks.endpoints.cron import insider_transactions_endpoints as cron
+from app.stocks.company.insider_transactions.use_cases import InsiderTransactionsSyncReport
 
 
 class _FakeRunner:

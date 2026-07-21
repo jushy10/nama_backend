@@ -4,9 +4,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import etf_endpoints as endpoints
-from app.stocks.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
+from app.stocks.ai.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
 from app.stocks.entities import Quote, StockPerformance
-from app.stocks.etfs.entities import (
+from app.stocks.catalog.etfs.entities import (
     EtfCategories,
     EtfDetail,
     EtfHolding,
@@ -18,8 +18,8 @@ from app.stocks.etfs.entities import (
     EtfSort,
     SortDirection,
 )
-from app.stocks.etfs.repository import EtfSearchRepository
-from app.stocks.etfs.use_cases import ListEtfCategories, SearchEtfs
+from app.stocks.catalog.etfs.repository import EtfSearchRepository
+from app.stocks.catalog.etfs.use_cases import ListEtfCategories, SearchEtfs
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 
 

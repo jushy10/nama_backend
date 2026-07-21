@@ -1,6 +1,6 @@
 import pytest
 
-from app.stocks.adapters import yfinance_session
+from app.stocks.adapters.yfinance import session as yfinance_session
 
 
 @pytest.fixture(autouse=True)

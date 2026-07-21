@@ -4,7 +4,7 @@ from app.stocks.adapters.bedrock.screener_query_adapter import (
     BedrockScreenerQueryTranslator,
 )
 from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.universe.entities import MarketCapTier, SortDirection, StockSort
+from app.stocks.catalog.universe.entities import MarketCapTier, SortDirection, StockSort
 
 
 # --- Stub Bedrock client (same shape as the analysis adapters') --------------------------------

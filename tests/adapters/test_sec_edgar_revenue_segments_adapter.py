@@ -4,13 +4,13 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.adapters import sec_edgar_revenue_segments_adapter as sec
-from app.stocks.adapters.sec_edgar_revenue_segments_adapter import (
+from app.stocks.adapters.sec_edgar import revenue_segments_adapter as sec
+from app.stocks.adapters.sec_edgar.revenue_segments_adapter import (
     SecEdgarRevenueSegmentsProvider,
     _parse_revenue_segments,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.revenue_segments.entities import SegmentAxis
+from app.stocks.company.revenue_segments.entities import SegmentAxis
 
 
 # ── a hand-built XBRL instance ────────────────────────────────────────────────────────────

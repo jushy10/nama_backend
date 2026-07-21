@@ -3,18 +3,18 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
-from app.stocks.adapters.yfinance_options_flow_adapter import (
+from app.stocks.adapters.yfinance.options_flow_adapter import (
     YfinanceOptionsChainProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.options.entities import ExpiryChain, OptionContract, OptionsFlowSummary
-from app.stocks.options.ports import OptionsChainProvider
-from app.stocks.options.schemas import (
+from app.stocks.company.options.entities import ExpiryChain, OptionContract, OptionsFlowSummary
+from app.stocks.company.options.ports import OptionsChainProvider
+from app.stocks.company.options.schemas import (
     OptionContractResponse,
     OptionsFlowResponse,
     OptionsFlowSummaryResponse,
 )
-from app.stocks.options.use_cases import GetOptionsFlow, OptionsFlow
+from app.stocks.company.options.use_cases import GetOptionsFlow, OptionsFlow
 
 router = APIRouter(tags=["options"])
 

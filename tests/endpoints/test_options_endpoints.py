@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 
 from app.stocks.endpoints import options_endpoints as endpoints
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.options.entities import ExpiryChain, OptionContract, OptionType
-from app.stocks.options.use_cases import OptionsFlow
+from app.stocks.company.options.entities import ExpiryChain, OptionContract, OptionType
+from app.stocks.company.options.use_cases import OptionsFlow
 
 _EXPIRY = date(2026, 7, 31)
 _FAR = date(2026, 9, 18)
