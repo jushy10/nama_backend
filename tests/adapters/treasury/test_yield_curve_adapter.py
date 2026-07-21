@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.adapters import treasury_yield_curve_adapter as tr
-from app.stocks.adapters.treasury_yield_curve_adapter import TreasuryYieldCurveProvider
+from app.stocks.adapters.treasury import yield_curve_adapter as tr
+from app.stocks.adapters.treasury.yield_curve_adapter import TreasuryYieldCurveProvider
 from app.stocks.exceptions import StockDataUnavailable
 
 

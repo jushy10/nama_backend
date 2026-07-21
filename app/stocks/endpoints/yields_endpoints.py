@@ -3,7 +3,7 @@ from functools import lru_cache
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.stocks.adapters.fred.yield_history_adapter import FredYieldHistoryProvider
-from app.stocks.adapters.treasury_yield_curve_adapter import TreasuryYieldCurveProvider
+from app.stocks.adapters.treasury.yield_curve_adapter import TreasuryYieldCurveProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.yields.entities import YieldCurve, YieldHistory
 from app.stocks.market.yields.ports import YieldCurveProvider, YieldHistoryProvider

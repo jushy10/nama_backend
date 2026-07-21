@@ -3,8 +3,8 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.adapters import wikipedia_index_membership_adapter as wiki
-from app.stocks.adapters.wikipedia_index_membership_adapter import (
+from app.stocks.adapters.wikipedia import index_membership_adapter as wiki
+from app.stocks.adapters.wikipedia.index_membership_adapter import (
     WikipediaIndexMembershipProvider,
 )
 from app.stocks.exceptions import StockDataUnavailable

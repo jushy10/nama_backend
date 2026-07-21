@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.stocks.adapters.market_routing import (
+from app.stocks.adapters.market_routing.price_adapter import (
     MarketRoutingPriceProvider,
     is_canadian,
 )

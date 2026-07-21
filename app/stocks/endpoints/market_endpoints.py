@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.stocks.adapters.alpaca_adapter import AlpacaStockDataProvider
+from app.stocks.adapters.alpaca.price_adapter import AlpacaStockDataProvider
 from app.stocks.entities import StockPerformance
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.boards.entities import SectorPerformance

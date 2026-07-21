@@ -4,7 +4,7 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.stock_watcher_congress_adapter import (
+from app.stocks.adapters.stock_watcher.congress_adapter import (
     StockWatcherCongressProvider,
 )
 from app.stocks.company.congress.db_repository import SqlCongressTradesRepository

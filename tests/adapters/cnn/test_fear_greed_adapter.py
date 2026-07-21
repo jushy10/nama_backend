@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.adapters.cnn_fear_greed_adapter import (
+from app.stocks.adapters.cnn.fear_greed_adapter import (
     CnnFearGreedProvider,
     _parse_fear_greed,
 )

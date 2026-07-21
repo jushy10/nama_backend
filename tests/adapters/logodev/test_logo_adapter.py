@@ -5,7 +5,7 @@ import pytest
 
 from app.stocks.company.logo.entities import Logo
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.adapters.logodev_adapter import LogoDevProvider
+from app.stocks.adapters.logodev.logo_adapter import LogoDevProvider
 
 
 class FakeHttpClient:

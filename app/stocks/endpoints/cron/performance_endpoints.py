@@ -5,7 +5,7 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.alpaca_adapter import AlpacaStockDataProvider
+from app.stocks.adapters.alpaca.price_adapter import AlpacaStockDataProvider
 from app.stocks.endpoints.cron.background_sync import (
     SyncRunner,
     SyncTriggerResponse,

@@ -3,7 +3,7 @@ from datetime import date
 import httpx
 import pytest
 
-from app.stocks.adapters.stock_watcher_congress_adapter import (
+from app.stocks.adapters.stock_watcher.congress_adapter import (
     _HOUSE_FEED,
     _SENATE_FEED,
     StockWatcherCongressProvider,

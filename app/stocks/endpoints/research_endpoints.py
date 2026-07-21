@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.rate_limit import limiter
 from app.stocks.adapters.bedrock.research_model_adapter import BedrockConversationModel
-from app.stocks.adapters.cnn_fear_greed_adapter import CnnFearGreedProvider
+from app.stocks.adapters.cnn.fear_greed_adapter import CnnFearGreedProvider
 from app.stocks.adapters.fred.vix_adapter import FredVixProvider
 from app.stocks.ai.agent.entities import ResearchResult
 from app.stocks.ai.agent.ports import ConversationModel

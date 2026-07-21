@@ -6,11 +6,11 @@ from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.stocks.adapters.alpaca_adapter import AlpacaStockDataProvider
+from app.stocks.adapters.alpaca.price_adapter import AlpacaStockDataProvider
 from app.stocks.adapters.db.annual_earnings_estimates_adapter import (
     AnnualEarningsEstimatesProvider,
 )
-from app.stocks.adapters.market_routing import MarketRoutingPriceProvider
+from app.stocks.adapters.market_routing.price_adapter import MarketRoutingPriceProvider
 from app.stocks.adapters.yfinance.price_adapter import YahooPriceProvider
 from app.stocks.adapters.yfinance.options_adapter import YfinanceOptionChainProvider
 from app.stocks.company.earnings.annual.db_repository import SqlAnnualEarningsRepository

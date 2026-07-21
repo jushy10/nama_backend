@@ -2,7 +2,7 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
-from app.stocks.adapters.cnn_fear_greed_adapter import CnnFearGreedProvider
+from app.stocks.adapters.cnn.fear_greed_adapter import CnnFearGreedProvider
 from app.stocks.adapters.fred.vix_adapter import FredVixProvider
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.sentiment.entities import (

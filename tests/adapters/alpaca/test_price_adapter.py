@@ -5,7 +5,7 @@ import pytest
 from alpaca.common.exceptions import APIError
 from alpaca.data.enums import Adjustment, DataFeed
 
-from app.stocks.adapters.alpaca_adapter import AlpacaStockDataProvider
+from app.stocks.adapters.alpaca.price_adapter import AlpacaStockDataProvider
 from app.stocks.company.charts.ports import CandleProvider
 from app.stocks.entities import (
     AllTimeHigh,

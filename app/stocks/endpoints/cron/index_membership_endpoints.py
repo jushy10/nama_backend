@@ -4,7 +4,7 @@ import threading
 from fastapi import APIRouter, Depends, Response, status
 
 from app.db import SessionLocal
-from app.stocks.adapters.wikipedia_index_membership_adapter import (
+from app.stocks.adapters.wikipedia.index_membership_adapter import (
     WikipediaIndexMembershipProvider,
 )
 from app.stocks.endpoints.cron.background_sync import (
