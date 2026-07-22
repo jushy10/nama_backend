@@ -1,3 +1,5 @@
+from dataclasses import asdict, dataclass
+
 from app.stocks.ai.agent.entities import ToolSpec
 from app.stocks.ai.agent.interfaces import Tool
 from app.stocks.exceptions import StockDataUnavailable, StockNotFound
@@ -104,7 +106,7 @@ class SearchStocksTool(Tool):
         return _SEARCH_STOCKS_SPEC
 
     def run(self, arguments: dict) -> str:
-        page = self._search.execute(**_search_filters(arguments))
+        page = self._search.execute(**asdict(_SearchArgs.from_model(arguments)))
         if not page.results:
             return "No stocks in the universe matched that screen."
         rows = "\n".join(_format_row(row) for row in page.results)
@@ -141,19 +143,37 @@ class MarketSentimentTool(Tool):
         )
 
 
-def _search_filters(arguments: dict) -> dict:
-    limit = _positive_int_or_none(arguments.get("limit")) or _MAX_SCREEN_ROWS
-    return dict(
-        query=_string_or_none(arguments.get("query")),
-        sectors=_string_tuple(arguments.get("sectors")),
-        market_cap_tiers=_enum_tuple(MarketCapTier, arguments.get("market_cap_tiers")),
-        sort=_enum_or_none(StockSort, arguments.get("sort")),
-        direction=_enum_or_none(SortDirection, arguments.get("direction"))
-        or SortDirection.DESC,
-        in_sp500=_bool_or_none(arguments.get("in_sp500")),
-        in_nasdaq100=_bool_or_none(arguments.get("in_nasdaq100")),
-        limit=min(limit, _MAX_SCREEN_ROWS),
-    )
+@dataclass(frozen=True)
+class _SearchArgs:
+    """The search_stocks tool's arguments, coerced from the model's raw (untrusted) input.
+
+    Field names mirror SearchStocks.execute's keyword arguments, so run() can splat
+    asdict(...) straight into it. A stray model value degrades to its default, never raises.
+    """
+
+    query: str | None = None
+    sectors: tuple[str, ...] = ()
+    market_cap_tiers: tuple[MarketCapTier, ...] = ()
+    sort: StockSort | None = None
+    direction: SortDirection = SortDirection.DESC
+    in_sp500: bool | None = None
+    in_nasdaq100: bool | None = None
+    limit: int = _MAX_SCREEN_ROWS
+
+    @classmethod
+    def from_model(cls, raw: dict) -> "_SearchArgs":
+        limit = _positive_int_or_none(raw.get("limit")) or _MAX_SCREEN_ROWS
+        return cls(
+            query=_string_or_none(raw.get("query")),
+            sectors=_string_tuple(raw.get("sectors")),
+            market_cap_tiers=_enum_tuple(MarketCapTier, raw.get("market_cap_tiers")),
+            sort=_enum_or_none(StockSort, raw.get("sort")),
+            direction=_enum_or_none(SortDirection, raw.get("direction"))
+            or SortDirection.DESC,
+            in_sp500=_bool_or_none(raw.get("in_sp500")),
+            in_nasdaq100=_bool_or_none(raw.get("in_nasdaq100")),
+            limit=min(limit, _MAX_SCREEN_ROWS),
+        )
 
 
 def _format_row(row: StockSearchResult) -> str:
