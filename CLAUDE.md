@@ -774,7 +774,9 @@ app/
     │   └── fundamentals/        #    the weekly Yahoo .info sweep → margins/ROE/beta/per-share inputs + company name onto the anchor (table-less)
     ├── ai/                 # ── model-generated reads (Claude on Bedrock):
     │   ├── analysis/            #    every AI analysis + the shared result cache (one `investment_analysis_cache` table keyed (kind, symbol), per-kind TTL)
-    │   ├── agent/               #    the tool-using stock-research agent behind POST /research (tools over the app's own reads; no table)
+    │   ├── agent/               #    the tool-using stock-research agent behind POST /research (tools over the app's own reads);
+    │   │                        #    configured by the `agent_recipes` table (prompt/tool names/step budget/model per agent, seeded by
+    │   │                        #    migration 0042, no code fallback — tools stay in a code-side registry the rows reference by name)
     │   └── brief/               #    the daily market brief (composes boards/heatmap context → Bedrock; DB-cached by date, cron-generated)
     ├── seo/                # ── server-rendered SEO pages + sitemap (templates/, DB reads across the catalog)
     └── endpoints/          # ── the HTTP surface (controller + presenter + wiring), one module per slice:
