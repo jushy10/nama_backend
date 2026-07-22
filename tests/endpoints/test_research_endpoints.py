@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.domains.research.agent.entities import AgentStep, ResearchResult
-from app.domains.research.agent.errors import AgentNotConfigured, EmptyQuestion
+from app.domains.research.agent.errors import AgentNotConfigured, EmptyQuestion, UnknownAgentTool
 from app.domains.research.agent.models import AgentRecipeRecord
 from app.domains.research.agent import wiring
 from app.endpoints import research_endpoints as endpoints
@@ -34,7 +34,8 @@ def _client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
     register_error_handlers(app)  # the endpoint has no try/except; the handlers translate
-    app.dependency_overrides[wiring.get_run_research] = lambda: fake
+    # Overriding the shim replaces the whole construction chain (db session included).
+    app.dependency_overrides[endpoints.get_run_research] = lambda: fake
     return TestClient(app)
 
 
@@ -79,7 +80,7 @@ def test_returns_the_answer_steps_and_disclaimer():
 
 def test_a_whitespace_question_maps_to_400():
     # Passes pydantic's min_length, but the use case rejects the blank -> EmptyQuestion -> 400.
-    fake = _FakeUseCase(error=EmptyQuestion("A research question must not be empty."))
+    fake = _FakeUseCase(error=EmptyQuestion())
     resp = _client(fake).post("/agents/research", json={"question": "   "})
     assert resp.status_code == 400
 
@@ -113,7 +114,7 @@ def _seed_recipe(db, **over) -> None:
         system_prompt="Answer with the tools.",
         tool_names=["search_stocks", "get_market_sentiment"],
         max_steps=4,
-        model_id=None,
+        model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         updated_at=datetime.now(timezone.utc),
     )
     for key, value in over.items():
@@ -129,7 +130,7 @@ class _FakeModel:
 def test_a_missing_recipe_row_raises_agent_not_configured(db):
     # AgentNotConfigured maps to 503 via the central error handlers.
     with pytest.raises(AgentNotConfigured, match="recipe"):
-        wiring.get_run_research(db=db)
+        wiring.build_run_research(db=db)
 
 
 def test_the_recipe_row_configures_the_agent(db, monkeypatch):
@@ -141,14 +142,14 @@ def test_the_recipe_row_configures_the_agent(db, monkeypatch):
         return _FakeModel()
 
     monkeypatch.setattr(wiring, "get_conversation_model", fake_model)
-    use_case = wiring.get_run_research(db=db)
-    assert use_case._system_prompt == "Answer with the tools."
-    assert use_case._max_steps == 2
+    use_case = wiring.build_run_research(db=db)
     assert list(use_case._tools) == ["search_stocks"]  # only the recipe's tools are offered
-    assert seen == [None]  # no model override on the row -> the adapter's default
+    assert use_case._agent_name == "research"  # prompt/steps are fetched from the repo at execute time
+    assert use_case._recipe_repo.get("research").system_prompt == "Answer with the tools."
+    assert seen == ["us.anthropic.claude-haiku-4-5-20251001-v1:0"]  # the row's required model id
 
 
-def test_the_recipe_model_id_wins_over_the_default(db, monkeypatch):
+def test_the_recipe_model_id_is_used(db, monkeypatch):
     _seed_recipe(db, model_id="us.anthropic.claude-sonnet-5-v1:0")
     seen: list[str | None] = []
     monkeypatch.setattr(
@@ -156,12 +157,14 @@ def test_the_recipe_model_id_wins_over_the_default(db, monkeypatch):
         "get_conversation_model",
         lambda model_id=None: seen.append(model_id) or _FakeModel(),
     )
-    wiring.get_run_research(db=db)
+    wiring.build_run_research(db=db)
     assert seen == ["us.anthropic.claude-sonnet-5-v1:0"]
 
 
-def test_unknown_tool_names_are_skipped_not_fatal(db, monkeypatch):
+def test_an_unknown_tool_name_fails_loud(db, monkeypatch):
+    # A recipe naming a tool the registry lacks is a misconfiguration -> 503, not a
+    # silently thinner agent.
     _seed_recipe(db, tool_names=["search_stocks", "not_a_tool"])
     monkeypatch.setattr(wiring, "get_conversation_model", lambda model_id=None: _FakeModel())
-    use_case = wiring.get_run_research(db=db)
-    assert list(use_case._tools) == ["search_stocks"]
+    with pytest.raises(UnknownAgentTool, match="not_a_tool"):
+        wiring.build_run_research(db=db)

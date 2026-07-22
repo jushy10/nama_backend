@@ -2,13 +2,7 @@ import datetime
 
 from pydantic import BaseModel, Field
 
-from app.domains.research.agent.entities import ResearchResult
-
-# Authored by the service, not the model: the research read is informational only.
-_RESEARCH_DISCLAIMER = (
-    "AI-generated for informational and educational purposes only — not financial advice. "
-    "Markets carry risk; do your own research before investing."
-)
+from app.domains.research.agent.entities import RESEARCH_DISCLAIMER, ResearchResult
 
 
 class ResearchRequest(BaseModel):
@@ -44,7 +38,7 @@ class ResearchResponse(BaseModel):
                 )
                 for step in result.steps
             ],
-            disclaimer=_RESEARCH_DISCLAIMER,
+            disclaimer=RESEARCH_DISCLAIMER,
             model=result.model,
             generated_at=result.generated_at,
         )

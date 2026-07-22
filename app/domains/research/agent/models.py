@@ -19,11 +19,9 @@ class AgentRecipeRecord(Base):
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     tool_names: Mapped[list] = mapped_column(JSON, nullable=False)
     max_steps: Mapped[int] = mapped_column(Integer, nullable=False)
-    model_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    model_id: Mapped[str] = mapped_column(String(128), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 def recipe_by_name(session: Session, name: str) -> AgentRecipeRecord | None:
-    return session.execute(
-        select(AgentRecipeRecord).where(AgentRecipeRecord.name == name)
-    ).scalar_one_or_none()
+    return session.scalar(select(AgentRecipeRecord).where(AgentRecipeRecord.name == name))

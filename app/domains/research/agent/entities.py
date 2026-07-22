@@ -1,6 +1,12 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+# Every research answer ships this disclaimer — authored by the service, never the model.
+RESEARCH_DISCLAIMER = (
+    "AI-generated for informational and educational purposes only — not financial advice. "
+    "Markets carry risk; do your own research before investing."
+)
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -64,7 +70,7 @@ class AgentRecipe:
     system_prompt: str
     tool_names: tuple[str, ...]
     max_steps: int
-    model_id: str | None = None
+    model_id: str
 
 
 @dataclass(frozen=True)
