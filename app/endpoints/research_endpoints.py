@@ -1,11 +1,12 @@
 import os
 
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy.orm import Session
 
+from app.db import get_db
 from app.rate_limit import limiter
-from app.domains.research.agent.schemas import ResearchRequest, ResearchResponse
-from app.domains.research.agent.use_cases import RunResearch
-from app.domains.research.agent.wiring import get_run_research
+from app.domains.research.agent import wiring
+from app.domains.research.agent.api_schemas import ResearchRequest, ResearchResponse
 
 router = APIRouter(tags=["stocks"])
 
@@ -18,7 +19,10 @@ _AI_RESEARCH_RATE_LIMIT = os.environ.get("AI_RESEARCH_RATE_LIMIT", "10/minute")
 def run_research_endpoint(
     request: Request,
     body: ResearchRequest,
-    use_case: RunResearch = Depends(get_run_research),
+    db: Session = Depends(get_db),
 ) -> ResearchResponse:
-    # Wiring builds the use case; domain errors are translated by the central handlers.
+    # The endpoint calls the wiring layer, which builds and returns the use case; domain
+    # errors are translated by the central handlers. Depends stays only for the DB session,
+    # whose per-request open/close the framework owns.
+    use_case = wiring.build_run_research(db)
     return ResearchResponse.from_result(use_case.execute(body.question))

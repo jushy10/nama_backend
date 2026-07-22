@@ -1,14 +1,12 @@
-"""The agent slice's composition root — Depends() calls these factories; the endpoint
-only receives the finished use case."""
+"""The agent slice's composition root — the endpoint calls build_run_research(db) and
+receives the finished use case; all construction knowledge lives here."""
 
 import logging
 import os
 from functools import lru_cache
 
-from fastapi import Depends
 from sqlalchemy.orm import Session
 
-from app.db import get_db
 from app.adapters.bedrock.conversation_model_adapter_impl import (
     ConversationModelAdapterImpl,
 )
@@ -62,7 +60,7 @@ def _tool_registry(db: Session) -> dict[str, Tool]:
     }
 
 
-def get_run_research(db: Session = Depends(get_db)) -> RunResearch:
+def build_run_research(db: Session) -> RunResearch:
     # No code fallback: a missing recipe row is a deployment problem (migrations not run),
     # surfaced as AgentNotConfigured -> 503.
     recipe = AgentRecipeRepositoryAdapterImpl(db).get(_RESEARCH_AGENT)

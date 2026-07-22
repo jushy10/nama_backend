@@ -30,11 +30,14 @@ class _FakeUseCase:
         return self._result
 
 
-def _client(fake: _FakeUseCase) -> TestClient:
+def _client(fake: _FakeUseCase, monkeypatch) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
     register_error_handlers(app)  # the endpoint has no try/except; the handlers translate
-    app.dependency_overrides[wiring.get_run_research] = lambda: fake
+    # The endpoint calls wiring.build_run_research(db) directly, so the seam is a
+    # monkeypatch on the wiring layer; the db dependency is stubbed out entirely.
+    monkeypatch.setattr(wiring, "build_run_research", lambda db: fake)
+    app.dependency_overrides[endpoints.get_db] = lambda: None
     return TestClient(app)
 
 
@@ -57,9 +60,9 @@ def _a_result(**over) -> ResearchResult:
     return ResearchResult(**base)
 
 
-def test_returns_the_answer_steps_and_disclaimer():
+def test_returns_the_answer_steps_and_disclaimer(monkeypatch):
     fake = _FakeUseCase(result=_a_result())
-    resp = _client(fake).post("/agents/research", json={"question": "compare NVDA and AMD"})
+    resp = _client(fake, monkeypatch).post("/agents/research", json={"question": "compare NVDA and AMD"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["answer"] == "NVDA is larger and growing faster."
@@ -77,21 +80,21 @@ def test_returns_the_answer_steps_and_disclaimer():
     assert fake.questions == ["compare NVDA and AMD"]
 
 
-def test_a_whitespace_question_maps_to_400():
+def test_a_whitespace_question_maps_to_400(monkeypatch):
     # Passes pydantic's min_length, but the use case rejects the blank -> EmptyQuestion -> 400.
     fake = _FakeUseCase(error=EmptyQuestion("A research question must not be empty."))
-    resp = _client(fake).post("/agents/research", json={"question": "   "})
+    resp = _client(fake, monkeypatch).post("/agents/research", json={"question": "   "})
     assert resp.status_code == 400
 
 
-def test_an_empty_question_is_rejected_by_validation():
-    resp = _client(_FakeUseCase(result=_a_result())).post("/agents/research", json={"question": ""})
+def test_an_empty_question_is_rejected_by_validation(monkeypatch):
+    resp = _client(_FakeUseCase(result=_a_result()), monkeypatch).post("/agents/research", json={"question": ""})
     assert resp.status_code == 422
 
 
-def test_a_model_failure_maps_to_502():
+def test_a_model_failure_maps_to_502(monkeypatch):
     fake = _FakeUseCase(error=StockDataUnavailable("research", "bedrock down"))
-    resp = _client(fake).post("/agents/research", json={"question": "how is the market?"})
+    resp = _client(fake, monkeypatch).post("/agents/research", json={"question": "how is the market?"})
     assert resp.status_code == 502
 
 
@@ -129,7 +132,7 @@ class _FakeModel:
 def test_a_missing_recipe_row_raises_agent_not_configured(db):
     # AgentNotConfigured maps to 503 via the central error handlers.
     with pytest.raises(AgentNotConfigured, match="recipe"):
-        wiring.get_run_research(db=db)
+        wiring.build_run_research(db=db)
 
 
 def test_the_recipe_row_configures_the_agent(db, monkeypatch):
@@ -141,7 +144,7 @@ def test_the_recipe_row_configures_the_agent(db, monkeypatch):
         return _FakeModel()
 
     monkeypatch.setattr(wiring, "get_conversation_model", fake_model)
-    use_case = wiring.get_run_research(db=db)
+    use_case = wiring.build_run_research(db=db)
     assert use_case._system_prompt == "Answer with the tools."
     assert use_case._max_steps == 2
     assert list(use_case._tools) == ["search_stocks"]  # only the recipe's tools are offered
@@ -156,12 +159,12 @@ def test_the_recipe_model_id_wins_over_the_default(db, monkeypatch):
         "get_conversation_model",
         lambda model_id=None: seen.append(model_id) or _FakeModel(),
     )
-    wiring.get_run_research(db=db)
+    wiring.build_run_research(db=db)
     assert seen == ["us.anthropic.claude-sonnet-5-v1:0"]
 
 
 def test_unknown_tool_names_are_skipped_not_fatal(db, monkeypatch):
     _seed_recipe(db, tool_names=["search_stocks", "not_a_tool"])
     monkeypatch.setattr(wiring, "get_conversation_model", lambda model_id=None: _FakeModel())
-    use_case = wiring.get_run_research(db=db)
+    use_case = wiring.build_run_research(db=db)
     assert list(use_case._tools) == ["search_stocks"]
