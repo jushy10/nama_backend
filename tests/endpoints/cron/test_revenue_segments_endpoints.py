@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints.cron import revenue_segments_endpoints as cron
-from app.stocks.company.revenue_segments.use_cases import RevenueSegmentsSyncReport
+from app.endpoints.cron import revenue_segments_endpoints as cron
+from app.domains.financials.revenue_segments.use_cases import RevenueSegmentsSyncReport
 
 
 class _FakeRunner:

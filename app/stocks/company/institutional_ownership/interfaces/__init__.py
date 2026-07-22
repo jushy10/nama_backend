@@ -1,5 +1,0 @@
-from app.stocks.company.institutional_ownership.interfaces.institutional_ownership_adapter import InstitutionalOwnershipAdapter
-from app.stocks.company.institutional_ownership.interfaces.institutional_ownership_repository_adapter import InstitutionalOwnershipRepositoryAdapter
-from app.stocks.company.institutional_ownership.interfaces.types import RefreshTarget
-
-__all__ = ["InstitutionalOwnershipAdapter", "InstitutionalOwnershipRepositoryAdapter", "RefreshTarget"]

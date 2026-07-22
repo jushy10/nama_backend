@@ -2,18 +2,18 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from app.stocks.adapters.bedrock.fundamentals_analysis_adapter_impl import (
+from app.adapters.bedrock.fundamentals_analysis_adapter_impl import (
     FundamentalsAnalysisAdapterImpl,
 )
-from app.stocks.ai.analysis.entities import Confidence, FundamentalsVerdict
-from app.stocks.entities import (
+from app.domains.research.analysis.entities import Confidence, FundamentalsVerdict
+from app.domains.shared.entities import (
     AnalystEstimates,
     KeyMetrics,
     Stock,
 )
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.company.ticker.entities import PeHistoryStats, ValuationSignal
-from app.stocks.catalog.universe.entities import IndustryValuation
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.pricing.ticker.entities import PeHistoryStats, ValuationSignal
+from app.domains.listings.universe.entities import IndustryValuation
 
 
 # --- Stub Bedrock client (same shape as the other adapters') -----------------------------------

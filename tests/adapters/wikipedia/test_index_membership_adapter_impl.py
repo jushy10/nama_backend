@@ -3,11 +3,11 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.adapters.wikipedia import index_membership_adapter_impl as wiki
-from app.stocks.adapters.wikipedia.index_membership_adapter_impl import (
+from app.adapters.wikipedia import index_membership_adapter_impl as wiki
+from app.adapters.wikipedia.index_membership_adapter_impl import (
     IndexMembershipAdapterImpl,
 )
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.shared.exceptions import StockDataUnavailable
 
 
 def _roster_table(header: str, tickers) -> str:

@@ -1,15 +1,15 @@
 from datetime import date
 
-from app.stocks.adapters.db.db_cached_annual_earnings_adapter_impl import (
+from app.adapters.db.db_cached_annual_earnings_adapter_impl import (
     AnnualEarningsAdapterImpl,
 )
-from app.stocks.company.earnings.annual.entities import (
+from app.domains.financials.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.stocks.company.earnings.annual.interfaces import AnnualEarningsAdapter
-from app.stocks.company.earnings.annual.interfaces import AnnualEarningsRepositoryAdapter
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.financials.earnings.annual.interfaces import AnnualEarningsAdapter
+from app.domains.financials.earnings.annual.interfaces import AnnualEarningsRepositoryAdapter
+from app.domains.shared.exceptions import StockDataUnavailable
 
 
 def _tl(symbol: str, eps_actual: float) -> AnnualEarningsTimeline:

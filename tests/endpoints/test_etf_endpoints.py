@@ -3,10 +3,10 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import etf_endpoints as endpoints
-from app.stocks.ai.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
-from app.stocks.entities import Quote, StockPerformance
-from app.stocks.catalog.etfs.entities import (
+from app.endpoints import etf_endpoints as endpoints
+from app.domains.research.analysis.entities import Confidence, InvestmentAnalysis, Recommendation
+from app.domains.shared.entities import Quote, StockPerformance
+from app.domains.etfs.entities import (
     EtfCategories,
     EtfDetail,
     EtfHolding,
@@ -18,9 +18,9 @@ from app.stocks.catalog.etfs.entities import (
     EtfSort,
     SortDirection,
 )
-from app.stocks.catalog.etfs.interfaces import EtfSearchRepositoryAdapter
-from app.stocks.catalog.etfs.use_cases import ListEtfCategories, SearchEtfs
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.etfs.interfaces import EtfSearchRepositoryAdapter
+from app.domains.etfs.use_cases import ListEtfCategories, SearchEtfs
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 
 
 class _FakeSearchRepo(EtfSearchRepositoryAdapter):

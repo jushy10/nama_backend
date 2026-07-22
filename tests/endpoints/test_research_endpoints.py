@@ -8,13 +8,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.stocks.ai.agent.entities import AgentStep, ResearchResult
-from app.stocks.ai.agent.errors import AgentNotConfigured, EmptyQuestion
-from app.stocks.ai.agent.models import AgentRecipeRecord
-from app.stocks.ai.agent import wiring
-from app.stocks.endpoints import research_endpoints as endpoints
-from app.stocks.endpoints.error_handlers import register_error_handlers
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.research.agent.entities import AgentStep, ResearchResult
+from app.domains.research.agent.errors import AgentNotConfigured, EmptyQuestion
+from app.domains.research.agent.models import AgentRecipeRecord
+from app.domains.research.agent import wiring
+from app.endpoints import research_endpoints as endpoints
+from app.endpoints.error_handlers import register_error_handlers
+from app.domains.shared.exceptions import StockDataUnavailable
 
 
 class _FakeUseCase:

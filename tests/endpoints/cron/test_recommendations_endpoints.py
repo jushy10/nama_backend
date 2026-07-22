@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints.cron import recommendations_endpoints as cron
-from app.stocks.company.recommendations.use_cases import RecommendationsSyncReport
+from app.endpoints.cron import recommendations_endpoints as cron
+from app.domains.coverage.recommendations.use_cases import RecommendationsSyncReport
 
 
 class _FakeRunner:

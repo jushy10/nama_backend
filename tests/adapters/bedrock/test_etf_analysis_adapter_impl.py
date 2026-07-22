@@ -2,17 +2,17 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.stocks.adapters.bedrock.etf_analysis_adapter_impl import EtfAnalysisAdapterImpl
-from app.stocks.ai.analysis.entities import Confidence, Recommendation
-from app.stocks.entities import Quote, StockPerformance
-from app.stocks.catalog.etfs.entities import (
+from app.adapters.bedrock.etf_analysis_adapter_impl import EtfAnalysisAdapterImpl
+from app.domains.research.analysis.entities import Confidence, Recommendation
+from app.domains.shared.entities import Quote, StockPerformance
+from app.domains.etfs.entities import (
     EtfDetail,
     EtfHolding,
     EtfProfile,
     EtfSearchResult,
     EtfSectorWeight,
 )
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.shared.exceptions import StockDataUnavailable
 
 
 # --- Stub Bedrock client (same shape as the stock adapter's) -----------------------------------

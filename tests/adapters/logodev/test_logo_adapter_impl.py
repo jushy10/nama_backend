@@ -3,9 +3,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.company.logo.entities import Logo
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.adapters.logodev.logo_adapter_impl import LogoAdapterImpl
+from app.domains.profile.logo.entities import Logo
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.adapters.logodev.logo_adapter_impl import LogoAdapterImpl
 
 
 class FakeHttpClient:

@@ -5,15 +5,15 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import ticker_endpoints as endpoints
-from app.stocks.entities import (
+from app.endpoints import ticker_endpoints as endpoints
+from app.domains.shared.entities import (
     Quote,
     StockPerformance,
 )
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.company.ticker.entities import TickerOptionsMetrics, TickerValuation
-from app.stocks.company.ticker.use_cases import TickerCard, TickerClassification
-from app.stocks.catalog.universe.entities import (
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.pricing.ticker.entities import TickerOptionsMetrics, TickerValuation
+from app.domains.pricing.ticker.use_cases import TickerCard, TickerClassification
+from app.domains.listings.universe.entities import (
     Classifications,
     IndustryValuation,
     MarketCapTier,

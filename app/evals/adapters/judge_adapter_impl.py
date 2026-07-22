@@ -1,7 +1,7 @@
 from app.evals.entities import EvalCase, Grade
 from app.evals.exceptions import JudgeUnavailable
 from app.evals.interfaces import JudgeAdapter
-from app.stocks.adapters.bedrock.cost import log_model_cost
+from app.adapters.bedrock.cost import log_model_cost
 
 _SYSTEM_PROMPT = (
     "You are a strict, fair grader of an AI stock-research assistant's answers. You are given a "

@@ -3,11 +3,11 @@ from datetime import date
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.company.earnings.annual.entities import (
+from app.domains.financials.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.stocks.endpoints import annual_earnings_endpoints as endpoints
+from app.endpoints import annual_earnings_endpoints as endpoints
 
 
 class _FakeUseCase:

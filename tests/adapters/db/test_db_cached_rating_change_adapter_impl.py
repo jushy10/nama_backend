@@ -2,11 +2,11 @@ from datetime import date
 
 import pytest
 
-from app.stocks.adapters.db.db_cached_rating_change_adapter_impl import (
+from app.adapters.db.db_cached_rating_change_adapter_impl import (
     RatingChangeAdapterImpl,
 )
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.company.recommendations.entities import AnalystRatingChanges, RatingChange
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.coverage.recommendations.entities import AnalystRatingChanges, RatingChange
 
 
 def _a_run(symbol: str) -> AnalystRatingChanges:

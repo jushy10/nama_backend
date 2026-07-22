@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.adapters.fred import yield_history_adapter_impl as fred
-from app.stocks.adapters.fred.yield_history_adapter_impl import YieldHistoryAdapterImpl
-from app.stocks.exceptions import StockDataUnavailable
+from app.adapters.fred import yield_history_adapter_impl as fred
+from app.adapters.fred.yield_history_adapter_impl import YieldHistoryAdapterImpl
+from app.domains.shared.exceptions import StockDataUnavailable
 
 
 def _url(series_id: str) -> str:

@@ -5,9 +5,9 @@ import pytest
 from alpaca.common.exceptions import APIError
 from alpaca.data.enums import Adjustment, DataFeed
 
-from app.stocks.adapters.alpaca.price_adapter_impl import PriceAdapterImpl
-from app.stocks.company.charts.interfaces import CandleAdapter
-from app.stocks.entities import (
+from app.adapters.alpaca.price_adapter_impl import PriceAdapterImpl
+from app.domains.pricing.charts.interfaces import CandleAdapter
+from app.domains.shared.entities import (
     AllTimeHigh,
     Candle,
     Quote,
@@ -15,15 +15,15 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
-from app.stocks.market.boards.interfaces import MarketOverviewAdapter, SectorPerformanceAdapter
-from app.stocks.interfaces import (
+from app.domains.markets.boards.interfaces import MarketOverviewAdapter, SectorPerformanceAdapter
+from app.domains.shared.interfaces import (
     AllTimeHighAdapter,
     BulkQuoteAdapter,
     StockDataAdapter,
     StockPerformanceAdapter,
     StockQuoteAdapter,
 )
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 
 
 def make_snapshot():

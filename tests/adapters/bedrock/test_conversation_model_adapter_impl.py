@@ -1,7 +1,7 @@
 import pytest
 
-from app.stocks.adapters.bedrock.conversation_model_adapter_impl import ConversationModelAdapterImpl
-from app.stocks.ai.agent.entities import (
+from app.adapters.bedrock.conversation_model_adapter_impl import ConversationModelAdapterImpl
+from app.domains.research.agent.entities import (
     AssistantMessage,
     ModelTurn,
     ToolCall,
@@ -10,7 +10,7 @@ from app.stocks.ai.agent.entities import (
     ToolSpec,
     UserMessage,
 )
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.shared.exceptions import StockDataUnavailable
 
 
 # --- Stub Bedrock client (same shape as the analysis adapters') --------------------------------

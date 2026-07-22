@@ -1,10 +1,10 @@
 import pytest
 
-from app.stocks.adapters.yfinance.company_classification_adapter_impl import (
+from app.adapters.yfinance.company_classification_adapter_impl import (
     CompanyClassificationAdapterImpl,
 )
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.catalog.universe.entities import CompanyClassification
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.listings.universe.entities import CompanyClassification
 
 
 class _FakeTicker:

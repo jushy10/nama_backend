@@ -4,21 +4,21 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.adapters.bedrock.stock_scorecard_adapter_impl import (
+from app.adapters.bedrock.stock_scorecard_adapter_impl import (
     StockScorecardAdapterImpl,
     _SECTIONS as _SCORECARD_SECTIONS,
 )
-from app.stocks.adapters.bedrock.earnings_analysis_adapter_impl import (
+from app.adapters.bedrock.earnings_analysis_adapter_impl import (
     EarningsAnalysisAdapterImpl,
 )
-from app.stocks.adapters.bedrock.market_summary_adapter_impl import (
+from app.adapters.bedrock.market_summary_adapter_impl import (
     MarketSummaryAdapterImpl,
 )
-from app.stocks.adapters.bedrock.sector_analysis_adapter_impl import (
+from app.adapters.bedrock.sector_analysis_adapter_impl import (
     SectorAnalysisAdapterImpl,
 )
-from app.stocks.company.charts.chart_window import ChartRange, resolve_window
-from app.stocks.ai.analysis.entities import (
+from app.domains.pricing.charts.chart_window import ChartRange, resolve_window
+from app.domains.research.analysis.entities import (
     Confidence,
     EarningsAnalysis,
     EarningsTrend,
@@ -38,7 +38,7 @@ from app.stocks.ai.analysis.entities import (
     SectorMover,
     StockScorecard,
 )
-from app.stocks.ai.analysis.interfaces import (
+from app.domains.research.analysis.interfaces import (
     AiAnalysisCacheAdapter,
     EarningsAnalysisAdapter,
     MarketSummaryAdapter,
@@ -46,45 +46,45 @@ from app.stocks.ai.analysis.interfaces import (
     StockScorecardCacheAdapter,
     StockScorecardAdapter,
 )
-from app.stocks.ai.analysis.use_cases import (
+from app.domains.research.analysis.use_cases import (
     GetEarningsAnalysis,
     GetMarketSummary,
     GetSectorAnalysis,
     GetStockAnalysis,
     GetStockInfo,
 )
-from app.stocks.company.charts.indicators import TrendDirection, TrendReading
-from app.stocks.company.charts.interfaces import CandleAdapter
-from app.stocks.company.charts.use_cases import (
+from app.domains.pricing.charts.indicators import TrendDirection, TrendReading
+from app.domains.pricing.charts.interfaces import CandleAdapter
+from app.domains.pricing.charts.use_cases import (
     GetStockCandles,
     GetStockEma,
     GetStockSupportLevels,
     GetStockTrend,
 )
-from app.stocks.company.earnings.annual.entities import (
+from app.domains.financials.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.stocks.company.earnings.annual.interfaces import AnnualEarningsAdapter
-from app.stocks.company.earnings.quarterly.entities import (
+from app.domains.financials.earnings.annual.interfaces import AnnualEarningsAdapter
+from app.domains.financials.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
-from app.stocks.endpoints.analysis_endpoints import (
+from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
+from app.endpoints.analysis_endpoints import (
     get_market_summary,
     get_sector_analysis,
     get_stock_analysis,
 )
-from app.stocks.endpoints.chart_endpoints import (
+from app.endpoints.chart_endpoints import (
     get_stock_candles,
     get_stock_ema,
     get_stock_support_levels,
     get_stock_trend,
 )
-from app.stocks.endpoints.logo_endpoints import get_stock_logo
-from app.stocks.endpoints.market_endpoints import get_sector_performance
-from app.stocks.entities import (
+from app.endpoints.logo_endpoints import get_stock_logo
+from app.endpoints.market_endpoints import get_sector_performance
+from app.domains.shared.entities import (
     AllTimeHigh,
     AnalystEstimates,
     Candle,
@@ -99,27 +99,27 @@ from app.stocks.entities import (
     market_session_at,
     normalize_symbol,
 )
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.company.logo.entities import Logo
-from app.stocks.company.logo.interfaces import LogoAdapter
-from app.stocks.company.logo.use_cases import GetStockLogo
-from app.stocks.market.boards.entities import MarketIndexPerformance, SectorPerformance
-from app.stocks.market.boards.interfaces import MarketOverviewAdapter, SectorPerformanceAdapter
-from app.stocks.market.boards.use_cases import GetMarketOverview, GetSectorPerformance
-from app.stocks.interfaces import (
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.profile.logo.entities import Logo
+from app.domains.profile.logo.interfaces import LogoAdapter
+from app.domains.profile.logo.use_cases import GetStockLogo
+from app.domains.markets.boards.entities import MarketIndexPerformance, SectorPerformance
+from app.domains.markets.boards.interfaces import MarketOverviewAdapter, SectorPerformanceAdapter
+from app.domains.markets.boards.use_cases import GetMarketOverview, GetSectorPerformance
+from app.domains.shared.interfaces import (
     AllTimeHighAdapter,
     AnalystEstimatesAdapter,
     StockDataAdapter,
     StockPerformanceAdapter,
 )
-from app.stocks.company.recommendations.entities import (
+from app.domains.coverage.recommendations.entities import (
     AnalystRecommendations,
     RecommendationTrend,
 )
-from app.stocks.company.recommendations.interfaces import RecommendationAdapter
-from app.stocks.company.news.entities import NewsArticle, StockNews
-from app.stocks.company.news.interfaces import NewsRepositoryAdapter
-from app.stocks.catalog.universe.entities import (
+from app.domains.coverage.recommendations.interfaces import RecommendationAdapter
+from app.domains.coverage.news.entities import NewsArticle, StockNews
+from app.domains.coverage.news.interfaces import NewsRepositoryAdapter
+from app.domains.listings.universe.entities import (
     AnchorMetrics,
     IndustryValuation,
     MarketCapTier,
@@ -129,8 +129,8 @@ from app.stocks.catalog.universe.entities import (
     StockSearchResult,
     StockSort,
 )
-from app.stocks.catalog.universe.interfaces import StockSearchRepositoryAdapter
-from app.stocks.wiring import analysis_cache_ttl
+from app.domains.listings.universe.interfaces import StockSearchRepositoryAdapter
+from app.endpoints.wiring import analysis_cache_ttl
 
 
 class FakeProvider(StockDataAdapter):

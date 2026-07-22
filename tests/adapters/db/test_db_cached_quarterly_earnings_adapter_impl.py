@@ -1,15 +1,15 @@
 from datetime import date
 
-from app.stocks.adapters.db.db_cached_quarterly_earnings_adapter_impl import (
+from app.adapters.db.db_cached_quarterly_earnings_adapter_impl import (
     QuarterlyEarningsAdapterImpl,
 )
-from app.stocks.company.earnings.quarterly.entities import (
+from app.domains.financials.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
-from app.stocks.company.earnings.quarterly.interfaces import QuarterlyEarningsRepositoryAdapter
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
+from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsRepositoryAdapter
+from app.domains.shared.exceptions import StockDataUnavailable
 
 
 def _tl(symbol: str, eps_actual: float) -> QuarterlyEarningsTimeline:

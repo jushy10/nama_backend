@@ -4,14 +4,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import seo_endpoints as endpoints
-from app.stocks.seo.interfaces import (
+from app.endpoints import seo_endpoints as endpoints
+from app.domains.seo.interfaces import (
     EtfPageFacts,
     SectorStock,
     StockPageRef,
     TickerPageFacts,
 )
-from app.stocks.seo.use_cases import (
+from app.domains.seo.use_cases import (
     SCREENS,
     EtfPage,
     ScreenPage,

@@ -2,9 +2,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.stocks.adapters.yfinance.news_adapter_impl import NewsAdapterImpl
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.company.news.entities import StockNews
+from app.adapters.yfinance.news_adapter_impl import NewsAdapterImpl
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.coverage.news.entities import StockNews
 
 
 class _FakeTicker:

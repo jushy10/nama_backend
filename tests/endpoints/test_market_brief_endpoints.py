@@ -5,8 +5,8 @@ from datetime import date, datetime, timezone
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.ai.brief.entities import BriefTone, MarketBrief, MarketBriefSection
-from app.stocks.endpoints import market_brief_endpoints as endpoints
+from app.domains.research.brief.entities import BriefTone, MarketBrief, MarketBriefSection
+from app.endpoints import market_brief_endpoints as endpoints
 
 
 class _FakeUseCase:

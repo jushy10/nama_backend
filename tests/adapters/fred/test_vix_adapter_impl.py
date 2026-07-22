@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.adapters.fred.vix_adapter_impl import VixAdapterImpl, _parse_observations
-from app.stocks.exceptions import StockDataUnavailable
+from app.adapters.fred.vix_adapter_impl import VixAdapterImpl, _parse_observations
+from app.domains.shared.exceptions import StockDataUnavailable
 
 
 class FakeHttpClient:

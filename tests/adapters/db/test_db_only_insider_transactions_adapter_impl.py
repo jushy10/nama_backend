@@ -1,13 +1,13 @@
 from datetime import date
 
-from app.stocks.adapters.db.db_only_insider_transactions_adapter_impl import (
+from app.adapters.db.db_only_insider_transactions_adapter_impl import (
     InsiderTransactionsAdapterImpl,
 )
-from app.stocks.company.insider_transactions.entities import (
+from app.domains.ownership.insider_transactions.entities import (
     InsiderActivity,
     InsiderTransaction,
 )
-from app.stocks.company.insider_transactions.interfaces import (
+from app.domains.ownership.insider_transactions.interfaces import (
     InsiderTransactionsRepositoryAdapter,
     RefreshTarget,
 )

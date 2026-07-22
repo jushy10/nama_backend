@@ -4,9 +4,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import institutional_ownership_endpoints as endpoints
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.company.institutional_ownership.entities import (
+from app.endpoints import institutional_ownership_endpoints as endpoints
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.ownership.institutional_ownership.entities import (
     HOLDER_TYPE_INSTITUTION,
     HOLDER_TYPE_MUTUAL_FUND,
     InstitutionalHolder,

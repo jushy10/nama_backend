@@ -1,11 +1,11 @@
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yfinance.rating_change_adapter_impl import (
+from app.adapters.yfinance.rating_change_adapter_impl import (
     RatingChangeAdapterImpl,
 )
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.company.recommendations.entities import AnalystRatingChanges
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.coverage.recommendations.entities import AnalystRatingChanges
 
 
 class _FakeTicker:

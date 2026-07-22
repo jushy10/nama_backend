@@ -1,8 +1,8 @@
 import pytest
 
-from app.stocks.adapters.yfinance.stock_screener_adapter_impl import StockScreenerAdapterImpl
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.catalog.universe.entities import ScreenedStock
+from app.adapters.yfinance.stock_screener_adapter_impl import StockScreenerAdapterImpl
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.listings.universe.entities import ScreenedStock
 
 
 class FakePages:
@@ -263,7 +263,7 @@ def test_live_page_retries_a_blocked_screen_then_succeeds(monkeypatch):
     # drops the crumb and re-fetches once; the retry's well-formed page is what's returned.
     import yfinance as yf
 
-    from app.stocks.adapters.yfinance.stock_screener_adapter_impl import _live_screen_page
+    from app.adapters.yfinance.stock_screener_adapter_impl import _live_screen_page
 
     calls = {"n": 0}
 
@@ -284,7 +284,7 @@ def test_live_page_scopes_by_region_for_ca_and_by_exchange_for_us(monkeypatch):
     # The CA pass filters by region==ca; the US pass filters by explicit exchange codes.
     import yfinance as yf
 
-    from app.stocks.adapters.yfinance.stock_screener_adapter_impl import _live_screen_page
+    from app.adapters.yfinance.stock_screener_adapter_impl import _live_screen_page
 
     captured = {}
 
@@ -308,7 +308,7 @@ def test_live_page_does_not_retry_a_legit_empty_tail(monkeypatch):
     # a block — the pagination terminator isn't wasted on a retry.
     import yfinance as yf
 
-    from app.stocks.adapters.yfinance.stock_screener_adapter_impl import _live_screen_page
+    from app.adapters.yfinance.stock_screener_adapter_impl import _live_screen_page
 
     calls = {"n": 0}
 

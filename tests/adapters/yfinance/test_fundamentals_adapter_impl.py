@@ -1,9 +1,9 @@
 import pytest
 
-from app.stocks.adapters.yfinance.fundamentals_adapter_impl import (
+from app.adapters.yfinance.fundamentals_adapter_impl import (
     FundamentalsAdapterImpl,
 )
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.shared.exceptions import StockDataUnavailable
 
 # An AAPL-shaped ``.info`` at the raw units Yahoo returns (see the adapter's docstring):
 # margins/ROE are fractions, debtToEquity is a percent, currentRatio/beta are plain figures.

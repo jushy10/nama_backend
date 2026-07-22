@@ -1,7 +1,7 @@
 import pytest
 
-from app.stocks.adapters.yfinance import currency as yfinance_currency
-from app.stocks.adapters.yfinance.currency import CurrencyNormalizer
+from app.adapters.yfinance import currency as yfinance_currency
+from app.adapters.yfinance.currency import CurrencyNormalizer
 
 
 class _FxTicker:
