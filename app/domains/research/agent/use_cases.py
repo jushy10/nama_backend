@@ -32,13 +32,10 @@ _SYSTEM_PROMPT = (
     "- When you have enough to answer, respond in plain text with no further tool calls."
 )
 
-# Bound the loop: each step is a metered model call plus tool work, so a runaway or looping
-# model can't rack up unbounded spend. Generous enough for a multi-tool comparison, low enough
-# to cap the blast radius of a stuck conversation.
+# Each step is a metered model call — caps the spend of a runaway or looping model.
 _DEFAULT_MAX_STEPS = 6
 
-# Appended to the system prompt for the forced final turn, when the step budget is spent while
-# the model still wants tools — tell it to answer from what it already has.
+# Appended to the system prompt for the forced final turn once the step budget is spent.
 _FORCE_FINAL = (
     "\nYou have reached the tool-call limit. Answer now from the information already gathered; "
     "do not request any more tools."
@@ -90,8 +87,7 @@ class RunResearch:
                 outcomes.append(ToolOutcome(call.id, step.output, step.is_error))
             messages.append(ToolResultsMessage(tuple(outcomes)))
 
-        # Budget spent while the model still wants tools: force one tool-free turn so the read
-        # always resolves to an answer rather than an exhausted loop.
+        # Budget spent: force one tool-free turn so the read always resolves to an answer.
         final = self._model.respond(
             system=self._system_prompt + _FORCE_FINAL, messages=messages, tools=()
         )

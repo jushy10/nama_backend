@@ -1,10 +1,5 @@
-"""The agent slice's domain errors.
-
-Framework-free: raised by use cases and wiring, translated to HTTP status codes by the
-central exception handlers (app/endpoints/error_handlers.py) — never caught in an
-endpoint. An endpoint stays a one-liner; a new error means a new class here plus one
-handler registration.
-"""
+"""Agent domain errors — framework-free; raised by use cases/wiring, mapped to HTTP by
+app/endpoints/error_handlers.py (never caught in an endpoint)."""
 
 
 class AgentError(Exception):

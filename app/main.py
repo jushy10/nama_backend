@@ -128,8 +128,7 @@ app = FastAPI(title="nama_backend", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Central domain-error -> HTTP translation: use cases raise, these handlers map, endpoints
-# stay one-liners (see app/endpoints/error_handlers.py).
+# Central domain-error -> HTTP translation (see app/endpoints/error_handlers.py).
 register_error_handlers(app)
 app.add_middleware(SlowAPIMiddleware)
 

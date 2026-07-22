@@ -12,8 +12,7 @@ from app.domains.listings.universe.entities import (
 )
 from app.domains.listings.universe.use_cases import SearchStocks
 
-# The cap on rows a single screen returns to the model — enough context to compare a handful of
-# names without flooding the prompt (and the token bill) with a whole page.
+# Cap on rows returned to the model — keeps the prompt (and token bill) bounded.
 _MAX_SCREEN_ROWS = 15
 
 _SEARCH_STOCKS_SPEC = ToolSpec(
@@ -145,11 +144,9 @@ class MarketSentimentTool(Tool):
 
 @dataclass(frozen=True)
 class _SearchArgs:
-    """The search_stocks tool's arguments, coerced from the model's raw (untrusted) input.
-
-    Field names mirror SearchStocks.execute's keyword arguments, so run() can splat
-    asdict(...) straight into it. A stray model value degrades to its default, never raises.
-    """
+    """search_stocks arguments coerced from the model's untrusted input — a stray value
+    degrades to its default, never raises. Field names mirror SearchStocks.execute's
+    kwargs so run() can splat asdict() straight into it."""
 
     query: str | None = None
     sectors: tuple[str, ...] = ()
@@ -204,7 +201,7 @@ def _human_usd(value: float) -> str:
     return f"${value:.0f}"
 
 
-# --- Defensive argument coercion (a stray model value degrades to "unset", never raises) ------
+# Coercion helpers: a stray model value degrades to "unset", never raises.
 
 
 def _string_or_none(value) -> str | None:

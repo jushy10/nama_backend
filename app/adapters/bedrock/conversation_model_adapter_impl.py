@@ -19,8 +19,7 @@ logger = logging.getLogger(__name__)
 class ConversationModelAdapterImpl(ConversationModelAdapter):
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     _DEFAULT_REGION = "us-east-1"
-    # A ceiling, not spend — we pay only actual tokens. Sized so a broad final answer never
-    # clips: truncation mid-tool_use would silently read as a final answer (see respond()).
+    # A ceiling, not spend — sized so a broad final answer never clips (see respond()).
     _MAX_TOKENS = 2048
 
     def __init__(
@@ -36,9 +35,7 @@ class ConversationModelAdapterImpl(ConversationModelAdapter):
         if client is not None:
             self._client = client
             return
-        # Imported here, not at module load: the SDK is an optional heavyweight dependency (it
-        # pulls boto3) that neither the app's other endpoints nor the offline tests need. A
-        # missing extra raises ImportError, which the wiring turns into a 503.
+        # Lazy import: boto3 is heavy and optional; ImportError -> 503 in the wiring.
         from anthropic import AnthropicBedrock
 
         self._client = AnthropicBedrock(aws_region=region)
@@ -56,8 +53,7 @@ class ConversationModelAdapterImpl(ConversationModelAdapter):
             "system": system,
             "messages": [_to_anthropic_message(m) for m in messages],
         }
-        # Offer tools only when the use case supplies them; on the forced final turn it passes
-        # none, so the model must answer in prose (no tools param, no tool_choice).
+        # The forced final turn passes no tools — omit the param so the model must answer in prose.
         if tools:
             request["tools"] = [_to_anthropic_tool(spec) for spec in tools]
         try:
@@ -68,8 +64,7 @@ class ConversationModelAdapterImpl(ConversationModelAdapter):
             ) from exc
         log_model_cost(label="ai research", model_id=self._model_id, message=message)
         if getattr(message, "stop_reason", None) == "max_tokens":
-            # Clipped output is served as-is; worse, a clipped tool_use block drops out and the
-            # partial text reads as a final answer — surface it instead of failing the request.
+            # A clipped tool_use block silently reads as a final answer — surface it loudly.
             logger.warning(
                 "research model turn truncated at max_tokens=%s (model %s)",
                 self._max_tokens,
@@ -95,7 +90,7 @@ def _to_anthropic_message(message: Message) -> dict:
                 }
             )
         return {"role": "assistant", "content": content}
-    # ToolResultsMessage — the tool outputs, paired to their calls by id, sent as a user turn.
+    # ToolResultsMessage: tool_result blocks ride a user turn, paired by tool_use_id.
     return {
         "role": "user",
         "content": [
