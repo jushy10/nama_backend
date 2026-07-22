@@ -201,3 +201,101 @@ def test_a_missing_recipe_raises_missing_agent_recipe():
     with pytest.raises(MissingAgentRecipe):
         use_case.execute("q")
     assert model.calls == []  # config is checked before any metered call
+
+
+# --- The recipe drives the loop ----------------------------------------------------------------
+
+
+def test_system_prompt_comes_from_the_recipe():
+    model = _ScriptedModel([ModelTurn("hi", (), model="m1")])
+    _research(model, [_FakeTool("echo")], system_prompt="Be terse.").execute("q")
+    assert model.calls[0]["system"] == "Be terse."
+
+
+def test_max_steps_comes_from_the_recipe():
+    model = _ScriptedModel(
+        [
+            ModelTurn("s1", (_call("echo", call_id="c1"),), model="m1"),
+            ModelTurn("s2", (_call("echo", call_id="c2"),), model="m1"),
+            ModelTurn("s3", (_call("echo", call_id="c3"),), model="m1"),
+            ModelTurn("done", (), model="m1"),
+        ]
+    )
+    result = _research(model, [_FakeTool("echo")], max_steps=3).execute("q")
+    assert len(model.calls) == 4  # 3 budgeted turns + 1 forced final
+    assert len(result.steps) == 3
+
+
+def test_a_zero_step_budget_is_floored_to_one():
+    # max(1, max_steps) guards a misconfigured row: the loop always gets one real turn.
+    model = _ScriptedModel(
+        [
+            ModelTurn("s1", (_call("echo"),), model="m1"),
+            ModelTurn("done", (), model="m1"),
+        ]
+    )
+    result = _research(model, [_FakeTool("echo")], max_steps=0).execute("q")
+    assert result.answer == "done"
+    assert len(model.calls) == 2  # 1 (floored) budgeted turn + 1 forced final
+
+
+def test_forced_final_turn_appends_the_limit_instruction():
+    model = _ScriptedModel(
+        [
+            ModelTurn("s1", (_call("echo"),), model="m1"),
+            ModelTurn("done", (), model="m1"),
+        ]
+    )
+    _research(model, [_FakeTool("echo")], max_steps=1, system_prompt="Base.").execute("q")
+    final_system = model.calls[-1]["system"]
+    assert final_system.startswith("Base.")
+    assert "tool-call limit" in final_system
+
+
+# --- Transcript and result mechanics -----------------------------------------------------------
+
+
+def test_tool_specs_are_offered_on_budgeted_turns():
+    model = _ScriptedModel([ModelTurn("hi", (), model="m1")])
+    _research(model, [_FakeTool("echo"), _FakeTool("other")]).execute("q")
+    assert [spec.name for spec in model.calls[0]["tools"]] == ["echo", "other"]
+
+
+def test_tool_results_are_paired_to_their_call_ids():
+    model = _ScriptedModel(
+        [
+            ModelTurn("both", (_call("echo", call_id="c1"), _call("echo", call_id="c2")), model="m1"),
+            ModelTurn("done", (), model="m1"),
+        ]
+    )
+    _research(model, [_FakeTool("echo")]).execute("q")
+    results_message = model.calls[1]["messages"][-1]
+    assert [outcome.call_id for outcome in results_message.outcomes] == ["c1", "c2"]
+
+
+def test_model_id_is_kept_from_an_earlier_turn_when_the_final_omits_it():
+    model = _ScriptedModel(
+        [
+            ModelTurn("s1", (_call("echo"),), model="m1"),
+            ModelTurn("done", (), model=""),  # final turn reports no model id
+        ]
+    )
+    result = _research(model, [_FakeTool("echo")]).execute("q")
+    assert result.model == "m1"
+
+
+def test_the_answer_is_stripped():
+    model = _ScriptedModel([ModelTurn("  spaced out  ", (), model="m1")])
+    assert _research(model, [_FakeTool("echo")]).execute("q").answer == "spaced out"
+
+
+def test_steps_survive_into_the_forced_final_result():
+    model = _ScriptedModel(
+        [
+            ModelTurn("s1", (_call("echo", {"k": "v"}),), model="m1"),
+            ModelTurn("late answer", (), model="m1"),
+        ]
+    )
+    result = _research(model, [_FakeTool("echo")], max_steps=1).execute("q")
+    assert result.answer == "late answer"
+    assert [(s.tool, s.arguments) for s in result.steps] == [("echo", {"k": "v"})]
