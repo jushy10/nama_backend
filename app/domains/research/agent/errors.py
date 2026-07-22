@@ -25,3 +25,8 @@ class MissingAgentRecipe(AgentNotConfigured):
 class BedrockNotInstalled(AgentNotConfigured):
     def __init__(self) -> None:
         super().__init__("AI research is not configured (install the 'bedrock' extra).")
+
+
+class UnknownAgentTool(AgentNotConfigured):
+    def __init__(self, tool_name: str) -> None:
+        super().__init__(f"Agent recipe references unknown tool '{tool_name}'.")

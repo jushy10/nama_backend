@@ -12,7 +12,11 @@ from app.adapters.bedrock.conversation_model_adapter_impl import (
 )
 from app.adapters.cnn.fear_greed_adapter_impl import FearGreedAdapterImpl
 from app.adapters.fred.vix_adapter_impl import VixAdapterImpl
-from app.domains.research.agent.errors import BedrockNotInstalled, MissingAgentRecipe
+from app.domains.research.agent.errors import (
+    BedrockNotInstalled,
+    MissingAgentRecipe,
+    UnknownAgentTool,
+)
 from app.domains.research.agent.interfaces import ConversationModelAdapter, Tool
 from app.domains.research.agent.repository_adapter_impl import AgentRecipeRepositoryAdapterImpl
 from app.domains.research.agent.tools import MarketSentimentTool, SearchStocksTool
@@ -65,12 +69,10 @@ def build_run_research(db: Session) -> RunResearchUsecase:
     if recipe is None:
         raise MissingAgentRecipe(_RESEARCH_AGENT)
     registry = _tool_registry(db)
-    unknown = [name for name in recipe.tool_names if name not in registry]
-    if unknown:
-        logger.warning(
-            "agent recipe '%s' references unknown tools: %s", recipe.name, unknown
-        )
-    tools = [registry[name] for name in recipe.tool_names if name in registry]
+    try:
+        tools = [registry[name] for name in recipe.tool_names]
+    except KeyError as exc:
+        raise UnknownAgentTool(exc.args[0]) from exc
     # The recipe's model_id is required (NOT NULL) — no env or code fallback chain.
     model = get_conversation_model(recipe.model_id)
     return RunResearchUsecase(model, tools, repo, _RESEARCH_AGENT)

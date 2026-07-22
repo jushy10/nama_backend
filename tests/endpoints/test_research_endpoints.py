@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.domains.research.agent.entities import AgentStep, ResearchResult
-from app.domains.research.agent.errors import AgentNotConfigured, EmptyQuestion
+from app.domains.research.agent.errors import AgentNotConfigured, EmptyQuestion, UnknownAgentTool
 from app.domains.research.agent.models import AgentRecipeRecord
 from app.domains.research.agent import wiring
 from app.endpoints import research_endpoints as endpoints
@@ -161,8 +161,10 @@ def test_the_recipe_model_id_is_used(db, monkeypatch):
     assert seen == ["us.anthropic.claude-sonnet-5-v1:0"]
 
 
-def test_unknown_tool_names_are_skipped_not_fatal(db, monkeypatch):
+def test_an_unknown_tool_name_fails_loud(db, monkeypatch):
+    # A recipe naming a tool the registry lacks is a misconfiguration -> 503, not a
+    # silently thinner agent.
     _seed_recipe(db, tool_names=["search_stocks", "not_a_tool"])
     monkeypatch.setattr(wiring, "get_conversation_model", lambda model_id=None: _FakeModel())
-    use_case = wiring.build_run_research(db=db)
-    assert list(use_case._tools) == ["search_stocks"]
+    with pytest.raises(UnknownAgentTool, match="not_a_tool"):
+        wiring.build_run_research(db=db)
