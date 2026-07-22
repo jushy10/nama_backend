@@ -56,6 +56,22 @@ class ModelTurn:
 
 
 @dataclass(frozen=True)
+class AgentRecipe:
+    """An agent's stored configuration: which prompt, tools, and model drive the loop.
+
+    Recipes live in the ``agent_recipes`` table (seeded by migration) so a new agent or a
+    prompt change ships as a migration, not a code change. ``tool_names`` reference the
+    code-side tool registry by name — the DB stores *which* tools, the code stores *how*.
+    """
+
+    name: str
+    system_prompt: str
+    tool_names: tuple[str, ...]
+    max_steps: int
+    model_id: str | None = None
+
+
+@dataclass(frozen=True)
 class AgentStep:
     tool: str
     arguments: dict

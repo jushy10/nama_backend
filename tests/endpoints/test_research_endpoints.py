@@ -1,9 +1,15 @@
+import uuid
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+import pytest
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
+from app.db import Base
 from app.stocks.ai.agent.entities import AgentStep, ResearchResult
+from app.stocks.ai.agent.models import AgentRecipeRecord
 from app.stocks.endpoints import research_endpoints as endpoints
 from app.stocks.exceptions import StockDataUnavailable
 
@@ -83,3 +89,76 @@ def test_a_model_failure_maps_to_502():
     fake = _FakeUseCase(error=StockDataUnavailable("research", "bedrock down"))
     resp = _client(fake).post("/research", json={"question": "how is the market?"})
     assert resp.status_code == 502
+
+
+# --- The recipe wiring: the DB row is the agent's configuration, with no code fallback ------
+
+
+@pytest.fixture
+def db():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        yield session
+
+
+def _seed_recipe(db, **over) -> None:
+    record = AgentRecipeRecord(
+        id=uuid.uuid4(),
+        name="research",
+        system_prompt="Answer with the tools.",
+        tool_names=["search_stocks", "get_market_sentiment"],
+        max_steps=4,
+        model_id=None,
+        updated_at=datetime.now(timezone.utc),
+    )
+    for key, value in over.items():
+        setattr(record, key, value)
+    db.add(record)
+    db.commit()
+
+
+class _FakeModel:
+    pass
+
+
+def test_a_missing_recipe_row_is_a_503(db):
+    with pytest.raises(HTTPException) as excinfo:
+        endpoints.get_run_research(db=db)
+    assert excinfo.value.status_code == 503
+    assert "recipe" in excinfo.value.detail
+
+
+def test_the_recipe_row_configures_the_agent(db, monkeypatch):
+    _seed_recipe(db, tool_names=["search_stocks"], max_steps=2)
+    seen: list[str | None] = []
+
+    def fake_model(model_id=None):
+        seen.append(model_id)
+        return _FakeModel()
+
+    monkeypatch.setattr(endpoints, "get_conversation_model", fake_model)
+    use_case = endpoints.get_run_research(db=db)
+    assert use_case._system_prompt == "Answer with the tools."
+    assert use_case._max_steps == 2
+    assert list(use_case._tools) == ["search_stocks"]  # only the recipe's tools are offered
+    assert seen == [None]  # no model override on the row -> the adapter's default
+
+
+def test_the_recipe_model_id_wins_over_the_default(db, monkeypatch):
+    _seed_recipe(db, model_id="us.anthropic.claude-sonnet-5-v1:0")
+    seen: list[str | None] = []
+    monkeypatch.setattr(
+        endpoints,
+        "get_conversation_model",
+        lambda model_id=None: seen.append(model_id) or _FakeModel(),
+    )
+    endpoints.get_run_research(db=db)
+    assert seen == ["us.anthropic.claude-sonnet-5-v1:0"]
+
+
+def test_unknown_tool_names_are_skipped_not_fatal(db, monkeypatch):
+    _seed_recipe(db, tool_names=["search_stocks", "not_a_tool"])
+    monkeypatch.setattr(endpoints, "get_conversation_model", lambda model_id=None: _FakeModel())
+    use_case = endpoints.get_run_research(db=db)
+    assert list(use_case._tools) == ["search_stocks"]
