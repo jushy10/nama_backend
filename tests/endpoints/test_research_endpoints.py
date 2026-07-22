@@ -55,7 +55,7 @@ def _a_result(**over) -> ResearchResult:
 
 def test_returns_the_answer_steps_and_disclaimer():
     fake = _FakeUseCase(result=_a_result())
-    resp = _client(fake).post("/research", json={"question": "compare NVDA and AMD"})
+    resp = _client(fake).post("/agents/research", json={"question": "compare NVDA and AMD"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["answer"] == "NVDA is larger and growing faster."
@@ -76,18 +76,18 @@ def test_returns_the_answer_steps_and_disclaimer():
 def test_a_whitespace_question_maps_to_400():
     # Passes pydantic's min_length, but the use case rejects the blank -> ValueError -> 400.
     fake = _FakeUseCase(error=ValueError("A research question must not be empty."))
-    resp = _client(fake).post("/research", json={"question": "   "})
+    resp = _client(fake).post("/agents/research", json={"question": "   "})
     assert resp.status_code == 400
 
 
 def test_an_empty_question_is_rejected_by_validation():
-    resp = _client(_FakeUseCase(result=_a_result())).post("/research", json={"question": ""})
+    resp = _client(_FakeUseCase(result=_a_result())).post("/agents/research", json={"question": ""})
     assert resp.status_code == 422
 
 
 def test_a_model_failure_maps_to_502():
     fake = _FakeUseCase(error=StockDataUnavailable("research", "bedrock down"))
-    resp = _client(fake).post("/research", json={"question": "how is the market?"})
+    resp = _client(fake).post("/agents/research", json={"question": "how is the market?"})
     assert resp.status_code == 502
 
 

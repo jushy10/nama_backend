@@ -9,7 +9,7 @@ class AnswerUnderTestAdapterImpl(AnswerUnderTestAdapter):
         self,
         *,
         base_url: str = "http://localhost:8080",
-        path: str = "/research",
+        path: str = "/agents/research",
         answer_field: str = "answer",
         timeout: float = 60.0,
         client: httpx.Client | None = None,

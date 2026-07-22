@@ -19,7 +19,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--base-url", default="http://localhost:8080", help="Subject server URL."
     )
     parser.add_argument(
-        "--path", default="/research", help="Endpoint path to POST the question."
+        "--path", default="/agents/research", help="Endpoint path to POST the question."
     )
     parser.add_argument(
         "--answer-field",

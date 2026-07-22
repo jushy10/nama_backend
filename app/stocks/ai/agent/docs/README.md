@@ -1,6 +1,6 @@
 # Research agent — flow diagrams
 
-## Request flow (`POST /research`)
+## Request flow (`POST /agents/research`)
 
 ![Request flow](research_agent_flow.png)
 

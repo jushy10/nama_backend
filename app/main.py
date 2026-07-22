@@ -307,7 +307,7 @@ app.include_router(earnings_calendar_router)
 # /stock/ prefix keeps it clear of the /stocks/ (plural) JSON API. See
 # app/stocks/endpoints/seo_endpoints.py and app/stocks/seo/README.md.
 app.include_router(seo_router)
-# The AI research agent (POST /research): a plain-English stock-research question answered by a
+# The AI research agent (POST /agents/research): a plain-English stock-research question answered by a
 # Claude-driven tool-use loop over the app's own read tools (universe screen + market
 # sentiment), so every figure it states is grounded in a real read. Metered per step, so it
 # carries the tight per-IP AI limit. See app/stocks/endpoints/research_endpoints.py.

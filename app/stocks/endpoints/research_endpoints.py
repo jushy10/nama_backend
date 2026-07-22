@@ -127,7 +127,7 @@ def _present(result: ResearchResult) -> ResearchResponse:
     )
 
 
-@router.post("/research", response_model=ResearchResponse)
+@router.post("/agents/research", response_model=ResearchResponse)
 @limiter.limit(_AI_RESEARCH_RATE_LIMIT)
 def run_research_endpoint(
     request: Request,
