@@ -1,7 +1,6 @@
 """The agent slice's composition root — the endpoint calls build_run_research(db) and
 receives the finished use case; all construction knowledge lives here."""
 
-import logging
 import os
 from functools import lru_cache
 
@@ -26,8 +25,6 @@ from app.domains.listings.universe.repository_adapter_impl import (
     StockSearchRepositoryAdapterImpl,
 )
 from app.domains.listings.universe.use_cases import SearchStocks
-
-logger = logging.getLogger(__name__)
 
 # Recipe row backing /agents/research — the DB is the source of truth for agent config.
 _RESEARCH_AGENT = "research"
