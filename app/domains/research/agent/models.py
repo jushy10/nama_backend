@@ -24,6 +24,4 @@ class AgentRecipeRecord(Base):
 
 
 def recipe_by_name(session: Session, name: str) -> AgentRecipeRecord | None:
-    return session.execute(
-        select(AgentRecipeRecord).where(AgentRecipeRecord.name == name)
-    ).scalar_one_or_none()
+    return session.scalar(select(AgentRecipeRecord).where(AgentRecipeRecord.name == name))

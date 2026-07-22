@@ -12,11 +12,11 @@ from app.adapters.bedrock.conversation_model_adapter_impl import (
 )
 from app.adapters.cnn.fear_greed_adapter_impl import FearGreedAdapterImpl
 from app.adapters.fred.vix_adapter_impl import VixAdapterImpl
-from app.domains.research.agent.errors import AgentNotConfigured
+from app.domains.research.agent.errors import BedrockNotInstalled, MissingAgentRecipe
 from app.domains.research.agent.interfaces import ConversationModelAdapter, Tool
 from app.domains.research.agent.repository_adapter_impl import AgentRecipeRepositoryAdapterImpl
 from app.domains.research.agent.tools import MarketSentimentTool, SearchStocksTool
-from app.domains.research.agent.use_cases import RunResearch
+from app.domains.research.agent.use_cases import RunResearchUsecase
 from app.domains.macro.sentiment.use_cases import GetMarketSentiment
 from app.domains.listings.universe.repository_adapter_impl import (
     StockSearchRepositoryAdapterImpl,
@@ -37,9 +37,7 @@ def get_conversation_model(model_id: str) -> ConversationModelAdapter:
     try:
         return ConversationModelAdapterImpl(model_id=model_id, region=region)
     except ImportError as exc:
-        raise AgentNotConfigured(
-            "AI research is not configured (install the 'bedrock' extra)."
-        ) from exc
+        raise BedrockNotInstalled() from exc
 
 
 @lru_cache(maxsize=1)
@@ -58,17 +56,14 @@ def _tool_registry(db: Session) -> dict[str, Tool]:
     }
 
 
-def build_run_research(db: Session) -> RunResearch:
+def build_run_research(db: Session) -> RunResearchUsecase:
     # No code fallback: a missing recipe row is a deployment problem (migrations not run),
-    # surfaced as AgentNotConfigured -> 503. The wiring reads the recipe for what it must
+    # surfaced as MissingAgentRecipe -> 503. The wiring reads the recipe for what it must
     # build (tools, model); the use case re-reads it at execute time for prompt/steps.
     repo = AgentRecipeRepositoryAdapterImpl(db)
     recipe = repo.get(_RESEARCH_AGENT)
     if recipe is None:
-        raise AgentNotConfigured(
-            "AI research is not configured "
-            f"(missing '{_RESEARCH_AGENT}' agent recipe — run migrations)."
-        )
+        raise MissingAgentRecipe(_RESEARCH_AGENT)
     registry = _tool_registry(db)
     unknown = [name for name in recipe.tool_names if name not in registry]
     if unknown:
@@ -78,4 +73,4 @@ def build_run_research(db: Session) -> RunResearch:
     tools = [registry[name] for name in recipe.tool_names if name in registry]
     # The recipe's model_id is required (NOT NULL) — no env or code fallback chain.
     model = get_conversation_model(recipe.model_id)
-    return RunResearch(model, tools, repo, _RESEARCH_AGENT)
+    return RunResearchUsecase(model, tools, repo, _RESEARCH_AGENT)

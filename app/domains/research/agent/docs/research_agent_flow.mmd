@@ -2,7 +2,7 @@ sequenceDiagram
     autonumber
     actor FE as Client
     participant EP as research_endpoints.py<br/>(POST /agents/research)
-    participant UC as RunResearch<br/>(use_cases.py)
+    participant UC as RunResearchUsecase<br/>(use_cases.py)
     participant AD as ConversationModelAdapterImpl<br/>(bedrock adapter)
     participant M as Claude on Bedrock
     participant T as Tools<br/>(search_stocks / get_market_sentiment)

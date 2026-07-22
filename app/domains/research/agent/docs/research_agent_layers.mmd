@@ -1,5 +1,5 @@
 graph LR
-    EP["endpoints/research_endpoints.py<br/>controller + presenter + wiring"] --> UC["ai/agent/use_cases.py<br/>RunResearch loop"]
+    EP["endpoints/research_endpoints.py<br/>controller + presenter + wiring"] --> UC["ai/agent/use_cases.py<br/>RunResearchUsecase loop"]
     UC --> E["ai/agent/entities.py<br/>Message / ModelTurn / AgentStep"]
     UC --> P1["interfaces/ConversationModelAdapter"]
     UC --> P2["interfaces/Tool"]

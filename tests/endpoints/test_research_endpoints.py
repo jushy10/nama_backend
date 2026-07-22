@@ -80,7 +80,7 @@ def test_returns_the_answer_steps_and_disclaimer():
 
 def test_a_whitespace_question_maps_to_400():
     # Passes pydantic's min_length, but the use case rejects the blank -> EmptyQuestion -> 400.
-    fake = _FakeUseCase(error=EmptyQuestion("A research question must not be empty."))
+    fake = _FakeUseCase(error=EmptyQuestion())
     resp = _client(fake).post("/agents/research", json={"question": "   "})
     assert resp.status_code == 400
 

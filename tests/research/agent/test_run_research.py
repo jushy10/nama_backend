@@ -1,11 +1,11 @@
 import pytest
 
 from app.domains.research.agent.entities import AgentRecipe, ModelTurn, ToolCall, ToolSpec
-from app.domains.research.agent.errors import AgentNotConfigured, EmptyQuestion
+from app.domains.research.agent.errors import EmptyQuestion, MissingAgentRecipe
 from app.domains.research.agent.interfaces import AgentRecipeRepositoryAdapter, Tool
 from app.domains.research.agent.use_cases import (
     _EMPTY_ANSWER_FALLBACK,
-    RunResearch,
+    RunResearchUsecase,
 )
 
 
@@ -26,7 +26,7 @@ def _research(model, tools, *, max_steps=6, system_prompt="You are a test agent.
         max_steps=max_steps,
         model_id="fake-model",
     )
-    return RunResearch(model, tools, _FakeRecipeRepo(recipe), "research")
+    return RunResearchUsecase(model, tools, _FakeRecipeRepo(recipe), "research")
 
 
 class _ScriptedModel:
@@ -195,9 +195,9 @@ def test_a_blank_question_is_rejected(blank):
     assert model.calls == []  # never reached the model
 
 
-def test_a_missing_recipe_raises_agent_not_configured():
+def test_a_missing_recipe_raises_missing_agent_recipe():
     model = _ScriptedModel([ModelTurn("x", (), model="m1")])
-    use_case = RunResearch(model, [_FakeTool("echo")], _FakeRecipeRepo(None), "research")
-    with pytest.raises(AgentNotConfigured):
+    use_case = RunResearchUsecase(model, [_FakeTool("echo")], _FakeRecipeRepo(None), "research")
+    with pytest.raises(MissingAgentRecipe):
         use_case.execute("q")
     assert model.calls == []  # config is checked before any metered call
