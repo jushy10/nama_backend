@@ -1,6 +1,13 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+# Business rule: every research answer ships with this disclaimer — authored by the
+# service, never the model, so it cannot be forgotten or rephrased.
+RESEARCH_DISCLAIMER = (
+    "AI-generated for informational and educational purposes only — not financial advice. "
+    "Markets carry risk; do your own research before investing."
+)
+
 
 @dataclass(frozen=True)
 class ToolSpec:
