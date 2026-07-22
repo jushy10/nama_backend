@@ -25,7 +25,7 @@ def _seed(session, **over) -> AgentRecipeRecord:
         system_prompt="You are a research agent.",
         tool_names=["search_stocks", "get_market_sentiment"],
         max_steps=6,
-        model_id=None,
+        model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         updated_at=datetime.now(timezone.utc),
     )
     for key, value in over.items():

@@ -24,6 +24,7 @@ def _research(model, tools, *, max_steps=6, system_prompt="You are a test agent.
         system_prompt=system_prompt,
         tool_names=tuple(t.spec.name for t in tools),
         max_steps=max_steps,
+        model_id="fake-model",
     )
     return RunResearch(model, tools, _FakeRecipeRepo(recipe), "research")
 

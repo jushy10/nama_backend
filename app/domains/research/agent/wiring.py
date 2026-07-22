@@ -30,14 +30,12 @@ _RESEARCH_AGENT = "research"
 
 
 @lru_cache(maxsize=4)
-def get_conversation_model(model_id: str | None = None) -> ConversationModelAdapter:
+def get_conversation_model(model_id: str) -> ConversationModelAdapter:
     # No secret to gate on — Bedrock authenticates via the process's AWS credentials (the
     # ECS task role in prod). Cached per model id so recipes on different models coexist.
     region = os.environ.get("BEDROCK_REGION", "us-east-1")
     try:
-        if model_id:
-            return ConversationModelAdapterImpl(model_id=model_id, region=region)
-        return ConversationModelAdapterImpl(region=region)
+        return ConversationModelAdapterImpl(model_id=model_id, region=region)
     except ImportError as exc:
         raise AgentNotConfigured(
             "AI research is not configured (install the 'bedrock' extra)."
@@ -78,7 +76,6 @@ def build_run_research(db: Session) -> RunResearch:
             "agent recipe '%s' references unknown tools: %s", recipe.name, unknown
         )
     tools = [registry[name] for name in recipe.tool_names if name in registry]
-    model = get_conversation_model(
-        recipe.model_id or os.environ.get("BEDROCK_RESEARCH_MODEL_ID")
-    )
+    # The recipe's model_id is required (NOT NULL) — no env or code fallback chain.
+    model = get_conversation_model(recipe.model_id)
     return RunResearch(model, tools, repo, _RESEARCH_AGENT)

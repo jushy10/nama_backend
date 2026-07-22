@@ -114,7 +114,7 @@ def _seed_recipe(db, **over) -> None:
         system_prompt="Answer with the tools.",
         tool_names=["search_stocks", "get_market_sentiment"],
         max_steps=4,
-        model_id=None,
+        model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         updated_at=datetime.now(timezone.utc),
     )
     for key, value in over.items():
@@ -146,10 +146,10 @@ def test_the_recipe_row_configures_the_agent(db, monkeypatch):
     assert list(use_case._tools) == ["search_stocks"]  # only the recipe's tools are offered
     assert use_case._agent_name == "research"  # prompt/steps are fetched from the repo at execute time
     assert use_case._recipe_repo.get("research").system_prompt == "Answer with the tools."
-    assert seen == [None]  # no model override on the row -> the adapter's default
+    assert seen == ["us.anthropic.claude-haiku-4-5-20251001-v1:0"]  # the row's required model id
 
 
-def test_the_recipe_model_id_wins_over_the_default(db, monkeypatch):
+def test_the_recipe_model_id_is_used(db, monkeypatch):
     _seed_recipe(db, model_id="us.anthropic.claude-sonnet-5-v1:0")
     seen: list[str | None] = []
     monkeypatch.setattr(

@@ -175,10 +175,12 @@ def test_upgrade_creates_and_seeds_the_agent_recipes_table(alembic):
     assert {"name", "system_prompt", "tool_names", "max_steps", "model_id"} <= columns
     with engine.connect() as conn:
         row = conn.execute(
-            text("SELECT name, max_steps, system_prompt FROM agent_recipes")
+            text("SELECT name, max_steps, system_prompt, model_id FROM agent_recipes")
         ).one()
     assert row.name == "research"
     assert row.max_steps == 6
+    # 0043 backfills and requires the model id — no NULL model rows survive head.
+    assert row.model_id == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     assert "stock-research assistant" in row.system_prompt
 
     command.downgrade(config, "base")

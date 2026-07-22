@@ -71,7 +71,7 @@ class AgentRecipe:
     system_prompt: str
     tool_names: tuple[str, ...]
     max_steps: int
-    model_id: str | None = None
+    model_id: str
 
 
 @dataclass(frozen=True)
