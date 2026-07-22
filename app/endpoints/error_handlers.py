@@ -1,10 +1,5 @@
-"""Central domain-exception -> HTTP translation.
-
-Registered once on the app so endpoints stay one-liners: a use case raises a domain error
-and the matching handler here turns it into the right status code. Handlers only fire for
-exceptions an endpoint did not catch itself, so slices that still translate inline are
-unaffected.
-"""
+"""Central domain-exception -> HTTP translation, registered once on the app. Fires only
+for exceptions an endpoint didn't catch itself, so inline-translating slices are unaffected."""
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse

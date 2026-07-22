@@ -10,8 +10,7 @@ from app.db import Base
 
 
 class AgentRecipeRecord(Base):
-    """A stored agent recipe — the prompt, tool names, step budget, and optional model
-    override that configure one agent. Seeded and updated by migrations, not by the app."""
+    """One agent's stored recipe — seeded and updated by migrations, never by the app."""
 
     __tablename__ = "agent_recipes"
 

@@ -1,9 +1,5 @@
-"""The agent slice's composition root.
-
-Builds the research agent from its parts — recipe row, tool registry, model adapter —
-so the endpoint module stays a pure controller. FastAPI's Depends calls these factories;
-the endpoint only receives the finished use case.
-"""
+"""The agent slice's composition root — Depends() calls these factories; the endpoint
+only receives the finished use case."""
 
 import logging
 import os
@@ -31,19 +27,14 @@ from app.domains.listings.universe.use_cases import SearchStocks
 
 logger = logging.getLogger(__name__)
 
-# The recipe row the /agents/research endpoint runs on. The DB is the single source of truth
-# for an agent's prompt / tools / step budget — a new agent or a prompt change ships as a
-# migration.
+# Recipe row backing /agents/research — the DB is the source of truth for agent config.
 _RESEARCH_AGENT = "research"
 
 
 @lru_cache(maxsize=4)
 def get_conversation_model(model_id: str | None = None) -> ConversationModelAdapter:
-    # The agent's model is its primary data, so it's required — but, like the analysis
-    # adapters, there's no secret to gate on: Bedrock authenticates through the process's AWS
-    # credentials (the ECS task role in production). The id comes from the recipe row (DB wins),
-    # falling back to the BEDROCK_RESEARCH_MODEL_ID env override, else the adapter's default.
-    # Cached per model id so two recipes on different models each keep their own client.
+    # No secret to gate on — Bedrock authenticates via the process's AWS credentials (the
+    # ECS task role in prod). Cached per model id so recipes on different models coexist.
     region = os.environ.get("BEDROCK_REGION", "us-east-1")
     try:
         if model_id:
@@ -57,15 +48,13 @@ def get_conversation_model(model_id: str | None = None) -> ConversationModelAdap
 
 @lru_cache(maxsize=1)
 def get_market_sentiment_use_case() -> GetMarketSentiment:
-    # Keyless live sources (FRED + CNN), so no key gate — the same singletons the
-    # /market/sentiment endpoint wires, reused here as the agent's sentiment tool.
+    # Keyless live sources (FRED + CNN) — the same singletons /market/sentiment wires.
     return GetMarketSentiment(VixAdapterImpl(), FearGreedAdapterImpl())
 
 
 def _tool_registry(db: Session) -> dict[str, Tool]:
-    # The code side of a recipe: every tool the app can offer, by the name recipe rows use.
-    # Adding a tool = its Tool subclass in app/domains/research/agent/tools.py + one entry here; a
-    # recipe then opts in by listing the name.
+    # Every tool the app offers, by the name recipe rows use. Adding a tool = its Tool
+    # subclass in tools.py + one entry here; a recipe opts in by listing the name.
     sentiment = get_market_sentiment_use_case()
     return {
         "search_stocks": SearchStocksTool(SearchStocks(StockSearchRepositoryAdapterImpl(db))),
@@ -74,9 +63,8 @@ def _tool_registry(db: Session) -> dict[str, Tool]:
 
 
 def get_run_research(db: Session = Depends(get_db)) -> RunResearch:
-    # The recipe row is the agent's configuration — prompt, tool names, step budget, model.
-    # No code fallback: a missing row is a deployment problem (migrations not run), not a
-    # runtime condition to paper over, so it raises AgentNotConfigured (-> 503).
+    # No code fallback: a missing recipe row is a deployment problem (migrations not run),
+    # surfaced as AgentNotConfigured -> 503.
     recipe = AgentRecipeRepositoryAdapterImpl(db).get(_RESEARCH_AGENT)
     if recipe is None:
         raise AgentNotConfigured(
