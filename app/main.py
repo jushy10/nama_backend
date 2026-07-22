@@ -9,6 +9,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.rate_limit import limiter
+from app.stocks.endpoints.error_handlers import register_error_handlers
 from app.stocks.endpoints.annual_earnings_endpoints import (
     router as annual_earnings_router,
 )
@@ -126,6 +127,10 @@ app = FastAPI(title="nama_backend", lifespan=lifespan)
 # this stops any single IP from consuming it.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Central domain-error -> HTTP translation: use cases raise, these handlers map, endpoints
+# stay one-liners (see app/stocks/endpoints/error_handlers.py).
+register_error_handlers(app)
 app.add_middleware(SlowAPIMiddleware)
 
 # CORS is added last so it stays the outermost middleware: a 429 from the limiter

@@ -12,6 +12,7 @@ from app.stocks.ai.agent.entities import (
     ToolResultsMessage,
     UserMessage,
 )
+from app.stocks.ai.agent.errors import EmptyQuestion
 from app.stocks.ai.agent.interfaces import ConversationModelAdapter, Tool
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ class RunResearch:
     def execute(self, question: str) -> ResearchResult:
         question = (question or "").strip()
         if not question:
-            raise ValueError("A research question must not be empty.")
+            raise EmptyQuestion("A research question must not be empty.")
 
         messages: list[Message] = [UserMessage(question)]
         steps: list[AgentStep] = []

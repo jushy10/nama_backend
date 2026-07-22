@@ -2,7 +2,7 @@ import logging
 import os
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -10,17 +10,12 @@ from app.rate_limit import limiter
 from app.stocks.adapters.bedrock.conversation_model_adapter_impl import ConversationModelAdapterImpl
 from app.stocks.adapters.cnn.fear_greed_adapter_impl import FearGreedAdapterImpl
 from app.stocks.adapters.fred.vix_adapter_impl import VixAdapterImpl
-from app.stocks.ai.agent.entities import ResearchResult
+from app.stocks.ai.agent.errors import AgentNotConfigured
 from app.stocks.ai.agent.interfaces import ConversationModelAdapter, Tool
 from app.stocks.ai.agent.repository_adapter_impl import AgentRecipeRepositoryAdapterImpl
-from app.stocks.ai.agent.schemas import (
-    AgentStepResponse,
-    ResearchRequest,
-    ResearchResponse,
-)
+from app.stocks.ai.agent.schemas import ResearchRequest, ResearchResponse
 from app.stocks.ai.agent.tools import MarketSentimentTool, SearchStocksTool
 from app.stocks.ai.agent.use_cases import RunResearch
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
 from app.stocks.market.sentiment.use_cases import GetMarketSentiment
 from app.stocks.catalog.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.stocks.catalog.universe.use_cases import SearchStocks
@@ -38,13 +33,6 @@ _RESEARCH_AGENT = "research"
 # occasional questions, not a scripted loop. Env-tunable without a deploy.
 _AI_RESEARCH_RATE_LIMIT = os.environ.get("AI_RESEARCH_RATE_LIMIT", "10/minute")
 
-# Authored by the service, not the model: the research read is informational only.
-_RESEARCH_DISCLAIMER = (
-    "AI-generated for informational and educational purposes only — not financial advice. "
-    "Markets carry risk; do your own research before investing."
-)
-
-
 @lru_cache(maxsize=4)
 def get_conversation_model(model_id: str | None = None) -> ConversationModelAdapter:
     # The agent's model is its primary data, so it's required — but, like the analysis
@@ -59,8 +47,8 @@ def get_conversation_model(model_id: str | None = None) -> ConversationModelAdap
             return ConversationModelAdapterImpl(model_id=model_id, region=region)
         return ConversationModelAdapterImpl(region=region)
     except ImportError as exc:
-        raise HTTPException(
-            503, "AI research is not configured (install the 'bedrock' extra)."
+        raise AgentNotConfigured(
+            "AI research is not configured (install the 'bedrock' extra)."
         ) from exc
 
 
@@ -88,10 +76,9 @@ def get_run_research(db: Session = Depends(get_db)) -> RunResearch:
     # runtime condition to paper over, so it surfaces as a 503.
     recipe = AgentRecipeRepositoryAdapterImpl(db).get(_RESEARCH_AGENT)
     if recipe is None:
-        raise HTTPException(
-            503,
+        raise AgentNotConfigured(
             "AI research is not configured "
-            f"(missing '{_RESEARCH_AGENT}' agent recipe — run migrations).",
+            f"(missing '{_RESEARCH_AGENT}' agent recipe — run migrations)."
         )
     registry = _tool_registry(db)
     unknown = [name for name in recipe.tool_names if name not in registry]
@@ -108,25 +95,6 @@ def get_run_research(db: Session = Depends(get_db)) -> RunResearch:
     )
 
 
-def _present(result: ResearchResult) -> ResearchResponse:
-    return ResearchResponse(
-        question=result.question,
-        answer=result.answer,
-        steps=[
-            AgentStepResponse(
-                tool=step.tool,
-                arguments=step.arguments,
-                output=step.output,
-                is_error=step.is_error,
-            )
-            for step in result.steps
-        ],
-        disclaimer=_RESEARCH_DISCLAIMER,
-        model=result.model,
-        generated_at=result.generated_at,
-    )
-
-
 @router.post("/agents/research", response_model=ResearchResponse)
 @limiter.limit(_AI_RESEARCH_RATE_LIMIT)
 def run_research_endpoint(
@@ -134,12 +102,6 @@ def run_research_endpoint(
     body: ResearchRequest,
     use_case: RunResearch = Depends(get_run_research),
 ) -> ResearchResponse:
-    try:
-        result = use_case.execute(body.question)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except StockNotFound as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except StockDataUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
-    return _present(result)
+    # No error handling here by design: the use case raises domain errors and the central
+    # handlers (endpoints/error_handlers.py) translate them to HTTP.
+    return ResearchResponse.from_result(use_case.execute(body.question))

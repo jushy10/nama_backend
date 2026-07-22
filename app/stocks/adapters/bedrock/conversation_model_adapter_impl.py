@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Sequence
 
 from app.stocks.adapters.bedrock.cost import log_model_cost
@@ -12,13 +13,15 @@ from app.stocks.ai.agent.entities import (
 from app.stocks.ai.agent.interfaces import ConversationModelAdapter
 from app.stocks.exceptions import StockDataUnavailable
 
+logger = logging.getLogger(__name__)
+
 
 class ConversationModelAdapterImpl(ConversationModelAdapter):
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     _DEFAULT_REGION = "us-east-1"
-    # One turn is a short narration plus a tool call or two, or the final answer — a modest cap
-    # is ample and keeps a runaway turn from ballooning the token bill.
-    _MAX_TOKENS = 1024
+    # A ceiling, not spend — we pay only actual tokens. Sized so a broad final answer never
+    # clips: truncation mid-tool_use would silently read as a final answer (see respond()).
+    _MAX_TOKENS = 2048
 
     def __init__(
         self,
@@ -64,6 +67,14 @@ class ConversationModelAdapterImpl(ConversationModelAdapter):
                 "research", f"research model call failed: {exc}"
             ) from exc
         log_model_cost(label="ai research", model_id=self._model_id, message=message)
+        if getattr(message, "stop_reason", None) == "max_tokens":
+            # Clipped output is served as-is; worse, a clipped tool_use block drops out and the
+            # partial text reads as a final answer — surface it instead of failing the request.
+            logger.warning(
+                "research model turn truncated at max_tokens=%s (model %s)",
+                self._max_tokens,
+                self._model_id,
+            )
         return _to_turn(message, self._model_id)
 
 

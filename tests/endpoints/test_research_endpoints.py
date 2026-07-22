@@ -2,15 +2,17 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.stocks.ai.agent.entities import AgentStep, ResearchResult
+from app.stocks.ai.agent.errors import AgentNotConfigured, EmptyQuestion
 from app.stocks.ai.agent.models import AgentRecipeRecord
 from app.stocks.endpoints import research_endpoints as endpoints
+from app.stocks.endpoints.error_handlers import register_error_handlers
 from app.stocks.exceptions import StockDataUnavailable
 
 
@@ -30,6 +32,7 @@ class _FakeUseCase:
 def _client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
+    register_error_handlers(app)  # the endpoint has no try/except; the handlers translate
     app.dependency_overrides[endpoints.get_run_research] = lambda: fake
     return TestClient(app)
 
@@ -74,8 +77,8 @@ def test_returns_the_answer_steps_and_disclaimer():
 
 
 def test_a_whitespace_question_maps_to_400():
-    # Passes pydantic's min_length, but the use case rejects the blank -> ValueError -> 400.
-    fake = _FakeUseCase(error=ValueError("A research question must not be empty."))
+    # Passes pydantic's min_length, but the use case rejects the blank -> EmptyQuestion -> 400.
+    fake = _FakeUseCase(error=EmptyQuestion("A research question must not be empty."))
     resp = _client(fake).post("/agents/research", json={"question": "   "})
     assert resp.status_code == 400
 
@@ -122,11 +125,10 @@ class _FakeModel:
     pass
 
 
-def test_a_missing_recipe_row_is_a_503(db):
-    with pytest.raises(HTTPException) as excinfo:
+def test_a_missing_recipe_row_raises_agent_not_configured(db):
+    # AgentNotConfigured maps to 503 via the central error handlers.
+    with pytest.raises(AgentNotConfigured, match="recipe"):
         endpoints.get_run_research(db=db)
-    assert excinfo.value.status_code == 503
-    assert "recipe" in excinfo.value.detail
 
 
 def test_the_recipe_row_configures_the_agent(db, monkeypatch):
