@@ -30,14 +30,12 @@ class _FakeUseCase:
         return self._result
 
 
-def _client(fake: _FakeUseCase, monkeypatch) -> TestClient:
+def _client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
     register_error_handlers(app)  # the endpoint has no try/except; the handlers translate
-    # The endpoint calls wiring.build_run_research(db) directly, so the seam is a
-    # monkeypatch on the wiring layer; the db dependency is stubbed out entirely.
-    monkeypatch.setattr(wiring, "build_run_research", lambda db: fake)
-    app.dependency_overrides[endpoints.get_db] = lambda: None
+    # Overriding the shim replaces the whole construction chain (db session included).
+    app.dependency_overrides[endpoints.get_run_research] = lambda: fake
     return TestClient(app)
 
 
@@ -60,9 +58,9 @@ def _a_result(**over) -> ResearchResult:
     return ResearchResult(**base)
 
 
-def test_returns_the_answer_steps_and_disclaimer(monkeypatch):
+def test_returns_the_answer_steps_and_disclaimer():
     fake = _FakeUseCase(result=_a_result())
-    resp = _client(fake, monkeypatch).post("/agents/research", json={"question": "compare NVDA and AMD"})
+    resp = _client(fake).post("/agents/research", json={"question": "compare NVDA and AMD"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["answer"] == "NVDA is larger and growing faster."
@@ -80,21 +78,21 @@ def test_returns_the_answer_steps_and_disclaimer(monkeypatch):
     assert fake.questions == ["compare NVDA and AMD"]
 
 
-def test_a_whitespace_question_maps_to_400(monkeypatch):
+def test_a_whitespace_question_maps_to_400():
     # Passes pydantic's min_length, but the use case rejects the blank -> EmptyQuestion -> 400.
     fake = _FakeUseCase(error=EmptyQuestion("A research question must not be empty."))
-    resp = _client(fake, monkeypatch).post("/agents/research", json={"question": "   "})
+    resp = _client(fake).post("/agents/research", json={"question": "   "})
     assert resp.status_code == 400
 
 
-def test_an_empty_question_is_rejected_by_validation(monkeypatch):
-    resp = _client(_FakeUseCase(result=_a_result()), monkeypatch).post("/agents/research", json={"question": ""})
+def test_an_empty_question_is_rejected_by_validation():
+    resp = _client(_FakeUseCase(result=_a_result())).post("/agents/research", json={"question": ""})
     assert resp.status_code == 422
 
 
-def test_a_model_failure_maps_to_502(monkeypatch):
+def test_a_model_failure_maps_to_502():
     fake = _FakeUseCase(error=StockDataUnavailable("research", "bedrock down"))
-    resp = _client(fake, monkeypatch).post("/agents/research", json={"question": "how is the market?"})
+    resp = _client(fake).post("/agents/research", json={"question": "how is the market?"})
     assert resp.status_code == 502
 
 

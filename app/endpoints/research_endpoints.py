@@ -14,15 +14,19 @@ router = APIRouter(tags=["stocks"])
 _AI_RESEARCH_RATE_LIMIT = os.environ.get("AI_RESEARCH_RATE_LIMIT", "10/minute")
 
 
+def get_run_research(db: Session = Depends(get_db)) -> wiring.RunResearch:
+    # The FastAPI-facing shim over the framework-free composition root: Depends gives the
+    # per-request db lifecycle and the tests' dependency_overrides seam; the wiring layer
+    # keeps all construction knowledge.
+    return wiring.build_run_research(db)
+
+
 @router.post("/agents/research", response_model=ResearchResponse)
 @limiter.limit(_AI_RESEARCH_RATE_LIMIT)
 def run_research_endpoint(
     request: Request,
     body: ResearchRequest,
-    db: Session = Depends(get_db),
+    use_case: wiring.RunResearch = Depends(get_run_research),
 ) -> ResearchResponse:
-    # The endpoint calls the wiring layer, which builds and returns the use case; domain
-    # errors are translated by the central handlers. Depends stays only for the DB session,
-    # whose per-request open/close the framework owns.
-    use_case = wiring.build_run_research(db)
+    # Domain errors raised below are translated by the central handlers.
     return ResearchResponse.from_result(use_case.execute(body.question))
