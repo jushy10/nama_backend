@@ -143,9 +143,9 @@ def test_the_recipe_row_configures_the_agent(db, monkeypatch):
 
     monkeypatch.setattr(wiring, "get_conversation_model", fake_model)
     use_case = wiring.build_run_research(db=db)
-    assert use_case._system_prompt == "Answer with the tools."
-    assert use_case._max_steps == 2
     assert list(use_case._tools) == ["search_stocks"]  # only the recipe's tools are offered
+    assert use_case._agent_name == "research"  # prompt/steps are fetched from the repo at execute time
+    assert use_case._recipe_repo.get("research").system_prompt == "Answer with the tools."
     assert seen == [None]  # no model override on the row -> the adapter's default
 
 

@@ -1,12 +1,31 @@
 import pytest
 
-from app.domains.research.agent.entities import ModelTurn, ToolCall, ToolSpec
-from app.domains.research.agent.errors import EmptyQuestion
-from app.domains.research.agent.interfaces import Tool
+from app.domains.research.agent.entities import AgentRecipe, ModelTurn, ToolCall, ToolSpec
+from app.domains.research.agent.errors import AgentNotConfigured, EmptyQuestion
+from app.domains.research.agent.interfaces import AgentRecipeRepositoryAdapter, Tool
 from app.domains.research.agent.use_cases import (
     _EMPTY_ANSWER_FALLBACK,
     RunResearch,
 )
+
+
+class _FakeRecipeRepo(AgentRecipeRepositoryAdapter):
+    def __init__(self, recipe) -> None:
+        self._recipe = recipe
+
+    def get(self, name):
+        return self._recipe
+
+
+def _research(model, tools, *, max_steps=6, system_prompt="You are a test agent."):
+    # The use case fetches prompt/steps from the recipe port at execute time.
+    recipe = AgentRecipe(
+        name="research",
+        system_prompt=system_prompt,
+        tool_names=tuple(t.spec.name for t in tools),
+        max_steps=max_steps,
+    )
+    return RunResearch(model, tools, _FakeRecipeRepo(recipe), "research")
 
 
 class _ScriptedModel:
@@ -49,7 +68,7 @@ def _call(name, arguments=None, call_id="c1"):
 
 def test_answers_directly_without_calling_a_tool():
     model = _ScriptedModel([ModelTurn(text="42", tool_calls=(), model="m1")])
-    result = RunResearch(model, [_FakeTool("echo")]).execute("what is the answer?")
+    result = _research(model, [_FakeTool("echo")]).execute("what is the answer?")
     assert result.answer == "42"
     assert result.steps == ()
     assert result.model == "m1"
@@ -67,7 +86,7 @@ def test_runs_a_requested_tool_and_feeds_the_result_back():
             ModelTurn("the value is echoed-value", (), model="m1"),
         ]
     )
-    result = RunResearch(model, [tool]).execute("look it up")
+    result = _research(model, [tool]).execute("look it up")
 
     assert result.answer == "the value is echoed-value"
     assert tool.calls == [{"x": 1}]
@@ -100,7 +119,7 @@ def test_runs_multiple_tool_calls_in_one_turn():
             ModelTurn("done", (), model="m1"),
         ]
     )
-    result = RunResearch(model, [a, b]).execute("compare a and b")
+    result = _research(model, [a, b]).execute("compare a and b")
     assert [s.tool for s in result.steps] == ["a", "b"]
     assert a.calls == [{"n": 1}] and b.calls == [{"n": 2}]
 
@@ -115,7 +134,7 @@ def test_unknown_tool_becomes_an_error_outcome_not_a_crash():
             ModelTurn("recovered", (), model="m1"),
         ]
     )
-    result = RunResearch(model, [_FakeTool("echo")]).execute("q")
+    result = _research(model, [_FakeTool("echo")]).execute("q")
     assert result.answer == "recovered"
     assert len(result.steps) == 1
     assert result.steps[0].is_error is True
@@ -130,7 +149,7 @@ def test_a_raising_tool_becomes_an_error_outcome_not_a_crash():
             ModelTurn("handled", (), model="m1"),
         ]
     )
-    result = RunResearch(model, [boom]).execute("q")
+    result = _research(model, [boom]).execute("q")
     assert result.answer == "handled"
     assert result.steps[0].is_error is True
     assert "failed" in result.steps[0].output
@@ -149,7 +168,7 @@ def test_forces_a_final_tool_free_turn_when_the_budget_is_spent():
             ModelTurn("final answer from what I have", (), model="m1"),
         ]
     )
-    result = RunResearch(model, [_FakeTool("echo")], max_steps=2).execute("q")
+    result = _research(model, [_FakeTool("echo")], max_steps=2).execute("q")
     assert result.answer == "final answer from what I have"
     assert len(model.calls) == 3  # 2 budgeted turns + 1 forced final
     assert model.calls[-1]["tools"] == ()  # the forced turn offers no tools
@@ -163,7 +182,7 @@ def test_empty_forced_answer_falls_back_to_a_message():
             ModelTurn("", (), model="m1"),  # forced final returns nothing usable
         ]
     )
-    result = RunResearch(model, [_FakeTool("echo")], max_steps=1).execute("q")
+    result = _research(model, [_FakeTool("echo")], max_steps=1).execute("q")
     assert result.answer == _EMPTY_ANSWER_FALLBACK
 
 
@@ -171,5 +190,13 @@ def test_empty_forced_answer_falls_back_to_a_message():
 def test_a_blank_question_is_rejected(blank):
     model = _ScriptedModel([ModelTurn("x", (), model="m1")])
     with pytest.raises(EmptyQuestion):
-        RunResearch(model, [_FakeTool("echo")]).execute(blank)
+        _research(model, [_FakeTool("echo")]).execute(blank)
     assert model.calls == []  # never reached the model
+
+
+def test_a_missing_recipe_raises_agent_not_configured():
+    model = _ScriptedModel([ModelTurn("x", (), model="m1")])
+    use_case = RunResearch(model, [_FakeTool("echo")], _FakeRecipeRepo(None), "research")
+    with pytest.raises(AgentNotConfigured):
+        use_case.execute("q")
+    assert model.calls == []  # config is checked before any metered call

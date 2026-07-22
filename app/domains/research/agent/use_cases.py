@@ -12,28 +12,14 @@ from app.domains.research.agent.entities import (
     ToolResultsMessage,
     UserMessage,
 )
-from app.domains.research.agent.errors import EmptyQuestion
-from app.domains.research.agent.interfaces import ConversationModelAdapter, Tool
-
-logger = logging.getLogger(__name__)
-
-_SYSTEM_PROMPT = (
-    "You are a stock-research assistant for a US/Canada equity screener. Answer the user's "
-    "question using ONLY the tools provided — do not rely on memorized figures, which may be "
-    "stale, and never invent a ticker, price, or statistic. Call a tool to get real data, read "
-    "its result, and call more tools if you need to before answering.\n"
-    "Rules:\n"
-    "- Ground every specific number or ticker you state in a tool result from this "
-    "conversation. If the tools can't answer, say so plainly rather than guessing.\n"
-    "- Be concise and neutral. Explain what the data shows; do not tell the user what to buy, "
-    "sell, or hold, and do not give personalized investment advice. If asked for a personal "
-    "recommendation (e.g. 'should I put my savings in X'), explain the trade-offs the data "
-    "shows and decline to advise.\n"
-    "- When you have enough to answer, respond in plain text with no further tool calls."
+from app.domains.research.agent.errors import AgentNotConfigured, EmptyQuestion
+from app.domains.research.agent.interfaces import (
+    AgentRecipeRepositoryAdapter,
+    ConversationModelAdapter,
+    Tool,
 )
 
-# Each step is a metered model call — caps the spend of a runaway or looping model.
-_DEFAULT_MAX_STEPS = 6
+logger = logging.getLogger(__name__)
 
 # Appended to the system prompt for the forced final turn once the step budget is spent.
 _FORCE_FINAL = (
@@ -52,28 +38,37 @@ class RunResearch:
         self,
         model: ConversationModelAdapter,
         tools: Sequence[Tool],
-        *,
-        max_steps: int = _DEFAULT_MAX_STEPS,
-        system_prompt: str = _SYSTEM_PROMPT,
+        recipe_repo: AgentRecipeRepositoryAdapter,
+        agent_name: str,
     ) -> None:
         self._model = model
         self._tools = {tool.spec.name: tool for tool in tools}
         self._specs = tuple(tool.spec for tool in tools)
-        self._max_steps = max(1, max_steps)
-        self._system_prompt = system_prompt
+        self._recipe_repo = recipe_repo
+        self._agent_name = agent_name
 
     def execute(self, question: str) -> ResearchResult:
         question = (question or "").strip()
         if not question:
             raise EmptyQuestion("A research question must not be empty.")
 
+        # The prompt and step budget come from the stored recipe at execution time — the DB
+        # is the single source of truth, so a recipe edit takes effect on the next request.
+        recipe = self._recipe_repo.get(self._agent_name)
+        if recipe is None:
+            raise AgentNotConfigured(
+                f"No stored recipe for agent '{self._agent_name}' — run migrations."
+            )
+        system_prompt = recipe.system_prompt
+        max_steps = max(1, recipe.max_steps)
+
         messages: list[Message] = [UserMessage(question)]
         steps: list[AgentStep] = []
         model_id = ""
 
-        for _ in range(self._max_steps):
+        for _ in range(max_steps):
             turn = self._model.respond(
-                system=self._system_prompt, messages=messages, tools=self._specs
+                system=system_prompt, messages=messages, tools=self._specs
             )
             model_id = turn.model or model_id
             if not turn.wants_tools:
@@ -89,7 +84,7 @@ class RunResearch:
 
         # Budget spent: force one tool-free turn so the read always resolves to an answer.
         final = self._model.respond(
-            system=self._system_prompt + _FORCE_FINAL, messages=messages, tools=()
+            system=system_prompt + _FORCE_FINAL, messages=messages, tools=()
         )
         model_id = final.model or model_id
         answer = final.text.strip() or _EMPTY_ANSWER_FALLBACK

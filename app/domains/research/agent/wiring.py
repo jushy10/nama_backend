@@ -62,8 +62,10 @@ def _tool_registry(db: Session) -> dict[str, Tool]:
 
 def build_run_research(db: Session) -> RunResearch:
     # No code fallback: a missing recipe row is a deployment problem (migrations not run),
-    # surfaced as AgentNotConfigured -> 503.
-    recipe = AgentRecipeRepositoryAdapterImpl(db).get(_RESEARCH_AGENT)
+    # surfaced as AgentNotConfigured -> 503. The wiring reads the recipe for what it must
+    # build (tools, model); the use case re-reads it at execute time for prompt/steps.
+    repo = AgentRecipeRepositoryAdapterImpl(db)
+    recipe = repo.get(_RESEARCH_AGENT)
     if recipe is None:
         raise AgentNotConfigured(
             "AI research is not configured "
@@ -79,6 +81,4 @@ def build_run_research(db: Session) -> RunResearch:
     model = get_conversation_model(
         recipe.model_id or os.environ.get("BEDROCK_RESEARCH_MODEL_ID")
     )
-    return RunResearch(
-        model, tools, max_steps=recipe.max_steps, system_prompt=recipe.system_prompt
-    )
+    return RunResearch(model, tools, repo, _RESEARCH_AGENT)
