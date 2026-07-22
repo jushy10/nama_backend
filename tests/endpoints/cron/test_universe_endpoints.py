@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints.cron import universe_endpoints as cron
-from app.stocks.catalog.universe.use_cases import SyncUniverse, UniverseSyncReport
+from app.endpoints.cron import universe_endpoints as cron
+from app.domains.listings.universe.use_cases import SyncUniverse, UniverseSyncReport
 
 
 class _FakeRunner:

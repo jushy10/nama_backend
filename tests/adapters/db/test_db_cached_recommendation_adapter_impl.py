@@ -2,11 +2,11 @@ from datetime import date
 
 import pytest
 
-from app.stocks.adapters.db.db_cached_recommendation_adapter_impl import (
+from app.adapters.db.db_cached_recommendation_adapter_impl import (
     RecommendationAdapterImpl,
 )
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.company.recommendations.entities import (
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.coverage.recommendations.entities import (
     AnalystRecommendations,
     RecommendationTrend,
 )

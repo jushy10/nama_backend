@@ -1,10 +1,10 @@
 import pytest
 
-from app.stocks.adapters.bedrock.screener_query_adapter_impl import (
+from app.adapters.bedrock.screener_query_adapter_impl import (
     ScreenerQueryAdapterImpl,
 )
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.catalog.universe.entities import MarketCapTier, SortDirection, StockSort
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.listings.universe.entities import MarketCapTier, SortDirection, StockSort
 
 
 # --- Stub Bedrock client (same shape as the analysis adapters') --------------------------------

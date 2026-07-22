@@ -2,12 +2,12 @@ from datetime import date
 
 import pytest
 
-from app.stocks.adapters.bedrock.ratings_analysis_adapter_impl import (
+from app.adapters.bedrock.ratings_analysis_adapter_impl import (
     RatingsAnalysisAdapterImpl,
 )
-from app.stocks.ai.analysis.entities import Confidence, RatingsVerdict
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.company.recommendations.entities import (
+from app.domains.research.analysis.entities import Confidence, RatingsVerdict
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.coverage.recommendations.entities import (
     AnalystPriceTargets,
     AnalystRecommendations,
     FirmRating,

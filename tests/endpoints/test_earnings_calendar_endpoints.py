@@ -5,13 +5,13 @@ from datetime import date
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.company.earnings.quarterly.entities import EarningsSession
-from app.stocks.market.earnings_calendar.entities import (
+from app.domains.financials.earnings.quarterly.entities import EarningsSession
+from app.domains.financials.earnings_calendar.entities import (
     EarningsCalendar,
     EarningsCalendarDay,
     EarningsCalendarItem,
 )
-from app.stocks.endpoints import earnings_calendar_endpoints as endpoints
+from app.endpoints import earnings_calendar_endpoints as endpoints
 
 
 class _FakeUseCase:

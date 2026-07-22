@@ -3,8 +3,8 @@ from datetime import date
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.ai.brief.use_cases import MarketBriefSyncReport
-from app.stocks.endpoints.cron import market_brief_endpoints as cron
+from app.domains.research.brief.use_cases import MarketBriefSyncReport
+from app.endpoints.cron import market_brief_endpoints as cron
 
 
 class _FakeRunner:

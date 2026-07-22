@@ -3,11 +3,11 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yfinance.recommendation_adapter_impl import (
+from app.adapters.yfinance.recommendation_adapter_impl import (
     RecommendationAdapterImpl,
 )
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.company.recommendations.entities import AnalystRecommendations
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.coverage.recommendations.entities import AnalystRecommendations
 
 _TODAY = date(2026, 7, 15)
 

@@ -3,9 +3,9 @@ from datetime import date
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import seo_endpoints as endpoints
-from app.stocks.seo.interfaces import CongressPageTrade, TickerPageFacts
-from app.stocks.seo.use_cases import CongressBoardPage, TickerStockPage
+from app.endpoints import seo_endpoints as endpoints
+from app.domains.seo.interfaces import CongressPageTrade, TickerPageFacts
+from app.domains.seo.use_cases import CongressBoardPage, TickerStockPage
 
 
 def _trade(ticker="NVDA", member="Nancy Pelosi", chamber="House", tx_type="Purchase"):

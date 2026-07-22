@@ -3,14 +3,14 @@ from datetime import date
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.company.congress.entities import (
+from app.domains.ownership.congress.entities import (
     CongressActivity,
     CongressLeaderboard,
     CongressLeaderboardEntry,
     CongressMarketActivity,
     CongressTrade,
 )
-from app.stocks.endpoints import congress_endpoints as endpoints
+from app.endpoints import congress_endpoints as endpoints
 
 
 def _trade(ticker="NVDA", member="Pelosi", chamber="House", tx_type="Purchase", disc=date(2026, 7, 1)):

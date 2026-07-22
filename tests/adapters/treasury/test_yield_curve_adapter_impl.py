@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.adapters.treasury import yield_curve_adapter_impl as tr
-from app.stocks.adapters.treasury.yield_curve_adapter_impl import YieldCurveAdapterImpl
-from app.stocks.exceptions import StockDataUnavailable
+from app.adapters.treasury import yield_curve_adapter_impl as tr
+from app.adapters.treasury.yield_curve_adapter_impl import YieldCurveAdapterImpl
+from app.domains.shared.exceptions import StockDataUnavailable
 
 
 def _url(year: int) -> str:

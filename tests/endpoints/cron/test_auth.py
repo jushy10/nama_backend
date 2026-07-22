@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.company.earnings.quarterly.use_cases import QuarterlyEarningsSyncReport
-from app.stocks.endpoints.cron import quarterly_earnings_endpoints as cron
+from app.domains.financials.earnings.quarterly.use_cases import QuarterlyEarningsSyncReport
+from app.endpoints.cron import quarterly_earnings_endpoints as cron
 
 _TOKEN = "s3cr3t-cron-token"
 _URL = "/internal/earnings/quarterly/sync"

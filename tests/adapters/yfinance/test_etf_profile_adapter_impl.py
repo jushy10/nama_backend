@@ -1,10 +1,10 @@
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yfinance.etf_profile_adapter_impl import (
+from app.adapters.yfinance.etf_profile_adapter_impl import (
     EtfProfileAdapterImpl,
 )
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.shared.exceptions import StockDataUnavailable
 
 # The VOO ``.info`` shape, at the raw units Yahoo actually returns (see the adapter's docstring):
 # netExpenseRatio/ytdReturn are already-percent numbers, the yield/return averages are fractions.

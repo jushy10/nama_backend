@@ -4,11 +4,11 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.stocks.adapters.cnn.fear_greed_adapter_impl import (
+from app.adapters.cnn.fear_greed_adapter_impl import (
     FearGreedAdapterImpl,
     _parse_fear_greed,
 )
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.shared.exceptions import StockDataUnavailable
 
 _PAYLOAD = {
     "fear_and_greed": {

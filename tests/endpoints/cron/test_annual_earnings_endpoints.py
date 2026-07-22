@@ -3,8 +3,8 @@ import threading
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.company.earnings.annual.use_cases import AnnualEarningsSyncReport
-from app.stocks.endpoints.cron import annual_earnings_endpoints as cron
+from app.domains.financials.earnings.annual.use_cases import AnnualEarningsSyncReport
+from app.endpoints.cron import annual_earnings_endpoints as cron
 
 
 class _FakeRunner:

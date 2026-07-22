@@ -2,8 +2,8 @@ import logging
 
 import pytest
 
-from app.stocks.adapters.bedrock import cost
-from app.stocks.adapters.bedrock.cost import (
+from app.adapters.bedrock import cost
+from app.adapters.bedrock.cost import (
     CostAccumulator,
     estimate_cost_usd,
     log_model_cost,

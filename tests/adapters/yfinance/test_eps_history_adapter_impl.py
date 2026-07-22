@@ -3,10 +3,10 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yfinance.eps_history_adapter_impl import (
+from app.adapters.yfinance.eps_history_adapter_impl import (
     EpsHistoryAdapterImpl,
 )
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.shared.exceptions import StockDataUnavailable
 
 _NAN = float("nan")
 

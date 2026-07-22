@@ -3,9 +3,9 @@ from datetime import date
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import yields_endpoints as endpoints
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.market.yields.entities import (
+from app.endpoints import yields_endpoints as endpoints
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.macro.yields.entities import (
     YieldCurve,
     YieldHistory,
     YieldObservation,

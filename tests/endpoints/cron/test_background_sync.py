@@ -2,7 +2,7 @@ import threading
 
 from fastapi import Response
 
-from app.stocks.endpoints.cron import background_sync
+from app.endpoints.cron import background_sync
 
 
 class _FakeRunner:

@@ -2,8 +2,8 @@ from datetime import date
 
 import pytest
 
-from app.stocks.adapters.bedrock.market_brief_adapter_impl import MarketBriefAdapterImpl
-from app.stocks.ai.brief.entities import (
+from app.adapters.bedrock.market_brief_adapter_impl import MarketBriefAdapterImpl
+from app.domains.research.brief.entities import (
     BriefHeadline,
     BriefIndexMove,
     BriefMover,
@@ -11,7 +11,7 @@ from app.stocks.ai.brief.entities import (
     BriefTone,
     MarketBriefContext,
 )
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.shared.exceptions import StockDataUnavailable
 
 
 # --- Stub Bedrock client (same shape as the other adapters') -----------------------------------

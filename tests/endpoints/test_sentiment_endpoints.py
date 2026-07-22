@@ -3,9 +3,9 @@ from datetime import date, datetime, timezone
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import sentiment_endpoints as endpoints
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.market.sentiment.entities import (
+from app.endpoints import sentiment_endpoints as endpoints
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.macro.sentiment.entities import (
     FearGreedSnapshot,
     MarketSentiment,
     VixSnapshot,

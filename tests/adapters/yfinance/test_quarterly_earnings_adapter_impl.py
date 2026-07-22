@@ -3,11 +3,11 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yfinance.quarterly_earnings_adapter_impl import (
+from app.adapters.yfinance.quarterly_earnings_adapter_impl import (
     QuarterlyEarningsAdapterImpl,
 )
-from app.stocks.company.earnings.quarterly.entities import EarningsSession
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.financials.earnings.quarterly.entities import EarningsSession
+from app.domains.shared.exceptions import StockDataUnavailable
 
 _NAN = float("nan")
 

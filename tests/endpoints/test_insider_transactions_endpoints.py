@@ -3,9 +3,9 @@ from datetime import date
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import insider_transactions_endpoints as endpoints
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.company.insider_transactions.entities import (
+from app.endpoints import insider_transactions_endpoints as endpoints
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.ownership.insider_transactions.entities import (
     InsiderActivity,
     InsiderTransaction,
 )

@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from app.stocks.progress import iter_with_progress
+from app.domains.shared.progress import iter_with_progress
 
 
 @pytest.fixture

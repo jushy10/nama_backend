@@ -1,0 +1,440 @@
+import os
+from functools import lru_cache
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.adapters.bedrock.etf_analysis_adapter_impl import EtfAnalysisAdapterImpl
+from app.adapters.yfinance.etf_profile_adapter_impl import (
+    EtfProfileAdapterImpl,
+)
+from app.domains.research.analysis.investment_analysis_cache_adapter_impl import InvestmentAnalysisCacheAdapterImpl
+from app.domains.research.analysis.entities import InvestmentAnalysis
+from app.domains.etfs.repository_adapter_impl import (
+    EtfLookupRepositoryAdapterImpl,
+    EtfSearchRepositoryAdapterImpl,
+)
+from app.domains.etfs.entities import (
+    EtfCategories,
+    EtfDetail,
+    EtfScreenIntent,
+    EtfSearchPage,
+    EtfSort,
+    SortDirection,
+)
+from app.domains.etfs.interfaces import EtfAnalysisAdapter, EtfScreenerQueryAdapter
+from app.domains.etfs.schemas import (
+    AiEtfScreenInterpretationResponse,
+    AiEtfScreenResponse,
+    EtfAnalysisResponse,
+    EtfCategoriesResponse,
+    EtfDetailResponse,
+    EtfDividendsResponse,
+    EtfHoldingResponse,
+    EtfMetricsResponse,
+    EtfPerformanceResponse,
+    EtfSearchItemResponse,
+    EtfSearchResponse,
+    EtfSectorWeightResponse,
+)
+from app.domains.etfs.use_cases import (
+    AiScreenEtfs,
+    GetEtfAnalysis,
+    GetEtfDetail,
+    ListEtfCategories,
+    SearchEtfs,
+)
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.research.analysis.interfaces import InvestmentAnalysisCacheAdapter
+from app.domains.shared.interfaces import (
+    StockPerformanceAdapter,
+    StockQuoteAdapter,
+)
+from app.adapters.bedrock.etf_screener_query_adapter_impl import (
+    EtfScreenerQueryAdapterImpl,
+)
+from app.endpoints.wiring import (
+    analysis_cache_ttl,
+    bedrock_recovery_model_id,
+    get_provider,
+)
+
+@lru_cache(maxsize=1)
+def get_etf_screener_translator() -> EtfScreenerQueryAdapter:
+    # The ETF sibling of the stock screener's translator: the AI ETF screener's translation is its
+    # primary data, so it's required, but there's no secret to gate on (Bedrock authenticates
+    # through the process's AWS credentials — the ECS task role in prod). It shares the stock
+    # screener's env so one config drives both: BEDROCK_REGION (default us-east-1) and the optional
+    # BEDROCK_SCREENER_MODEL_ID (a cross-region inference profile). A missing 'bedrock' extra
+    # surfaces as a clean 503 here rather than a 500.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_SCREENER_MODEL_ID")
+    try:
+        if model_id:
+            return EtfScreenerQueryAdapterImpl(model_id=model_id, region=region)
+        return EtfScreenerQueryAdapterImpl(region=region)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI ETF screening is not configured (install the 'bedrock' extra)."
+        ) from exc
+
+
+router = APIRouter(tags=["etfs"])
+
+
+def get_search_use_case(db: Session = Depends(get_db)) -> SearchEtfs:
+    # Pure DB read over the etfs table — no vendor, no key to gate on. The repository is
+    # request-scoped, like the session.
+    return SearchEtfs(EtfSearchRepositoryAdapterImpl(db))
+
+
+def get_categories_use_case(db: Session = Depends(get_db)) -> ListEtfCategories:
+    return ListEtfCategories(EtfSearchRepositoryAdapterImpl(db))
+
+
+def get_ai_etf_search_use_case(
+    db: Session = Depends(get_db),
+    translator: EtfScreenerQueryAdapter = Depends(get_etf_screener_translator),
+) -> AiScreenEtfs:
+    # The AI screen only translates — it reads the stored set's categories (the translator's
+    # allowed vocabulary) but does not run the search itself. The translator (Bedrock) is the only
+    # non-DB dependency — it carries its own 503 gate in the wiring.
+    return AiScreenEtfs(translator, EtfSearchRepositoryAdapterImpl(db))
+
+
+def get_etf_detail_use_case(
+    provider: StockQuoteAdapter = Depends(get_provider),
+    db: Session = Depends(get_db),
+) -> GetEtfDetail:
+    # The Alpaca singleton backs the live quote AND the opt-in trailing-return windows (the same
+    # instance the quote/ticker endpoints use, so the fund's move never disagrees) — it implements
+    # both StockQuoteAdapter and StockPerformanceAdapter, so the one dependency serves both roles
+    # (the isinstance mirrors the ticker card's wiring). The lookup repository is the request-scoped
+    # read over the etfs table + its profile children (the membership gate, the stored facts, and
+    # the stored profile). The Yahoo profile provider backs the performance block's live 3y/5y
+    # returns (no longer stored) — the one live Yahoo call on the read path, made only when that
+    # block is requested; it's keyless, so it's always constructable (best-effort like the windows).
+    performance = provider if isinstance(provider, StockPerformanceAdapter) else None
+    return GetEtfDetail(
+        EtfLookupRepositoryAdapterImpl(db), provider, performance, EtfProfileAdapterImpl()
+    )
+
+
+@lru_cache(maxsize=1)
+def get_etf_analysis_provider() -> EtfAnalysisAdapter:
+    # The Bedrock analyser, a process singleton (the SDK client is reusable and the config is
+    # static). Shares the stock analyser's env, so one deploy config drives both: BEDROCK_REGION
+    # (default us-east-1) and the optional BEDROCK_ANALYSIS_MODEL_ID (a cross-region inference
+    # profile). There is no API key — Bedrock authenticates through the process's AWS credentials
+    # (the ECS task role in prod). The anthropic/bedrock extra is optional and imported lazily, so a
+    # deploy without it turns the ImportError into a 503 here rather than failing app import.
+    region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    model_id = os.environ.get("BEDROCK_ANALYSIS_MODEL_ID")
+    # Shares the stock analyser's escalation env (BEDROCK_ANALYSIS_RECOVERY_MODEL_ID),
+    # like the primary model above — one deploy config drives both. Unset → no escalation.
+    recovery = bedrock_recovery_model_id("BEDROCK_ANALYSIS_RECOVERY_MODEL_ID")
+    try:
+        if model_id:
+            return EtfAnalysisAdapterImpl(
+                model_id=model_id, region=region, recovery_model_id=recovery
+            )
+        return EtfAnalysisAdapterImpl(region=region, recovery_model_id=recovery)
+    except ImportError as exc:
+        raise HTTPException(
+            503, "AI analysis is not configured (install the 'bedrock' extra)."
+        ) from exc
+
+
+def get_etf_analysis_cache(
+    db: Session = Depends(get_db),
+) -> InvestmentAnalysisCacheAdapter:
+    # The read-through result cache for the fund analysis (kind="etf", so it never collides with a
+    # stock of the same ticker). Same table + best-effort contract as the stock analysis cache.
+    return InvestmentAnalysisCacheAdapterImpl(db, "etf")
+
+
+def get_etf_analysis_use_case(
+    detail: GetEtfDetail = Depends(get_etf_detail_use_case),
+    analyzer: EtfAnalysisAdapter = Depends(get_etf_analysis_provider),
+    cache: InvestmentAnalysisCacheAdapter = Depends(get_etf_analysis_cache),
+) -> GetEtfAnalysis:
+    # Reuses the detail use case as the primary snapshot builder (so the analysis reasons over
+    # exactly what the detail card shows — same quote, same stored facts, same profile) and pairs it
+    # with the Bedrock analyser + the read-through result cache (a fresh stored read skips the
+    # snapshot build and the model call). The detail's missing-keys 503 (Alpaca quote) and the
+    # analyser's 503 (missing extra) both ride through. TTL is the "etf" kind's (profile is slow,
+    # only the quote is live), overridable via ANALYSIS_CACHE_TTL_MINUTES_ETF.
+    return GetEtfAnalysis(detail, analyzer, cache=cache, cache_ttl=analysis_cache_ttl("etf"))
+
+
+def _present_search(page: EtfSearchPage) -> EtfSearchResponse:
+    return EtfSearchResponse(
+        total=page.total,
+        limit=page.limit,
+        offset=page.offset,
+        count=len(page.results),
+        results=[
+            EtfSearchItemResponse(
+                ticker=r.ticker,
+                name=r.name,
+                exchange=r.exchange,
+                net_assets=r.net_assets,
+                expense_ratio=r.expense_ratio,
+                category=r.category,
+                dividend_yield=r.dividend_yield,
+            )
+            for r in page.results
+        ],
+    )
+
+
+def _present_categories(categories: EtfCategories) -> EtfCategoriesResponse:
+    return EtfCategoriesResponse(categories=list(categories.categories))
+
+
+def _present_ai_etf_screen(intent: EtfScreenIntent) -> AiEtfScreenResponse:
+    return AiEtfScreenResponse(
+        interpreted=AiEtfScreenInterpretationResponse(
+            query=intent.query,
+            categories=list(intent.categories),
+            sort=intent.sort.value if intent.sort is not None else None,
+            direction=intent.direction.value,
+            limit=intent.limit,
+        ),
+    )
+
+
+def _present_metrics(detail: EtfDetail) -> EtfMetricsResponse:
+    return EtfMetricsResponse(
+        expense_ratio=detail.expense_ratio,
+        nav=detail.profile.nav,
+        net_assets=detail.net_assets,
+    )
+
+
+def _present_dividends(detail: EtfDetail) -> EtfDividendsResponse:
+    return EtfDividendsResponse(yield_percentage=detail.profile.dividend_yield)
+
+
+def _present_performance(detail: EtfDetail) -> EtfPerformanceResponse:
+    perf = detail.performance
+    p = detail.profile
+    return EtfPerformanceResponse(
+        one_week=perf.one_week if perf else None,
+        one_month=perf.one_month if perf else None,
+        three_month=perf.three_month if perf else None,
+        six_month=perf.six_month if perf else None,
+        ytd=perf.ytd if perf else None,
+        one_year=perf.one_year if perf else None,
+        three_year=p.three_year_return,
+        five_year=p.five_year_return,
+    )
+
+
+def _present_detail(detail: EtfDetail) -> EtfDetailResponse:
+    quote = detail.quote
+    p = detail.profile
+    return EtfDetailResponse(
+        ticker=detail.ticker,
+        name=detail.name,
+        exchange=detail.exchange,
+        price=quote.price,
+        change=quote.change,
+        change_percent=quote.change_percent,
+        previous_close=quote.previous_close,
+        as_of=quote.as_of,
+        category=detail.category,
+        fund_family=p.fund_family,
+        description=p.description,
+        top_holdings=[
+            EtfHoldingResponse(ticker=h.ticker, name=h.name, weight=h.weight)
+            for h in p.top_holdings
+        ],
+        sector_weightings=[
+            EtfSectorWeightResponse(sector=s.sector, weight=s.weight)
+            for s in p.sector_weightings
+        ],
+        metrics=_present_metrics(detail) if "metrics" in detail.include else None,
+        dividends=_present_dividends(detail) if "dividends" in detail.include else None,
+        performance=(
+            _present_performance(detail) if "performance" in detail.include else None
+        ),
+    )
+
+
+# Authored by the service and attached at the edge — never trusted to the model — so the legal
+# framing is ours, not something the language model can drop or reword. The same disclaimer the
+# stock analysis serves, since the caveat is identical for a fund.
+_ANALYSIS_DISCLAIMER = (
+    "AI-generated for informational and educational purposes only — not financial "
+    "advice. Markets carry risk; do your own research before investing."
+)
+
+
+def _present_etf_analysis(analysis: InvestmentAnalysis) -> EtfAnalysisResponse:
+    return EtfAnalysisResponse(
+        ticker=analysis.symbol,
+        recommendation=analysis.recommendation.value,
+        confidence=analysis.confidence.value,
+        thesis=analysis.thesis,
+        strengths=list(analysis.strengths),
+        risks=list(analysis.risks),
+        disclaimer=_ANALYSIS_DISCLAIMER,
+        model=analysis.model,
+        generated_at=analysis.generated_at,
+    )
+
+
+@router.get("/stocks/etfs", response_model=EtfSearchResponse)
+def search_etfs_endpoint(
+    response: Response,
+    q: str | None = Query(
+        None,
+        description=(
+            "Free-text search, matched as a case-insensitive substring against the fund name OR "
+            "the ticker (so 'gold' returns gold-miner ETFs and 'SPY' matches by ticker). Omit to "
+            "browse the top ETFs."
+        ),
+    ),
+    category: list[str] | None = Query(
+        None,
+        description=(
+            "Filter by fund category (the ETF type). Repeat to match several at once "
+            "(?category=large_growth&category=large_blend — an OR set). Each accepts the slug from "
+            "/stocks/etfs/categories (e.g. 'large_growth') or the raw label ('Large Growth'). "
+            "Omit for every category."
+        ),
+    ),
+    sort: EtfSort = Query(
+        EtfSort.NET_ASSETS,
+        description=(
+            "Sort field: net_assets (assets under management, default — the biggest/top funds), "
+            "expense_ratio (pair with order=asc for cheapest first), or dividend_yield "
+            "(highest-income first with the default order=desc)."
+        ),
+    ),
+    order: SortDirection = Query(
+        SortDirection.DESC, description="Sort direction: asc or desc (default)."
+    ),
+    limit: int = Query(
+        SearchEtfs.DEFAULT_LIMIT,
+        ge=1,
+        le=SearchEtfs.MAX_LIMIT,
+        description="Page size (max 100).",
+    ),
+    offset: int = Query(0, ge=0, description="Rows to skip, for pagination."),
+    use_case: SearchEtfs = Depends(get_search_use_case),
+) -> EtfSearchResponse:
+    try:
+        page = use_case.execute(
+            query=q,
+            categories=category,
+            sort=sort,
+            direction=order,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    # The set is slow-moving (refreshed out of band by the sync cron) and this is a plain DB
+    # read — cache briefly so a burst of viewers (and any CDN in front) collapses onto one query
+    # without going stale.
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return _present_search(page)
+
+
+@router.get("/stocks/etfs/categories", response_model=EtfCategoriesResponse)
+def list_etf_categories_endpoint(
+    response: Response,
+    use_case: ListEtfCategories = Depends(get_categories_use_case),
+) -> EtfCategoriesResponse:
+    categories = use_case.execute()
+    # These barely change (a new category only surfaces as the set grows), so cache longer than
+    # the search list.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return _present_categories(categories)
+
+
+@router.get("/stocks/etfs/ai-search", response_model=AiEtfScreenResponse)
+def ai_search_etfs_endpoint(
+    response: Response,
+    q: str = Query(
+        ...,
+        min_length=1,
+        description=(
+            "A plain-English ETF-screen request — e.g. 'cheap S&P 500 index funds', 'high-yield "
+            "dividend ETFs', or 'gold funds by size'. An AI translates it into the same filters "
+            "the manual /stocks/etfs search accepts and returns just those interpreted filters (it "
+            "does not run the search) — the client applies them to /stocks/etfs to fetch the rows, "
+            "so it can show and edit them."
+        ),
+    ),
+    use_case: AiScreenEtfs = Depends(get_ai_etf_search_use_case),
+) -> AiEtfScreenResponse:
+    try:
+        intent = use_case.execute(query=q)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        raise HTTPException(
+            502, "AI ETF screening is temporarily unavailable."
+        ) from exc
+    # Deterministic for a given request against the slow-moving set — cache briefly like the manual
+    # search so a burst of identical queries collapses onto one translation.
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return _present_ai_etf_screen(intent)
+
+
+@router.get("/stocks/etf/{ticker}", response_model=EtfDetailResponse)
+def get_etf_detail_endpoint(
+    ticker: str,
+    response: Response,
+    include: list[str] | None = Query(
+        default=None,
+        description=(
+            "Opt-in blocks to include: metrics (expense ratio, NAV, net assets), dividends "
+            "(yield), performance (trailing returns). Repeat the param or comma-separate "
+            "(?include=metrics,performance). Unrequested blocks are null; an unknown value is a 400."
+        ),
+    ),
+    use_case: GetEtfDetail = Depends(get_etf_detail_use_case),
+) -> EtfDetailResponse:
+    try:
+        detail = use_case.execute(ticker, include=include)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        # Not in the stored ETF universe (or a symbol with no data) -> "not an ETF".
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        # The primary source (the live quote) failed — same status the quote/ticker endpoints use.
+        raise HTTPException(502, str(exc)) from exc
+    # Built around the live quote, so it's not a static resource — but the stored facts and the
+    # Yahoo profile move slowly, so cache briefly (like the ticker card) to collapse a burst of
+    # viewers onto one upstream read without going stale.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return _present_detail(detail)
+
+
+@router.get("/stocks/etf/{ticker}/analysis", response_model=EtfAnalysisResponse)
+def get_etf_analysis_endpoint(
+    ticker: str,
+    response: Response,
+    use_case: GetEtfAnalysis = Depends(get_etf_analysis_use_case),
+) -> EtfAnalysisResponse:
+    try:
+        analysis = use_case.execute(ticker)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StockNotFound as exc:
+        # Not in the stored ETF universe (or a symbol with no data) -> "not an ETF".
+        raise HTTPException(404, str(exc)) from exc
+    except StockDataUnavailable as exc:
+        # The primary snapshot (the live quote) or the model call failed.
+        raise HTTPException(502, str(exc)) from exc
+    # Model calls are slow and metered, and a fund's fundamentals move slowly — cache briefly (the
+    # same 5 min the stock analysis and the detail card use) so a burst of viewers collapses onto one
+    # generation.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return _present_etf_analysis(analysis)

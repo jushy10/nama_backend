@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints.cron import index_membership_endpoints as cron
-from app.stocks.catalog.index_membership.use_cases import IndexMembershipSyncReport
+from app.endpoints.cron import index_membership_endpoints as cron
+from app.domains.listings.index_membership.use_cases import IndexMembershipSyncReport
 
 
 class _FakeRunner:

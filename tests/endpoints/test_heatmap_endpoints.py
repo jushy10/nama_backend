@@ -3,10 +3,10 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.stocks.entities import StockPerformance
-from app.stocks.endpoints import heatmap_endpoints as endpoints
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.market.heatmap.entities import HeatMap, HeatMapRow, HeatMapScope
+from app.domains.shared.entities import StockPerformance
+from app.endpoints import heatmap_endpoints as endpoints
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.markets.heatmap.entities import HeatMap, HeatMapRow, HeatMapScope
 
 
 class _FakeUseCase:

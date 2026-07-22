@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yfinance.price_adapter_impl import PriceAdapterImpl
-from app.stocks.entities import Timeframe
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.adapters.yfinance.price_adapter_impl import PriceAdapterImpl
+from app.domains.shared.entities import Timeframe
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 
 
 class _FakeTicker:

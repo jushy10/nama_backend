@@ -2,11 +2,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.stocks.adapters.market_routing.price_adapter_impl import (
+from app.adapters.market_routing.price_adapter_impl import (
     PriceAdapterImpl,
     is_canadian,
 )
-from app.stocks.entities import (
+from app.domains.shared.entities import (
     AllTimeHigh,
     CandleSeries,
     Quote,
@@ -14,7 +14,7 @@ from app.stocks.entities import (
     StockPerformance,
     Timeframe,
 )
-from app.stocks.interfaces import AllTimeHighAdapter
+from app.domains.shared.interfaces import AllTimeHighAdapter
 
 
 @pytest.mark.parametrize(
@@ -47,7 +47,7 @@ def test_is_canadian(symbol, expected):
     ],
 )
 def test_base_ticker(symbol, expected):
-    from app.stocks.entities import base_ticker
+    from app.domains.shared.entities import base_ticker
 
     assert base_ticker(symbol) == expected
 

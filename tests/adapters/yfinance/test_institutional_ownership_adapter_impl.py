@@ -3,11 +3,11 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yfinance.institutional_ownership_adapter_impl import (
+from app.adapters.yfinance.institutional_ownership_adapter_impl import (
     InstitutionalOwnershipAdapterImpl,
 )
-from app.stocks.exceptions import StockDataUnavailable
-from app.stocks.company.institutional_ownership.entities import (
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.ownership.institutional_ownership.entities import (
     HOLDER_TYPE_INSTITUTION,
     HOLDER_TYPE_MUTUAL_FUND,
     InstitutionalOwnership,

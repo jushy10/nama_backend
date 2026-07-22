@@ -2,15 +2,15 @@ from datetime import date
 
 import pytest
 
-from app.stocks.adapters.db.analyst_estimates_adapter_impl import (
+from app.adapters.db.analyst_estimates_adapter_impl import (
     AnalystEstimatesAdapterImpl,
 )
-from app.stocks.company.earnings.annual.entities import (
+from app.domains.financials.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.stocks.company.earnings.annual.interfaces import AnnualEarningsRepositoryAdapter
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.financials.earnings.annual.interfaces import AnnualEarningsRepositoryAdapter
+from app.domains.shared.exceptions import StockDataUnavailable
 
 
 def _reported(year: int, eps: float) -> AnnualEarnings:

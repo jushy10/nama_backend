@@ -3,7 +3,7 @@ from datetime import date
 import httpx
 import pytest
 
-from app.stocks.adapters.stock_watcher.congress_trades_adapter_impl import (
+from app.adapters.stock_watcher.congress_trades_adapter_impl import (
     _HOUSE_FEED,
     _SENATE_FEED,
     CongressTradesAdapterImpl,
@@ -12,7 +12,7 @@ from app.stocks.adapters.stock_watcher.congress_trades_adapter_impl import (
     _parse_date,
     _parse_feed,
 )
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.shared.exceptions import StockDataUnavailable
 
 # Real House-feed row shapes (from TattooedHead/house-stock-watcher-data).
 _HOUSE_ROWS = [

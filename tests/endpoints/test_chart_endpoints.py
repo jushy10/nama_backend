@@ -3,11 +3,11 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import chart_endpoints as endpoints
-from app.stocks.company.charts.interfaces import CandleAdapter
-from app.stocks.entities import Candle, CandleSeries, Timeframe
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.wiring import get_price_provider
+from app.endpoints import chart_endpoints as endpoints
+from app.domains.pricing.charts.interfaces import CandleAdapter
+from app.domains.shared.entities import Candle, CandleSeries, Timeframe
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.endpoints.wiring import get_price_provider
 
 
 class _FakeCandleProvider(CandleAdapter):

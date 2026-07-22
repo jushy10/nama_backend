@@ -1,6 +1,6 @@
 import pytest
 
-from app.stocks.adapters.yfinance import session as yfinance_session
+from app.adapters.yfinance import session as yfinance_session
 
 
 def _count_resets(monkeypatch) -> list:

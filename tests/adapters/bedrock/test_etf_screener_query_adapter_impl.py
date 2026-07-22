@@ -1,10 +1,10 @@
 import pytest
 
-from app.stocks.adapters.bedrock.etf_screener_query_adapter_impl import (
+from app.adapters.bedrock.etf_screener_query_adapter_impl import (
     EtfScreenerQueryAdapterImpl,
 )
-from app.stocks.catalog.etfs.entities import EtfSort, SortDirection
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.etfs.entities import EtfSort, SortDirection
+from app.domains.shared.exceptions import StockDataUnavailable
 
 
 # --- Stub Bedrock client (same shape as the analysis adapters') --------------------------------

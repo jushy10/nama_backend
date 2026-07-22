@@ -1,10 +1,10 @@
 import pytest
 
-from app.stocks.adapters.yfinance.etf_screener_adapter_impl import (
+from app.adapters.yfinance.etf_screener_adapter_impl import (
     EtfScreenerAdapterImpl,
 )
-from app.stocks.catalog.etfs.entities import ScreenedEtf
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.etfs.entities import ScreenedEtf
+from app.domains.shared.exceptions import StockDataUnavailable
 
 _FLOOR = 1_000_000.0  # the AUM floor the sync passes; the fake pages ignore it but record it
 
@@ -209,7 +209,7 @@ def test_live_page_retries_a_blocked_screen_then_succeeds(monkeypatch):
     # drops the crumb and re-fetches once; the retry's well-formed page is what's returned.
     import yfinance as yf
 
-    from app.stocks.adapters.yfinance.etf_screener_adapter_impl import _live_screen_page
+    from app.adapters.yfinance.etf_screener_adapter_impl import _live_screen_page
 
     calls = {"n": 0}
 
@@ -231,7 +231,7 @@ def test_live_page_does_not_retry_a_legit_empty_tail(monkeypatch):
     # a block — the pagination terminator isn't wasted on a retry.
     import yfinance as yf
 
-    from app.stocks.adapters.yfinance.etf_screener_adapter_impl import _live_screen_page
+    from app.adapters.yfinance.etf_screener_adapter_impl import _live_screen_page
 
     calls = {"n": 0}
 

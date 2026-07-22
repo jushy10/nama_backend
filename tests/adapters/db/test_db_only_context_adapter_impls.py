@@ -1,16 +1,16 @@
 from datetime import date
 
-from app.stocks.adapters.db.db_only_context_adapter_impls import (
+from app.adapters.db.db_only_context_adapter_impls import (
     AnnualEarningsAdapterImpl,
     QuarterlyEarningsAdapterImpl,
     RecommendationAdapterImpl,
 )
-from app.stocks.company.earnings.annual.entities import AnnualEarnings, AnnualEarningsTimeline
-from app.stocks.company.earnings.quarterly.entities import (
+from app.domains.financials.earnings.annual.entities import AnnualEarnings, AnnualEarningsTimeline
+from app.domains.financials.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.stocks.company.recommendations.entities import (
+from app.domains.coverage.recommendations.entities import (
     AnalystRecommendations,
     RecommendationTrend,
 )

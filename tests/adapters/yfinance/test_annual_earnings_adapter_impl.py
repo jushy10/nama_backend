@@ -3,10 +3,10 @@ from datetime import date, datetime, timezone
 import pandas as pd
 import pytest
 
-from app.stocks.adapters.yfinance.annual_earnings_adapter_impl import (
+from app.adapters.yfinance.annual_earnings_adapter_impl import (
     AnnualEarningsAdapterImpl,
 )
-from app.stocks.exceptions import StockDataUnavailable
+from app.domains.shared.exceptions import StockDataUnavailable
 
 _NAN = float("nan")
 

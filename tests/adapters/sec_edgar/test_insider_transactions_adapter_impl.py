@@ -1,11 +1,11 @@
 import httpx
 import pytest
 
-from app.stocks.adapters.sec_edgar.insider_transactions_adapter_impl import (
+from app.adapters.sec_edgar.insider_transactions_adapter_impl import (
     InsiderTransactionsAdapterImpl,
     _parse_form4,
 )
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 
 
 # ── a hand-built Form 4 ownership document (no namespace, like the real thing) ─────────────
@@ -285,7 +285,7 @@ def test_live_order_matches_db_serving_order():
     from sqlalchemy.orm import Session
 
     from app.db import Base
-    from app.stocks.company.insider_transactions.insider_transactions_repository_adapter_impl import (
+    from app.domains.ownership.insider_transactions.insider_transactions_repository_adapter_impl import (
         InsiderTransactionsRepositoryAdapterImpl,
     )
 

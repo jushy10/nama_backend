@@ -3,9 +3,9 @@ from datetime import date
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.stocks.endpoints import analyst_endpoints as endpoints
-from app.stocks.exceptions import StockDataUnavailable, StockNotFound
-from app.stocks.company.recommendations.entities import (
+from app.endpoints import analyst_endpoints as endpoints
+from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.coverage.recommendations.entities import (
     AnalystPriceTargets,
     AnalystRatingChanges,
     AnalystRecommendations,
@@ -13,7 +13,7 @@ from app.stocks.company.recommendations.entities import (
     RatingChange,
     RecommendationTrend,
 )
-from app.stocks.company.recommendations.use_cases import AnalystInfo
+from app.domains.coverage.recommendations.use_cases import AnalystInfo
 
 
 class _FakeUseCase:
