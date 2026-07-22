@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from dataclasses import asdict, dataclass
 
 from app.stocks.ai.agent.entities import ToolSpec
 from app.stocks.ai.agent.interfaces import Tool
@@ -16,6 +16,86 @@ from app.stocks.catalog.universe.use_cases import SearchStocks
 # names without flooding the prompt (and the token bill) with a whole page.
 _MAX_SCREEN_ROWS = 15
 
+_SEARCH_STOCKS_SPEC = ToolSpec(
+    name="search_stocks",
+    description=(
+        "Screen the US/Canada stock universe, or look up a single company. Use the "
+        "'query' field to find one name or ticker (e.g. 'NVDA', 'Apple'); use the "
+        "filters to screen a group (e.g. mega-cap technology, sorted by revenue "
+        "growth). Returns matching companies with market cap, valuation, and growth "
+        "figures. It never returns a stock outside the screened universe."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": (
+                    "Free-text match on company name or ticker. Use to look up one "
+                    "specific company; omit to screen a group by the filters."
+                ),
+            },
+            "sectors": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Sector names to include (an OR set), e.g. 'technology', "
+                    "'healthcare'. Omit to not filter by sector."
+                ),
+            },
+            "market_cap_tiers": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": [t.value for t in MarketCapTier],
+                },
+                "description": (
+                    "Company size buckets (OR set): mega (>= $200B), large "
+                    "($10-200B), mid ($2-10B), small (< $2B). Omit for every size."
+                ),
+            },
+            "sort": {
+                "type": "string",
+                "enum": [s.value for s in StockSort],
+                "description": (
+                    "Rank results by this column: market_cap for size, "
+                    "revenue_growth / eps_growth for growth, pe for cheap-on-earnings, "
+                    "fcf_yield for cheap-on-cash. Omit for an A-Z browse."
+                ),
+            },
+            "direction": {
+                "type": "string",
+                "enum": [d.value for d in SortDirection],
+                "description": "desc for top/highest, asc for lowest/cheapest. Needs a sort.",
+            },
+            "in_sp500": {
+                "type": "boolean",
+                "description": "Set true to restrict to S&P 500 members.",
+            },
+            "in_nasdaq100": {
+                "type": "boolean",
+                "description": "Set true to restrict to Nasdaq-100 members.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": f"How many rows to return (max {_MAX_SCREEN_ROWS}).",
+            },
+        },
+        "required": [],
+    },
+)
+
+_MARKET_SENTIMENT_SPEC = ToolSpec(
+    name="get_market_sentiment",
+    description=(
+        "Get the current overall US market sentiment: the VIX (CBOE volatility index, "
+        "the 'fear gauge') and the CNN Fear & Greed score (0-100). Use for questions "
+        "about the market's mood, risk appetite, or how fearful/greedy the market is. "
+        "Takes no arguments."
+    ),
+    input_schema={"type": "object", "properties": {}, "required": []},
+)
+
 
 class SearchStocksTool(Tool):
     def __init__(self, search: SearchStocks) -> None:
@@ -23,94 +103,14 @@ class SearchStocksTool(Tool):
 
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec(
-            name="search_stocks",
-            description=(
-                "Screen the US/Canada stock universe, or look up a single company. Use the "
-                "'query' field to find one name or ticker (e.g. 'NVDA', 'Apple'); use the "
-                "filters to screen a group (e.g. mega-cap technology, sorted by revenue "
-                "growth). Returns matching companies with market cap, valuation, and growth "
-                "figures. It never returns a stock outside the screened universe."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": (
-                            "Free-text match on company name or ticker. Use to look up one "
-                            "specific company; omit to screen a group by the filters."
-                        ),
-                    },
-                    "sectors": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Sector names to include (an OR set), e.g. 'technology', "
-                            "'healthcare'. Omit to not filter by sector."
-                        ),
-                    },
-                    "market_cap_tiers": {
-                        "type": "array",
-                        "items": {
-                            "type": "string",
-                            "enum": [t.value for t in MarketCapTier],
-                        },
-                        "description": (
-                            "Company size buckets (OR set): mega (>= $200B), large "
-                            "($10-200B), mid ($2-10B), small (< $2B). Omit for every size."
-                        ),
-                    },
-                    "sort": {
-                        "type": "string",
-                        "enum": [s.value for s in StockSort],
-                        "description": (
-                            "Rank results by this column: market_cap for size, "
-                            "revenue_growth / eps_growth for growth, pe for cheap-on-earnings, "
-                            "fcf_yield for cheap-on-cash. Omit for an A-Z browse."
-                        ),
-                    },
-                    "direction": {
-                        "type": "string",
-                        "enum": [d.value for d in SortDirection],
-                        "description": "desc for top/highest, asc for lowest/cheapest. Needs a sort.",
-                    },
-                    "in_sp500": {
-                        "type": "boolean",
-                        "description": "Set true to restrict to S&P 500 members.",
-                    },
-                    "in_nasdaq100": {
-                        "type": "boolean",
-                        "description": "Set true to restrict to Nasdaq-100 members.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": f"How many rows to return (max {_MAX_SCREEN_ROWS}).",
-                    },
-                },
-                "required": [],
-            },
-        )
+        return _SEARCH_STOCKS_SPEC
 
     def run(self, arguments: dict) -> str:
-        limit = _positive_int_or_none(arguments.get("limit"))
-        page = self._search.execute(
-            query=_string_or_none(arguments.get("query")),
-            sectors=_string_tuple(arguments.get("sectors")),
-            market_cap_tiers=_enum_tuple(
-                MarketCapTier, arguments.get("market_cap_tiers")
-            ),
-            sort=_enum_or_none(StockSort, arguments.get("sort")),
-            direction=_enum_or_none(SortDirection, arguments.get("direction"))
-            or SortDirection.DESC,
-            in_sp500=_bool_or_none(arguments.get("in_sp500")),
-            in_nasdaq100=_bool_or_none(arguments.get("in_nasdaq100")),
-            limit=min(limit or _MAX_SCREEN_ROWS, _MAX_SCREEN_ROWS),
-        )
+        page = self._search.execute(**asdict(_SearchArgs.from_model(arguments)))
         if not page.results:
             return "No stocks in the universe matched that screen."
-        header = f"{page.total} match(es); showing {len(page.results)}:"
-        return header + "\n" + "\n".join(_format_row(row) for row in page.results)
+        rows = "\n".join(_format_row(row) for row in page.results)
+        return f"{page.total} match(es); showing {len(page.results)}:\n{rows}"
 
 
 class MarketSentimentTool(Tool):
@@ -119,16 +119,7 @@ class MarketSentimentTool(Tool):
 
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec(
-            name="get_market_sentiment",
-            description=(
-                "Get the current overall US market sentiment: the VIX (CBOE volatility index, "
-                "the 'fear gauge') and the CNN Fear & Greed score (0-100). Use for questions "
-                "about the market's mood, risk appetite, or how fearful/greedy the market is. "
-                "Takes no arguments."
-            ),
-            input_schema={"type": "object", "properties": {}, "required": []},
-        )
+        return _MARKET_SENTIMENT_SPEC
 
     def run(self, arguments: dict) -> str:
         try:
@@ -149,6 +140,39 @@ class MarketSentimentTool(Tool):
             )
         return (
             " ".join(parts) if parts else "No market-sentiment sources were available."
+        )
+
+
+@dataclass(frozen=True)
+class _SearchArgs:
+    """The search_stocks tool's arguments, coerced from the model's raw (untrusted) input.
+
+    Field names mirror SearchStocks.execute's keyword arguments, so run() can splat
+    asdict(...) straight into it. A stray model value degrades to its default, never raises.
+    """
+
+    query: str | None = None
+    sectors: tuple[str, ...] = ()
+    market_cap_tiers: tuple[MarketCapTier, ...] = ()
+    sort: StockSort | None = None
+    direction: SortDirection = SortDirection.DESC
+    in_sp500: bool | None = None
+    in_nasdaq100: bool | None = None
+    limit: int = _MAX_SCREEN_ROWS
+
+    @classmethod
+    def from_model(cls, raw: dict) -> "_SearchArgs":
+        limit = _positive_int_or_none(raw.get("limit")) or _MAX_SCREEN_ROWS
+        return cls(
+            query=_string_or_none(raw.get("query")),
+            sectors=_string_tuple(raw.get("sectors")),
+            market_cap_tiers=_enum_tuple(MarketCapTier, raw.get("market_cap_tiers")),
+            sort=_enum_or_none(StockSort, raw.get("sort")),
+            direction=_enum_or_none(SortDirection, raw.get("direction"))
+            or SortDirection.DESC,
+            in_sp500=_bool_or_none(raw.get("in_sp500")),
+            in_nasdaq100=_bool_or_none(raw.get("in_nasdaq100")),
+            limit=min(limit, _MAX_SCREEN_ROWS),
         )
 
 
@@ -221,4 +245,4 @@ def _positive_int_or_none(value) -> int | None:
     return value if value > 0 else None
 
 
-__all__: Sequence[str] = ("SearchStocksTool", "MarketSentimentTool")
+__all__ = ("SearchStocksTool", "MarketSentimentTool")

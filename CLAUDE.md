@@ -774,7 +774,9 @@ app/
     │   └── fundamentals/        #    the weekly Yahoo .info sweep → margins/ROE/beta/per-share inputs + company name onto the anchor (table-less)
     ├── ai/                 # ── model-generated reads (Claude on Bedrock):
     │   ├── analysis/            #    every AI analysis + the shared result cache (one `investment_analysis_cache` table keyed (kind, symbol), per-kind TTL)
-    │   ├── agent/               #    the tool-using stock-research agent behind POST /research (tools over the app's own reads; no table)
+    │   ├── agent/               #    the tool-using stock-research agent behind POST /agents/research (tools over the app's own reads);
+    │   │                        #    configured by the `agent_recipes` table (prompt/tool names/step budget/model per agent, seeded by
+    │   │                        #    migration 0042, no code fallback — tools stay in a code-side registry the rows reference by name)
     │   └── brief/               #    the daily market brief (composes boards/heatmap context → Bedrock; DB-cached by date, cron-generated)
     ├── seo/                # ── server-rendered SEO pages + sitemap (templates/, DB reads across the catalog)
     └── endpoints/          # ── the HTTP surface (controller + presenter + wiring), one module per slice:
@@ -798,7 +800,7 @@ app/
         ├── earnings_calendar_endpoints.py        #  GET /market/earnings-calendar
         ├── market_brief_endpoints.py             #  GET /market/brief + /market/brief/{brief_date}
         ├── analysis_endpoints.py                 #  the AI reads: /stocks/{symbol}/analysis + /stocks/{symbol}/earnings/analysis + .../analyst-info/analysis + /sectors/analysis + /market/summary
-        ├── research_endpoints.py                 #  POST /research (the tool-using research agent)
+        ├── research_endpoints.py                 #  POST /agents/research (the tool-using research agent)
         ├── seo_endpoints.py                      #  the server-rendered SEO pages (/stock/{ticker}, /sector/{sector}, /etf/{ticker}, /screen/{slug}, …) + sitemap
         └── cron/                                 #  the POST /internal/*/sync endpoints (fire-and-forget), one per synced slice:
             ├── auth.py                           #  require_cron_token (Bearer CRON_SYNC_TOKEN, constant-time, fail-closed)

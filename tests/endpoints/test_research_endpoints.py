@@ -1,10 +1,19 @@
+import uuid
 from datetime import datetime, timezone
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
+from app.db import Base
 from app.stocks.ai.agent.entities import AgentStep, ResearchResult
+from app.stocks.ai.agent.errors import AgentNotConfigured, EmptyQuestion
+from app.stocks.ai.agent.models import AgentRecipeRecord
+from app.stocks.ai.agent import wiring
 from app.stocks.endpoints import research_endpoints as endpoints
+from app.stocks.endpoints.error_handlers import register_error_handlers
 from app.stocks.exceptions import StockDataUnavailable
 
 
@@ -24,7 +33,8 @@ class _FakeUseCase:
 def _client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
-    app.dependency_overrides[endpoints.get_run_research] = lambda: fake
+    register_error_handlers(app)  # the endpoint has no try/except; the handlers translate
+    app.dependency_overrides[wiring.get_run_research] = lambda: fake
     return TestClient(app)
 
 
@@ -49,7 +59,7 @@ def _a_result(**over) -> ResearchResult:
 
 def test_returns_the_answer_steps_and_disclaimer():
     fake = _FakeUseCase(result=_a_result())
-    resp = _client(fake).post("/research", json={"question": "compare NVDA and AMD"})
+    resp = _client(fake).post("/agents/research", json={"question": "compare NVDA and AMD"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["answer"] == "NVDA is larger and growing faster."
@@ -68,18 +78,90 @@ def test_returns_the_answer_steps_and_disclaimer():
 
 
 def test_a_whitespace_question_maps_to_400():
-    # Passes pydantic's min_length, but the use case rejects the blank -> ValueError -> 400.
-    fake = _FakeUseCase(error=ValueError("A research question must not be empty."))
-    resp = _client(fake).post("/research", json={"question": "   "})
+    # Passes pydantic's min_length, but the use case rejects the blank -> EmptyQuestion -> 400.
+    fake = _FakeUseCase(error=EmptyQuestion("A research question must not be empty."))
+    resp = _client(fake).post("/agents/research", json={"question": "   "})
     assert resp.status_code == 400
 
 
 def test_an_empty_question_is_rejected_by_validation():
-    resp = _client(_FakeUseCase(result=_a_result())).post("/research", json={"question": ""})
+    resp = _client(_FakeUseCase(result=_a_result())).post("/agents/research", json={"question": ""})
     assert resp.status_code == 422
 
 
 def test_a_model_failure_maps_to_502():
     fake = _FakeUseCase(error=StockDataUnavailable("research", "bedrock down"))
-    resp = _client(fake).post("/research", json={"question": "how is the market?"})
+    resp = _client(fake).post("/agents/research", json={"question": "how is the market?"})
     assert resp.status_code == 502
+
+
+# --- The recipe wiring: the DB row is the agent's configuration, with no code fallback ------
+
+
+@pytest.fixture
+def db():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        yield session
+
+
+def _seed_recipe(db, **over) -> None:
+    record = AgentRecipeRecord(
+        id=uuid.uuid4(),
+        name="research",
+        system_prompt="Answer with the tools.",
+        tool_names=["search_stocks", "get_market_sentiment"],
+        max_steps=4,
+        model_id=None,
+        updated_at=datetime.now(timezone.utc),
+    )
+    for key, value in over.items():
+        setattr(record, key, value)
+    db.add(record)
+    db.commit()
+
+
+class _FakeModel:
+    pass
+
+
+def test_a_missing_recipe_row_raises_agent_not_configured(db):
+    # AgentNotConfigured maps to 503 via the central error handlers.
+    with pytest.raises(AgentNotConfigured, match="recipe"):
+        wiring.get_run_research(db=db)
+
+
+def test_the_recipe_row_configures_the_agent(db, monkeypatch):
+    _seed_recipe(db, tool_names=["search_stocks"], max_steps=2)
+    seen: list[str | None] = []
+
+    def fake_model(model_id=None):
+        seen.append(model_id)
+        return _FakeModel()
+
+    monkeypatch.setattr(wiring, "get_conversation_model", fake_model)
+    use_case = wiring.get_run_research(db=db)
+    assert use_case._system_prompt == "Answer with the tools."
+    assert use_case._max_steps == 2
+    assert list(use_case._tools) == ["search_stocks"]  # only the recipe's tools are offered
+    assert seen == [None]  # no model override on the row -> the adapter's default
+
+
+def test_the_recipe_model_id_wins_over_the_default(db, monkeypatch):
+    _seed_recipe(db, model_id="us.anthropic.claude-sonnet-5-v1:0")
+    seen: list[str | None] = []
+    monkeypatch.setattr(
+        wiring,
+        "get_conversation_model",
+        lambda model_id=None: seen.append(model_id) or _FakeModel(),
+    )
+    wiring.get_run_research(db=db)
+    assert seen == ["us.anthropic.claude-sonnet-5-v1:0"]
+
+
+def test_unknown_tool_names_are_skipped_not_fatal(db, monkeypatch):
+    _seed_recipe(db, tool_names=["search_stocks", "not_a_tool"])
+    monkeypatch.setattr(wiring, "get_conversation_model", lambda model_id=None: _FakeModel())
+    use_case = wiring.get_run_research(db=db)
+    assert list(use_case._tools) == ["search_stocks"]

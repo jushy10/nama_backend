@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Sequence
 
 from app.stocks.adapters.bedrock.cost import log_model_cost
@@ -12,13 +13,15 @@ from app.stocks.ai.agent.entities import (
 from app.stocks.ai.agent.interfaces import ConversationModelAdapter
 from app.stocks.exceptions import StockDataUnavailable
 
+logger = logging.getLogger(__name__)
+
 
 class ConversationModelAdapterImpl(ConversationModelAdapter):
     _DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     _DEFAULT_REGION = "us-east-1"
-    # One turn is a short narration plus a tool call or two, or the final answer — a modest cap
-    # is ample and keeps a runaway turn from ballooning the token bill.
-    _MAX_TOKENS = 1024
+    # A ceiling, not spend — we pay only actual tokens. Sized so a broad final answer never
+    # clips: truncation mid-tool_use would silently read as a final answer (see respond()).
+    _MAX_TOKENS = 2048
 
     def __init__(
         self,
@@ -64,6 +67,14 @@ class ConversationModelAdapterImpl(ConversationModelAdapter):
                 "research", f"research model call failed: {exc}"
             ) from exc
         log_model_cost(label="ai research", model_id=self._model_id, message=message)
+        if getattr(message, "stop_reason", None) == "max_tokens":
+            # Clipped output is served as-is; worse, a clipped tool_use block drops out and the
+            # partial text reads as a final answer — surface it instead of failing the request.
+            logger.warning(
+                "research model turn truncated at max_tokens=%s (model %s)",
+                self._max_tokens,
+                self._model_id,
+            )
         return _to_turn(message, self._model_id)
 
 
@@ -108,28 +119,23 @@ def _to_anthropic_tool(spec: ToolSpec) -> dict:
 
 
 def _to_turn(message, model_id: str) -> ModelTurn:
-    text_parts: list[str] = []
-    tool_calls: list[ToolCall] = []
+    texts: list[str] = []
+    calls: list[ToolCall] = []
     for block in getattr(message, "content", None) or []:
         kind = getattr(block, "type", None)
-        if kind == "text":
-            piece = getattr(block, "text", None)
-            if isinstance(piece, str):
-                text_parts.append(piece)
-        elif kind == "tool_use":
-            name = getattr(block, "name", None)
-            call_id = getattr(block, "id", None)
+        if kind == "text" and isinstance(getattr(block, "text", None), str):
+            texts.append(block.text)
+        elif kind == "tool_use" and isinstance(getattr(block, "id", None), str):
             arguments = getattr(block, "input", None)
-            if isinstance(name, str) and isinstance(call_id, str):
-                tool_calls.append(
-                    ToolCall(
-                        id=call_id,
-                        name=name,
-                        arguments=arguments if isinstance(arguments, dict) else {},
-                    )
+            calls.append(
+                ToolCall(
+                    id=block.id,
+                    name=str(getattr(block, "name", "")),
+                    arguments=arguments if isinstance(arguments, dict) else {},
                 )
+            )
     return ModelTurn(
-        text="".join(text_parts).strip(),
-        tool_calls=tuple(tool_calls),
+        text="".join(texts).strip(),
+        tool_calls=tuple(calls),
         model=model_id,
     )

@@ -1,0 +1,33 @@
+sequenceDiagram
+    autonumber
+    actor FE as Client
+    participant EP as research_endpoints.py<br/>(POST /agents/research)
+    participant UC as RunResearch<br/>(use_cases.py)
+    participant AD as ConversationModelAdapterImpl<br/>(bedrock adapter)
+    participant M as Claude on Bedrock
+    participant T as Tools<br/>(search_stocks / get_market_sentiment)
+
+    FE->>EP: {"question": "..."}
+    EP->>EP: wire tools + model (DI)
+    EP->>UC: execute(question)
+
+    loop up to 6 steps
+        UC->>AD: respond(system, transcript, tool specs)
+        AD->>M: messages.create(...)
+        M-->>AD: text and/or tool_use blocks
+        AD-->>UC: ModelTurn
+        alt model answered (no tool calls)
+            UC-->>EP: ResearchResult(answer, steps)
+        else model wants tools
+            UC->>T: run(arguments) per call
+            T-->>UC: text result (errors become results too)
+            UC->>UC: append AssistantMessage + ToolResultsMessage
+        end
+    end
+
+    opt budget spent, still wants tools
+        UC->>AD: respond(... + FORCE_FINAL, tools=())
+        AD-->>UC: final prose answer
+    end
+
+    EP-->>FE: {answer, steps[], disclaimer, model}

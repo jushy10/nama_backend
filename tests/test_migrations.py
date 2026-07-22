@@ -160,3 +160,26 @@ def test_upgrade_creates_the_market_brief_table(alembic):
 
     command.downgrade(config, "base")
     assert "stock_market_brief" not in inspect(create_engine(url)).get_table_names()
+
+
+def test_upgrade_creates_and_seeds_the_agent_recipes_table(alembic):
+    # 0042 adds agent_recipes and seeds the research agent's recipe — the DB is the single
+    # source of truth for an agent's prompt/tools/budget, so the seed must ship with the table.
+    config, url = alembic
+
+    command.upgrade(config, "head")
+    engine = create_engine(url)
+    inspector = inspect(engine)
+    assert "agent_recipes" in inspector.get_table_names()
+    columns = {c["name"] for c in inspector.get_columns("agent_recipes")}
+    assert {"name", "system_prompt", "tool_names", "max_steps", "model_id"} <= columns
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT name, max_steps, system_prompt FROM agent_recipes")
+        ).one()
+    assert row.name == "research"
+    assert row.max_steps == 6
+    assert "stock-research assistant" in row.system_prompt
+
+    command.downgrade(config, "base")
+    assert "agent_recipes" not in inspect(create_engine(url)).get_table_names()

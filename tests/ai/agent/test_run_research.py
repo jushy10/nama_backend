@@ -1,6 +1,7 @@
 import pytest
 
 from app.stocks.ai.agent.entities import ModelTurn, ToolCall, ToolSpec
+from app.stocks.ai.agent.errors import EmptyQuestion
 from app.stocks.ai.agent.interfaces import Tool
 from app.stocks.ai.agent.use_cases import (
     _EMPTY_ANSWER_FALLBACK,
@@ -169,6 +170,6 @@ def test_empty_forced_answer_falls_back_to_a_message():
 @pytest.mark.parametrize("blank", ["", "   ", "\n\t"])
 def test_a_blank_question_is_rejected(blank):
     model = _ScriptedModel([ModelTurn("x", (), model="m1")])
-    with pytest.raises(ValueError):
+    with pytest.raises(EmptyQuestion):
         RunResearch(model, [_FakeTool("echo")]).execute(blank)
     assert model.calls == []  # never reached the model
