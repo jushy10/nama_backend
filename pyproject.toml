@@ -38,6 +38,14 @@ bedrock = [
 dev = [
     "pytest>=8.0",
 ]
+# The metered LLM-eval layer (tests_llm/): DeepEval grades the live research agent's
+# answers with a Bedrock judge. Not part of the offline suite — run explicitly via
+# `pytest tests_llm` (needs AWS Bedrock access and a running server).
+llm-evals = [
+    "deepeval>=4.0",
+    "anthropic[bedrock]>=0.40",
+    "httpx>=0.27",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
