@@ -52,8 +52,7 @@ class RunResearchUsecase:
         if not question:
             raise EmptyQuestion()
 
-        # The prompt and step budget come from the stored recipe at execution time — the DB
-        # is the single source of truth, so a recipe edit takes effect on the next request.
+        # Prompt/steps come from the stored recipe per execution — a DB edit hits the next request.
         recipe = self._recipe_repo.get(self._agent_name)
         if recipe is None:
             raise MissingAgentRecipe(self._agent_name)

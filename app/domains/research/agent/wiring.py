@@ -32,8 +32,7 @@ _RESEARCH_AGENT = "research"
 
 @lru_cache(maxsize=4)
 def get_conversation_model(model_id: str) -> ConversationModelAdapter:
-    # No secret to gate on — Bedrock authenticates via the process's AWS credentials (the
-    # ECS task role in prod). Cached per model id so recipes on different models coexist.
+    # Bedrock auth rides the process's AWS credentials (ECS task role); cached per model id.
     region = os.environ.get("BEDROCK_REGION", "us-east-1")
     try:
         return ConversationModelAdapterImpl(model_id=model_id, region=region)
@@ -48,8 +47,7 @@ def get_market_sentiment_use_case() -> GetMarketSentiment:
 
 
 def _tool_registry(db: Session) -> dict[str, Tool]:
-    # Every tool the app offers, by the name recipe rows use. Adding a tool = its Tool
-    # subclass in tools.py + one entry here; a recipe opts in by listing the name.
+    # Adding a tool = its Tool subclass in tools.py + one entry here; recipes opt in by name.
     sentiment = get_market_sentiment_use_case()
     return {
         "search_stocks": SearchStocksTool(SearchStocks(StockSearchRepositoryAdapterImpl(db))),
@@ -58,9 +56,8 @@ def _tool_registry(db: Session) -> dict[str, Tool]:
 
 
 def build_run_research(db: Session) -> RunResearchUsecase:
-    # No code fallback: a missing recipe row is a deployment problem (migrations not run),
-    # surfaced as MissingAgentRecipe -> 503. The wiring reads the recipe for what it must
-    # build (tools, model); the use case re-reads it at execute time for prompt/steps.
+    # A missing recipe row is a deployment problem (migrations not run) -> 503.
+    # Wiring reads the recipe for what it builds (tools, model); the use case re-reads for prompt/steps.
     repo = AgentRecipeRepositoryAdapterImpl(db)
     recipe = repo.get(_RESEARCH_AGENT)
     if recipe is None:
