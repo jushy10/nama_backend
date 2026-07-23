@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from datetime import date
 
 
-class QuotaRepositoryAdapter(ABC):
+class QuotaRepository(ABC):
     """Persistence for the per-client daily generation counter."""
 
     @abstractmethod

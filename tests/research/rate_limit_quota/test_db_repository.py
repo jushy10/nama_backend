@@ -6,9 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.domains.research.rate_limit_quota.models import GenerationUsageRecord
-from app.domains.research.rate_limit_quota.quota_repository_adapter_impl import (
-    QuotaRepositoryAdapterImpl,
-)
+from app.domains.research.rate_limit_quota.db_repository import DbQuotaRepository
 
 _TODAY = date(2026, 7, 23)
 
@@ -22,7 +20,7 @@ def session():
 
 
 def _consume(session, client="1.2.3.4", *, limit=3, pool="analysis", day=_TODAY) -> bool:
-    return QuotaRepositoryAdapterImpl(session).try_consume(pool, client, day, limit)
+    return DbQuotaRepository(session).try_consume(pool, client, day, limit)
 
 
 def test_consumes_up_to_the_limit_then_denies(session):
@@ -66,6 +64,6 @@ def test_fails_open_when_the_table_is_missing():
     engine = create_engine("sqlite:///:memory:")  # no create_all
     with Session(engine) as session:
         assert (
-            QuotaRepositoryAdapterImpl(session).try_consume("analysis", "1.2.3.4", _TODAY, 1)
+            DbQuotaRepository(session).try_consume("analysis", "1.2.3.4", _TODAY, 1)
             is True
         )

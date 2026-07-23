@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from typing import Callable
 
-from app.domains.research.rate_limit_quota.interfaces import QuotaRepositoryAdapter
+from app.domains.research.rate_limit_quota.repository import QuotaRepository
 from app.domains.shared.exceptions import QuotaExceeded
 
 
@@ -12,7 +12,7 @@ class ConsumeGenerationQuota:
 
     def __init__(
         self,
-        repository: QuotaRepositoryAdapter,
+        repository: QuotaRepository,
         pool: str,
         daily_limit: int,
         today: Callable[[], date] | None = None,

@@ -2,14 +2,14 @@ from datetime import date
 
 import pytest
 
-from app.domains.research.rate_limit_quota.interfaces import QuotaRepositoryAdapter
+from app.domains.research.rate_limit_quota.repository import QuotaRepository
 from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 from app.domains.shared.exceptions import QuotaExceeded
 
 _TODAY = date(2026, 7, 23)
 
 
-class _FakeRepo(QuotaRepositoryAdapter):
+class _FakeRepo(QuotaRepository):
     def __init__(self, *, allow=True) -> None:
         self._allow = allow
         self.calls: list[tuple] = []
