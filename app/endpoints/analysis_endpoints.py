@@ -108,11 +108,13 @@ from app.domains.coverage.recommendations.repository_adapter_impl import (
 from app.domains.listings.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.endpoints.wiring import (
     analysis_cache_ttl,
+    analysis_generation_quota,
     bedrock_recovery_model_id,
     get_estimates_provider,
     get_price_provider,
     get_provider,
 )
+from app.rate_limit import client_ip
 
 router = APIRouter(tags=["stocks"])
 
@@ -208,6 +210,7 @@ def get_stock_analysis(
         StockSearchRepositoryAdapterImpl(db),
         cache=cache,
         cache_ttl=analysis_cache_ttl("stock"),
+        quota=analysis_generation_quota(db),
     )
 
 
@@ -341,6 +344,7 @@ def get_earnings_analysis(
         AnnualEarningsAdapterImpl(AnnualEarningsRepositoryAdapterImpl(db)),
         cache=earnings_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("earnings"),
+        quota=analysis_generation_quota(db),
     )
 
 
@@ -377,6 +381,7 @@ def get_ratings_findings(
         RatingChangeAdapterImpl(RatingChangesRepositoryAdapterImpl(db)),
         cache=ratings_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("ratings"),
+        quota=analysis_generation_quota(db),
     )
 
 
@@ -437,6 +442,7 @@ def get_fundamentals_analysis(
         pe_history=GetStockPeHistory(candles, _eps_history_provider()),
         cache=fundamentals_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("fundamentals"),
+        quota=analysis_generation_quota(db),
     )
 
 
@@ -597,7 +603,9 @@ def get_stock_analysis_endpoint(
     use_case: GetStockAnalysis = Depends(get_stock_analysis),
 ) -> InvestmentAnalysisResponse:
     try:
-        analysis = use_case.execute(symbol)
+        # QuotaExceeded (the per-IP daily generation budget) is translated to 429
+        # by the central handlers, not caught here.
+        analysis = use_case.execute(symbol, client_id=client_ip(request))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except StockNotFound as exc:
@@ -623,7 +631,7 @@ def get_earnings_analysis_endpoint(
     use_case: GetEarningsAnalysis = Depends(get_earnings_analysis),
 ) -> EarningsAnalysisResponse:
     try:
-        analysis = use_case.execute(symbol)
+        analysis = use_case.execute(symbol, client_id=client_ip(request))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except StockNotFound as exc:
@@ -649,7 +657,7 @@ def get_ratings_analysis_endpoint(
     use_case: GetRatingsFindings = Depends(get_ratings_findings),
 ) -> RatingsAnalysisResponse:
     try:
-        analysis = use_case.execute(ticker)
+        analysis = use_case.execute(ticker, client_id=client_ip(request))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except StockNotFound as exc:
@@ -674,7 +682,7 @@ def get_fundamentals_analysis_endpoint(
     use_case: GetFundamentalsAnalysis = Depends(get_fundamentals_analysis),
 ) -> FundamentalsAnalysisResponse:
     try:
-        analysis = use_case.execute(symbol)
+        analysis = use_case.execute(symbol, client_id=client_ip(request))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except StockNotFound as exc:

@@ -32,8 +32,10 @@ from app.domains.etfs.interfaces import (
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.research.analysis.interfaces import InvestmentAnalysisCacheAdapter
 from app.domains.shared.interfaces import (
+    GenerationQuotaAdapter,
     StockPerformanceAdapter,
     StockQuoteAdapter,
+    consume_generation_quota,
 )
 from app.domains.shared.progress import iter_with_progress
 
@@ -300,13 +302,15 @@ class GetEtfAnalysis:
         analyzer: EtfAnalysisAdapter,
         cache: InvestmentAnalysisCacheAdapter | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
+        quota: GenerationQuotaAdapter | None = None,
     ) -> None:
         self._detail = detail
         self._analyzer = analyzer
         self._cache = cache
         self._cache_ttl = cache_ttl
+        self._quota = quota
 
-    def execute(self, symbol: str) -> InvestmentAnalysis:
+    def execute(self, symbol: str, client_id: str | None = None) -> InvestmentAnalysis:
         # Normalize up front so the cache key matches what the analyzer stamps on the
         # result (``EtfDetail.ticker``, the normalized ticker) — a hit here skips both
         # the snapshot build (quote + live 3y/5y returns) and the model call.
@@ -315,6 +319,9 @@ class GetEtfAnalysis:
         if cached is not None:
             return cached
         detail = self._detail.execute(normalized, include=self._SNAPSHOT_INCLUDES)
+        # A generation is about to run — spend one from the client's daily budget
+        # (a cache hit above is free; an unknown fund raised out of the detail read).
+        consume_generation_quota(self._quota, client_id)
         analysis = self._analyzer.analyze(detail)
         # Cache only a *complete* read (both strengths and risks present), so a rare
         # empty-list model result never freezes for the TTL — the next view regenerates.

@@ -428,7 +428,7 @@ class _FakeUseCase:
         self._error = error
         self.calls: list[str] = []
 
-    def execute(self, symbol: str) -> FundamentalsAnalysis:
+    def execute(self, symbol: str, client_id: str | None = None) -> FundamentalsAnalysis:
         self.calls.append(symbol)
         if self._error is not None:
             raise self._error

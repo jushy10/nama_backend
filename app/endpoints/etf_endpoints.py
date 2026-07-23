@@ -1,7 +1,7 @@
 import os
 from functools import lru_cache
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -56,9 +56,11 @@ from app.adapters.bedrock.etf_screener_query_adapter_impl import (
 )
 from app.endpoints.wiring import (
     analysis_cache_ttl,
+    analysis_generation_quota,
     bedrock_recovery_model_id,
     get_provider,
 )
+from app.rate_limit import client_ip
 
 @lru_cache(maxsize=1)
 def get_etf_screener_translator() -> EtfScreenerQueryAdapter:
@@ -158,6 +160,7 @@ def get_etf_analysis_use_case(
     detail: GetEtfDetail = Depends(get_etf_detail_use_case),
     analyzer: EtfAnalysisAdapter = Depends(get_etf_analysis_provider),
     cache: InvestmentAnalysisCacheAdapter = Depends(get_etf_analysis_cache),
+    db: Session = Depends(get_db),
 ) -> GetEtfAnalysis:
     # Reuses the detail use case as the primary snapshot builder (so the analysis reasons over
     # exactly what the detail card shows — same quote, same stored facts, same profile) and pairs it
@@ -165,7 +168,14 @@ def get_etf_analysis_use_case(
     # snapshot build and the model call). The detail's missing-keys 503 (Alpaca quote) and the
     # analyser's 503 (missing extra) both ride through. TTL is the "etf" kind's (profile is slow,
     # only the quote is live), overridable via ANALYSIS_CACHE_TTL_MINUTES_ETF.
-    return GetEtfAnalysis(detail, analyzer, cache=cache, cache_ttl=analysis_cache_ttl("etf"))
+    return GetEtfAnalysis(
+        detail,
+        analyzer,
+        cache=cache,
+        cache_ttl=analysis_cache_ttl("etf"),
+        # The same per-IP daily generation pool as the per-stock AI reads.
+        quota=analysis_generation_quota(db),
+    )
 
 
 def _present_search(page: EtfSearchPage) -> EtfSearchResponse:
@@ -419,12 +429,15 @@ def get_etf_detail_endpoint(
 
 @router.get("/stocks/etf/{ticker}/analysis", response_model=EtfAnalysisResponse)
 def get_etf_analysis_endpoint(
+    request: Request,
     ticker: str,
     response: Response,
     use_case: GetEtfAnalysis = Depends(get_etf_analysis_use_case),
 ) -> EtfAnalysisResponse:
     try:
-        analysis = use_case.execute(ticker)
+        # QuotaExceeded (the per-IP daily generation budget) is translated to 429
+        # by the central handlers, not caught here.
+        analysis = use_case.execute(ticker, client_id=client_ip(request))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except StockNotFound as exc:

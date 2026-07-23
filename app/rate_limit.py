@@ -4,7 +4,9 @@ from slowapi import Limiter
 from starlette.requests import Request
 
 
-def _client_ip(request: Request) -> str:
+def client_ip(request: Request) -> str:
+    """The caller's identity for rate limiting AND the AI generation quota — the
+    LB-stamped header when present, else the socket peer."""
     stamped = request.headers.get("x-client-ip")
     if stamped:
         return stamped.strip()
@@ -30,7 +32,7 @@ _rate_limit_storage = os.environ.get("RATE_LIMIT_STORAGE_URI", "memory://")
 # apply to every route; expensive routes layer a tighter ``@limiter.limit(...)``
 # on top (their own bucket, checked in addition to these). Tune as traffic grows.
 limiter = Limiter(
-    key_func=_client_ip,
+    key_func=client_ip,
     default_limits=["20/second", "600/minute"],
     storage_uri=_rate_limit_storage,
 )

@@ -5,11 +5,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.domains.research.agent.errors import AgentNotConfigured, EmptyQuestion
-from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.shared.exceptions import QuotaExceeded, StockDataUnavailable, StockNotFound
 
 _STATUS_BY_ERROR: tuple[tuple[type[Exception], int], ...] = (
     (EmptyQuestion, 400),
     (StockNotFound, 404),
+    (QuotaExceeded, 429),
     (StockDataUnavailable, 502),
     (AgentNotConfigured, 503),
 )

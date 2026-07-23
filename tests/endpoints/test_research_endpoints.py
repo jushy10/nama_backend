@@ -14,7 +14,7 @@ from app.domains.research.agent.models import AgentRecipeRecord
 from app.domains.research.agent import wiring
 from app.endpoints import research_endpoints as endpoints
 from app.endpoints.error_handlers import register_error_handlers
-from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.shared.exceptions import QuotaExceeded, StockDataUnavailable
 
 
 class _FakeUseCase:
@@ -23,7 +23,7 @@ class _FakeUseCase:
         self._error = error
         self.questions: list[str] = []
 
-    def execute(self, question: str) -> ResearchResult:
+    def execute(self, question: str, client_id: str | None = None) -> ResearchResult:
         self.questions.append(question)
         if self._error is not None:
             raise self._error
@@ -168,3 +168,10 @@ def test_an_unknown_tool_name_fails_loud(db, monkeypatch):
     monkeypatch.setattr(wiring, "get_conversation_model", lambda model_id=None: _FakeModel())
     with pytest.raises(UnknownAgentTool, match="not_a_tool"):
         wiring.build_run_research(db=db)
+
+
+def test_a_spent_daily_quota_is_a_429():
+    fake = _FakeUseCase(error=QuotaExceeded())
+    resp = _client(fake).post("/agents/research", json={"question": "compare NVDA and AMD"})
+    assert resp.status_code == 429
+    assert "limit" in resp.json()["detail"].lower()

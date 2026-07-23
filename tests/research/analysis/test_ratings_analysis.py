@@ -8,7 +8,8 @@ from app.endpoints import analysis_endpoints
 from app.domains.research.analysis.entities import Confidence, RatingsAnalysis, RatingsVerdict
 from app.domains.research.analysis.interfaces import AiAnalysisCacheAdapter, RatingsAnalysisAdapter
 from app.domains.research.analysis.use_cases import GetRatingsFindings
-from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.shared.exceptions import QuotaExceeded, StockDataUnavailable, StockNotFound
+from app.endpoints.error_handlers import register_error_handlers
 from app.domains.coverage.recommendations.entities import (
     AnalystPriceTargets,
     AnalystRatingChanges,
@@ -277,7 +278,7 @@ class _FakeUseCase:
         self._error = error
         self.calls: list[str] = []
 
-    def execute(self, symbol: str) -> RatingsAnalysis:
+    def execute(self, symbol: str, client_id: str | None = None) -> RatingsAnalysis:
         self.calls.append(symbol)
         if self._error is not None:
             raise self._error
@@ -287,6 +288,7 @@ class _FakeUseCase:
 def _client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
     app.include_router(analysis_endpoints.router)
+    register_error_handlers(app)  # QuotaExceeded has no inline catch; the handlers translate
     app.dependency_overrides[analysis_endpoints.get_ratings_findings] = lambda: fake
     return TestClient(app)
 
@@ -329,3 +331,10 @@ def test_endpoint_unknown_symbol_is_404():
 def test_endpoint_no_coverage_or_model_failure_is_502():
     fake = _FakeUseCase(error=StockDataUnavailable("NVDA", "no analyst coverage to analyse"))
     assert _client(fake).get(_URL).status_code == 502
+
+
+def test_endpoint_spent_daily_quota_is_429():
+    fake = _FakeUseCase(error=QuotaExceeded())
+    resp = _client(fake).get(_URL)
+    assert resp.status_code == 429
+    assert "limit" in resp.json()["detail"].lower()
