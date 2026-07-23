@@ -4,21 +4,18 @@ from app.domains.shared.exceptions import QuotaExceeded
 
 
 class GenerationQuotaAdapter(ABC):
-    """A per-client daily budget of metered AI generations. Consumed only when a
-    generation actually runs — a cache hit never touches it."""
+    """Per-client daily budget of metered AI generations; a cache hit never consumes."""
 
     @abstractmethod
     def try_consume(self, client_id: str) -> bool:
-        """Spend one generation from the client's budget for today. Returns False
-        when the budget is already exhausted (nothing is consumed)."""
+        """Spend one generation from today's budget; False when already exhausted."""
 
 
 def consume_generation_quota(
     quota: GenerationQuotaAdapter | None, client_id: str | None
 ) -> None:
-    """Raises QuotaExceeded when the client's daily budget is spent. A missing quota
-    (unwired, e.g. tests/crons) or missing client id is a no-op — the quota is a
-    guard on the metered HTTP paths, never a required capability."""
+    """Raises QuotaExceeded when the day's budget is spent. No-op without a quota or
+    client id (non-HTTP callers: tests, crons)."""
     if quota is None or client_id is None:
         return
     if not quota.try_consume(client_id):

@@ -435,8 +435,7 @@ def get_etf_analysis_endpoint(
     use_case: GetEtfAnalysis = Depends(get_etf_analysis_use_case),
 ) -> EtfAnalysisResponse:
     try:
-        # QuotaExceeded (the per-IP daily generation budget) is translated to 429
-        # by the central handlers, not caught here.
+        # QuotaExceeded -> 429 via the central handlers, not caught here.
         analysis = use_case.execute(ticker, client_id=client_ip(request))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

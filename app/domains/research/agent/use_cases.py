@@ -54,9 +54,8 @@ class RunResearchUsecase:
         question = (question or "").strip()
         if not question:
             raise EmptyQuestion()
-        # Every run is several metered Bedrock calls with no result cache, so each
-        # spends one from the client's daily research budget — after the validation
-        # above, so an empty question never burns one. Raises QuotaExceeded (429).
+        # Every run is several uncached Bedrock calls — each spends one from the
+        # client's daily research budget. Raises QuotaExceeded when spent.
         consume_generation_quota(self._quota, client_id)
 
         # Prompt/steps come from the stored recipe per execution — a DB edit hits the next request.

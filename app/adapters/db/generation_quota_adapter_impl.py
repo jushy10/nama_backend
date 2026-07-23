@@ -13,12 +13,10 @@ logger = logging.getLogger(__name__)
 
 
 class GenerationQuotaAdapterImpl(GenerationQuotaAdapter):
-    """DB-backed daily counter, one row per (pool, client, UTC day). Writes happen only
-    when a generation actually runs, so volume is bounded by the quota itself — no
-    Redis needed, and the count survives deploys (unlike the in-process rate limiter).
-
-    Fail-open on a DB fault: the quota is a cost guard, not a correctness rule, so a
-    broken counter must not take the AI features down (slowapi stays the hard backstop)."""
+    """DB-backed daily counter, one row per (pool, client, UTC day). Writes are bounded
+    by the quota itself, so a plain table suffices (no Redis) and the count survives
+    deploys. Fails open on a DB fault — a cost guard, not a correctness rule; the
+    slowapi per-IP limits stay the hard backstop."""
 
     def __init__(
         self,
@@ -47,8 +45,7 @@ class GenerationQuotaAdapterImpl(GenerationQuotaAdapter):
             return True
 
     def _increment_if_under_limit(self, client_key: str) -> bool:
-        # One atomic conditional UPDATE, so two concurrent requests can never both
-        # spend the last generation of the day.
+        # Atomic conditional UPDATE: two concurrent requests can't both spend the last one.
         result = self._db.execute(
             update(GenerationUsageRecord)
             .where(
@@ -92,7 +89,6 @@ class GenerationQuotaAdapterImpl(GenerationQuotaAdapter):
             self._db.commit()
             return True
         except IntegrityError:
-            # Lost the race for the day's first row — fall back to the conditional
-            # increment against the row the winner just created.
+            # Lost the day's first-row race — retry the conditional increment.
             self._db.rollback()
             return self._increment_if_under_limit(client_key)

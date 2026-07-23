@@ -319,8 +319,7 @@ class GetEtfAnalysis:
         if cached is not None:
             return cached
         detail = self._detail.execute(normalized, include=self._SNAPSHOT_INCLUDES)
-        # A generation is about to run — spend one from the client's daily budget
-        # (a cache hit above is free; an unknown fund raised out of the detail read).
+        # Only a real generation spends the daily budget (a cache hit above is free).
         consume_generation_quota(self._quota, client_id)
         analysis = self._analyzer.analyze(detail)
         # Cache only a *complete* read (both strengths and risks present), so a rare

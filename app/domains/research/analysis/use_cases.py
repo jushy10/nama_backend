@@ -287,9 +287,8 @@ class GetStockAnalysis:
         # context).
         quarterly = self._quarterly(normalized)
         stock = self._with_stored_metrics(stock, normalized, quarterly)
-        # Only an actual generation spends the client's daily budget — a cache hit
-        # above is free, and the guard sits after the symbol checks so a bad ticker
-        # never burns a generation. Raises QuotaExceeded (429) when the budget's spent.
+        # Only a real generation spends the daily budget — cache hits and bad tickers
+        # above are free. Raises QuotaExceeded when spent.
         consume_generation_quota(self._quota, client_id)
         scorecard = self._analyzer.analyze(
             stock,
@@ -432,8 +431,7 @@ class GetEarningsAnalysis:
         # rather than ask the model to reason over an empty slate.
         if quarterly is None and annual is None:
             raise StockDataUnavailable(normalized, "no earnings data to analyse")
-        # A generation is about to run — spend one from the client's daily budget
-        # (cache hits above are free; an uncovered symbol never reaches this).
+        # Only a real generation spends the daily budget (cache hits above are free).
         consume_generation_quota(self._quota, client_id)
         analysis = self._analyzer.analyze(normalized, quarterly, annual)
         # Store for the next viewer — but only a complete read, so a rare empty model
@@ -509,8 +507,7 @@ class GetRatingsFindings:
         # events, so this also covers a symbol with only uncredited firms' actions.)
         if (recommendations is None or recommendations.is_empty) and not top_firms:
             raise StockDataUnavailable(normalized, "no analyst coverage to analyse")
-        # A generation is about to run — spend one from the client's daily budget
-        # (cache hits above are free; an uncovered symbol never reaches this).
+        # Only a real generation spends the daily budget (cache hits above are free).
         consume_generation_quota(self._quota, client_id)
         analysis = self._analyzer.analyze(normalized, recommendations, top_firms)
         # Store for the next viewer — complete reads only, best-effort (see GetEarningsAnalysis).
@@ -586,8 +583,7 @@ class GetFundamentalsAnalysis:
             # dividend or market cap. Nothing fundamental to read, so fail rather than ask the
             # model to reason over a bare quote (mirrors the earnings/ratings no-data guards).
             raise StockDataUnavailable(normalized, "no fundamentals data to analyse")
-        # A generation is about to run — spend one from the client's daily budget
-        # (cache hits above are free; a bare-quote symbol never reaches this).
+        # Only a real generation spends the daily budget (cache hits above are free).
         consume_generation_quota(self._quota, client_id)
         analysis = self._analyzer.analyze(
             stock,

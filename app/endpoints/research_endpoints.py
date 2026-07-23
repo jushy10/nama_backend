@@ -17,8 +17,8 @@ _AI_RESEARCH_RATE_LIMIT = os.environ.get("AI_RESEARCH_RATE_LIMIT", "10/minute")
 
 def get_run_research(db: Session = Depends(get_db)) -> wiring.RunResearchUsecase:
     # Shim over the framework-free wiring: Depends gives the db lifecycle + the
-    # dependency_overrides test seam. The quota (the agent's own per-IP daily pool,
-    # tighter than the analyses') is built here so env config stays at this edge.
+    # dependency_overrides test seam. The quota is built here so env config stays
+    # at this edge.
     return wiring.build_run_research(db, quota=research_generation_quota(db))
 
 

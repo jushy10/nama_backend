@@ -1,6 +1,5 @@
-"""The per-client daily generation budget on the AI analysis use cases: consumed only
-when a generation actually runs (never on a cache hit), raising QuotaExceeded when spent.
-Driven through GetEarningsAnalysis — every analysis use case shares the same guard."""
+"""The per-client daily generation budget, driven through GetEarningsAnalysis —
+every analysis use case shares the same consume_generation_quota guard."""
 
 from datetime import datetime, timedelta, timezone
 

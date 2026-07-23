@@ -603,8 +603,7 @@ def get_stock_analysis_endpoint(
     use_case: GetStockAnalysis = Depends(get_stock_analysis),
 ) -> InvestmentAnalysisResponse:
     try:
-        # QuotaExceeded (the per-IP daily generation budget) is translated to 429
-        # by the central handlers, not caught here.
+        # QuotaExceeded -> 429 via the central handlers, not caught here.
         analysis = use_case.execute(symbol, client_id=client_ip(request))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

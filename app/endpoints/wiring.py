@@ -120,19 +120,16 @@ def _daily_quota(env_var: str, default: int) -> int:
 
 
 def analysis_generation_quota(db: Session) -> GenerationQuotaAdapter:
-    # One shared daily pool per client IP across ALL the per-symbol AI analyses
-    # (stock scorecard, ETF, earnings, ratings, fundamentals) — spent only when a
-    # generation actually runs, never on a cache hit. The market-wide reads (sector,
-    # market summary) are deliberately unmetered: their cache row is shared by every
-    # viewer, so one client's view mostly costs nothing marginal.
+    # One shared per-IP daily pool across the per-symbol AI analyses, spent only on
+    # real generations. The market-wide reads (sector, market summary) are deliberately
+    # unmetered — their cache row is shared by every viewer.
     return GenerationQuotaAdapterImpl(
         db, pool="analysis", daily_limit=_daily_quota("AI_ANALYSIS_DAILY_QUOTA", 10)
     )
 
 
 def research_generation_quota(db: Session) -> GenerationQuotaAdapter:
-    # The agent's own, tighter pool — every run is several metered Bedrock calls
-    # with no result cache, so a run costs more than an analysis generation.
+    # The agent's own, tighter pool — every run is several uncached Bedrock calls.
     return GenerationQuotaAdapterImpl(
         db, pool="research", daily_limit=_daily_quota("AI_RESEARCH_DAILY_QUOTA", 5)
     )

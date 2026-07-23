@@ -5,8 +5,7 @@ from starlette.requests import Request
 
 
 def client_ip(request: Request) -> str:
-    """The caller's identity for rate limiting AND the AI generation quota — the
-    LB-stamped header when present, else the socket peer."""
+    """Caller identity for rate limiting AND the AI generation quota."""
     stamped = request.headers.get("x-client-ip")
     if stamped:
         return stamped.strip()

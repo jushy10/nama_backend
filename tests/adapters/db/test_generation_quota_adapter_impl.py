@@ -72,8 +72,7 @@ def test_oversized_client_key_is_truncated_not_an_error(session):
 
 
 def test_fails_open_when_the_table_is_missing():
-    # The quota is a cost guard, not a correctness rule — a broken counter (e.g.
-    # migrations not run) must let the request through, never 500 it.
+    # A broken counter (e.g. migrations not run) must let the request through, never 500.
     engine = create_engine("sqlite:///:memory:")  # no create_all
     with Session(engine) as session:
         assert GenerationQuotaAdapterImpl(session, "analysis", 1).try_consume("1.2.3.4") is True
