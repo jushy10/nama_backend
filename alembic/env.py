@@ -15,6 +15,7 @@ from app.domains.coverage.recommendations import models as recommendations_model
 from app.domains.coverage.news import models as news_models  # noqa: F401
 from app.domains.etfs import models as etf_models  # noqa: F401
 from app.domains.research.analysis import models as analysis_models  # noqa: F401
+from app.domains.research.rate_limit_quota import models as quota_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

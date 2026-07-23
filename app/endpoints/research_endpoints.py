@@ -4,9 +4,10 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.rate_limit import limiter
+from app.rate_limit import client_ip, limiter
 from app.domains.research.agent import wiring
 from app.domains.research.agent.api_schemas import ResearchRequest, ResearchResponse
+from app.endpoints.wiring import research_generation_quota
 
 router = APIRouter(tags=["stocks"])
 
@@ -16,8 +17,9 @@ _AI_RESEARCH_RATE_LIMIT = os.environ.get("AI_RESEARCH_RATE_LIMIT", "10/minute")
 
 def get_run_research(db: Session = Depends(get_db)) -> wiring.RunResearchUsecase:
     # Shim over the framework-free wiring: Depends gives the db lifecycle + the
-    # dependency_overrides test seam.
-    return wiring.build_run_research(db)
+    # dependency_overrides test seam. The quota is built here so env config stays
+    # at this edge.
+    return wiring.build_run_research(db, quota=research_generation_quota(db))
 
 
 @router.post("/agents/research", response_model=ResearchResponse)
@@ -27,5 +29,8 @@ def run_research_endpoint(
     body: ResearchRequest,
     use_case: wiring.RunResearchUsecase = Depends(get_run_research),
 ) -> ResearchResponse:
-    # Domain errors raised below are translated by the central handlers.
-    return ResearchResponse.from_result(use_case.execute(body.question))
+    # Domain errors raised below (incl. QuotaExceeded -> 429) are translated by the
+    # central handlers.
+    return ResearchResponse.from_result(
+        use_case.execute(body.question, client_id=client_ip(request))
+    )

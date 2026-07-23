@@ -493,7 +493,7 @@ class _FakeEtfAnalysisUseCase:
         self._error = error
         self.calls: list[str] = []
 
-    def execute(self, ticker: str) -> InvestmentAnalysis:
+    def execute(self, ticker: str, client_id: str | None = None) -> InvestmentAnalysis:
         self.calls.append(ticker)
         if self._error is not None:
             raise self._error

@@ -14,6 +14,8 @@ from app.adapters.market_routing.price_adapter_impl import PriceAdapterImpl as M
 from app.adapters.yfinance.price_adapter_impl import PriceAdapterImpl as YahooPriceAdapterImpl
 from app.adapters.yfinance.option_chain_adapter_impl import OptionChainAdapterImpl
 from app.domains.financials.earnings.annual.annual_earnings_repository_adapter_impl import AnnualEarningsRepositoryAdapterImpl
+from app.domains.research.rate_limit_quota.db_repository import DbQuotaRepository
+from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 from app.domains.shared.interfaces import AnalystEstimatesAdapter
 
 
@@ -106,3 +108,33 @@ def analysis_cache_ttl(kind: str) -> timedelta:
             except ValueError:
                 continue
     return timedelta(minutes=default)
+
+
+def _daily_quota(env_var: str, default: int) -> int:
+    raw = os.environ.get(env_var)
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return default
+
+
+def analysis_generation_quota(db: Session) -> ConsumeGenerationQuota:
+    # One shared per-IP daily pool across the per-symbol AI analyses, spent only on
+    # real generations. The market-wide reads (sector, market summary) are deliberately
+    # unmetered — their cache row is shared by every viewer.
+    return ConsumeGenerationQuota(
+        DbQuotaRepository(db),
+        pool="analysis",
+        daily_limit=_daily_quota("AI_ANALYSIS_DAILY_QUOTA", 10),
+    )
+
+
+def research_generation_quota(db: Session) -> ConsumeGenerationQuota:
+    # The agent's own, tighter pool — every run is several uncached Bedrock calls.
+    return ConsumeGenerationQuota(
+        DbQuotaRepository(db),
+        pool="research",
+        daily_limit=_daily_quota("AI_RESEARCH_DAILY_QUOTA", 5),
+    )

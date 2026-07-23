@@ -41,6 +41,7 @@ from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.markets.boards.use_cases import GetMarketOverview, GetSectorPerformance
 from app.domains.coverage.news.entities import NewsArticle
 from app.domains.coverage.news.interfaces import NewsRepositoryAdapter
+from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 from app.domains.shared.interfaces import (
     AllTimeHighAdapter,
     AnalystEstimatesAdapter,
@@ -255,6 +256,7 @@ class GetStockAnalysis:
         industry_repository: StockSearchRepositoryAdapter | None = None,
         cache: StockScorecardCacheAdapter | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
+        quota: ConsumeGenerationQuota | None = None,
     ) -> None:
         self._stock_info = stock_info
         self._analyzer = analyzer
@@ -264,8 +266,9 @@ class GetStockAnalysis:
         self._industry_repository = industry_repository
         self._cache = cache
         self._cache_ttl = cache_ttl
+        self._quota = quota
 
-    def execute(self, symbol: str) -> StockScorecard:
+    def execute(self, symbol: str, client_id: str | None = None) -> StockScorecard:
         normalized = _normalize_symbol(symbol)
         # A fresh cached read short-circuits the whole gather + model call — the
         # scorecard only drifts as the figures do, so a repeat view within the TTL
@@ -283,6 +286,10 @@ class GetStockAnalysis:
         # context).
         quarterly = self._quarterly(normalized)
         stock = self._with_stored_metrics(stock, normalized, quarterly)
+        # Only a real generation spends the daily budget — cache hits and bad tickers
+        # above are free. Raises QuotaExceeded when spent.
+        if self._quota is not None:
+            self._quota.execute(client_id)
         scorecard = self._analyzer.analyze(
             stock,
             quarterly,
@@ -401,14 +408,16 @@ class GetEarningsAnalysis:
         annual_provider: AnnualEarningsAdapter | None = None,
         cache: AiAnalysisCacheAdapter[EarningsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
+        quota: ConsumeGenerationQuota | None = None,
     ) -> None:
         self._analyzer = analyzer
         self._quarterly_provider = quarterly_provider
         self._annual_provider = annual_provider
         self._cache = cache
         self._cache_ttl = cache_ttl
+        self._quota = quota
 
-    def execute(self, symbol: str) -> EarningsAnalysis:
+    def execute(self, symbol: str, client_id: str | None = None) -> EarningsAnalysis:
         normalized = _normalize_symbol(symbol)
         # A fresh cached read short-circuits the whole DB gather + model call — the
         # read only drifts as the earnings figures do, so a repeat view within the TTL
@@ -422,6 +431,9 @@ class GetEarningsAnalysis:
         # rather than ask the model to reason over an empty slate.
         if quarterly is None and annual is None:
             raise StockDataUnavailable(normalized, "no earnings data to analyse")
+        # Only a real generation spends the daily budget (cache hits above are free).
+        if self._quota is not None:
+            self._quota.execute(client_id)
         analysis = self._analyzer.analyze(normalized, quarterly, annual)
         # Store for the next viewer — but only a complete read, so a rare empty model
         # result is never frozen for the TTL. Best-effort (a write failure is swallowed
@@ -468,6 +480,7 @@ class GetRatingsFindings:
         rating_change_provider: RatingChangeAdapter | None = None,
         cache: AiAnalysisCacheAdapter[RatingsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
+        quota: ConsumeGenerationQuota | None = None,
         *,
         now: datetime | None = None,
     ) -> None:
@@ -476,9 +489,10 @@ class GetRatingsFindings:
         self._rating_change_provider = rating_change_provider
         self._cache = cache
         self._cache_ttl = cache_ttl
+        self._quota = quota
         self._now = now  # injectable clock for tests; None → real now per call
 
-    def execute(self, symbol: str) -> RatingsAnalysis:
+    def execute(self, symbol: str, client_id: str | None = None) -> RatingsAnalysis:
         normalized = _normalize_symbol(symbol)
         # A fresh cached read short-circuits the whole DB gather + model call.
         cached = self._fresh_cached(normalized)
@@ -494,6 +508,9 @@ class GetRatingsFindings:
         # events, so this also covers a symbol with only uncredited firms' actions.)
         if (recommendations is None or recommendations.is_empty) and not top_firms:
             raise StockDataUnavailable(normalized, "no analyst coverage to analyse")
+        # Only a real generation spends the daily budget (cache hits above are free).
+        if self._quota is not None:
+            self._quota.execute(client_id)
         analysis = self._analyzer.analyze(normalized, recommendations, top_firms)
         # Store for the next viewer — complete reads only, best-effort (see GetEarningsAnalysis).
         if self._cache is not None and analysis.is_complete:
@@ -539,6 +556,7 @@ class GetFundamentalsAnalysis:
         pe_history: GetStockPeHistory | None = None,
         cache: AiAnalysisCacheAdapter[FundamentalsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
+        quota: ConsumeGenerationQuota | None = None,
     ) -> None:
         self._stock_info = stock_info
         self._analyzer = analyzer
@@ -547,8 +565,9 @@ class GetFundamentalsAnalysis:
         self._pe_history = pe_history
         self._cache = cache
         self._cache_ttl = cache_ttl
+        self._quota = quota
 
-    def execute(self, symbol: str) -> FundamentalsAnalysis:
+    def execute(self, symbol: str, client_id: str | None = None) -> FundamentalsAnalysis:
         normalized = _normalize_symbol(symbol)
         # A fresh cached read short-circuits the whole snapshot gather + model call.
         cached = self._fresh_cached(normalized)
@@ -566,6 +585,9 @@ class GetFundamentalsAnalysis:
             # dividend or market cap. Nothing fundamental to read, so fail rather than ask the
             # model to reason over a bare quote (mirrors the earnings/ratings no-data guards).
             raise StockDataUnavailable(normalized, "no fundamentals data to analyse")
+        # Only a real generation spends the daily budget (cache hits above are free).
+        if self._quota is not None:
+            self._quota.execute(client_id)
         analysis = self._analyzer.analyze(
             stock,
             self._industry_valuation(normalized),
