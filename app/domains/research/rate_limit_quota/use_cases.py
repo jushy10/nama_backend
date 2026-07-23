@@ -6,9 +6,8 @@ from app.domains.shared.exceptions import QuotaExceeded
 
 
 class ConsumeGenerationQuota:
-    """Spend one metered AI generation from a client's daily budget for one pool.
-    Other slices' use cases take this and call it right before their model call, so
-    only a real generation pays — never a cache hit or a rejected symbol."""
+    """Spend one AI generation from a client's daily pool budget. Consumer use cases
+    call this right before their model call, so only a real generation pays."""
 
     def __init__(
         self,

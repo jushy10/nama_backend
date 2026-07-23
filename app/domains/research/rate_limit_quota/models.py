@@ -29,8 +29,7 @@ class GenerationUsageRecord(Base):
     count: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
-# Query helpers beside the model (the anchor's get_or_create_stock pattern) — the
-# db_repository composes these and owns the transaction (commit/rollback stays there).
+# Query helpers beside the model (anchor pattern); the db_repository owns the transaction.
 
 
 def increment_usage_if_below(
