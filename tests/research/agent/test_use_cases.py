@@ -7,6 +7,7 @@ from app.domains.research.agent.use_cases import (
     _EMPTY_ANSWER_FALLBACK,
     RunResearchUsecase,
 )
+from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 
 
 class _FakeRecipeRepo(AgentRecipeRepositoryAdapter):
@@ -64,16 +65,20 @@ def _call(name, arguments=None, call_id="c1"):
     return ToolCall(id=call_id, name=name, arguments=arguments or {})
 
 
-class _FakeQuota:
+class _FakeQuotaRepo:
     def __init__(self, *, allow=True) -> None:
         self._allow = allow
         self.consumed: list[str] = []
 
-    def try_consume(self, client_id: str) -> bool:
+    def try_consume(self, pool, client_key, day, limit) -> bool:
         if not self._allow:
             return False
-        self.consumed.append(client_id)
+        self.consumed.append(client_key)
         return True
+
+
+def _quota(repo) -> ConsumeGenerationQuota:
+    return ConsumeGenerationQuota(repo, pool="research", daily_limit=5)
 
 
 # --- The per-client daily run budget -----------------------------------------------------------
@@ -81,29 +86,29 @@ class _FakeQuota:
 
 def test_a_run_spends_one_from_the_client_budget():
     model = _ScriptedModel([ModelTurn(text="42", tool_calls=(), model="m1")])
-    quota = _FakeQuota()
-    _research(model, [_FakeTool("echo")], quota=quota).execute(
+    repo = _FakeQuotaRepo()
+    _research(model, [_FakeTool("echo")], quota=_quota(repo)).execute(
         "what is the answer?", client_id="1.2.3.4"
     )
-    assert quota.consumed == ["1.2.3.4"]
+    assert repo.consumed == ["1.2.3.4"]
 
 
 def test_an_exhausted_budget_raises_before_any_model_call():
     from app.domains.shared.exceptions import QuotaExceeded
 
     model = _ScriptedModel([ModelTurn(text="42", tool_calls=(), model="m1")])
-    use_case = _research(model, [_FakeTool("echo")], quota=_FakeQuota(allow=False))
+    use_case = _research(model, [_FakeTool("echo")], quota=_quota(_FakeQuotaRepo(allow=False)))
     with pytest.raises(QuotaExceeded):
         use_case.execute("what is the answer?", client_id="1.2.3.4")
     assert model.calls == []  # denied before the first metered Bedrock call
 
 
 def test_an_empty_question_never_burns_a_generation():
-    quota = _FakeQuota()
-    use_case = _research(_ScriptedModel([]), [_FakeTool("echo")], quota=quota)
+    repo = _FakeQuotaRepo()
+    use_case = _research(_ScriptedModel([]), [_FakeTool("echo")], quota=_quota(repo))
     with pytest.raises(EmptyQuestion):
         use_case.execute("   ", client_id="1.2.3.4")
-    assert quota.consumed == []
+    assert repo.consumed == []
 
 
 # --- Direct answer (no tools) -----------------------------------------------------------------

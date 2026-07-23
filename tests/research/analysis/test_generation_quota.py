@@ -1,5 +1,5 @@
 """The per-client daily generation budget, driven through GetEarningsAnalysis —
-every analysis use case shares the same consume_generation_quota guard."""
+every analysis use case shares the same ConsumeGenerationQuota guard."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -16,20 +16,25 @@ from app.domains.research.analysis.interfaces import (
     EarningsAnalysisAdapter,
 )
 from app.domains.research.analysis.use_cases import GetEarningsAnalysis
+from app.domains.research.rate_limit_quota.interfaces import QuotaRepositoryAdapter
+from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 from app.domains.shared.exceptions import QuotaExceeded
-from app.domains.shared.interfaces import GenerationQuotaAdapter
 
 
-class _FakeQuota(GenerationQuotaAdapter):
+class _FakeRepo(QuotaRepositoryAdapter):
     def __init__(self, *, allow=True) -> None:
         self._allow = allow
         self.consumed: list[str] = []
 
-    def try_consume(self, client_id: str) -> bool:
+    def try_consume(self, pool, client_key, day, limit) -> bool:
         if not self._allow:
             return False
-        self.consumed.append(client_id)
+        self.consumed.append(client_key)
         return True
+
+
+def _quota(repo) -> ConsumeGenerationQuota:
+    return ConsumeGenerationQuota(repo, pool="analysis", daily_limit=10)
 
 
 class _FakeAnalyzer(EarningsAnalysisAdapter):
@@ -94,15 +99,15 @@ def _use_case(quota, cache=None):
 
 
 def test_a_generation_consumes_one_from_the_budget():
-    quota = _FakeQuota()
-    _use_case(quota).execute("AAPL", client_id="1.2.3.4")
-    assert quota.consumed == ["1.2.3.4"]
+    repo = _FakeRepo()
+    _use_case(_quota(repo)).execute("AAPL", client_id="1.2.3.4")
+    assert repo.consumed == ["1.2.3.4"]
 
 
 def test_an_exhausted_budget_raises_quota_exceeded_before_the_model_runs():
     analyzer = _FakeAnalyzer()
     use_case = GetEarningsAnalysis(
-        analyzer, quarterly_provider=_FakeQuarterly(), quota=_FakeQuota(allow=False)
+        analyzer, quarterly_provider=_FakeQuarterly(), quota=_quota(_FakeRepo(allow=False))
     )
     with pytest.raises(QuotaExceeded):
         use_case.execute("AAPL", client_id="1.2.3.4")
@@ -110,7 +115,7 @@ def test_an_exhausted_budget_raises_quota_exceeded_before_the_model_runs():
 
 
 def test_a_fresh_cache_hit_is_free():
-    quota = _FakeQuota(allow=False)  # would raise if ever consulted
+    quota = _quota(_FakeRepo(allow=False))  # would raise if ever consulted
     cached = _an_analysis()
     result = _use_case(quota, cache=_FakeCache(stored=cached)).execute(
         "AAPL", client_id="1.2.3.4"
@@ -120,8 +125,7 @@ def test_a_fresh_cache_hit_is_free():
 
 def test_no_client_id_skips_the_quota():
     # Non-HTTP callers (tests, internal composition) carry no client identity.
-    quota = _FakeQuota(allow=False)
-    _use_case(quota).execute("AAPL")
+    _use_case(_quota(_FakeRepo(allow=False))).execute("AAPL")
 
 
 def test_no_quota_wired_is_a_no_op():

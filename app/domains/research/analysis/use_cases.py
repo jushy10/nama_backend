@@ -41,14 +41,13 @@ from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.markets.boards.use_cases import GetMarketOverview, GetSectorPerformance
 from app.domains.coverage.news.entities import NewsArticle
 from app.domains.coverage.news.interfaces import NewsRepositoryAdapter
+from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 from app.domains.shared.interfaces import (
     AllTimeHighAdapter,
     AnalystEstimatesAdapter,
     BulkQuoteAdapter,
-    GenerationQuotaAdapter,
     StockDataAdapter,
     StockPerformanceAdapter,
-    consume_generation_quota,
 )
 from app.domains.coverage.recommendations.entities import (
     AnalystRatingChanges,
@@ -257,7 +256,7 @@ class GetStockAnalysis:
         industry_repository: StockSearchRepositoryAdapter | None = None,
         cache: StockScorecardCacheAdapter | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
-        quota: GenerationQuotaAdapter | None = None,
+        quota: ConsumeGenerationQuota | None = None,
     ) -> None:
         self._stock_info = stock_info
         self._analyzer = analyzer
@@ -289,7 +288,8 @@ class GetStockAnalysis:
         stock = self._with_stored_metrics(stock, normalized, quarterly)
         # Only a real generation spends the daily budget — cache hits and bad tickers
         # above are free. Raises QuotaExceeded when spent.
-        consume_generation_quota(self._quota, client_id)
+        if self._quota is not None:
+            self._quota.execute(client_id)
         scorecard = self._analyzer.analyze(
             stock,
             quarterly,
@@ -408,7 +408,7 @@ class GetEarningsAnalysis:
         annual_provider: AnnualEarningsAdapter | None = None,
         cache: AiAnalysisCacheAdapter[EarningsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
-        quota: GenerationQuotaAdapter | None = None,
+        quota: ConsumeGenerationQuota | None = None,
     ) -> None:
         self._analyzer = analyzer
         self._quarterly_provider = quarterly_provider
@@ -432,7 +432,8 @@ class GetEarningsAnalysis:
         if quarterly is None and annual is None:
             raise StockDataUnavailable(normalized, "no earnings data to analyse")
         # Only a real generation spends the daily budget (cache hits above are free).
-        consume_generation_quota(self._quota, client_id)
+        if self._quota is not None:
+            self._quota.execute(client_id)
         analysis = self._analyzer.analyze(normalized, quarterly, annual)
         # Store for the next viewer — but only a complete read, so a rare empty model
         # result is never frozen for the TTL. Best-effort (a write failure is swallowed
@@ -479,7 +480,7 @@ class GetRatingsFindings:
         rating_change_provider: RatingChangeAdapter | None = None,
         cache: AiAnalysisCacheAdapter[RatingsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
-        quota: GenerationQuotaAdapter | None = None,
+        quota: ConsumeGenerationQuota | None = None,
         *,
         now: datetime | None = None,
     ) -> None:
@@ -508,7 +509,8 @@ class GetRatingsFindings:
         if (recommendations is None or recommendations.is_empty) and not top_firms:
             raise StockDataUnavailable(normalized, "no analyst coverage to analyse")
         # Only a real generation spends the daily budget (cache hits above are free).
-        consume_generation_quota(self._quota, client_id)
+        if self._quota is not None:
+            self._quota.execute(client_id)
         analysis = self._analyzer.analyze(normalized, recommendations, top_firms)
         # Store for the next viewer — complete reads only, best-effort (see GetEarningsAnalysis).
         if self._cache is not None and analysis.is_complete:
@@ -554,7 +556,7 @@ class GetFundamentalsAnalysis:
         pe_history: GetStockPeHistory | None = None,
         cache: AiAnalysisCacheAdapter[FundamentalsAnalysis] | None = None,
         cache_ttl: timedelta = timedelta(minutes=30),
-        quota: GenerationQuotaAdapter | None = None,
+        quota: ConsumeGenerationQuota | None = None,
     ) -> None:
         self._stock_info = stock_info
         self._analyzer = analyzer
@@ -584,7 +586,8 @@ class GetFundamentalsAnalysis:
             # model to reason over a bare quote (mirrors the earnings/ratings no-data guards).
             raise StockDataUnavailable(normalized, "no fundamentals data to analyse")
         # Only a real generation spends the daily budget (cache hits above are free).
-        consume_generation_quota(self._quota, client_id)
+        if self._quota is not None:
+            self._quota.execute(client_id)
         analysis = self._analyzer.analyze(
             stock,
             self._industry_valuation(normalized),

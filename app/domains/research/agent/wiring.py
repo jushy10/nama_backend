@@ -20,7 +20,7 @@ from app.domains.research.agent.interfaces import ConversationModelAdapter, Tool
 from app.domains.research.agent.repository_adapter_impl import AgentRecipeRepositoryAdapterImpl
 from app.domains.research.agent.tools import MarketSentimentTool, SearchStocksTool
 from app.domains.research.agent.use_cases import RunResearchUsecase
-from app.domains.shared.interfaces import GenerationQuotaAdapter
+from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 from app.domains.macro.sentiment.use_cases import GetMarketSentiment
 from app.domains.listings.universe.repository_adapter_impl import (
     StockSearchRepositoryAdapterImpl,
@@ -57,7 +57,7 @@ def _tool_registry(db: Session) -> dict[str, Tool]:
 
 
 def build_run_research(
-    db: Session, quota: GenerationQuotaAdapter | None = None
+    db: Session, quota: ConsumeGenerationQuota | None = None
 ) -> RunResearchUsecase:
     # A missing recipe row is a deployment problem (migrations not run) -> 503.
     # Wiring reads the recipe for what it builds (tools, model); the use case re-reads for prompt/steps.

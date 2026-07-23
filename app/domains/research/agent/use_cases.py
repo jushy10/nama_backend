@@ -18,7 +18,7 @@ from app.domains.research.agent.interfaces import (
     ConversationModelAdapter,
     Tool,
 )
-from app.domains.shared.interfaces import GenerationQuotaAdapter, consume_generation_quota
+from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class RunResearchUsecase:
         tools: Sequence[Tool],
         recipe_repo: AgentRecipeRepositoryAdapter,
         agent_name: str,
-        quota: GenerationQuotaAdapter | None = None,
+        quota: ConsumeGenerationQuota | None = None,
     ) -> None:
         self._model = model
         self._tools = {tool.spec.name: tool for tool in tools}
@@ -56,7 +56,8 @@ class RunResearchUsecase:
             raise EmptyQuestion()
         # Every run is several uncached Bedrock calls — each spends one from the
         # client's daily research budget. Raises QuotaExceeded when spent.
-        consume_generation_quota(self._quota, client_id)
+        if self._quota is not None:
+            self._quota.execute(client_id)
 
         # Prompt/steps come from the stored recipe per execution — a DB edit hits the next request.
         recipe = self._recipe_repo.get(self._agent_name)
