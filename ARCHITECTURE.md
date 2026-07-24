@@ -383,6 +383,32 @@ unlisted expiration stays, as does the 120s Cache-Control header); table-less
 and live-per-request, so the persistence pair is N/A, `interfaces/` was already
 vendor-only (`OptionsChainAdapter` ← `app/adapters/yfinance/`), and no slice
 `errors.py` — it raises only `ValueError` and the shared-kernel errors);
+`pricing/ticker` (fully, for its applicable steps — the persistence pair
+(`TickerRepository` + its `StoredTickerFacts` read model in `repository.py`,
+`DbTickerRepository` in `db_repository.py` — the anchor-level name/exchange
+read + fill and the one-row facts read; no slice-owned table), `interfaces/`
+trimmed to the two vendor ports (`OptionChainAdapter` + `EpsHistoryAdapter` ←
+`app/adapters/yfinance/`), `run` on all three use cases (`GetTickerCard`,
+`GetStockPeHistory` — the fundamentals analysis's P/E-history context call
+site updated with it — and `ClassifyTicker`, whose public method was
+`classify`), the `TickerCard` / `TickerClassification` composite results
+moved from `use_cases.py` into `entities.py` (the exemplar's `ResearchResult`
+placement), `api_schemas.py` with `from_*` presenters (which keep the card's
+include-set null-vs-unavailable semantics and own the edge rounding + the
+live-priced dividend yield), framework-free `wiring.py` whose
+`build_get_ticker_card(db, provider, options, earnings, estimates)` /
+`build_get_stock_pe_history(candles)` take the shared providers as parameters
+(the market-routing price router owned by `app/endpoints/wiring.py` with its
+Alpaca missing-keys 503 gate, the keyless options chain, the quarterly DB
+cache, the DB-only estimates projection) while constructing the slice's own
+DB-backed pieces from the Session, plus the `@lru_cache`d keyless
+`get_eps_history_provider()` (now also reused by `analysis_endpoints`'
+fundamentals-analysis wiring instead of a duplicate singleton), and thin
+endpoints with central error translation (the inline `ValueError` → 400 on a
+bad symbol / unknown `?include=` stays, as do the Cache-Control headers); no
+slice `errors.py` — it raises only `ValueError` and the shared-kernel errors.
+The universe search routes co-hosted in `endpoints/ticker_endpoints.py` are
+the listings/universe slice and were left untouched);
 `research/rate_limit_quota`
 partially — it has the persistence pair and the `models.py` helpers pattern, but its
 use case still exposes `execute` (checklist step 3 pending).

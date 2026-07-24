@@ -107,7 +107,7 @@ class _FakePeHistory:
         self._stats = stats
         self._error = error
 
-    def execute(self, symbol: str):
+    def run(self, symbol: str):
         if self._error is not None:
             raise self._error
         return SimpleNamespace(stats=self._stats)

@@ -177,7 +177,7 @@ def test_execute_combines_both_legs():
     candles = _FakeCandles({date(2024, 2, 1): 50.0, date(2024, 5, 1): 70.0})
     use_case = GetStockPeHistory(candles, _FakeEpsHistory(_eps_5q()))
 
-    history = use_case.execute("aapl")
+    history = use_case.run("aapl")
 
     assert history.symbol == "AAPL"  # normalized
     assert [p.pe for p in history.points] == [10.0, 10.0]
@@ -192,7 +192,7 @@ def test_blocked_eps_degrades_to_empty_without_a_price_fetch():
     eps = _FakeEpsHistory(error=StockDataUnavailable("AAPL", "yahoo blocked"))
     use_case = GetStockPeHistory(candles, eps)
 
-    history = use_case.execute("AAPL")
+    history = use_case.run("AAPL")
 
     assert history.points == ()
     assert candles.calls == []  # best-effort EPS empty → no Alpaca call
@@ -203,7 +203,7 @@ def test_too_few_quarters_short_circuits_before_the_price_fetch():
     eps = _FakeEpsHistory(_quarters([("2023-05-01", 1.0), ("2023-11-01", 1.0)]))
     use_case = GetStockPeHistory(candles, eps)
 
-    assert use_case.execute("AAPL").points == ()
+    assert use_case.run("AAPL").points == ()
     assert candles.calls == []
 
 
@@ -211,13 +211,13 @@ def test_candle_failure_propagates():
     candles = _FakeCandles(error=StockDataUnavailable("AAPL", "alpaca down"))
     use_case = GetStockPeHistory(candles, _FakeEpsHistory(_eps_5q()))
     with pytest.raises(StockDataUnavailable):
-        use_case.execute("AAPL")
+        use_case.run("AAPL")
 
 
 def test_bad_symbol_is_a_value_error():
     use_case = GetStockPeHistory(_FakeCandles(), _FakeEpsHistory())
     with pytest.raises(ValueError):
-        use_case.execute("!!")
+        use_case.run("!!")
 
 
 # --- Cyclical-trough filtering (STX-style pump/dump) -------------------------------------

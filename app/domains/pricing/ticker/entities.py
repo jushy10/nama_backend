@@ -6,6 +6,13 @@ from datetime import date
 from enum import Enum
 from typing import Mapping, Sequence
 
+from app.domains.shared.entities import Quote, StockPerformance
+
+# The card's asset-type discriminator: an ETF (in the stored ETF universe) or a plain equity.
+# Always one of these two — never null — so the FE can branch on it unconditionally.
+ASSET_TYPE_ETF = "etf"
+ASSET_TYPE_EQUITY = "equity"
+
 # A trailing-twelve-month EPS is the sum of this many reported quarters — the window the
 # P/E-history walk rolls over the reported-EPS run (and the warm-up before its first point).
 TTM_QUARTERS = 4
@@ -382,3 +389,53 @@ def _without_cyclical_spikes(
         for i, point in enumerate(points)
         if i == last or (point.ttm_eps >= trough_eps and point.pe <= pe_fence)
     )
+
+
+@dataclass(frozen=True)
+class TickerCard:
+    quote: Quote  # live price + the day's move
+    include: frozenset[str]  # the opt-in blocks this card was asked to carry
+    valuation: TickerValuation | None  # the trailing-P/E read; only with 'metrics'
+    performance: StockPerformance | None  # trailing windows; only with 'performance'
+    # Always served (never null): "etf" when the symbol is in the stored ETF universe, else
+    # "equity" — a single indexed lookup off the etfs table, so the FE can branch the card.
+    asset_type: str = ASSET_TYPE_EQUITY
+    name: str | None = None  # display name; served off the anchor (filled by the syncs)
+    exchange: str | None = None  # listing venue; DB-first, filled once from the feed
+    # The rest ride the same anchor read, served straight from the DB (never a provider
+    # call): the universe screen's facts, the annual slice's trailing snapshot, and the
+    # fundamentals slice's margins + dividend per share.
+    market_cap: float | None = None  # raw USD, from the universe screen
+    sector: str | None = None  # classification slug, from the universe screen
+    industry: str | None = None  # classification slug, from the universe screen
+    revenue_growth_yoy: float | None = None  # percent, annual slice's latest trailing YoY
+    eps_growth_yoy: float | None = None  # percent (consensus basis), annual slice's latest trailing YoY
+    fcf_growth_yoy: float | None = None  # percent, annual slice's latest trailing FCF/share YoY
+    # Forward (analyst-consensus FY1->FY2) growth off the anchor — the forward mirror of the
+    # trailing pair, served directly like it. Only shown with 'metrics'.
+    forward_revenue_growth_yoy: float | None = None  # percent, forward consensus (anchor)
+    forward_eps_growth_yoy: float | None = None  # percent, forward consensus (anchor)
+    # The fundamentals slice's anchor writes (Yahoo .info): the trailing profitability /
+    # liquidity / leverage / volatility ratios and the dividend per share (trading currency; the
+    # presenter prices it live into a yield). Served off the same anchor read — no live vendor
+    # call — and only shown when 'metrics'/'dividend' is requested.
+    gross_margin: float | None = None
+    operating_margin: float | None = None
+    net_margin: float | None = None
+    roe: float | None = None  # percent, return on equity
+    current_ratio: float | None = None  # current assets / current liabilities
+    debt_to_equity: float | None = None  # total debt / equity (a ratio)
+    beta: float | None = None  # volatility vs the market
+    dividend_per_share: float | None = None
+    # Forward valuation multiples priced on the live quote from the annual slice's stored
+    # forward consensus (FY1 EPS -> forward P/E, FY1 revenue -> forward P/S). Best-effort — an
+    # uncovered symbol (no forward estimates cached) leaves them null. Only shown with 'metrics'.
+    forward_pe: float | None = None
+    forward_ps: float | None = None
+    options_metrics: TickerOptionsMetrics | None = None  # only with 'options_metrics'
+
+
+@dataclass(frozen=True)
+class TickerClassification:
+    ticker: str
+    asset_type: str

@@ -4,8 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.domains.listings.anchor.models import StockRecord
-from app.domains.pricing.ticker.ticker_repository_adapter_impl import TickerRepositoryAdapterImpl
-from app.domains.pricing.ticker.interfaces import StoredTickerFacts
+from app.domains.pricing.ticker.db_repository import DbTickerRepository
+from app.domains.pricing.ticker.repository import StoredTickerFacts
 
 
 @pytest.fixture
@@ -17,24 +17,24 @@ def session():
 
 
 def test_get_facts_miss_is_all_none(session):
-    assert TickerRepositoryAdapterImpl(session).get_facts("MU") == StoredTickerFacts(None, None)
+    assert DbTickerRepository(session).get_facts("MU") == StoredTickerFacts(None, None)
 
 
 def test_saves_round_trip_and_create_the_anchor_row(session):
-    repo = TickerRepositoryAdapterImpl(session)
+    repo = DbTickerRepository(session)
     repo.save_name("MU", "Micron Technology")
     repo.save_exchange("MU", "NASDAQ")
     assert repo.get_facts("MU") == StoredTickerFacts("Micron Technology", "NASDAQ")
 
 
 def test_each_fact_fills_independently(session):
-    repo = TickerRepositoryAdapterImpl(session)
+    repo = DbTickerRepository(session)
     repo.save_exchange("MU", "NASDAQ")  # row exists, name still unknown
     assert repo.get_facts("MU") == StoredTickerFacts(None, "NASDAQ")
 
 
 def test_saves_never_clobber_stored_values(session):
-    repo = TickerRepositoryAdapterImpl(session)
+    repo = DbTickerRepository(session)
     repo.save_name("MU", "Micron Technology")
     repo.save_exchange("MU", "NASDAQ")
     repo.save_name("MU", "Micron Corp.")  # later differing values are ignored
@@ -45,7 +45,7 @@ def test_saves_never_clobber_stored_values(session):
 def test_saves_commit_their_own_write(session):
     # A successful lazy fill must be durable independent of the request: the
     # values survive a rollback of the surrounding session.
-    repo = TickerRepositoryAdapterImpl(session)
+    repo = DbTickerRepository(session)
     repo.save_name("MU", "Micron Technology")
     repo.save_exchange("MU", "NASDAQ")
     session.rollback()
@@ -68,7 +68,7 @@ def test_get_facts_serves_the_screen_and_growth_facts_off_the_anchor(session):
         )
     )
     session.commit()
-    assert TickerRepositoryAdapterImpl(session).get_facts("MU") == StoredTickerFacts(
+    assert DbTickerRepository(session).get_facts("MU") == StoredTickerFacts(
         name="Micron Technology",
         exchange="NASDAQ",
         market_cap=1.09e12,

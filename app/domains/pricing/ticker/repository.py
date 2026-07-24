@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from typing import NamedTuple
 
 
@@ -28,3 +29,17 @@ class StoredTickerFacts(NamedTuple):
     total_debt: float | None = None
     cash_and_equivalents: float | None = None
     shares_outstanding: float | None = None
+
+
+class TickerRepository(ABC):
+    @abstractmethod
+    def get_facts(self, symbol: str) -> StoredTickerFacts:
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_name(self, symbol: str, name: str) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_exchange(self, symbol: str, exchange: str) -> None:
+        raise NotImplementedError
