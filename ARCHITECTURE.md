@@ -311,104 +311,36 @@ converge and it's updated, read these as superseded **for refactored/new slices*
   import entities" → the presenter lives **on the DTO** as a `from_<entity>(...)`
   classmethod in `api_schemas.py`, which imports entities read-only for that mapping.
 
-Converged so far: `research/agent` (the exemplar, fully); `coverage/news` and
-`coverage/recommendations` (fully — persistence pair, vendor-only `interfaces/`, `run`,
-`api_schemas.py` with `from_*` presenters, framework-free `wiring.py`, thin endpoints
-with central error translation; no slice `errors.py` — they raise only the shared-kernel
-errors, which stay in `app/domains/shared/exceptions.py`); `profile/logo` (fully, for
-its applicable steps — `run`, framework-free `wiring.py` with the endpoint shim keeping
-the `LOGODEV_TOKEN` 503 gate, central error translation; table-less and returns raw
-image bytes, so the persistence pair, `api_schemas.py`, and a slice `errors.py` are
-N/A); `macro/yields` (fully, for its applicable steps — `run`, `api_schemas.py` with
-`from_*` presenters, framework-free `wiring.py` with `@lru_cache`d keyless providers
-and `build_<action>` factories, thin endpoints with central error translation (the
-inline `ValueError` → 400 stays); table-less and live-per-request, so the persistence
-pair is N/A, `interfaces/` was already vendor-only (Treasury + FRED), and no slice
-`errors.py` — it raises only the shared-kernel errors); `macro/sentiment` (fully, for
-its applicable steps — `run` (the research agent's `MarketSentimentTool` call site
-updated with it), `api_schemas.py` with `from_*` presenters, framework-free `wiring.py`
-with `@lru_cache`d keyless FRED/CNN providers and `build_get_market_sentiment()` (which
-`research/agent`'s wiring now reuses instead of constructing its own), thin endpoint
-with central error translation; table-less and live-per-request, so the persistence
-pair is N/A, `interfaces/` was already vendor-only (FRED + CNN), and no slice
-`errors.py` — the best-effort legs raise only the shared-kernel errors);
-`markets/boards` (fully, for its applicable steps — `run` (call sites updated in the
-sector/market AI analyses and the daily brief's gather), `api_schemas.py` with `from_*`
-presenters (the shared `StockPerformanceResponse` gained a reusable `from_performance`
-presenter for the trailing-window block), framework-free `wiring.py` whose
-`build_<action>` factories take the board provider as a parameter — the provider is
-the shared Alpaca singleton owned by `app/endpoints/wiring.py` with its missing-keys
-503 gate, so the endpoint shims (`get_sector_performance` / `get_market_overview`,
-reused by `analysis_endpoints` and kept under their established names) resolve it via
-`Depends(get_provider)` and pass it in — and a thin endpoint with central error
-translation; table-less and live-per-request, so the persistence pair is N/A,
-`interfaces/` was already vendor-only (both board ports ← `app/adapters/alpaca/`), and
-no slice `errors.py` — it raises only the shared-kernel errors);
-`markets/heatmap` (fully, for its applicable steps — `run` (call sites updated in the
-daily brief's gather and its cron wiring), `api_schemas.py` with `from_*` presenters
-(reusing the shared `StockPerformanceResponse.from_performance` for the trailing-window
-block), framework-free `wiring.py` whose `build_get_stock_heat_map(db, quotes)` builds
-the universe's db-backed search repository from the Session and takes the bulk-quote
-provider as a parameter — the provider is the shared Alpaca singleton owned by
-`app/endpoints/wiring.py` with its missing-keys 503 gate, resolved by the endpoint shim
-(`get_stock_heat_map`) via `Depends(get_provider)` — and a thin endpoint with central
-error translation (the inline `ValueError` → 400 on an unknown `?index=` stays);
-table-less and live-per-request, so the persistence pair is N/A, it declares no ports of
-its own (it consumes the shared-kernel `BulkQuoteAdapter` and the universe slice's
-search port), and no slice `errors.py` — it raises only the shared-kernel errors);
-`pricing/charts` (fully, for its applicable steps — `run` on all five use cases
-(candles / EMA / support levels / trend / indicators), `api_schemas.py` with `from_*`
-presenters, framework-free `wiring.py` whose `build_<action>(provider)` factories take
-the `CandleAdapter` as a parameter — the provider is the per-symbol market-routing
-price router owned by `app/endpoints/wiring.py` (`get_price_provider`, riding the
-Alpaca missing-keys 503 gate), resolved by the endpoint shims (`get_stock_candles` /
-`get_stock_ema` / `get_stock_support_levels` / `get_stock_trend` /
-`get_stock_indicators`) via `Depends(get_price_provider)` — and thin endpoints with
-central error translation (the inline `ValueError` → 400 on bad symbol / inverted
-window / bad periods stays, as do the endpoint-level request parsers for EMA periods
-and `name:period` indicator tokens); table-less and live-per-request, so the
-persistence pair is N/A, `interfaces/` was already vendor-only (`CandleAdapter` ←
-`alpaca` / `yfinance` / `market_routing`), the pure-domain `indicators.py` /
-`chart_window.py` helpers stay beside the entities untouched, and no slice
-`errors.py` — it raises only `ValueError` and the shared-kernel errors);
-`pricing/options` (fully, for its applicable steps — `run`, the `OptionsFlow`
-composite result moved from `use_cases.py` into `entities.py` (the exemplar's
-`ResearchResult` placement, so `api_schemas.py` imports entities only),
-`api_schemas.py` with `from_*` presenters (which own the edge rounding, the
-IV percent rendering, and the `_MAX_UNUSUAL` highlight cap), framework-free
-`wiring.py` with the `@lru_cache`d keyless yfinance chain provider and
-`build_get_options_flow()`, and a thin endpoint (`get_get_options_flow` shim)
-with central error translation (the inline `ValueError` → 400 on a bad symbol /
-unlisted expiration stays, as does the 120s Cache-Control header); table-less
-and live-per-request, so the persistence pair is N/A, `interfaces/` was already
-vendor-only (`OptionsChainAdapter` ← `app/adapters/yfinance/`), and no slice
-`errors.py` — it raises only `ValueError` and the shared-kernel errors);
-`pricing/ticker` (fully, for its applicable steps — the persistence pair
-(`TickerRepository` + its `StoredTickerFacts` read model in `repository.py`,
-`DbTickerRepository` in `db_repository.py` — the anchor-level name/exchange
-read + fill and the one-row facts read; no slice-owned table), `interfaces/`
-trimmed to the two vendor ports (`OptionChainAdapter` + `EpsHistoryAdapter` ←
-`app/adapters/yfinance/`), `run` on all three use cases (`GetTickerCard`,
-`GetStockPeHistory` — the fundamentals analysis's P/E-history context call
-site updated with it — and `ClassifyTicker`, whose public method was
-`classify`), the `TickerCard` / `TickerClassification` composite results
-moved from `use_cases.py` into `entities.py` (the exemplar's `ResearchResult`
-placement), `api_schemas.py` with `from_*` presenters (which keep the card's
-include-set null-vs-unavailable semantics and own the edge rounding + the
-live-priced dividend yield), framework-free `wiring.py` whose
-`build_get_ticker_card(db, provider, options, earnings, estimates)` /
-`build_get_stock_pe_history(candles)` take the shared providers as parameters
-(the market-routing price router owned by `app/endpoints/wiring.py` with its
-Alpaca missing-keys 503 gate, the keyless options chain, the quarterly DB
-cache, the DB-only estimates projection) while constructing the slice's own
-DB-backed pieces from the Session, plus the `@lru_cache`d keyless
-`get_eps_history_provider()` (now also reused by `analysis_endpoints`'
-fundamentals-analysis wiring instead of a duplicate singleton), and thin
-endpoints with central error translation (the inline `ValueError` → 400 on a
-bad symbol / unknown `?include=` stays, as do the Cache-Control headers); no
-slice `errors.py` — it raises only `ValueError` and the shared-kernel errors.
-The universe search routes co-hosted in `endpoints/ticker_endpoints.py` are
-the listings/universe slice and were left untouched);
-`research/rate_limit_quota`
-partially — it has the persistence pair and the `models.py` helpers pattern, but its
-use case still exposes `execute` (checklist step 3 pending).
+## Convergence status
+
+Patterns that recur across converged slices (all implied by the rules above — restated
+once here so status entries never repeat them):
+
+- A table-less slice skips the persistence pair; a slice returning non-JSON output
+  (raw bytes) skips `api_schemas.py`. Apply only the applicable steps.
+- No converged slice has needed its own `errors.py` yet: they raise `ValueError`
+  (kept as an inline 400 in the endpoint — it is not a domain error) and the
+  shared-kernel errors, which the central handlers translate.
+- A composite result that a DTO presents lives in `entities.py`, never `use_cases.py`
+  (so `api_schemas.py` imports entities only).
+- Cross-endpoint singletons (the Alpaca / price-router providers with their
+  missing-key 503 gates) stay in `app/endpoints/wiring.py`; a slice's `build_<action>`
+  takes them as **parameters** and the endpoint shim resolves them via `Depends`.
+- Slice wiring may reuse another slice's `build_*` factory (wiring may import wiring).
+- Support types a repository port needs (`RefreshTarget`, read models like
+  `StoredTickerFacts`) live beside the port in `repository.py`.
+
+| Slice | Status |
+|---|---|
+| `research/agent` | converged (the exemplar) |
+| `coverage/news`, `coverage/recommendations` | converged |
+| `profile/logo` | converged |
+| `macro/yields`, `macro/sentiment` | converged |
+| `markets/boards`, `markets/heatmap` | converged |
+| `pricing/charts`, `pricing/options`, `pricing/ticker` | converged |
+| `research/rate_limit_quota` | partial — persistence pair + `models.py` helpers done; `run` rename pending |
+| all other slices | pending |
+
+When a slice converges, flip or add its **one-line** row here; add a bullet above only
+if a genuinely new repo-wide pattern emerged. Slice-specific detail belongs in the
+slice's PR description and `CLAUDE.md`'s slice section, not this document.
