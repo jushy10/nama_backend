@@ -307,6 +307,10 @@ converge and it's updated, read these as superseded **for refactored/new slices*
   `<x>_repository_adapter_impl.py`" → `<Concept>Repository` / `Db<Concept>Repository`
   in `repository.py` / `db_repository.py`.
 - Slice DTO file `schemas.py` → `api_schemas.py`.
+- "Presenter — `_present_*` functions in the endpoint module" and "DTOs must not
+  import entities" → the presenter lives **on the DTO** as a `from_<entity>(...)`
+  classmethod in `api_schemas.py`, which imports entities read-only for that mapping.
 
-Converged so far: `research/agent` (the exemplar), `research/rate_limit_quota`
-(the persistence pair + `models.py` helpers pattern).
+Converged so far: `research/agent` (the exemplar, fully); `research/rate_limit_quota`
+partially — it has the persistence pair and the `models.py` helpers pattern, but its
+use case still exposes `execute` (checklist step 3 pending).
