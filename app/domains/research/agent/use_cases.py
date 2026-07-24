@@ -1,5 +1,7 @@
+import json
 import logging
 from collections.abc import Sequence
+from dataclasses import asdict
 from datetime import datetime, timezone
 
 from app.domains.research.agent.entities import (
@@ -111,7 +113,9 @@ class RunResearchUsecase:
             message = f"Unknown tool '{call.name}'. Available tools: {known}."
             return AgentStep(call.name, call.arguments, message, is_error=True)
         try:
-            return AgentStep(call.name, call.arguments, tool.run(call.arguments))
+            # The one place a tool payload becomes model-facing text.
+            output = json.dumps(asdict(tool.run(call.arguments)), default=str)
+            return AgentStep(call.name, call.arguments, output)
         except Exception as exc:  # a tool should not raise, but never let one stall the loop
             logger.warning("research tool %s raised: %s", call.name, exc)
             message = f"Tool '{call.name}' failed: {exc}"

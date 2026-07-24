@@ -1,11 +1,19 @@
-from app.domains.research.agent.entities import ToolSpec
+from app.domains.research.agent.entities import (
+    FearGreedReading,
+    MarketSentimentResult,
+    StockScreenResult,
+    StockScreenRow,
+    ToolMessage,
+    ToolResult,
+    ToolSpec,
+    VixReading,
+)
 from app.domains.research.agent.tool import Tool
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.macro.sentiment.use_cases import GetMarketSentiment
 from app.domains.listings.universe.entities import (
     MarketCapTier,
     SortDirection,
-    StockSearchResult,
     StockSort,
 )
 from app.domains.listings.universe.use_cases import SearchStocks
@@ -100,7 +108,7 @@ class SearchStocksTool(Tool):
     def __init__(self, search: SearchStocks) -> None:
         self._search = search
 
-    def run(self, arguments: dict) -> str:
+    def run(self, arguments: dict) -> ToolResult:
         # The model's arguments are untrusted — a stray value degrades to its default, never raises.
         limit = _positive_int_or_none(arguments.get("limit")) or _MAX_SCREEN_ROWS
         page = self._search.execute(
@@ -115,9 +123,21 @@ class SearchStocksTool(Tool):
             limit=min(limit, _MAX_SCREEN_ROWS),
         )
         if not page.results:
-            return "No stocks in the universe matched that screen."
-        rows = "\n".join(_format_row(row) for row in page.results)
-        return f"{page.total} match(es); showing {len(page.results)}:\n{rows}"
+            return ToolMessage("No stocks in the universe matched that screen.")
+        return StockScreenResult(
+            total=page.total,
+            results=tuple(
+                StockScreenRow(
+                    ticker=row.ticker,
+                    name=row.name,
+                    sector=row.sector,
+                    market_cap=row.market_cap,
+                    pe_ratio=row.pe_ratio,
+                    revenue_growth_yoy=row.revenue_growth_yoy,
+                )
+                for row in page.results
+            ),
+        )
 
 
 class MarketSentimentTool(Tool):
@@ -126,54 +146,21 @@ class MarketSentimentTool(Tool):
     def __init__(self, sentiment: GetMarketSentiment) -> None:
         self._sentiment = sentiment
 
-    def run(self, arguments: dict) -> str:
+    def run(self, arguments: dict) -> ToolResult:
         try:
             sentiment = self._sentiment.execute()
         except (StockNotFound, StockDataUnavailable) as exc:
-            return f"Market sentiment is unavailable right now: {exc}"
-        parts: list[str] = []
+            return ToolMessage(f"Market sentiment is unavailable right now: {exc}")
+        vix = fear_greed = None
         if sentiment.vix is not None:
-            vix = sentiment.vix
-            change = "" if vix.change is None else f" ({vix.change:+.2f})"
-            parts.append(
-                f"VIX: {vix.value:.2f}{change}, regime '{vix.regime}' (as of {vix.as_of})."
-            )
+            v = sentiment.vix
+            vix = VixReading(value=v.value, change=v.change, regime=v.regime, as_of=v.as_of)
         if sentiment.fear_greed is not None:
             fg = sentiment.fear_greed
-            parts.append(
-                f"Fear & Greed: {fg.score:.0f}/100 — '{fg.label}' (CNN rating: {fg.rating})."
-            )
-        return (
-            " ".join(parts) if parts else "No market-sentiment sources were available."
-        )
-
-
-def _format_row(row: StockSearchResult) -> str:
-    bits: list[str] = [f"- {row.ticker}"]
-    if row.name:
-        bits.append(f"({row.name})")
-    facts: list[str] = []
-    if row.sector:
-        facts.append(row.sector)
-    if row.market_cap is not None:
-        facts.append(f"mktcap {_human_usd(row.market_cap)}")
-    if row.pe_ratio is not None:
-        facts.append(f"P/E {row.pe_ratio:.1f}")
-    if row.revenue_growth_yoy is not None:
-        facts.append(f"rev growth {row.revenue_growth_yoy:+.1f}%")
-    if facts:
-        bits.append("— " + ", ".join(facts))
-    return " ".join(bits)
-
-
-def _human_usd(value: float) -> str:
-    if value >= 1_000_000_000_000:
-        return f"${value / 1_000_000_000_000:.1f}T"
-    if value >= 1_000_000_000:
-        return f"${value / 1_000_000_000:.1f}B"
-    if value >= 1_000_000:
-        return f"${value / 1_000_000:.0f}M"
-    return f"${value:.0f}"
+            fear_greed = FearGreedReading(score=fg.score, label=fg.label, cnn_rating=fg.rating)
+        if vix is None and fear_greed is None:
+            return ToolMessage("No market-sentiment sources were available.")
+        return MarketSentimentResult(vix=vix, fear_greed=fear_greed)
 
 
 # Coercion helpers: a stray model value degrades to "unset", never raises.

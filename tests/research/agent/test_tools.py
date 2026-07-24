@@ -1,5 +1,10 @@
 from datetime import date, datetime, timezone
 
+from app.domains.research.agent.entities import (
+    MarketSentimentResult,
+    StockScreenResult,
+    ToolMessage,
+)
 from app.domains.research.agent.tools import MarketSentimentTool, SearchStocksTool
 from app.domains.shared.exceptions import StockDataUnavailable
 from app.domains.macro.sentiment.entities import (
@@ -78,24 +83,31 @@ def test_search_tool_coerces_arguments_onto_the_use_case():
     assert fake.kwargs["direction"] is SortDirection.DESC
     assert fake.kwargs["in_sp500"] is True
     assert fake.kwargs["limit"] == 15  # _MAX_SCREEN_ROWS
-    # Rendered row carries the ticker, name, and the present figures.
-    assert "NVDA" in out and "NVIDIA Corp" in out
-    assert "$3.4T" in out and "P/E 55.2" in out and "rev growth +94.0%" in out
+    # The payload carries the selected row fields, untouched.
+    assert isinstance(out, StockScreenResult) and out.total == 1
+    row = out.results[0]
+    assert (row.ticker, row.name, row.sector) == ("NVDA", "NVIDIA Corp", "technology")
+    assert (row.market_cap, row.pe_ratio, row.revenue_growth_yoy) == (
+        3_400_000_000_000.0,
+        55.2,
+        94.0,
+    )
 
 
 def test_search_tool_defaults_direction_and_reports_no_matches():
     fake = _FakeSearch(results=[])
     out = SearchStocksTool(fake).run({"sectors": ["energy"]})
     assert fake.kwargs["direction"] is SortDirection.DESC  # unset -> default
-    assert "No stocks" in out
+    assert isinstance(out, ToolMessage) and "No stocks" in out.message
 
 
-def test_search_tool_drops_absent_figures_from_a_row():
-    # A thinly covered row (no P/E, no growth) yields a shorter line, not "N/A" noise.
+def test_search_tool_passes_absent_figures_as_none():
+    # A thinly covered row (no P/E, no growth) keeps its shape; the gaps are honest nulls.
     fake = _FakeSearch(results=[_row(pe_ratio=None, revenue_growth_yoy=None)])
     out = SearchStocksTool(fake).run({"query": "NVDA"})
-    assert "P/E" not in out and "rev growth" not in out
-    assert "mktcap $3.4T" in out
+    row = out.results[0]
+    assert row.pe_ratio is None and row.revenue_growth_yoy is None
+    assert row.market_cap == 3_400_000_000_000.0
 
 
 class _FakeSentiment:
@@ -117,8 +129,9 @@ def test_sentiment_tool_renders_both_legs():
         ),
     )
     out = MarketSentimentTool(_FakeSentiment(result=sentiment)).run({})
-    assert "VIX: 17.16" in out and "regime 'normal'" in out
-    assert "Fear & Greed: 72/100" in out and "Greed" in out
+    assert isinstance(out, MarketSentimentResult)
+    assert (out.vix.value, out.vix.regime, out.vix.as_of) == (17.16, "normal", date(2026, 7, 20))
+    assert (out.fear_greed.score, out.fear_greed.cnn_rating) == (72.0, "Greed")
 
 
 def test_sentiment_tool_reports_unavailable_instead_of_raising():
@@ -126,7 +139,7 @@ def test_sentiment_tool_reports_unavailable_instead_of_raising():
         _FakeSentiment(error=StockDataUnavailable("*", "sources down"))
     )
     out = tool.run({})
-    assert "unavailable" in out.lower()
+    assert isinstance(out, ToolMessage) and "unavailable" in out.message.lower()
 
 
 def test_sentiment_tool_schema_takes_no_arguments():

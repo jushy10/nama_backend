@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from app.domains.research.agent.entities import ToolSpec
+from app.domains.research.agent.entities import ToolResult, ToolSpec
 
 
 class Tool(ABC):
@@ -10,5 +10,5 @@ class Tool(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def run(self, arguments: dict) -> str:
+    def run(self, arguments: dict) -> ToolResult:
         raise NotImplementedError
