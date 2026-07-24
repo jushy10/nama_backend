@@ -606,7 +606,9 @@ module has three jobs:
   (`@lru_cache` for singletons), injected via FastAPI `Depends`.
 
 Slice-specific wiring lives in the slice's endpoint module (a Bedrock analyser
-factory in `analysis_endpoints.py`, the logo vendor in `logo_endpoints.py`).
+factory in `analysis_endpoints.py`; a converged slice like `profile/logo` instead
+builds in its own framework-free `wiring.py`, the endpoint keeping only the
+`get_<action>` Depends shim + the env-key 503 gate — see `ARCHITECTURE.md`).
 `app/endpoints/wiring.py` holds only the factories shared **across** endpoint
 modules — the Alpaca price-feed singleton (`get_provider`, with its missing-keys
 503 gate), the Finnhub enrichment providers, the yfinance options chain, the

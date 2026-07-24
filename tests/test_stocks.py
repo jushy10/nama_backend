@@ -82,7 +82,7 @@ from app.endpoints.chart_endpoints import (
     get_stock_support_levels,
     get_stock_trend,
 )
-from app.endpoints.logo_endpoints import get_stock_logo
+from app.endpoints.logo_endpoints import get_get_stock_logo
 from app.endpoints.market_endpoints import get_sector_performance
 from app.domains.shared.entities import (
     AllTimeHigh,
@@ -1176,7 +1176,7 @@ def test_use_case_all_time_high_none_without_provider():
 
 def test_logo_use_case_normalizes_symbol():
     fake = FakeLogoProvider(logo=a_logo(content=b"PNG"))
-    assert GetStockLogo(fake).execute("  aapl ").content == b"PNG"
+    assert GetStockLogo(fake).run("  aapl ").content == b"PNG"
     assert fake.received == ["AAPL"]
 
 
@@ -1193,7 +1193,7 @@ def test_logo_use_case_normalizes_symbol():
 def test_logo_use_case_keeps_exchange_and_class_suffixes(symbol, expected):
     # Logo.dev is exchange-aware, so the suffix must reach it (T.TO is Telus, bare T is AT&T).
     fake = FakeLogoProvider(logo=a_logo(content=b"PNG"))
-    GetStockLogo(fake).execute(symbol)
+    GetStockLogo(fake).run(symbol)
     assert fake.received == [expected]
 
 
@@ -1203,7 +1203,7 @@ def test_logo_use_case_keeps_exchange_and_class_suffixes(symbol, expected):
 def test_logo_use_case_rejects_invalid_symbols(bad):
     fake = FakeLogoProvider(logo=a_logo())
     with pytest.raises(ValueError):
-        GetStockLogo(fake).execute(bad)
+        GetStockLogo(fake).run(bad)
     assert fake.received == []  # provider untouched on invalid input
 
 
@@ -1476,7 +1476,9 @@ def make_client():
         market_summary_provider: MarketSummaryAdapter | None = None,
     ) -> TestClient:
         if logo_provider is not None:
-            app.dependency_overrides[get_stock_logo] = lambda: GetStockLogo(logo_provider)
+            app.dependency_overrides[get_get_stock_logo] = (
+                lambda: GetStockLogo(logo_provider)
+            )
         if candle_provider is not None:
             app.dependency_overrides[get_stock_candles] = (
                 lambda: GetStockCandles(candle_provider)

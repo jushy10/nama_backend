@@ -26,5 +26,5 @@ class GetStockLogo:
     def __init__(self, provider: LogoAdapter) -> None:
         self._provider = provider
 
-    def execute(self, symbol: str) -> Logo:
+    def run(self, symbol: str) -> Logo:
         return self._provider.get_logo(_normalize_symbol(symbol))

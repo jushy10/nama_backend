@@ -315,6 +315,10 @@ Converged so far: `research/agent` (the exemplar, fully); `coverage/news` and
 `coverage/recommendations` (fully — persistence pair, vendor-only `interfaces/`, `run`,
 `api_schemas.py` with `from_*` presenters, framework-free `wiring.py`, thin endpoints
 with central error translation; no slice `errors.py` — they raise only the shared-kernel
-errors, which stay in `app/domains/shared/exceptions.py`); `research/rate_limit_quota`
+errors, which stay in `app/domains/shared/exceptions.py`); `profile/logo` (fully, for
+its applicable steps — `run`, framework-free `wiring.py` with the endpoint shim keeping
+the `LOGODEV_TOKEN` 503 gate, central error translation; table-less and returns raw
+image bytes, so the persistence pair, `api_schemas.py`, and a slice `errors.py` are
+N/A); `research/rate_limit_quota`
 partially — it has the persistence pair and the `models.py` helpers pattern, but its
 use case still exposes `execute` (checklist step 3 pending).
