@@ -1436,21 +1436,21 @@ def test_sector_use_case_ranks_best_performer_first():
     tech = a_sector(sector="Technology", price=110.0, previous_close=100.0)    # +10%
     energy = a_sector(sector="Energy", price=95.0, previous_close=100.0)       # -5%
     health = a_sector(sector="Health Care", price=102.0, previous_close=100.0) # +2%
-    ranked = GetSectorPerformance(FakeSectorProvider([energy, health, tech])).execute()
+    ranked = GetSectorPerformance(FakeSectorProvider([energy, health, tech])).run()
     assert [s.sector for s in ranked] == ["Technology", "Health Care", "Energy"]
 
 
 def test_sector_use_case_sorts_missing_percent_last():
     up = a_sector(sector="Technology", price=110.0, previous_close=100.0)  # +10%
     unknown = a_sector(sector="Energy", previous_close=None)              # no percent
-    ranked = GetSectorPerformance(FakeSectorProvider([unknown, up])).execute()
+    ranked = GetSectorPerformance(FakeSectorProvider([unknown, up])).run()
     assert [s.sector for s in ranked] == ["Technology", "Energy"]
 
 
 def test_sector_use_case_propagates_not_found():
     fake = FakeSectorProvider(raises=StockNotFound("sectors"))
     with pytest.raises(StockNotFound):
-        GetSectorPerformance(fake).execute()
+        GetSectorPerformance(fake).run()
 
 
 @pytest.fixture

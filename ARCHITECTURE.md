@@ -332,6 +332,18 @@ with `@lru_cache`d keyless FRED/CNN providers and `build_get_market_sentiment()`
 with central error translation; table-less and live-per-request, so the persistence
 pair is N/A, `interfaces/` was already vendor-only (FRED + CNN), and no slice
 `errors.py` — the best-effort legs raise only the shared-kernel errors);
+`markets/boards` (fully, for its applicable steps — `run` (call sites updated in the
+sector/market AI analyses and the daily brief's gather), `api_schemas.py` with `from_*`
+presenters (the shared `StockPerformanceResponse` gained a reusable `from_performance`
+presenter for the trailing-window block), framework-free `wiring.py` whose
+`build_<action>` factories take the board provider as a parameter — the provider is
+the shared Alpaca singleton owned by `app/endpoints/wiring.py` with its missing-keys
+503 gate, so the endpoint shims (`get_sector_performance` / `get_market_overview`,
+reused by `analysis_endpoints` and kept under their established names) resolve it via
+`Depends(get_provider)` and pass it in — and a thin endpoint with central error
+translation; table-less and live-per-request, so the persistence pair is N/A,
+`interfaces/` was already vendor-only (both board ports ← `app/adapters/alpaca/`), and
+no slice `errors.py` — it raises only the shared-kernel errors);
 `research/rate_limit_quota`
 partially — it has the persistence pair and the `models.py` helpers pattern, but its
 use case still exposes `execute` (checklist step 3 pending).

@@ -22,7 +22,7 @@ from app.endpoints.cron.background_sync import (
 )
 from app.endpoints.cron.auth import require_cron_token
 from app.domains.markets.heatmap.use_cases import GetStockHeatMap
-from app.domains.markets.boards.use_cases import GetMarketOverview, GetSectorPerformance
+from app.domains.markets.boards import wiring as boards_wiring
 from app.domains.coverage.news.db_repository import DbNewsRepository
 from app.domains.listings.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.endpoints.wiring import bedrock_recovery_model_id, get_provider
@@ -52,8 +52,8 @@ def run_market_brief_sync(limit: int | None) -> MarketBriefSyncReport:
     try:
         provider = get_provider()  # the shared Alpaca singleton (boards + bulk quotes)
         use_case = GenerateDailyBrief(
-            GetMarketOverview(provider),
-            GetSectorPerformance(provider),
+            boards_wiring.build_get_market_overview(provider),
+            boards_wiring.build_get_sector_performance(provider),
             GetStockHeatMap(StockSearchRepositoryAdapterImpl(db), provider),
             get_market_brief_provider(),
             MarketBriefRepositoryAdapterImpl(db),
