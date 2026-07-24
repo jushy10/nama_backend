@@ -644,17 +644,23 @@ def test_search_filters_by_country(session):
     assert len(r.search(_criteria()).results) == 4
 
 
-def test_us_screen_excludes_canadian_domiciled_listings(session):
+def test_us_screen_excludes_foreign_domiciled_listings(session):
     # The US screen (single market, default) scopes to US *home* companies by issuer domicile:
-    # a Canadian company's US listing (CNI, domicile CA) drops out, while US companies, foreign
-    # ADRs (TSM, domicile TW), and rows whose domicile isn't known yet all stay.
+    # every foreign-domiciled listing drops out — a Canadian company's US line (CNI, domicile
+    # CA) and foreign ADRs (TSM domicile TW, SKHYV domicile KR) alike — while US companies and
+    # rows whose domicile isn't known yet stay.
     _seed(session, "AAPL", country="US", currency="USD", domicile_country="US")
     _seed(session, "CNI", country="US", currency="USD", domicile_country="CA")
     _seed(session, "TSM", country="US", currency="USD", domicile_country="TW")
+    _seed(session, "SKHYV", country="US", currency="USD", domicile_country="KR")
     _seed(session, "UNKN", country="US", currency="USD", domicile_country=None)
     r = StockSearchRepositoryAdapterImpl(session)
 
-    assert set(_tickers(r.search(_criteria(countries=("US",))))) == {"AAPL", "TSM", "UNKN"}
+    assert set(_tickers(r.search(_criteria(countries=("US",))))) == {"AAPL", "UNKN"}
+    # Opting into the duplicates brings the foreign listings back.
+    assert set(
+        _tickers(r.search(_criteria(countries=("US",), include_interlisted=True)))
+    ) == {"AAPL", "CNI", "TSM", "SKHYV", "UNKN"}
 
 
 def test_ca_screen_excludes_foreign_domiciled_cdrs(session):
