@@ -141,3 +141,10 @@ class ExpiryChain:
                 reverse=True,
             )
         )
+
+
+@dataclass(frozen=True)
+class OptionsFlow:
+    symbol: str
+    expirations: tuple[date, ...]
+    chain: ExpiryChain | None  # None only when the symbol lists no options
