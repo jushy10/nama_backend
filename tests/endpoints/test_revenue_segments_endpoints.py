@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.endpoints import revenue_segments_endpoints as endpoints
+from app.endpoints.error_handlers import register_error_handlers
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.financials.revenue_segments.entities import (
     RevenueSegment,
@@ -18,7 +19,7 @@ class _FakeUseCase:
         self._error = error
         self.calls: list[str] = []
 
-    def execute(self, symbol: str) -> RevenueSegmentation:
+    def run(self, symbol: str) -> RevenueSegmentation:
         self.calls.append(symbol)
         if self._error is not None:
             raise self._error
@@ -28,7 +29,9 @@ class _FakeUseCase:
 def _client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
-    app.dependency_overrides[endpoints.get_revenue_segments_use_case] = lambda: fake
+    register_error_handlers(app)  # the endpoint has no try/except; the handlers translate
+    # Overriding the shim replaces the whole construction chain (db session included).
+    app.dependency_overrides[endpoints.get_get_revenue_segments] = lambda: fake
     return TestClient(app)
 
 

@@ -5,8 +5,8 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.domains.financials.revenue_segments.revenue_segments_repository_adapter_impl import (
-    RevenueSegmentsRepositoryAdapterImpl,
+from app.domains.financials.revenue_segments.db_repository import (
+    DbRevenueSegmentsRepository,
     _MAX_STORED_YEARS,
 )
 from app.domains.financials.revenue_segments.entities import (
@@ -31,8 +31,8 @@ def session():
         yield db
 
 
-def repo(session, *, now=None) -> RevenueSegmentsRepositoryAdapterImpl:
-    return RevenueSegmentsRepositoryAdapterImpl(session, now=now or (lambda: _NOW))
+def repo(session, *, now=None) -> DbRevenueSegmentsRepository:
+    return DbRevenueSegmentsRepository(session, now=now or (lambda: _NOW))
 
 
 def _seg(year, axis, member, value) -> RevenueSegment:
@@ -191,7 +191,7 @@ def test_merge_stamps_only_the_refreshed_years(session):
     # A stock's rows can carry different fetch stamps (the merge keeps old years' stamps); the
     # newest stamp is what stalest ordering uses.
     r = repo(session)
-    old = RevenueSegmentsRepositoryAdapterImpl(session, now=lambda: _NOW - timedelta(days=10))
+    old = DbRevenueSegmentsRepository(session, now=lambda: _NOW - timedelta(days=10))
     old.upsert("GOOGL", "Alphabet", _segmentation("GOOGL", _seg(2023, SegmentAxis.BUSINESS, "A", 1e9)))
     r.upsert("GOOGL", "Alphabet", _segmentation("GOOGL", _seg(2024, SegmentAxis.BUSINESS, "A", 2e9)))
 

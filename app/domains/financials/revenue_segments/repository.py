@@ -1,9 +1,15 @@
 from abc import ABC, abstractmethod
+from typing import NamedTuple
+
 from app.domains.financials.revenue_segments.entities import RevenueSegmentation
-from app.domains.financials.revenue_segments.interfaces.types import RefreshTarget
 
 
-class RevenueSegmentsRepositoryAdapter(ABC):
+class RefreshTarget(NamedTuple):
+    symbol: str
+    name: str | None
+
+
+class RevenueSegmentsRepository(ABC):
     @abstractmethod
     def get(self, symbol: str) -> RevenueSegmentation | None:
         raise NotImplementedError

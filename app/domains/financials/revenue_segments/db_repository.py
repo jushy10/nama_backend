@@ -11,9 +11,9 @@ from app.domains.financials.revenue_segments.entities import (
     SegmentAxis,
 )
 from app.domains.financials.revenue_segments.models import StockRevenueSegmentRecord
-from app.domains.financials.revenue_segments.interfaces import (
+from app.domains.financials.revenue_segments.repository import (
     RefreshTarget,
-    RevenueSegmentsRepositoryAdapter,
+    RevenueSegmentsRepository,
 )
 
 # How many fiscal years of disaggregation to keep per stock. A filing restates ~3 years, so a
@@ -40,7 +40,7 @@ def _to_segmentation(
     )
 
 
-class RevenueSegmentsRepositoryAdapterImpl(RevenueSegmentsRepositoryAdapter):
+class DbRevenueSegmentsRepository(RevenueSegmentsRepository):
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the fetch stamp deterministic in tests.

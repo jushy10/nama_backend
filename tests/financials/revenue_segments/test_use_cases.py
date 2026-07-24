@@ -9,9 +9,9 @@ from app.domains.financials.revenue_segments.entities import (
     SegmentAxis,
 )
 from app.domains.financials.revenue_segments.interfaces import RevenueSegmentsAdapter
-from app.domains.financials.revenue_segments.interfaces import (
+from app.domains.financials.revenue_segments.repository import (
     RefreshTarget,
-    RevenueSegmentsRepositoryAdapter,
+    RevenueSegmentsRepository,
 )
 from app.domains.financials.revenue_segments.use_cases import (
     GetRevenueSegments,
@@ -42,7 +42,7 @@ class _FakeReadProvider(RevenueSegmentsAdapter):
 def test_get_normalizes_the_symbol_before_calling_the_provider():
     result = RevenueSegmentation("AAPL", ())
     provider = _FakeReadProvider(result)
-    out = GetRevenueSegments(provider).execute("  aapl ")
+    out = GetRevenueSegments(provider).run("  aapl ")
     assert out is result
     assert provider.calls == ["AAPL"]  # trimmed + upper-cased once, at the edge
 
@@ -50,7 +50,7 @@ def test_get_normalizes_the_symbol_before_calling_the_provider():
 def test_get_rejects_a_blank_symbol():
     provider = _FakeReadProvider(RevenueSegmentation("", ()))
     with pytest.raises(ValueError):
-        GetRevenueSegments(provider).execute("   ")
+        GetRevenueSegments(provider).run("   ")
     assert provider.calls == []
 
 
@@ -58,11 +58,11 @@ def test_get_rejects_obviously_invalid_symbols():
     provider = _FakeReadProvider(RevenueSegmentation("", ()))
     for bad in ("123", "TOOLONG", "BR.K"):
         with pytest.raises(ValueError):
-            GetRevenueSegments(provider).execute(bad)
+            GetRevenueSegments(provider).run(bad)
     assert provider.calls == []
 
 
-class _FakeRepo(RevenueSegmentsRepositoryAdapter):
+class _FakeRepo(RevenueSegmentsRepository):
     def __init__(self, targets: list[RefreshTarget]) -> None:
         self._targets = list(targets)
         self.upserts: list[tuple[str, str | None]] = []
@@ -100,7 +100,7 @@ def test_sync_refreshes_every_target_and_reports_counts():
     repo = _FakeRepo([RefreshTarget("GOOGL", "Alphabet"), RefreshTarget("MSFT", None)])
     provider = _FakeSyncProvider()
 
-    report = SyncRevenueSegments(provider, repo).execute(limit=10)
+    report = SyncRevenueSegments(provider, repo).run(limit=10)
 
     assert isinstance(report, RevenueSegmentsSyncReport)
     assert (report.refreshed, report.failed, report.limit) == (2, 0, 10)
@@ -114,7 +114,7 @@ def test_sync_counts_failures_and_keeps_going():
     )
     provider = _FakeSyncProvider(errors={"BAD": StockDataUnavailable("BAD", "sec down")})
 
-    report = SyncRevenueSegments(provider, repo).execute(limit=10)
+    report = SyncRevenueSegments(provider, repo).run(limit=10)
 
     assert (report.refreshed, report.failed) == (2, 1)
     assert [s for s, _ in repo.upserts] == ["GOOGL", "MSFT"]  # BAD skipped, not stored
@@ -124,7 +124,7 @@ def test_sync_not_found_is_a_failure_not_a_crash():
     repo = _FakeRepo([RefreshTarget("ZZZZ", None)])
     provider = _FakeSyncProvider(errors={"ZZZZ": StockNotFound("ZZZZ")})
 
-    report = SyncRevenueSegments(provider, repo).execute()
+    report = SyncRevenueSegments(provider, repo).run()
 
     assert (report.refreshed, report.failed) == (0, 1)
     assert repo.upserts == []
@@ -134,7 +134,7 @@ def test_sync_empty_live_result_is_skipped_not_stored():
     repo = _FakeRepo([RefreshTarget("GOOGL", "Alphabet"), RefreshTarget("GONE", None)])
     provider = _FakeSyncProvider(empty={"GONE"})
 
-    report = SyncRevenueSegments(provider, repo).execute(limit=10)
+    report = SyncRevenueSegments(provider, repo).run(limit=10)
 
     assert (report.refreshed, report.failed) == (1, 1)
     assert repo.upserts == [("GOOGL", "Alphabet")]  # GONE never upserted
@@ -142,14 +142,14 @@ def test_sync_empty_live_result_is_skipped_not_stored():
 
 def test_sync_defaults_to_unlimited_when_no_limit_is_given():
     repo = _FakeRepo([])
-    SyncRevenueSegments(_FakeSyncProvider(), repo).execute()
+    SyncRevenueSegments(_FakeSyncProvider(), repo).run()
     assert repo.refresh_limit is None  # None => process every anchor stock (seed + refresh)
 
 
 def test_sync_limit_is_passed_through_and_floored_at_one():
     repo = _FakeRepo([])
-    SyncRevenueSegments(_FakeSyncProvider(), repo).execute(limit=5)
+    SyncRevenueSegments(_FakeSyncProvider(), repo).run(limit=5)
     assert repo.refresh_limit == 5
 
-    SyncRevenueSegments(_FakeSyncProvider(), repo).execute(limit=0)
+    SyncRevenueSegments(_FakeSyncProvider(), repo).run(limit=0)
     assert repo.refresh_limit == 1  # a non-positive cap is floored to one

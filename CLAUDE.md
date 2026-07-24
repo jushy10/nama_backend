@@ -438,10 +438,15 @@ Naming: every adapter implementation lives in its vendor's folder as `<concern>_
 > the *total* revenue per period, this carries its breakdown. Built on the same skeleton as the
 > news/recommendations slices: its **own `entities.py`** (`SegmentAxis` enum +
 > `RevenueSegment` + `RevenueSegmentation`; `RevenueSegment.label` humanizes the raw XBRL member
-> on access, not stored — the views `for_axis` / `latest_for_axis` slice by cut), plus
-> `ports` / `repository` / `db_repository` / `models` / `use_cases` / `schemas` (both HTTP endpoints
+> on access, not stored — the views `for_axis` / `latest_for_axis` slice by cut).
+> **Converged to the ARCHITECTURE.md canonical slice shape**: `repository.py`
+> (`RevenueSegmentsRepository` + `RefreshTarget`) / `db_repository.py`
+> (`DbRevenueSegmentsRepository`) / `models` / `use_cases` (single public method **`run`**) /
+> `api_schemas.py` (DTOs with `from_*` presenter classmethods) / `wiring.py` (framework-free
+> `build_get_revenue_segments` / `build_sync_revenue_segments`, owning the SEC request pacing),
+> with `interfaces/` holding only the vendor port (`RevenueSegmentsAdapter`) (both HTTP endpoints
 > live in `app/endpoints/`: the read `revenue_segments_endpoints.py` and the
-> `cron_revenue_segments_endpoints.py`). Live source is **SEC EDGAR** — **keyless**, unlike the
+> `cron/revenue_segments_endpoints.py`). Live source is **SEC EDGAR** — **keyless**, unlike the
 > paid segment APIs (Financial Modeling Prep gates this behind a subscription) — via
 > `adapters/sec_edgar/revenue_segments_adapter_impl.py`, behind the same persistent **read-through** DB
 > cache (`adapters/db/db_cached_revenue_segments_adapter_impl.py`) + out-of-band cron

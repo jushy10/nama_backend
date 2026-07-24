@@ -2,7 +2,7 @@ import logging
 
 from app.domains.financials.revenue_segments.entities import RevenueSegmentation
 from app.domains.financials.revenue_segments.interfaces import RevenueSegmentsAdapter
-from app.domains.financials.revenue_segments.interfaces import RevenueSegmentsRepositoryAdapter
+from app.domains.financials.revenue_segments.repository import RevenueSegmentsRepository
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,7 @@ class RevenueSegmentsAdapterImpl(RevenueSegmentsAdapter):
     def __init__(
         self,
         inner: RevenueSegmentsAdapter,
-        repo: RevenueSegmentsRepositoryAdapter,
+        repo: RevenueSegmentsRepository,
     ) -> None:
         self._inner = inner
         self._repo = repo

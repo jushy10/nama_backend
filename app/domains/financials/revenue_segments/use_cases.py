@@ -8,7 +8,7 @@ from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.shared.progress import iter_with_progress
 from app.domains.financials.revenue_segments.entities import RevenueSegmentation
 from app.domains.financials.revenue_segments.interfaces import RevenueSegmentsAdapter
-from app.domains.financials.revenue_segments.interfaces import RevenueSegmentsRepositoryAdapter
+from app.domains.financials.revenue_segments.repository import RevenueSegmentsRepository
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class GetRevenueSegments:
     def __init__(self, provider: RevenueSegmentsAdapter) -> None:
         self._provider = provider
 
-    def execute(self, symbol: str) -> RevenueSegmentation:
+    def run(self, symbol: str) -> RevenueSegmentation:
         return self._provider.get_revenue_segments(_normalize_symbol(symbol))
 
 
@@ -36,12 +36,12 @@ class SyncRevenueSegments:
     def __init__(
         self,
         provider: RevenueSegmentsAdapter,
-        repository: RevenueSegmentsRepositoryAdapter,
+        repository: RevenueSegmentsRepository,
     ) -> None:
         self._provider = provider
         self._repository = repository
 
-    def execute(self, *, limit: int | None = None) -> RevenueSegmentsSyncReport:
+    def run(self, *, limit: int | None = None) -> RevenueSegmentsSyncReport:
         effective = None if limit is None else max(1, limit)
         refreshed = 0
         failed = 0
