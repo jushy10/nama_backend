@@ -2,7 +2,7 @@ import logging
 
 from app.domains.financials.earnings.annual.entities import AnnualEarningsTimeline
 from app.domains.financials.earnings.annual.interfaces import AnnualEarningsAdapter
-from app.domains.financials.earnings.annual.interfaces import AnnualEarningsRepositoryAdapter
+from app.domains.financials.earnings.annual.repository import AnnualEarningsRepository
 from app.domains.financials.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
 from app.domains.financials.earnings.quarterly.repository import QuarterlyEarningsRepository
@@ -38,7 +38,7 @@ class QuarterlyEarningsAdapterImpl(QuarterlyEarningsAdapter):
 
 
 class AnnualEarningsAdapterImpl(AnnualEarningsAdapter):
-    def __init__(self, repo: AnnualEarningsRepositoryAdapter) -> None:
+    def __init__(self, repo: AnnualEarningsRepository) -> None:
         self._repo = repo
 
     def get_annual_earnings(self, symbol: str) -> AnnualEarningsTimeline:

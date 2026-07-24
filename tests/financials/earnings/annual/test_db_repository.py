@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.domains.financials.earnings.annual.annual_earnings_repository_adapter_impl import AnnualEarningsRepositoryAdapterImpl
+from app.domains.financials.earnings.annual.db_repository import DbAnnualEarningsRepository
 from app.domains.financials.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
@@ -28,8 +28,8 @@ def session():
         yield db
 
 
-def repo(session) -> AnnualEarningsRepositoryAdapterImpl:
-    return AnnualEarningsRepositoryAdapterImpl(session, now=lambda: _NOW)
+def repo(session) -> DbAnnualEarningsRepository:
+    return DbAnnualEarningsRepository(session, now=lambda: _NOW)
 
 
 def _reported(
@@ -387,8 +387,8 @@ def test_forward_eps_growth_snapshot_is_null_off_a_nonpositive_first_year(sessio
 def test_refresh_targets_orders_stalest_first_and_carries_the_name(session):
     # refresh_targets wraps the stalest-first query the cron walks; a stock's rows share a
     # fetch stamp, so an older upsert sorts ahead of a newer one, each paired with its name.
-    older = AnnualEarningsRepositoryAdapterImpl(session, now=lambda: _NOW - timedelta(days=10))
-    newer = AnnualEarningsRepositoryAdapterImpl(session, now=lambda: _NOW)
+    older = DbAnnualEarningsRepository(session, now=lambda: _NOW - timedelta(days=10))
+    newer = DbAnnualEarningsRepository(session, now=lambda: _NOW)
     older.upsert(
         "MSFT",
         "Microsoft",

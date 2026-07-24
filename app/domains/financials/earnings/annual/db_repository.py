@@ -10,8 +10,8 @@ from app.domains.financials.earnings.annual.entities import (
     AnnualEarningsTimeline,
 )
 from app.domains.financials.earnings.annual.models import StockAnnualEarningsRecord
-from app.domains.financials.earnings.annual.interfaces import (
-    AnnualEarningsRepositoryAdapter,
+from app.domains.financials.earnings.annual.repository import (
+    AnnualEarningsRepository,
     RefreshTarget,
 )
 
@@ -38,7 +38,7 @@ def _to_timeline(
     return AnnualEarningsTimeline(symbol=symbol, years=tuple(years))
 
 
-class AnnualEarningsRepositoryAdapterImpl(AnnualEarningsRepositoryAdapter):
+class DbAnnualEarningsRepository(AnnualEarningsRepository):
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the fetch stamp deterministic in tests.

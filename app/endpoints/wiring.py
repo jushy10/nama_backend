@@ -13,7 +13,9 @@ from app.adapters.db.analyst_estimates_adapter_impl import (
 from app.adapters.market_routing.price_adapter_impl import PriceAdapterImpl as MarketRoutingPriceAdapterImpl
 from app.adapters.yfinance.price_adapter_impl import PriceAdapterImpl as YahooPriceAdapterImpl
 from app.adapters.yfinance.option_chain_adapter_impl import OptionChainAdapterImpl
-from app.domains.financials.earnings.annual.annual_earnings_repository_adapter_impl import AnnualEarningsRepositoryAdapterImpl
+from app.domains.financials.earnings.annual.db_repository import (
+    DbAnnualEarningsRepository,
+)
 from app.domains.research.rate_limit_quota.db_repository import DbQuotaRepository
 from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 from app.domains.shared.interfaces import AnalystEstimatesAdapter
@@ -66,7 +68,7 @@ def get_estimates_provider(
     # timeline serves), DB-only: a symbol whose timeline isn't cached yet just
     # omits the forward metrics until the annual read path or its cron fills the
     # rows. No second table, fetch, or cron.
-    return AnalystEstimatesAdapterImpl(AnnualEarningsRepositoryAdapterImpl(db))
+    return AnalystEstimatesAdapterImpl(DbAnnualEarningsRepository(db))
 
 
 # Per-kind default TTL for a stored AI analysis (minutes) — each tuned to how

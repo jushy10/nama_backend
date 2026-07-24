@@ -1,9 +1,15 @@
 from abc import ABC, abstractmethod
+from typing import NamedTuple
+
 from app.domains.financials.earnings.annual.entities import AnnualEarningsTimeline
-from app.domains.financials.earnings.annual.interfaces.types import RefreshTarget
 
 
-class AnnualEarningsRepositoryAdapter(ABC):
+class RefreshTarget(NamedTuple):
+    symbol: str
+    name: str | None
+
+
+class AnnualEarningsRepository(ABC):
     @abstractmethod
     def get(self, symbol: str) -> AnnualEarningsTimeline | None:
         raise NotImplementedError

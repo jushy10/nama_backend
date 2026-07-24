@@ -4,13 +4,9 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.adapters.yfinance.annual_earnings_adapter_impl import (
-    AnnualEarningsAdapterImpl,
-)
-from app.domains.financials.earnings.annual.annual_earnings_repository_adapter_impl import AnnualEarningsRepositoryAdapterImpl
+from app.domains.financials.earnings.annual import wiring
 from app.domains.financials.earnings.annual.use_cases import (
     AnnualEarningsSyncReport,
-    SyncAnnualEarnings,
 )
 from app.endpoints.cron.background_sync import (
     SyncRunner,
@@ -26,21 +22,11 @@ router = APIRouter(tags=["annual-earnings-cron"])
 # which may run at the same time (a lock only stops a sweep overlapping itself).
 _sync_lock = threading.Lock()
 
-# Pause between the sync's retry passes in production. The use case defaults this to 0 (so the
-# offline tests never sleep); here — the composition root — we dial it up so an intermittent
-# Yahoo block has ~30s to lift before a blocked symbol is re-attempted. A batch run isn't behind
-# the API Gateway's 30s clock (it's a one-off ECS task), so the added seconds are free.
-_RETRY_BACKOFF_SECONDS = 30.0
-
 
 def run_annual_earnings_sync(limit: int | None) -> AnnualEarningsSyncReport:
     db = SessionLocal()
     try:
-        report = SyncAnnualEarnings(
-            AnnualEarningsAdapterImpl(),
-            AnnualEarningsRepositoryAdapterImpl(db),
-            retry_backoff_seconds=_RETRY_BACKOFF_SECONDS,
-        ).execute(limit=limit)
+        report = wiring.build_sync_annual_earnings(db).run(limit=limit)
         logger.info(
             "annual-earnings sync done: refreshed=%d failed=%d limit=%s",
             report.refreshed,
