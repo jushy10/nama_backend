@@ -8,7 +8,7 @@ from app.adapters.yfinance.company_classification_adapter_impl import (
     CompanyClassificationAdapterImpl,
 )
 from app.adapters.yfinance.stock_screener_adapter_impl import StockScreenerAdapterImpl
-from app.domains.financials.earnings.quarterly.quarterly_earnings_repository_adapter_impl import QuarterlyEarningsRepositoryAdapterImpl
+from app.domains.financials.earnings.quarterly.db_repository import DbQuarterlyEarningsRepository
 from app.endpoints.cron.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
@@ -37,7 +37,7 @@ def _run_universe_pass(db, *, region: str, limit: int) -> UniverseSyncReport:
         StockScreenerAdapterImpl(),
         UniverseRepositoryAdapterImpl(db),
         CompanyClassificationAdapterImpl(),
-        QuarterlyEarningsRepositoryAdapterImpl(db),
+        DbQuarterlyEarningsRepository(db),
         region=region,
     ).execute(limit=limit)
     if report.skipped:

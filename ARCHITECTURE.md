@@ -338,6 +338,7 @@ once here so status entries never repeat them):
 | `macro/yields`, `macro/sentiment` | converged |
 | `markets/boards`, `markets/heatmap` | converged |
 | `pricing/charts`, `pricing/options`, `pricing/ticker` | converged |
+| `financials/earnings/quarterly` | converged |
 | `research/rate_limit_quota` | partial — persistence pair + `models.py` helpers done; `run` rename pending |
 | all other slices | pending |
 

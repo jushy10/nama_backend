@@ -8,7 +8,7 @@ from app.domains.financials.earnings.quarterly.entities import (
     QuarterlyEarningsTimeline,
 )
 from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
-from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsRepositoryAdapter
+from app.domains.financials.earnings.quarterly.repository import QuarterlyEarningsRepository
 from app.domains.shared.exceptions import StockDataUnavailable
 
 
@@ -35,7 +35,7 @@ def _empty(symbol: str) -> QuarterlyEarningsTimeline:
     return QuarterlyEarningsTimeline(symbol, ())
 
 
-class FakeRepo(QuarterlyEarningsRepositoryAdapter):
+class FakeRepo(QuarterlyEarningsRepository):
     def __init__(self) -> None:
         self.rows: dict[str, QuarterlyEarningsTimeline] = {}
         self.get_calls = 0

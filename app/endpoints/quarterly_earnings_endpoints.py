@@ -1,82 +1,27 @@
-from functools import lru_cache
-
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.adapters.db.db_cached_quarterly_earnings_adapter_impl import (
-    QuarterlyEarningsAdapterImpl as DbCachedQuarterlyEarningsAdapterImpl,
-)
-from app.adapters.yfinance.quarterly_earnings_adapter_impl import (
-    QuarterlyEarningsAdapterImpl as YfinanceQuarterlyEarningsAdapterImpl,
-)
-from app.domains.financials.earnings.quarterly.quarterly_earnings_repository_adapter_impl import QuarterlyEarningsRepositoryAdapterImpl
-from app.domains.financials.earnings.quarterly.entities import (
-    QuarterlyEarnings,
-    QuarterlyEarningsTimeline,
-)
+from app.domains.financials.earnings.quarterly import wiring
+from app.domains.financials.earnings.quarterly.api_schemas import QuarterlyEarningsResponse
 from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
-from app.domains.financials.earnings.quarterly.schemas import (
-    QuarterlyEarningsQuarterResponse,
-    QuarterlyEarningsResponse,
-)
 from app.domains.financials.earnings.quarterly.use_cases import GetQuarterlyEarnings
-from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 
 router = APIRouter(tags=["quarterly-earnings"])
-
-
-@lru_cache(maxsize=1)
-def _yfinance_quarterly_earnings_provider() -> QuarterlyEarningsAdapter:
-    # One process-singleton live provider (no key, no connection pool to share); the DB
-    # cache that wraps it is built per request, since it needs the request session.
-    return YfinanceQuarterlyEarningsAdapterImpl()
 
 
 def get_quarterly_earnings_provider(
     db: Session = Depends(get_db),
 ) -> QuarterlyEarningsAdapter:
-    # A persistent DB cache (refreshed out of band by the quarterly-earnings cron endpoint
-    # + lazily on a miss) sits in front of Yahoo so the endpoint rarely calls it, and it
-    # serves stored rows without a live round-trip. yfinance needs no key, so this is
-    # always wired.
-    return DbCachedQuarterlyEarningsAdapterImpl(
-        _yfinance_quarterly_earnings_provider(), QuarterlyEarningsRepositoryAdapterImpl(db)
-    )
+    # The db-cached provider shim — also injected into the ticker card (the trailing
+    # P/E's TTM sum), so it lives beside the use-case shim rather than inside it.
+    return wiring.build_quarterly_earnings_provider(db)
 
 
-def get_quarterly_earnings_use_case(
-    provider: QuarterlyEarningsAdapter = Depends(get_quarterly_earnings_provider),
-) -> GetQuarterlyEarnings:
-    return GetQuarterlyEarnings(provider)
-
-
-def _present_quarter(quarter: QuarterlyEarnings) -> QuarterlyEarningsQuarterResponse:
-    return QuarterlyEarningsQuarterResponse(
-        fiscal_year=quarter.fiscal_year,
-        fiscal_quarter=quarter.fiscal_quarter,
-        period_end=quarter.period_end,
-        report_date=quarter.report_date,
-        eps_actual=quarter.eps_actual,
-        eps_estimate=quarter.eps_estimate,
-        eps_surprise=quarter.eps_surprise,
-        eps_surprise_percent=quarter.eps_surprise_percent,
-        revenue_estimate=quarter.revenue_estimate,
-        revenue_actual=quarter.revenue_actual,
-        report_session=quarter.report_session.value,
-        beat=quarter.beat,
-        is_reported=quarter.is_reported,
-    )
-
-
-def _present(timeline: QuarterlyEarningsTimeline) -> QuarterlyEarningsResponse:
-    return QuarterlyEarningsResponse(
-        symbol=timeline.symbol,
-        count=len(timeline.quarters),
-        reported_count=len(timeline.past),
-        upcoming_count=len(timeline.future),
-        quarters=[_present_quarter(q) for q in timeline.quarters],
-    )
+def get_get_quarterly_earnings(db: Session = Depends(get_db)) -> GetQuarterlyEarnings:
+    # Depends shim over the slice's wiring — exists for the db lifecycle and the
+    # dependency_overrides test seam, nothing more.
+    return wiring.build_get_quarterly_earnings(db)
 
 
 @router.get(
@@ -85,17 +30,15 @@ def _present(timeline: QuarterlyEarningsTimeline) -> QuarterlyEarningsResponse:
 def get_quarterly_earnings_endpoint(
     symbol: str,
     response: Response,
-    use_case: GetQuarterlyEarnings = Depends(get_quarterly_earnings_use_case),
+    use_case: GetQuarterlyEarnings = Depends(get_get_quarterly_earnings),
 ) -> QuarterlyEarningsResponse:
     try:
-        timeline = use_case.execute(symbol)
+        timeline = use_case.run(symbol)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    except StockNotFound as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except StockDataUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
+    # Domain errors (StockNotFound → 404, StockDataUnavailable → 502) are translated by
+    # the central handlers in endpoints/error_handlers.py.
     # Reported quarters and firmed-up report dates move slowly (and are served from the
     # DB cache), so cache briefly: a burst of viewers collapses onto one response.
     response.headers["Cache-Control"] = "public, max-age=300"
-    return _present(timeline)
+    return QuarterlyEarningsResponse.from_timeline(timeline)

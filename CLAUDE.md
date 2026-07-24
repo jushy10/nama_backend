@@ -241,10 +241,17 @@ Naming: every adapter implementation lives in its vendor's folder as `<concern>_
 
 > **The quarterly-earnings sub-slice — `app/domains/financials/earnings/quarterly/`.** A fully
 > self-contained slice with its **own `entities.py`** (rather than reusing the
-> shared `app/domains/shared/entities.py`): `QuarterlyEarnings` + `QuarterlyEarningsTimeline`, plus
-> `ports` / `repository` / `db_repository` / `models` / `use_cases` / `schemas` (both HTTP
-> endpoints live in `app/endpoints/`: the read `quarterly_earnings_endpoints.py` and
-> the `cron_quarterly_earnings_endpoints.py`, so the slice itself carries no HTTP code).
+> shared `app/domains/shared/entities.py`): `QuarterlyEarnings` + `QuarterlyEarningsTimeline`.
+> **Converged to the ARCHITECTURE.md canonical slice shape**: `repository.py`
+> (`QuarterlyEarningsRepository` + `RefreshTarget`) / `db_repository.py`
+> (`DbQuarterlyEarningsRepository`) / `models` / `use_cases` (single public method **`run`**) /
+> `api_schemas.py` (DTOs with `from_*` presenter classmethods) / `wiring.py` (framework-free
+> `build_get_quarterly_earnings` / `build_quarterly_earnings_provider` — the db-cached read the
+> ticker card also injects — / `build_sync_quarterly_earnings`), with `interfaces/` holding only
+> the vendor port (`QuarterlyEarningsAdapter`) (both HTTP endpoints live in `app/endpoints/`:
+> the read `quarterly_earnings_endpoints.py` — a thin `get_<action>` Depends shim over the
+> wiring, domain errors translated by the central `error_handlers.py` — and the
+> `cron/quarterly_earnings_endpoints.py`, so the slice itself carries no HTTP code).
 > It serves a stock's 4 most-recent reported quarters (reported EPS + a surprise *computed*
 > from actual vs. estimate) and up to **2** upcoming quarters — the `0q`/`+1q` forward EPS +
 > revenue estimates, which is as far out as Yahoo publishes structured forward data (so 2 is

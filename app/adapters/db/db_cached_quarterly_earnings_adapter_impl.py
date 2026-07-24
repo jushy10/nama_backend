@@ -2,7 +2,7 @@ import logging
 
 from app.domains.financials.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
-from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsRepositoryAdapter
+from app.domains.financials.earnings.quarterly.repository import QuarterlyEarningsRepository
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,7 @@ class QuarterlyEarningsAdapterImpl(QuarterlyEarningsAdapter):
     def __init__(
         self,
         inner: QuarterlyEarningsAdapter,
-        repo: QuarterlyEarningsRepositoryAdapter,
+        repo: QuarterlyEarningsRepository,
     ) -> None:
         self._inner = inner
         self._repo = repo

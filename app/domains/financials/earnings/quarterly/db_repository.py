@@ -11,8 +11,8 @@ from app.domains.financials.earnings.quarterly.entities import (
     QuarterlyEarningsTimeline,
 )
 from app.domains.financials.earnings.quarterly.models import StockQuarterlyEarningsRecord
-from app.domains.financials.earnings.quarterly.interfaces import (
-    QuarterlyEarningsRepositoryAdapter,
+from app.domains.financials.earnings.quarterly.repository import (
+    QuarterlyEarningsRepository,
     RefreshTarget,
 )
 
@@ -53,7 +53,7 @@ def _to_timeline(
     return QuarterlyEarningsTimeline(symbol=symbol, quarters=tuple(quarters))
 
 
-class QuarterlyEarningsRepositoryAdapterImpl(QuarterlyEarningsRepositoryAdapter):
+class DbQuarterlyEarningsRepository(QuarterlyEarningsRepository):
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the fetch stamp deterministic in tests.
