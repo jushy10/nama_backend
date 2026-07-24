@@ -4,7 +4,7 @@ from app.domains.financials.earnings.quarterly.entities import (
     QuarterlyEarnings,
     QuarterlyEarningsTimeline,
 )
-from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsRepositoryAdapter
+from app.domains.financials.earnings.quarterly.repository import QuarterlyEarningsRepository
 from app.domains.shared.exceptions import StockDataUnavailable
 from app.domains.listings.universe.entities import (
     Classifications,
@@ -87,7 +87,7 @@ def _four_quarter_timeline(symbol: str, ttm_eps: float) -> QuarterlyEarningsTime
     return QuarterlyEarningsTimeline(symbol=symbol, quarters=quarters)
 
 
-class _FakeQuarterlyRepo(QuarterlyEarningsRepositoryAdapter):
+class _FakeQuarterlyRepo(QuarterlyEarningsRepository):
     def __init__(self, ttm_by_ticker=None) -> None:
         self._ttm = dict(ttm_by_ticker or {})
         self.gets: list[str] = []

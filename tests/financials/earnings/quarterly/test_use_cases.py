@@ -7,8 +7,8 @@ from app.domains.financials.earnings.quarterly.entities import (
     QuarterlyEarningsTimeline,
 )
 from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
-from app.domains.financials.earnings.quarterly.interfaces import (
-    QuarterlyEarningsRepositoryAdapter,
+from app.domains.financials.earnings.quarterly.repository import (
+    QuarterlyEarningsRepository,
     RefreshTarget,
 )
 from app.domains.financials.earnings.quarterly.use_cases import (
@@ -101,7 +101,7 @@ def test_get_normalizes_the_symbol_before_calling_the_provider():
     timeline = QuarterlyEarningsTimeline("AAPL", ())
     provider = _FakeReadProvider(timeline)
 
-    out = GetQuarterlyEarnings(provider).execute("  aapl ")
+    out = GetQuarterlyEarnings(provider).run("  aapl ")
 
     assert out is timeline
     assert provider.calls == ["AAPL"]  # trimmed + upper-cased once, at the edge
@@ -110,7 +110,7 @@ def test_get_normalizes_the_symbol_before_calling_the_provider():
 def test_get_rejects_a_blank_symbol():
     provider = _FakeReadProvider(QuarterlyEarningsTimeline("", ()))
     with pytest.raises(ValueError):
-        GetQuarterlyEarnings(provider).execute("   ")
+        GetQuarterlyEarnings(provider).run("   ")
     assert provider.calls == []  # rejected before the provider is touched
 
 
@@ -118,11 +118,11 @@ def test_get_rejects_obviously_invalid_symbols():
     provider = _FakeReadProvider(QuarterlyEarningsTimeline("", ()))
     for bad in ("123", "TOOLONG", "BR.K"):
         with pytest.raises(ValueError):
-            GetQuarterlyEarnings(provider).execute(bad)
+            GetQuarterlyEarnings(provider).run(bad)
     assert provider.calls == []
 
 
-class _FakeRepo(QuarterlyEarningsRepositoryAdapter):
+class _FakeRepo(QuarterlyEarningsRepository):
     def __init__(
         self,
         targets: list[RefreshTarget],
@@ -165,7 +165,7 @@ def test_sync_refreshes_every_target_and_reports_counts():
     repo = _FakeRepo([RefreshTarget("AAPL", "Apple Inc."), RefreshTarget("MSFT", None)])
     provider = _FakeSyncProvider()
 
-    report = SyncQuarterlyEarnings(provider, repo).execute(limit=10)
+    report = SyncQuarterlyEarnings(provider, repo).run(limit=10)
 
     assert isinstance(report, QuarterlyEarningsSyncReport)
     assert (report.refreshed, report.failed, report.limit) == (2, 0, 10)
@@ -177,7 +177,7 @@ def test_sync_refreshes_every_target_and_reports_counts():
 
 def test_sync_carries_the_stored_name_through_to_upsert():
     repo = _FakeRepo([RefreshTarget("AAPL", "Apple Inc.")])
-    SyncQuarterlyEarnings(_FakeSyncProvider(), repo).execute()
+    SyncQuarterlyEarnings(_FakeSyncProvider(), repo).run()
     assert repo.upserts == [("AAPL", "Apple Inc.")]
 
 
@@ -187,7 +187,7 @@ def test_sync_counts_failures_and_keeps_going():
     )
     provider = _FakeSyncProvider(errors={"BAD": StockDataUnavailable("BAD", "yahoo down")})
 
-    report = SyncQuarterlyEarnings(provider, repo).execute(limit=10)
+    report = SyncQuarterlyEarnings(provider, repo).run(limit=10)
 
     assert (report.refreshed, report.failed) == (2, 1)
     assert [s for s, _ in repo.upserts] == ["AAPL", "MSFT"]  # BAD skipped, not stored
@@ -197,7 +197,7 @@ def test_sync_not_found_is_a_failure_not_a_crash():
     repo = _FakeRepo([RefreshTarget("ZZZZ", None)])
     provider = _FakeSyncProvider(errors={"ZZZZ": StockNotFound("ZZZZ")})
 
-    report = SyncQuarterlyEarnings(provider, repo).execute()
+    report = SyncQuarterlyEarnings(provider, repo).run()
 
     assert (report.refreshed, report.failed) == (0, 1)
     assert repo.upserts == []
@@ -209,7 +209,7 @@ def test_sync_empty_live_result_is_skipped_not_stored():
     repo = _FakeRepo([RefreshTarget("AAPL", "Apple Inc."), RefreshTarget("GONE", None)])
     provider = _FakeSyncProvider(empty={"GONE"})
 
-    report = SyncQuarterlyEarnings(provider, repo).execute(limit=10)
+    report = SyncQuarterlyEarnings(provider, repo).run(limit=10)
 
     assert (report.refreshed, report.failed) == (1, 1)
     assert repo.upserts == [("AAPL", "Apple Inc.")]  # GONE never upserted
@@ -255,7 +255,7 @@ def test_sync_fills_missing_revenue_from_the_stored_rows():
     )
     repo = _FakeRepo([RefreshTarget("AAPL", None)], stored={"AAPL": stored})
 
-    SyncQuarterlyEarnings(_TimelineSyncProvider(fresh), repo).execute()
+    SyncQuarterlyEarnings(_TimelineSyncProvider(fresh), repo).run()
 
     saved = repo.saved["AAPL"]
     assert saved.past[0].revenue_actual == 100e9  # carried forward, not nulled
@@ -270,7 +270,7 @@ def test_sync_degraded_fetch_keeps_stored_reported_quarters():
     fresh = QuarterlyEarningsTimeline("AAPL", (_upcoming_q(2026, 2, 2.1),))
     repo = _FakeRepo([RefreshTarget("AAPL", None)], stored={"AAPL": stored})
 
-    SyncQuarterlyEarnings(_TimelineSyncProvider(fresh), repo).execute()
+    SyncQuarterlyEarnings(_TimelineSyncProvider(fresh), repo).run()
 
     saved = repo.saved["AAPL"]
     assert [(q.fiscal_year, q.fiscal_quarter) for q in saved.past] == [
@@ -290,7 +290,7 @@ def test_sync_normal_roll_does_not_grow_the_reported_window():
     )
     repo = _FakeRepo([RefreshTarget("AAPL", None)], stored={"AAPL": stored})
 
-    SyncQuarterlyEarnings(_TimelineSyncProvider(fresh), repo).execute()
+    SyncQuarterlyEarnings(_TimelineSyncProvider(fresh), repo).run()
 
     saved = repo.saved["AAPL"]
     assert [(q.fiscal_year, q.fiscal_quarter) for q in saved.past] == [
@@ -303,16 +303,16 @@ def test_sync_normal_roll_does_not_grow_the_reported_window():
 
 def test_sync_defaults_to_unlimited_when_no_limit_is_given():
     repo = _FakeRepo([])
-    SyncQuarterlyEarnings(_FakeSyncProvider(), repo).execute()
+    SyncQuarterlyEarnings(_FakeSyncProvider(), repo).run()
     assert repo.refresh_limit is None  # None => process every anchor stock (seed + refresh)
 
 
 def test_sync_limit_is_passed_through_and_floored_at_one():
     repo = _FakeRepo([])
-    SyncQuarterlyEarnings(_FakeSyncProvider(), repo).execute(limit=5)
+    SyncQuarterlyEarnings(_FakeSyncProvider(), repo).run(limit=5)
     assert repo.refresh_limit == 5
 
-    SyncQuarterlyEarnings(_FakeSyncProvider(), repo).execute(limit=0)
+    SyncQuarterlyEarnings(_FakeSyncProvider(), repo).run(limit=0)
     assert repo.refresh_limit == 1  # a non-positive cap is floored to one
 
 
@@ -339,7 +339,7 @@ def test_sync_retries_a_transient_failure_and_recovers_it():
     repo = _FakeRepo([RefreshTarget("GOOD", None), RefreshTarget("FLAKY", None)])
     provider = _FlakyProvider({"FLAKY": 1})  # fails once, then succeeds
 
-    report = SyncQuarterlyEarnings(provider, repo).execute(limit=10)
+    report = SyncQuarterlyEarnings(provider, repo).run(limit=10)
 
     assert (report.refreshed, report.failed) == (2, 0)  # FLAKY recovered on the retry pass
     assert provider.calls.count("FLAKY") == 2  # first pass + one retry
@@ -356,7 +356,7 @@ def test_sync_retryable_failure_gives_up_after_max_attempts():
     # progress, giving DOWN the full max_attempts=3 budget before it's abandoned.
     provider = _FlakyProvider({"R1": 0, "R2": 1, "DOWN": None})
 
-    report = SyncQuarterlyEarnings(provider, repo).execute(limit=10)
+    report = SyncQuarterlyEarnings(provider, repo).run(limit=10)
 
     assert (report.refreshed, report.failed) == (2, 1)  # R1 + R2 recovered, DOWN failed
     assert provider.calls.count("DOWN") == 3  # attempted max_attempts times, no more
@@ -371,7 +371,7 @@ def test_sync_does_not_retry_when_a_whole_pass_recovers_nothing():
     repo = _FakeRepo([RefreshTarget("A", None), RefreshTarget("B", None)])
     provider = _FlakyProvider({"A": None, "B": None})  # both blocked all run
 
-    report = SyncQuarterlyEarnings(provider, repo).execute(limit=10)
+    report = SyncQuarterlyEarnings(provider, repo).run(limit=10)
 
     assert (report.refreshed, report.failed) == (0, 2)
     assert provider.calls.count("A") == 1 and provider.calls.count("B") == 1  # no retry

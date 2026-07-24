@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.domains.financials.earnings.quarterly.quarterly_earnings_repository_adapter_impl import QuarterlyEarningsRepositoryAdapterImpl
+from app.domains.financials.earnings.quarterly.db_repository import DbQuarterlyEarningsRepository
 from app.domains.financials.earnings.quarterly.entities import (
     EarningsSession,
     QuarterlyEarnings,
@@ -28,8 +28,8 @@ def session():
         yield db
 
 
-def repo(session) -> QuarterlyEarningsRepositoryAdapterImpl:
-    return QuarterlyEarningsRepositoryAdapterImpl(session, now=lambda: _NOW)
+def repo(session) -> DbQuarterlyEarningsRepository:
+    return DbQuarterlyEarningsRepository(session, now=lambda: _NOW)
 
 
 def _reported(
@@ -198,8 +198,8 @@ def test_fills_a_missing_name_but_never_clobbers_a_known_one(session):
 def test_refresh_targets_orders_stalest_first_and_carries_the_name(session):
     # refresh_targets wraps the stalest-first query the cron walks; a stock's rows share a
     # fetch stamp, so an older upsert sorts ahead of a newer one, each paired with its name.
-    older = QuarterlyEarningsRepositoryAdapterImpl(session, now=lambda: _NOW - timedelta(days=10))
-    newer = QuarterlyEarningsRepositoryAdapterImpl(session, now=lambda: _NOW)
+    older = DbQuarterlyEarningsRepository(session, now=lambda: _NOW - timedelta(days=10))
+    newer = DbQuarterlyEarningsRepository(session, now=lambda: _NOW)
     older.upsert(
         "MSFT",
         "Microsoft",

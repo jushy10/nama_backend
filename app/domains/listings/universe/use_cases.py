@@ -4,7 +4,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsRepositoryAdapter
+from app.domains.financials.earnings.quarterly.repository import QuarterlyEarningsRepository
 from app.domains.shared.entities import is_cboe_canada
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.shared.progress import iter_with_progress
@@ -112,7 +112,7 @@ class SyncUniverse:
         screener: StockScreenerAdapter,
         repository: UniverseRepositoryAdapter,
         classifier: CompanyClassificationAdapter,
-        quarterly: QuarterlyEarningsRepositoryAdapter | None = None,
+        quarterly: QuarterlyEarningsRepository | None = None,
         *,
         region: str = "us",
     ) -> None:

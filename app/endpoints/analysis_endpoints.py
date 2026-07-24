@@ -84,8 +84,8 @@ from app.domains.research.analysis.use_cases import (
 )
 from app.domains.pricing.ticker import wiring as ticker_wiring
 from app.domains.financials.earnings.annual.annual_earnings_repository_adapter_impl import AnnualEarningsRepositoryAdapterImpl
-from app.domains.financials.earnings.quarterly.quarterly_earnings_repository_adapter_impl import (
-    QuarterlyEarningsRepositoryAdapterImpl,
+from app.domains.financials.earnings.quarterly.db_repository import (
+    DbQuarterlyEarningsRepository,
 )
 from app.endpoints.market_endpoints import (
     get_market_overview,
@@ -203,7 +203,7 @@ def get_stock_analysis(
     return GetStockAnalysis(
         stock_info,
         analyzer,
-        QuarterlyEarningsAdapterImpl(QuarterlyEarningsRepositoryAdapterImpl(db)),
+        QuarterlyEarningsAdapterImpl(DbQuarterlyEarningsRepository(db)),
         AnnualEarningsAdapterImpl(AnnualEarningsRepositoryAdapterImpl(db)),
         RecommendationAdapterImpl(DbRecommendationsRepository(db)),
         StockSearchRepositoryAdapterImpl(db),
@@ -339,7 +339,7 @@ def get_earnings_analysis(
 ) -> GetEarningsAnalysis:
     return GetEarningsAnalysis(
         analyzer,
-        QuarterlyEarningsAdapterImpl(QuarterlyEarningsRepositoryAdapterImpl(db)),
+        QuarterlyEarningsAdapterImpl(DbQuarterlyEarningsRepository(db)),
         AnnualEarningsAdapterImpl(AnnualEarningsRepositoryAdapterImpl(db)),
         cache=earnings_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("earnings"),
@@ -428,7 +428,7 @@ def get_fundamentals_analysis(
         stock_info,
         analyzer,
         StockSearchRepositoryAdapterImpl(db),
-        QuarterlyEarningsAdapterImpl(QuarterlyEarningsRepositoryAdapterImpl(db)),
+        QuarterlyEarningsAdapterImpl(DbQuarterlyEarningsRepository(db)),
         pe_history=ticker_wiring.build_get_stock_pe_history(candles),
         cache=fundamentals_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("fundamentals"),

@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 from app.domains.financials.earnings.quarterly.entities import QuarterlyEarningsTimeline
 from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
-from app.domains.financials.earnings.quarterly.interfaces import (
-    QuarterlyEarningsRepositoryAdapter,
+from app.domains.financials.earnings.quarterly.repository import (
+    QuarterlyEarningsRepository,
     RefreshTarget,
 )
 from app.domains.shared.entities import normalize_symbol
@@ -30,21 +30,17 @@ _DEFAULT_SYNC_WORKERS = 8
 # The gate the retry targets lifts on a seconds-to-minutes timescale, so a symbol that failed
 # early on a sweep often succeeds a pass later — recovering it here beats waiting a *week* for
 # the next quarterly run. Genuine no-coverage (an empty timeline / ``StockNotFound``) is never
-# retried, and a whole pass that recovers nothing stops the loop (see ``execute``), so a
+# retried, and a whole pass that recovers nothing stops the loop (see ``run``), so a
 # *persistent* block terminates after one wasted pass rather than hammering a blocked IP.
 _DEFAULT_MAX_ATTEMPTS = 3
-
-
-def _normalize_symbol(symbol: str) -> str:
-    return normalize_symbol(symbol)
 
 
 class GetQuarterlyEarnings:
     def __init__(self, provider: QuarterlyEarningsAdapter) -> None:
         self._provider = provider
 
-    def execute(self, symbol: str) -> QuarterlyEarningsTimeline:
-        return self._provider.get_quarterly_earnings(_normalize_symbol(symbol))
+    def run(self, symbol: str) -> QuarterlyEarningsTimeline:
+        return self._provider.get_quarterly_earnings(normalize_symbol(symbol))
 
 
 @dataclass(frozen=True)
@@ -65,7 +61,7 @@ class SyncQuarterlyEarnings:
     def __init__(
         self,
         provider: QuarterlyEarningsAdapter,
-        repository: QuarterlyEarningsRepositoryAdapter,
+        repository: QuarterlyEarningsRepository,
         *,
         max_workers: int = _DEFAULT_SYNC_WORKERS,
         max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
@@ -80,7 +76,7 @@ class SyncQuarterlyEarnings:
         # to 0 (no sleep) so the offline tests don't wait; the production wiring dials it up.
         self._retry_backoff_seconds = max(0.0, retry_backoff_seconds)
 
-    def execute(self, *, limit: int | None = None) -> QuarterlyEarningsSyncReport:
+    def run(self, *, limit: int | None = None) -> QuarterlyEarningsSyncReport:
         effective = None if limit is None else max(1, limit)
         # refresh_targets is read once, up front: the same stalest-first batch is retried, so
         # the retries can't spill past the per-run cap into fresh symbols.
