@@ -741,7 +741,7 @@ class GetSectorAnalysis:
         # and the model call (Bedrock). This is the ground truth for "where do the
         # seconds go", rather than guessing which leg dominates.
         gather_start = time.perf_counter()
-        board = self._sectors.execute()
+        board = self._sectors.run()
         contexts = self._build_contexts(board)
         gather_ms = (time.perf_counter() - gather_start) * 1000
 
@@ -924,7 +924,7 @@ class GetMarketSummary:
         # only two moving parts: the index-board gather (Alpaca) and the model call
         # (Bedrock) — the same split the sector-analysis use case records.
         gather_start = time.perf_counter()
-        board = self._overview.execute()
+        board = self._overview.run()
         gather_ms = (time.perf_counter() - gather_start) * 1000
 
         # Log in a `finally` so a failing/slow model call still records the split.

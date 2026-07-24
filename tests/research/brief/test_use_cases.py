@@ -32,6 +32,11 @@ class _FakeExec:
             raise self._error
         return self._result
 
+    # The boards use cases expose run() (the heatmap still uses execute()); this
+    # fake stands in for both, so it scripts the same result under either name.
+    def run(self, *args):
+        return self.execute(*args)
+
 
 class _FakeProvider(MarketBriefAdapter):
     def __init__(self, brief=None, error=None):

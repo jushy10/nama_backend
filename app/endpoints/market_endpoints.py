@@ -1,78 +1,38 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from app.adapters.alpaca.price_adapter_impl import PriceAdapterImpl
-from app.domains.shared.entities import StockPerformance
-from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
-from app.domains.markets.boards.entities import SectorPerformance
-from app.domains.markets.boards.schemas import (
-    SectorBoardResponse,
-    SectorPerformanceResponse,
-)
+from app.domains.markets.boards import wiring
+from app.domains.markets.boards.api_schemas import SectorBoardResponse
 from app.domains.markets.boards.use_cases import GetMarketOverview, GetSectorPerformance
-from app.domains.shared.schemas import StockPerformanceResponse
 from app.endpoints.wiring import get_provider
 
 router = APIRouter(tags=["market"])
 
 
 def get_sector_performance(
-    # The Alpaca provider implements SectorPerformanceAdapter as well, reading
-    # each sector through its proxy ETF snapshot.
+    # Depends shim over the slice's wiring. The Alpaca provider implements
+    # SectorPerformanceAdapter as well (each sector through its proxy ETF snapshot);
+    # it's the shared singleton owned by endpoints/wiring.py, so this shim inherits
+    # its missing-keys 503 gate. analysis_endpoints reuses the shim to wire the
+    # sector AI read off the same board.
     provider: PriceAdapterImpl = Depends(get_provider),
 ) -> GetSectorPerformance:
-    return GetSectorPerformance(provider)
+    return wiring.build_get_sector_performance(provider)
 
 
 def get_market_overview(
     # The Alpaca provider implements MarketOverviewAdapter too, reading the S&P
     # 500 and Nasdaq through their proxy ETFs (SPY / QQQ) — same as the sectors.
+    # analysis_endpoints reuses this shim to wire the market-summary AI read.
     provider: PriceAdapterImpl = Depends(get_provider),
 ) -> GetMarketOverview:
-    return GetMarketOverview(provider)
-
-
-def _present_performance(
-    perf: StockPerformance | None,
-) -> StockPerformanceResponse | None:
-    if perf is None:
-        return None
-    return StockPerformanceResponse(
-        one_week=perf.one_week,
-        one_month=perf.one_month,
-        three_month=perf.three_month,
-        six_month=perf.six_month,
-        ytd=perf.ytd,
-        one_year=perf.one_year,
-    )
-
-
-def _present_sectors(sectors: list[SectorPerformance]) -> SectorBoardResponse:
-    return SectorBoardResponse(
-        count=len(sectors),
-        sectors=[
-            SectorPerformanceResponse(
-                sector=s.sector,
-                symbol=s.symbol,
-                price=s.price,
-                change=s.change,
-                change_percent=s.change_percent,
-                previous_close=s.previous_close,
-                as_of=s.as_of,
-                performance=_present_performance(s.performance),
-            )
-            for s in sectors
-        ],
-    )
+    return wiring.build_get_market_overview(provider)
 
 
 @router.get("/sectors", response_model=SectorBoardResponse)
 def get_sectors_endpoint(
     use_case: GetSectorPerformance = Depends(get_sector_performance),
 ) -> SectorBoardResponse:
-    try:
-        sectors = use_case.execute()
-    except StockNotFound as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except StockDataUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
-    return _present_sectors(sectors)
+    # Domain errors (StockNotFound → 404, StockDataUnavailable → 502) are translated
+    # by the central handlers in endpoints/error_handlers.py.
+    return SectorBoardResponse.from_sectors(use_case.run())
