@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.endpoints import sentiment_endpoints as endpoints
+from app.endpoints.error_handlers import register_error_handlers
 from app.domains.shared.exceptions import StockDataUnavailable
 from app.domains.macro.sentiment.entities import (
     FearGreedSnapshot,
@@ -17,7 +18,7 @@ class _FakeUseCase:
         self._result = result
         self._error = error
 
-    def execute(self):
+    def run(self):
         if self._error is not None:
             raise self._error
         return self._result
@@ -26,7 +27,8 @@ class _FakeUseCase:
 def _client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
-    app.dependency_overrides[endpoints.get_market_sentiment] = lambda: fake
+    register_error_handlers(app)  # the endpoint has no try/except; the handlers translate
+    app.dependency_overrides[endpoints.get_get_market_sentiment] = lambda: fake
     return TestClient(app)
 
 

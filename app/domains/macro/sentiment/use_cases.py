@@ -22,7 +22,7 @@ class GetMarketSentiment:
         self._vix_provider = vix_provider
         self._fear_greed_provider = fear_greed_provider
 
-    def execute(self) -> MarketSentiment:
+    def run(self) -> MarketSentiment:
         vix = self._best_effort("VIX", self._vix_provider.get_vix)
         fear_greed = self._best_effort(
             "Fear & Greed", self._fear_greed_provider.get_fear_greed

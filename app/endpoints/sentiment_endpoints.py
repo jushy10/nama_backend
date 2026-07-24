@@ -1,94 +1,29 @@
-from functools import lru_cache
+from fastapi import APIRouter, Depends, Response
 
-from fastapi import APIRouter, Depends, HTTPException, Response
-
-from app.adapters.cnn.fear_greed_adapter_impl import FearGreedAdapterImpl
-from app.adapters.fred.vix_adapter_impl import VixAdapterImpl
-from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
-from app.domains.macro.sentiment.entities import (
-    FearGreedSnapshot,
-    MarketSentiment,
-    VixSnapshot,
-)
-from app.domains.macro.sentiment.interfaces import FearGreedAdapter, VixAdapter
-from app.domains.macro.sentiment.schemas import (
-    FearGreedResponse,
-    MarketSentimentResponse,
-    VixResponse,
-)
+from app.domains.macro.sentiment import wiring
+from app.domains.macro.sentiment.api_schemas import MarketSentimentResponse
 from app.domains.macro.sentiment.use_cases import GetMarketSentiment
 
 router = APIRouter(tags=["market"])
 
 
-@lru_cache(maxsize=1)
-def get_vix_provider() -> VixAdapter:
-    # Keyless (FRED), so no 503 gate — unlike the Alpaca price feed.
-    return VixAdapterImpl()
-
-
-@lru_cache(maxsize=1)
-def get_fear_greed_provider() -> FearGreedAdapter:
-    # Keyless (CNN), so no 503 gate.
-    return FearGreedAdapterImpl()
-
-
-def get_market_sentiment(
-    vix_provider: VixAdapter = Depends(get_vix_provider),
-    fear_greed_provider: FearGreedAdapter = Depends(get_fear_greed_provider),
-) -> GetMarketSentiment:
-    return GetMarketSentiment(vix_provider, fear_greed_provider)
-
-
-def _present_vix(vix: VixSnapshot) -> VixResponse:
-    return VixResponse(
-        as_of=vix.as_of,
-        value=vix.value,
-        previous_close=vix.previous_close,
-        change=vix.change,
-        change_percent=vix.change_percent,
-        regime=vix.regime,
-    )
-
-
-def _present_fear_greed(fear_greed: FearGreedSnapshot) -> FearGreedResponse:
-    return FearGreedResponse(
-        score=fear_greed.score,
-        as_of=fear_greed.as_of,
-        rating=fear_greed.rating,
-        band=fear_greed.band.value,
-        label=fear_greed.label,
-        previous_close=fear_greed.previous_close,
-        previous_1_week=fear_greed.previous_1_week,
-        previous_1_month=fear_greed.previous_1_month,
-        previous_1_year=fear_greed.previous_1_year,
-    )
-
-
-def _present_sentiment(sentiment: MarketSentiment) -> MarketSentimentResponse:
-    return MarketSentimentResponse(
-        vix=_present_vix(sentiment.vix) if sentiment.vix is not None else None,
-        fear_greed=(
-            _present_fear_greed(sentiment.fear_greed)
-            if sentiment.fear_greed is not None
-            else None
-        ),
-    )
+def get_get_market_sentiment() -> GetMarketSentiment:
+    # Depends shim over the slice's wiring — exists for the dependency_overrides
+    # test seam, nothing more (both sources are keyless, so no 503 gate).
+    return wiring.build_get_market_sentiment()
 
 
 @router.get("/market/sentiment", response_model=MarketSentimentResponse)
 def get_market_sentiment_endpoint(
     response: Response,
-    use_case: GetMarketSentiment = Depends(get_market_sentiment),
+    use_case: GetMarketSentiment = Depends(get_get_market_sentiment),
 ) -> MarketSentimentResponse:
-    try:
-        sentiment = use_case.execute()
-    except StockNotFound as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except StockDataUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
+    # Each leg is best-effort inside the use case; only both legs failing raises
+    # StockDataUnavailable, translated to 502 by the central handlers in
+    # endpoints/error_handlers.py.
+    sentiment = use_case.run()
     # Backs a homepage widget hit by every visitor; both inputs move slowly (the
     # VIX is an end-of-day close), so cache generously — a burst of viewers
     # collapses onto one upstream fetch rather than hammering FRED/CNN.
     response.headers["Cache-Control"] = "public, max-age=900"
-    return _present_sentiment(sentiment)
+    return MarketSentimentResponse.from_sentiment(sentiment)
