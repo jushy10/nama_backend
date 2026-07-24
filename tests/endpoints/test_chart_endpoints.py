@@ -7,6 +7,7 @@ from app.endpoints import chart_endpoints as endpoints
 from app.domains.pricing.charts.interfaces import CandleAdapter
 from app.domains.shared.entities import Candle, CandleSeries, Timeframe
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.endpoints.error_handlers import register_error_handlers
 from app.endpoints.wiring import get_price_provider
 
 
@@ -42,6 +43,7 @@ def _rising_series(count: int = 60) -> CandleSeries:
 def _client(fake: _FakeCandleProvider) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
+    register_error_handlers(app)  # 404/502 come from the central handlers, not the endpoint
     # The chart endpoints ride the market-routing price provider; override it with the fake
     # CandleAdapter (the router slot accepts any CandleAdapter), so these stay offline.
     app.dependency_overrides[get_price_provider] = lambda: fake

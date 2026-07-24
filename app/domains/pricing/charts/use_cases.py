@@ -28,7 +28,7 @@ class GetStockCandles:
     def __init__(self, provider: CandleAdapter) -> None:
         self._provider = provider
 
-    def execute(
+    def run(
         self,
         symbol: str,
         timeframe: Timeframe,
@@ -73,7 +73,7 @@ class GetStockEma:
     def __init__(self, provider: CandleAdapter) -> None:
         self._provider = provider
 
-    def execute(
+    def run(
         self,
         symbol: str,
         timeframe: Timeframe,
@@ -111,7 +111,7 @@ class GetStockSupportLevels:
     def __init__(self, provider: CandleAdapter) -> None:
         self._provider = provider
 
-    def execute(
+    def run(
         self,
         symbol: str,
         timeframe: Timeframe,
@@ -144,7 +144,7 @@ class GetStockTrend:
     def __init__(self, provider: CandleAdapter) -> None:
         self._provider = provider
 
-    def execute(
+    def run(
         self,
         symbol: str,
         timeframe: Timeframe,
@@ -186,7 +186,7 @@ class GetStockIndicators:
     def __init__(self, provider: CandleAdapter) -> None:
         self._provider = provider
 
-    def execute(
+    def run(
         self,
         symbol: str,
         timeframe: Timeframe,
