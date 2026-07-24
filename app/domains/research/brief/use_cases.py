@@ -92,7 +92,7 @@ class GenerateDailyBrief:
     def _gather(self) -> MarketBriefContext:
         indexes = tuple(_index_move(i) for i in self._read(self._overview.run))
         sectors = tuple(_sector_move(s) for s in self._read(self._sectors.run))
-        heatmap = self._read(lambda: self._heatmap.execute(self._scope))
+        heatmap = self._read(lambda: self._heatmap.run(self._scope))
         gainers, losers, advancers, decliners, quoted = _movers_and_breadth(
             heatmap, self._movers
         )

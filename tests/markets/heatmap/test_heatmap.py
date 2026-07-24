@@ -185,7 +185,7 @@ def test_build_without_a_performance_map_leaves_every_block_blank():
     assert heatmap.sectors[0].industries[0].cells[0].performance is None
 
 
-def test_execute_filters_sp500_and_builds_coloured_map():
+def test_run_filters_sp500_and_builds_coloured_map():
     repo = FakeSearchRepo(
         [
             _result("NVDA", "technology", "semiconductors", 3e12),
@@ -195,7 +195,7 @@ def test_execute_filters_sp500_and_builds_coloured_map():
     quotes = FakeBulkQuotes(
         {"NVDA": _quote("NVDA", 99.0, 100.0), "JPM": _quote("JPM", 102.0, 100.0)}
     )
-    heatmap = GetStockHeatMap(repo, quotes).execute(HeatMapScope.SP500)
+    heatmap = GetStockHeatMap(repo, quotes).run(HeatMapScope.SP500)
 
     assert repo.criteria.in_sp500 is True
     assert repo.criteria.in_nasdaq100 is None
@@ -207,7 +207,7 @@ def test_execute_filters_sp500_and_builds_coloured_map():
     assert nvda_cell.change_percent == -1.0  # (99-100)/100*100
 
 
-def test_execute_attaches_stored_trailing_performance_from_results():
+def test_run_attaches_stored_trailing_performance_from_results():
     # Trailing windows now ride on the search results (materialized on the anchor by the
     # performance sync), not a live feed — NVDA carries a block, JPM doesn't.
     repo = FakeSearchRepo(
@@ -222,7 +222,7 @@ def test_execute_attaches_stored_trailing_performance_from_results():
             _result("JPM", "financials", "banks", 6e11),
         ]
     )
-    heatmap = GetStockHeatMap(repo, FakeBulkQuotes()).execute(HeatMapScope.SP500)
+    heatmap = GetStockHeatMap(repo, FakeBulkQuotes()).run(HeatMapScope.SP500)
 
     nvda_cell = heatmap.sectors[0].industries[0].cells[0]
     assert nvda_cell.performance.one_year == 120.0
@@ -231,14 +231,14 @@ def test_execute_attaches_stored_trailing_performance_from_results():
     assert heatmap.sectors[1].industries[0].cells[0].performance is None
 
 
-def test_execute_nasdaq100_scope_flips_the_flag():
+def test_run_nasdaq100_scope_flips_the_flag():
     repo = FakeSearchRepo([_result("AAPL", "technology", "consumer-electronics", 3e12)])
-    GetStockHeatMap(repo, FakeBulkQuotes()).execute(HeatMapScope.NASDAQ100)
+    GetStockHeatMap(repo, FakeBulkQuotes()).run(HeatMapScope.NASDAQ100)
     assert repo.criteria.in_nasdaq100 is True
     assert repo.criteria.in_sp500 is None
 
 
-def test_execute_quote_failure_yields_uncoloured_map_not_an_error():
+def test_run_quote_failure_yields_uncoloured_map_not_an_error():
     repo = FakeSearchRepo(
         [
             _result(
@@ -251,7 +251,7 @@ def test_execute_quote_failure_yields_uncoloured_map_not_an_error():
         ]
     )
     quotes = FakeBulkQuotes(error=StockDataUnavailable("quotes", "boom"))
-    heatmap = GetStockHeatMap(repo, quotes).execute(HeatMapScope.SP500)
+    heatmap = GetStockHeatMap(repo, quotes).run(HeatMapScope.SP500)
     assert heatmap.cell_count == 1
     cell = heatmap.sectors[0].industries[0].cells[0]
     # The day-change feed failed (uncoloured day tile), but the stored trailing windows —
@@ -260,9 +260,9 @@ def test_execute_quote_failure_yields_uncoloured_map_not_an_error():
     assert cell.performance.one_year == 120.0
 
 
-def test_execute_empty_universe_is_an_empty_map_no_quote_call():
+def test_run_empty_universe_is_an_empty_map_no_quote_call():
     repo = FakeSearchRepo([])
     quotes = FakeBulkQuotes({"X": _quote("X", 1.0, 1.0)})
-    heatmap = GetStockHeatMap(repo, quotes).execute(HeatMapScope.SP500)
+    heatmap = GetStockHeatMap(repo, quotes).run(HeatMapScope.SP500)
     assert heatmap.sectors == ()
     assert quotes.requested is None  # no symbols -> provider never called

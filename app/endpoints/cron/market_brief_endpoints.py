@@ -21,10 +21,9 @@ from app.endpoints.cron.background_sync import (
     trigger_sync,
 )
 from app.endpoints.cron.auth import require_cron_token
-from app.domains.markets.heatmap.use_cases import GetStockHeatMap
+from app.domains.markets.heatmap import wiring as heatmap_wiring
 from app.domains.markets.boards import wiring as boards_wiring
 from app.domains.coverage.news.db_repository import DbNewsRepository
-from app.domains.listings.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.endpoints.wiring import bedrock_recovery_model_id, get_provider
 
 logger = logging.getLogger(__name__)
@@ -54,7 +53,7 @@ def run_market_brief_sync(limit: int | None) -> MarketBriefSyncReport:
         use_case = GenerateDailyBrief(
             boards_wiring.build_get_market_overview(provider),
             boards_wiring.build_get_sector_performance(provider),
-            GetStockHeatMap(StockSearchRepositoryAdapterImpl(db), provider),
+            heatmap_wiring.build_get_stock_heat_map(db, provider),
             get_market_brief_provider(),
             MarketBriefRepositoryAdapterImpl(db),
             # DB-only news reader (never a live fetch) — the daily news sync keeps it warm,
