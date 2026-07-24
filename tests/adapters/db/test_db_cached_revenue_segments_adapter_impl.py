@@ -10,7 +10,7 @@ from app.domains.financials.revenue_segments.entities import (
     SegmentAxis,
 )
 from app.domains.financials.revenue_segments.interfaces import RevenueSegmentsAdapter
-from app.domains.financials.revenue_segments.interfaces import RevenueSegmentsRepositoryAdapter
+from app.domains.financials.revenue_segments.repository import RevenueSegmentsRepository
 
 
 def _seg(symbol: str, value: float) -> RevenueSegmentation:
@@ -24,7 +24,7 @@ def _empty(symbol: str) -> RevenueSegmentation:
     return RevenueSegmentation(symbol, ())
 
 
-class FakeRepo(RevenueSegmentsRepositoryAdapter):
+class FakeRepo(RevenueSegmentsRepository):
     def __init__(self) -> None:
         self.rows: dict[str, RevenueSegmentation] = {}
         self.upsert_calls = 0

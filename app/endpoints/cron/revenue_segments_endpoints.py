@@ -4,8 +4,9 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.adapters.sec_edgar.revenue_segments_adapter_impl import (
-    RevenueSegmentsAdapterImpl,
+from app.domains.financials.revenue_segments import wiring
+from app.domains.financials.revenue_segments.use_cases import (
+    RevenueSegmentsSyncReport,
 )
 from app.endpoints.cron.background_sync import (
     SyncRunner,
@@ -13,11 +14,6 @@ from app.endpoints.cron.background_sync import (
     trigger_sync,
 )
 from app.endpoints.cron.auth import require_cron_token
-from app.domains.financials.revenue_segments.revenue_segments_repository_adapter_impl import RevenueSegmentsRepositoryAdapterImpl
-from app.domains.financials.revenue_segments.use_cases import (
-    RevenueSegmentsSyncReport,
-    SyncRevenueSegments,
-)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["revenue-segments-cron"])
@@ -26,21 +22,11 @@ router = APIRouter(tags=["revenue-segments-cron"])
 # slices, which may run at the same time (a lock only stops a sweep overlapping itself).
 _sync_lock = threading.Lock()
 
-# Minimum spacing between the sweep's SEC requests, so the serial walk stays under EDGAR's ~10
-# req/s fair-use ceiling. A batch run isn't behind the API Gateway's 30s clock (it's a one-off
-# ECS task), so the added spacing is free.
-_SEC_MIN_REQUEST_INTERVAL = 0.15
-
 
 def run_revenue_segments_sync(limit: int | None) -> RevenueSegmentsSyncReport:
     db = SessionLocal()
     try:
-        report = SyncRevenueSegments(
-            RevenueSegmentsAdapterImpl(
-                min_request_interval_seconds=_SEC_MIN_REQUEST_INTERVAL
-            ),
-            RevenueSegmentsRepositoryAdapterImpl(db),
-        ).execute(limit=limit)
+        report = wiring.build_sync_revenue_segments(db).run(limit=limit)
         logger.info(
             "revenue-segments sync done: refreshed=%d failed=%d limit=%s",
             report.refreshed,
