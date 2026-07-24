@@ -34,7 +34,7 @@ _EMPTY_ANSWER_FALLBACK = (
 )
 
 
-class RunResearchUsecase:
+class RunResearchUseCase:
     def __init__(
         self,
         model: ConversationModelAdapter,

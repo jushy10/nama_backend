@@ -12,7 +12,7 @@ from app.domains.research.agent.repository import AgentRecipeRepository
 from app.domains.research.agent.tool import Tool
 from app.domains.research.agent.use_cases import (
     _EMPTY_ANSWER_FALLBACK,
-    RunResearchUsecase,
+    RunResearchUseCase,
 )
 from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 
@@ -34,7 +34,7 @@ def _research(model, tools, *, max_steps=6, system_prompt="You are a test agent.
         max_steps=max_steps,
         model_id="fake-model",
     )
-    return RunResearchUsecase(model, tools, _FakeRecipeRepo(recipe), "research", quota=quota)
+    return RunResearchUseCase(model, tools, _FakeRecipeRepo(recipe), "research", quota=quota)
 
 
 class _ScriptedModel:
@@ -252,7 +252,7 @@ def test_a_blank_question_is_rejected(blank):
 
 def test_a_missing_recipe_raises_missing_agent_recipe():
     model = _ScriptedModel([ModelTurn("x", (), model="m1")])
-    use_case = RunResearchUsecase(model, [_FakeTool("echo")], _FakeRecipeRepo(None), "research")
+    use_case = RunResearchUseCase(model, [_FakeTool("echo")], _FakeRecipeRepo(None), "research")
     with pytest.raises(MissingAgentRecipe):
         use_case.run("q")
     assert model.calls == []  # config is checked before any metered call
