@@ -15,7 +15,7 @@ router = APIRouter(tags=["stocks"])
 _AI_RESEARCH_RATE_LIMIT = os.environ.get("AI_RESEARCH_RATE_LIMIT", "10/minute")
 
 
-def get_run_research(db: Session = Depends(get_db)) -> wiring.RunResearchUsecase:
+def get_run_research(db: Session = Depends(get_db)) -> wiring.RunResearchUseCase:
     # Shim over the framework-free wiring: Depends gives the db lifecycle + the
     # dependency_overrides test seam. The quota is built here so env config stays
     # at this edge.
@@ -27,7 +27,7 @@ def get_run_research(db: Session = Depends(get_db)) -> wiring.RunResearchUsecase
 def run_research_endpoint(
     request: Request,
     body: ResearchRequest,
-    use_case: wiring.RunResearchUsecase = Depends(get_run_research),
+    use_case: wiring.RunResearchUseCase = Depends(get_run_research),
 ) -> ResearchResponse:
     # Domain errors raised below (incl. QuotaExceeded -> 429) are translated by the
     # central handlers.

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app.domains.research.agent.entities import (
@@ -12,7 +14,7 @@ from app.domains.research.agent.repository import AgentRecipeRepository
 from app.domains.research.agent.tool import Tool
 from app.domains.research.agent.use_cases import (
     _EMPTY_ANSWER_FALLBACK,
-    RunResearchUsecase,
+    RunResearchUseCase,
 )
 from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 
@@ -34,7 +36,7 @@ def _research(model, tools, *, max_steps=6, system_prompt="You are a test agent.
         max_steps=max_steps,
         model_id="fake-model",
     )
-    return RunResearchUsecase(model, tools, _FakeRecipeRepo(recipe), "research", quota=quota)
+    return RunResearchUseCase(model, tools, _FakeRecipeRepo(recipe), "research", quota=quota)
 
 
 class _ScriptedModel:
@@ -194,7 +196,9 @@ def test_unknown_tool_becomes_an_error_outcome_not_a_crash():
     assert result.answer == "recovered"
     assert len(result.steps) == 1
     assert result.steps[0].is_error is True
-    assert "Unknown tool" in result.steps[0].output
+    payload = json.loads(result.steps[0].output)
+    assert payload["error"] == "unknown_tool" and payload["tool"] == "does_not_exist"
+    assert payload["available_tools"] == ["echo"]
 
 
 def test_a_raising_tool_becomes_an_error_outcome_not_a_crash():
@@ -208,7 +212,8 @@ def test_a_raising_tool_becomes_an_error_outcome_not_a_crash():
     result = _research(model, [boom]).run("q")
     assert result.answer == "handled"
     assert result.steps[0].is_error is True
-    assert "failed" in result.steps[0].output
+    payload = json.loads(result.steps[0].output)
+    assert payload["error"] == "tool_failed" and "kaboom" in payload["detail"]
 
 
 # --- The step budget bounds the loop -----------------------------------------------------------
@@ -252,7 +257,7 @@ def test_a_blank_question_is_rejected(blank):
 
 def test_a_missing_recipe_raises_missing_agent_recipe():
     model = _ScriptedModel([ModelTurn("x", (), model="m1")])
-    use_case = RunResearchUsecase(model, [_FakeTool("echo")], _FakeRecipeRepo(None), "research")
+    use_case = RunResearchUseCase(model, [_FakeTool("echo")], _FakeRecipeRepo(None), "research")
     with pytest.raises(MissingAgentRecipe):
         use_case.run("q")
     assert model.calls == []  # config is checked before any metered call
