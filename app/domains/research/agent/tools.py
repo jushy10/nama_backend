@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 from app.domains.research.agent.entities import ToolSpec
 from app.domains.research.agent.tool import Tool
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
@@ -97,24 +95,24 @@ _MARKET_SENTIMENT_SPEC = ToolSpec(
 
 
 class SearchStocksTool(Tool):
+    spec = _SEARCH_STOCKS_SPEC
+
     def __init__(self, search: SearchStocks) -> None:
         self._search = search
 
-    @property
-    def spec(self) -> ToolSpec:
-        return _SEARCH_STOCKS_SPEC
-
     def run(self, arguments: dict) -> str:
-        args = _SearchArgs.from_model(arguments)
+        # The model's arguments are untrusted — a stray value degrades to its default, never raises.
+        limit = _positive_int_or_none(arguments.get("limit")) or _MAX_SCREEN_ROWS
         page = self._search.execute(
-            query=args.query,
-            sectors=args.sectors,
-            market_cap_tiers=args.market_cap_tiers,
-            sort=args.sort,
-            direction=args.direction,
-            in_sp500=args.in_sp500,
-            in_nasdaq100=args.in_nasdaq100,
-            limit=args.limit,
+            query=_string_or_none(arguments.get("query")),
+            sectors=_string_tuple(arguments.get("sectors")),
+            market_cap_tiers=_enum_tuple(MarketCapTier, arguments.get("market_cap_tiers")),
+            sort=_enum_or_none(StockSort, arguments.get("sort")),
+            direction=_enum_or_none(SortDirection, arguments.get("direction"))
+            or SortDirection.DESC,
+            in_sp500=_bool_or_none(arguments.get("in_sp500")),
+            in_nasdaq100=_bool_or_none(arguments.get("in_nasdaq100")),
+            limit=min(limit, _MAX_SCREEN_ROWS),
         )
         if not page.results:
             return "No stocks in the universe matched that screen."
@@ -123,12 +121,10 @@ class SearchStocksTool(Tool):
 
 
 class MarketSentimentTool(Tool):
+    spec = _MARKET_SENTIMENT_SPEC
+
     def __init__(self, sentiment: GetMarketSentiment) -> None:
         self._sentiment = sentiment
-
-    @property
-    def spec(self) -> ToolSpec:
-        return _MARKET_SENTIMENT_SPEC
 
     def run(self, arguments: dict) -> str:
         try:
@@ -149,36 +145,6 @@ class MarketSentimentTool(Tool):
             )
         return (
             " ".join(parts) if parts else "No market-sentiment sources were available."
-        )
-
-
-@dataclass(frozen=True)
-class _SearchArgs:
-    """search_stocks arguments coerced from the model's untrusted input — a stray value
-    degrades to its default, never raises."""
-
-    query: str | None = None
-    sectors: tuple[str, ...] = ()
-    market_cap_tiers: tuple[MarketCapTier, ...] = ()
-    sort: StockSort | None = None
-    direction: SortDirection = SortDirection.DESC
-    in_sp500: bool | None = None
-    in_nasdaq100: bool | None = None
-    limit: int = _MAX_SCREEN_ROWS
-
-    @classmethod
-    def from_model(cls, raw: dict) -> "_SearchArgs":
-        limit = _positive_int_or_none(raw.get("limit")) or _MAX_SCREEN_ROWS
-        return cls(
-            query=_string_or_none(raw.get("query")),
-            sectors=_string_tuple(raw.get("sectors")),
-            market_cap_tiers=_enum_tuple(MarketCapTier, raw.get("market_cap_tiers")),
-            sort=_enum_or_none(StockSort, raw.get("sort")),
-            direction=_enum_or_none(SortDirection, raw.get("direction"))
-            or SortDirection.DESC,
-            in_sp500=_bool_or_none(raw.get("in_sp500")),
-            in_nasdaq100=_bool_or_none(raw.get("in_nasdaq100")),
-            limit=min(limit, _MAX_SCREEN_ROWS),
         )
 
 
