@@ -270,3 +270,14 @@ class AnalystRatingChanges:
             )
         ranked.sort(key=lambda fr: fr.rank)
         return tuple(ranked[: max(0, limit)])
+
+
+@dataclass(frozen=True)
+class AnalystInfo:
+    """The consolidated analyst-coverage payload: trends (primary), the best-effort
+    rating-change events, and the top credible firms derived from them."""
+
+    symbol: str
+    recommendations: AnalystRecommendations
+    rating_changes: AnalystRatingChanges
+    top_firms: tuple[FirmRating, ...] = ()

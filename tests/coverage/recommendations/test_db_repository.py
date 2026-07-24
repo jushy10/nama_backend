@@ -5,9 +5,9 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.domains.coverage.recommendations.repository_adapter_impl import (
-    RatingChangesRepositoryAdapterImpl,
-    RecommendationsRepositoryAdapterImpl,
+from app.domains.coverage.recommendations.db_repository import (
+    DbRatingChangesRepository,
+    DbRecommendationsRepository,
 )
 from app.domains.coverage.recommendations.entities import (
     AnalystPriceTargets,
@@ -34,8 +34,8 @@ def session():
         yield db
 
 
-def repo(session) -> RecommendationsRepositoryAdapterImpl:
-    return RecommendationsRepositoryAdapterImpl(session, now=lambda: _NOW)
+def repo(session) -> DbRecommendationsRepository:
+    return DbRecommendationsRepository(session, now=lambda: _NOW)
 
 
 def _a_trend(period: date, *, buy=0, **counts) -> RecommendationTrend:
@@ -162,9 +162,9 @@ def test_refresh_targets_orders_by_last_refresh_not_oldest_row(session):
     # The merge keeps old months' stamps forever, so staleness must read the *newest*
     # stamp (the last refresh): AAPL holds an ancient accumulated month but was refreshed
     # after MSFT, so MSFT is the staler of the two.
-    ancient = RecommendationsRepositoryAdapterImpl(session, now=lambda: _NOW - timedelta(days=90))
-    mid = RecommendationsRepositoryAdapterImpl(session, now=lambda: _NOW - timedelta(days=10))
-    fresh = RecommendationsRepositoryAdapterImpl(session, now=lambda: _NOW)
+    ancient = DbRecommendationsRepository(session, now=lambda: _NOW - timedelta(days=90))
+    mid = DbRecommendationsRepository(session, now=lambda: _NOW - timedelta(days=10))
+    fresh = DbRecommendationsRepository(session, now=lambda: _NOW)
 
     ancient.upsert("AAPL", "Apple Inc.", _a_run(_a_trend(date(2026, 4, 1), buy=5)))
     mid.upsert("MSFT", "Microsoft", _a_run(_a_trend(date(2026, 6, 1), buy=9), symbol="MSFT"))
@@ -238,8 +238,8 @@ def test_missing_price_targets_read_back_as_none(session):
 _RC_NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 
 
-def rc_repo(session, *, now=_RC_NOW) -> RatingChangesRepositoryAdapterImpl:
-    return RatingChangesRepositoryAdapterImpl(session, now=lambda: now)
+def rc_repo(session, *, now=_RC_NOW) -> DbRatingChangesRepository:
+    return DbRatingChangesRepository(session, now=lambda: now)
 
 
 def _a_change(firm: str, published_at: date, **kw) -> RatingChange:

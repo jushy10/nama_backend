@@ -1,9 +1,15 @@
 from abc import ABC, abstractmethod
+from typing import NamedTuple
+
 from app.domains.coverage.news.entities import StockNews
-from app.domains.coverage.news.interfaces.types import RefreshTarget
 
 
-class NewsRepositoryAdapter(ABC):
+class RefreshTarget(NamedTuple):
+    symbol: str
+    name: str | None
+
+
+class NewsRepository(ABC):
     @abstractmethod
     def get(self, symbol: str) -> StockNews | None:
         raise NotImplementedError

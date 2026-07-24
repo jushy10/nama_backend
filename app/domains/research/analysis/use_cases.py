@@ -40,7 +40,7 @@ from app.domains.shared.entities import (
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.markets.boards.use_cases import GetMarketOverview, GetSectorPerformance
 from app.domains.coverage.news.entities import NewsArticle
-from app.domains.coverage.news.interfaces import NewsRepositoryAdapter
+from app.domains.coverage.news.repository import NewsRepository
 from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 from app.domains.shared.interfaces import (
     AllTimeHighAdapter,
@@ -717,7 +717,7 @@ class GetSectorAnalysis:
         *,
         constituents: StockSearchRepositoryAdapter | None = None,
         quotes: BulkQuoteAdapter | None = None,
-        news: NewsRepositoryAdapter | None = None,
+        news: NewsRepository | None = None,
     ) -> None:
         self._sectors = sectors
         self._analyzer = analyzer

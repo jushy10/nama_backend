@@ -5,9 +5,9 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.domains.coverage.news.news_repository_adapter_impl import (
+from app.domains.coverage.news.db_repository import (
     _MAX_STORED_ARTICLES,
-    NewsRepositoryAdapterImpl,
+    DbNewsRepository,
 )
 from app.domains.coverage.news.entities import NewsArticle, StockNews
 from app.domains.coverage.news.models import (
@@ -27,8 +27,8 @@ def session():
         yield db
 
 
-def repo(session) -> NewsRepositoryAdapterImpl:
-    return NewsRepositoryAdapterImpl(session, now=lambda: _NOW)
+def repo(session) -> DbNewsRepository:
+    return DbNewsRepository(session, now=lambda: _NOW)
 
 
 def _article(article_id: str, *, published: datetime, title="Headline", **kw) -> NewsArticle:
@@ -181,9 +181,9 @@ def test_refresh_targets_orders_by_last_refresh_not_oldest_row(session):
     # The merge keeps old articles' stamps forever, so staleness must read the *newest*
     # stamp (the last refresh): AAPL holds an ancient accumulated article but was refreshed
     # after MSFT, so MSFT is the staler of the two.
-    ancient = NewsRepositoryAdapterImpl(session, now=lambda: _NOW - timedelta(days=90))
-    mid = NewsRepositoryAdapterImpl(session, now=lambda: _NOW - timedelta(days=10))
-    fresh = NewsRepositoryAdapterImpl(session, now=lambda: _NOW)
+    ancient = DbNewsRepository(session, now=lambda: _NOW - timedelta(days=90))
+    mid = DbNewsRepository(session, now=lambda: _NOW - timedelta(days=10))
+    fresh = DbNewsRepository(session, now=lambda: _NOW)
 
     ancient.upsert("AAPL", "Apple Inc.", _run(_article("a1", published=_d(1))))
     mid.upsert("MSFT", "Microsoft", _run(_article("m1", published=_d(5)), symbol="MSFT"))

@@ -2,13 +2,13 @@ import logging
 
 from app.domains.coverage.news.entities import StockNews
 from app.domains.coverage.news.interfaces import NewsAdapter
-from app.domains.coverage.news.interfaces import NewsRepositoryAdapter
+from app.domains.coverage.news.repository import NewsRepository
 
 logger = logging.getLogger(__name__)
 
 
 class NewsAdapterImpl(NewsAdapter):
-    def __init__(self, inner: NewsAdapter, repo: NewsRepositoryAdapter) -> None:
+    def __init__(self, inner: NewsAdapter, repo: NewsRepository) -> None:
         self._inner = inner
         self._repo = repo
 

@@ -16,9 +16,9 @@ from app.domains.coverage.recommendations.models import (
     StockAnalystRatingChangeRecord,
     StockRecommendationTrendRecord,
 )
-from app.domains.coverage.recommendations.interfaces import (
-    RatingChangesRepositoryAdapter,
-    RecommendationsRepositoryAdapter,
+from app.domains.coverage.recommendations.repository import (
+    RatingChangesRepository,
+    RecommendationsRepository,
     RefreshTarget,
 )
 
@@ -57,7 +57,7 @@ def _to_recommendations(
     )
 
 
-class RecommendationsRepositoryAdapterImpl(RecommendationsRepositoryAdapter):
+class DbRecommendationsRepository(RecommendationsRepository):
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the fetch stamp deterministic in tests.
@@ -140,7 +140,7 @@ def _to_rating_changes(
     return AnalystRatingChanges(symbol=symbol, changes=tuple(changes))
 
 
-class RatingChangesRepositoryAdapterImpl(RatingChangesRepositoryAdapter):
+class DbRatingChangesRepository(RatingChangesRepository):
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the fetch stamp deterministic in tests.
