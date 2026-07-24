@@ -148,7 +148,7 @@ class MarketSentimentTool(Tool):
 
     def run(self, arguments: dict) -> ToolResult:
         try:
-            sentiment = self._sentiment.execute()
+            sentiment = self._sentiment.run()
         except (StockNotFound, StockDataUnavailable) as exc:
             return ToolMessage(f"Market sentiment is unavailable right now: {exc}")
         vix = fear_greed = None

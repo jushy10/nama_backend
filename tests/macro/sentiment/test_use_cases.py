@@ -47,7 +47,7 @@ def test_gathers_both_legs():
         FakeVixProvider(result=_vix()),
         FakeFearGreedProvider(result=_fear_greed()),
     )
-    sentiment = use_case.execute()
+    sentiment = use_case.run()
     assert sentiment.vix.value == 17.16
     assert sentiment.fear_greed.score == 43.14
 
@@ -57,7 +57,7 @@ def test_fear_greed_failure_drops_only_that_leg():
         FakeVixProvider(result=_vix()),
         FakeFearGreedProvider(error=StockDataUnavailable("*", "CNN blocked")),
     )
-    sentiment = use_case.execute()
+    sentiment = use_case.run()
     assert sentiment.vix.value == 17.16
     assert sentiment.fear_greed is None
 
@@ -67,7 +67,7 @@ def test_vix_failure_drops_only_that_leg():
         FakeVixProvider(error=StockNotFound("*")),
         FakeFearGreedProvider(result=_fear_greed()),
     )
-    sentiment = use_case.execute()
+    sentiment = use_case.run()
     assert sentiment.vix is None
     assert sentiment.fear_greed.score == 43.14
 
@@ -78,4 +78,4 @@ def test_both_failing_raises_unavailable():
         FakeFearGreedProvider(error=StockDataUnavailable("*", "CNN down")),
     )
     with pytest.raises(StockDataUnavailable):
-        use_case.execute()
+        use_case.run()

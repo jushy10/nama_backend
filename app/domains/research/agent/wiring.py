@@ -9,8 +9,6 @@ from sqlalchemy.orm import Session
 from app.adapters.bedrock.conversation_model_adapter_impl import (
     ConversationModelAdapterImpl,
 )
-from app.adapters.cnn.fear_greed_adapter_impl import FearGreedAdapterImpl
-from app.adapters.fred.vix_adapter_impl import VixAdapterImpl
 from app.domains.research.agent.errors import (
     BedrockNotInstalled,
     MissingAgentRecipe,
@@ -22,7 +20,7 @@ from app.domains.research.agent.tool import Tool
 from app.domains.research.agent.tools import MarketSentimentTool, SearchStocksTool
 from app.domains.research.agent.use_cases import RunResearchUseCase
 from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
-from app.domains.macro.sentiment.use_cases import GetMarketSentiment
+from app.domains.macro.sentiment import wiring as sentiment_wiring
 from app.domains.listings.universe.repository_adapter_impl import (
     StockSearchRepositoryAdapterImpl,
 )
@@ -42,15 +40,11 @@ def get_conversation_model(model_id: str) -> ConversationModelAdapter:
         raise BedrockNotInstalled() from exc
 
 
-@lru_cache(maxsize=1)
-def get_market_sentiment_use_case() -> GetMarketSentiment:
-    # Keyless live sources (FRED + CNN) — the same singletons /market/sentiment wires.
-    return GetMarketSentiment(VixAdapterImpl(), FearGreedAdapterImpl())
-
-
 def _tool_registry(db: Session) -> dict[str, Tool]:
     # Adding a tool = its Tool subclass in tools.py + one entry here; recipes opt in by name.
-    sentiment = get_market_sentiment_use_case()
+    # The sentiment use case comes from its own slice's wiring — the same keyless
+    # FRED/CNN provider singletons /market/sentiment wires.
+    sentiment = sentiment_wiring.build_get_market_sentiment()
     return {
         "search_stocks": SearchStocksTool(SearchStocks(StockSearchRepositoryAdapterImpl(db))),
         "get_market_sentiment": MarketSentimentTool(sentiment),

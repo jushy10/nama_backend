@@ -324,6 +324,14 @@ N/A); `macro/yields` (fully, for its applicable steps — `run`, `api_schemas.py
 and `build_<action>` factories, thin endpoints with central error translation (the
 inline `ValueError` → 400 stays); table-less and live-per-request, so the persistence
 pair is N/A, `interfaces/` was already vendor-only (Treasury + FRED), and no slice
-`errors.py` — it raises only the shared-kernel errors); `research/rate_limit_quota`
+`errors.py` — it raises only the shared-kernel errors); `macro/sentiment` (fully, for
+its applicable steps — `run` (the research agent's `MarketSentimentTool` call site
+updated with it), `api_schemas.py` with `from_*` presenters, framework-free `wiring.py`
+with `@lru_cache`d keyless FRED/CNN providers and `build_get_market_sentiment()` (which
+`research/agent`'s wiring now reuses instead of constructing its own), thin endpoint
+with central error translation; table-less and live-per-request, so the persistence
+pair is N/A, `interfaces/` was already vendor-only (FRED + CNN), and no slice
+`errors.py` — the best-effort legs raise only the shared-kernel errors);
+`research/rate_limit_quota`
 partially — it has the persistence pair and the `models.py` helpers pattern, but its
 use case still exposes `execute` (checklist step 3 pending).
