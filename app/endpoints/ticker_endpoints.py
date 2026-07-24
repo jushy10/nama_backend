@@ -551,8 +551,9 @@ def search_stocks_endpoint(
         False,
         description=(
             "When a single market is chosen, scope it to that market's home companies (the "
-            "default): the US market drops Canadian companies' US listings (e.g. CNI) by issuer "
-            "domicile while keeping other foreign ADRs, and the Canadian market drops the CDRs of "
+            "default): the US market drops every foreign-domiciled listing by issuer domicile -- "
+            "Canadian companies' US listings (e.g. CNI) and foreign ADRs (e.g. TSM, SKHYV) "
+            "alike -- and the Canadian market drops the CDRs of "
             "US / foreign companies -- structurally by excluding the Cboe Canada (.NE) "
             "depositary-receipt venue, plus any confirmed foreign-domiciled listing -- while "
             "keeping Canadian companies (TSX / TSXV). Set true to skip that scoping and see every "

@@ -559,12 +559,15 @@ class StockSearchRepositoryAdapterImpl(StockSearchRepositoryAdapter):
             if not criteria.include_interlisted and len(criteria.countries) == 1:
                 (market,) = criteria.countries
                 if market == "US":
-                    # US screen: drop Canadian companies' US listings (CNI, CP on NYSE); keep US
-                    # companies and non-Canadian foreign ADRs (domicile not CA, or not yet known).
+                    # US screen: keep US *home* companies only (domicile US, or not yet known) —
+                    # symmetric with the CA screen below. Drops every foreign-domiciled listing:
+                    # a Canadian company's US line (CNI, CP on NYSE) and the foreign ADRs/ADSs
+                    # (TSM, BABA, SK hynix's SKHY/SKHYV) alike. ?include_interlisted=true still
+                    # shows them, and a direct ticker read is unaffected.
                     conditions.append(
                         or_(
                             StockRecord.domicile_country.is_(None),
-                            StockRecord.domicile_country != "CA",
+                            StockRecord.domicile_country == "US",
                         )
                     )
                 elif market == "CA":
