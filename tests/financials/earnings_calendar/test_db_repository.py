@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.db import Base
 from app.domains.financials.earnings.quarterly.entities import EarningsSession
 from app.domains.financials.earnings.quarterly.models import StockQuarterlyEarningsRecord
-from app.domains.financials.earnings_calendar.earnings_calendar_repository_adapter_impl import EarningsCalendarRepositoryAdapterImpl
+from app.domains.financials.earnings_calendar.db_repository import DbEarningsCalendarRepository
 from app.domains.listings.anchor.models import get_or_create_stock
 
 _FETCHED = datetime(2026, 7, 14, tzinfo=timezone.utc)
@@ -80,8 +80,8 @@ def _seed(session):
     session.commit()
 
 
-def repo(session) -> EarningsCalendarRepositoryAdapterImpl:
-    return EarningsCalendarRepositoryAdapterImpl(session)
+def repo(session) -> DbEarningsCalendarRepository:
+    return DbEarningsCalendarRepository(session)
 
 
 def test_returns_upcoming_reports_in_window_ordered_by_date_then_ticker(session):

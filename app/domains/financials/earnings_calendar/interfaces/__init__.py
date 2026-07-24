@@ -1,3 +1,0 @@
-from app.domains.financials.earnings_calendar.interfaces.earnings_calendar_repository_adapter import EarningsCalendarRepositoryAdapter
-
-__all__ = ["EarningsCalendarRepositoryAdapter"]

@@ -20,7 +20,7 @@ class _FakeUseCase:
         self._error = error
         self.calls: list[tuple] = []
 
-    def execute(self, from_date=None, to_date=None):
+    def run(self, from_date=None, to_date=None):
         self.calls.append((from_date, to_date))
         if self._error is not None:
             raise self._error
@@ -28,12 +28,12 @@ class _FakeUseCase:
 
 
 def _client(fake: _FakeUseCase) -> TestClient:
-    app.dependency_overrides[endpoints.get_earnings_calendar_use_case] = lambda: fake
+    app.dependency_overrides[endpoints.get_get_earnings_calendar] = lambda: fake
     return TestClient(app)
 
 
 def _teardown():
-    app.dependency_overrides.pop(endpoints.get_earnings_calendar_use_case, None)
+    app.dependency_overrides.pop(endpoints.get_get_earnings_calendar, None)
 
 
 def _a_calendar() -> EarningsCalendar:
