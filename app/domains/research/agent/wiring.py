@@ -16,8 +16,9 @@ from app.domains.research.agent.errors import (
     MissingAgentRecipe,
     UnknownAgentTool,
 )
-from app.domains.research.agent.interfaces import ConversationModelAdapter, Tool
-from app.domains.research.agent.repository_adapter_impl import AgentRecipeRepositoryAdapterImpl
+from app.domains.research.agent.db_repository import DbAgentRecipeRepository
+from app.domains.research.agent.interfaces import ConversationModelAdapter
+from app.domains.research.agent.tool import Tool
 from app.domains.research.agent.tools import MarketSentimentTool, SearchStocksTool
 from app.domains.research.agent.use_cases import RunResearchUsecase
 from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
@@ -61,7 +62,7 @@ def build_run_research(
 ) -> RunResearchUsecase:
     # A missing recipe row is a deployment problem (migrations not run) -> 503.
     # Wiring reads the recipe for what it builds (tools, model); the use case re-reads for prompt/steps.
-    repo = AgentRecipeRepositoryAdapterImpl(db)
+    repo = DbAgentRecipeRepository(db)
     recipe = repo.get(_RESEARCH_AGENT)
     if recipe is None:
         raise MissingAgentRecipe(_RESEARCH_AGENT)

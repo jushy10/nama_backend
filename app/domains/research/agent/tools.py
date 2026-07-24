@@ -1,7 +1,7 @@
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 from app.domains.research.agent.entities import ToolSpec
-from app.domains.research.agent.interfaces import Tool
+from app.domains.research.agent.tool import Tool
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.macro.sentiment.use_cases import GetMarketSentiment
 from app.domains.listings.universe.entities import (
@@ -105,7 +105,17 @@ class SearchStocksTool(Tool):
         return _SEARCH_STOCKS_SPEC
 
     def run(self, arguments: dict) -> str:
-        page = self._search.execute(**asdict(_SearchArgs.from_model(arguments)))
+        args = _SearchArgs.from_model(arguments)
+        page = self._search.execute(
+            query=args.query,
+            sectors=args.sectors,
+            market_cap_tiers=args.market_cap_tiers,
+            sort=args.sort,
+            direction=args.direction,
+            in_sp500=args.in_sp500,
+            in_nasdaq100=args.in_nasdaq100,
+            limit=args.limit,
+        )
         if not page.results:
             return "No stocks in the universe matched that screen."
         rows = "\n".join(_format_row(row) for row in page.results)
@@ -145,8 +155,7 @@ class MarketSentimentTool(Tool):
 @dataclass(frozen=True)
 class _SearchArgs:
     """search_stocks arguments coerced from the model's untrusted input — a stray value
-    degrades to its default, never raises. Field names mirror SearchStocks.execute's
-    kwargs so run() can splat asdict() straight into it."""
+    degrades to its default, never raises."""
 
     query: str | None = None
     sectors: tuple[str, ...] = ()

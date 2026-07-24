@@ -32,5 +32,5 @@ def run_research_endpoint(
     # Domain errors raised below (incl. QuotaExceeded -> 429) are translated by the
     # central handlers.
     return ResearchResponse.from_result(
-        use_case.execute(body.question, client_id=client_ip(request))
+        use_case.run(body.question, client_id=client_ip(request))
     )

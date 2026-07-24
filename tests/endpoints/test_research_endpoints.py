@@ -23,7 +23,7 @@ class _FakeUseCase:
         self._error = error
         self.questions: list[str] = []
 
-    def execute(self, question: str, client_id: str | None = None) -> ResearchResult:
+    def run(self, question: str, client_id: str | None = None) -> ResearchResult:
         self.questions.append(question)
         if self._error is not None:
             raise self._error
