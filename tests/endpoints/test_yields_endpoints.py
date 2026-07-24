@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.endpoints import yields_endpoints as endpoints
+from app.endpoints.error_handlers import register_error_handlers
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.macro.yields.entities import (
     YieldCurve,
@@ -20,7 +21,7 @@ class _FakeUseCase:
         self._error = error
         self.calls: list = []
 
-    def execute(self, *args) -> object:
+    def run(self, *args) -> object:
         self.calls.append(args)
         if self._error is not None:
             raise self._error
@@ -30,14 +31,16 @@ class _FakeUseCase:
 def _curve_client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
-    app.dependency_overrides[endpoints.get_yield_curve] = lambda: fake
+    register_error_handlers(app)  # the endpoint has no try/except; the handlers translate
+    app.dependency_overrides[endpoints.get_get_yield_curve] = lambda: fake
     return TestClient(app)
 
 
 def _history_client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
-    app.dependency_overrides[endpoints.get_yield_history] = lambda: fake
+    register_error_handlers(app)
+    app.dependency_overrides[endpoints.get_get_yield_history] = lambda: fake
     return TestClient(app)
 
 

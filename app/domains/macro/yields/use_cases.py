@@ -6,7 +6,7 @@ class GetYieldCurve:
     def __init__(self, provider: YieldCurveAdapter) -> None:
         self._provider = provider
 
-    def execute(self) -> YieldCurve:
+    def run(self) -> YieldCurve:
         curve = self._provider.get_yield_curve()
         return YieldCurve(
             as_of=curve.as_of,
@@ -21,7 +21,7 @@ class GetYieldHistory:
     def __init__(self, provider: YieldHistoryAdapter) -> None:
         self._provider = provider
 
-    def execute(self, lookback_days: int | None = None) -> YieldHistory:
+    def run(self, lookback_days: int | None = None) -> YieldHistory:
         days = self._DEFAULT_LOOKBACK_DAYS if lookback_days is None else lookback_days
         if days <= 0:
             raise ValueError("lookback_days must be a positive number of days")
