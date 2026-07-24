@@ -29,7 +29,7 @@ class GetStockHeatMap:
         self._repository = repository
         self._quotes = quotes
 
-    def execute(self, scope: HeatMapScope) -> HeatMap:
+    def run(self, scope: HeatMapScope) -> HeatMap:
         page = self._repository.search(self._criteria(scope))
         results = tuple(r for r in page.results if r.market_cap is not None)
         rows = tuple(

@@ -15,7 +15,7 @@ class _FakeUseCase:
         self._error = error
         self.scope = None
 
-    def execute(self, scope):
+    def run(self, scope):
         self.scope = scope
         if self._error is not None:
             raise self._error
@@ -23,12 +23,12 @@ class _FakeUseCase:
 
 
 def _client(fake: _FakeUseCase) -> TestClient:
-    app.dependency_overrides[endpoints.get_heatmap_use_case] = lambda: fake
+    app.dependency_overrides[endpoints.get_stock_heat_map] = lambda: fake
     return TestClient(app)
 
 
 def _teardown():
-    app.dependency_overrides.pop(endpoints.get_heatmap_use_case, None)
+    app.dependency_overrides.pop(endpoints.get_stock_heat_map, None)
 
 
 def _a_map(scope=HeatMapScope.SP500) -> HeatMap:

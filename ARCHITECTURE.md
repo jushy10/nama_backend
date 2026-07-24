@@ -344,6 +344,18 @@ reused by `analysis_endpoints` and kept under their established names) resolve i
 translation; table-less and live-per-request, so the persistence pair is N/A,
 `interfaces/` was already vendor-only (both board ports ← `app/adapters/alpaca/`), and
 no slice `errors.py` — it raises only the shared-kernel errors);
+`markets/heatmap` (fully, for its applicable steps — `run` (call sites updated in the
+daily brief's gather and its cron wiring), `api_schemas.py` with `from_*` presenters
+(reusing the shared `StockPerformanceResponse.from_performance` for the trailing-window
+block), framework-free `wiring.py` whose `build_get_stock_heat_map(db, quotes)` builds
+the universe's db-backed search repository from the Session and takes the bulk-quote
+provider as a parameter — the provider is the shared Alpaca singleton owned by
+`app/endpoints/wiring.py` with its missing-keys 503 gate, resolved by the endpoint shim
+(`get_stock_heat_map`) via `Depends(get_provider)` — and a thin endpoint with central
+error translation (the inline `ValueError` → 400 on an unknown `?index=` stays);
+table-less and live-per-request, so the persistence pair is N/A, it declares no ports of
+its own (it consumes the shared-kernel `BulkQuoteAdapter` and the universe slice's
+search port), and no slice `errors.py` — it raises only the shared-kernel errors);
 `research/rate_limit_quota`
 partially — it has the persistence pair and the `models.py` helpers pattern, but its
 use case still exposes `execute` (checklist step 3 pending).
