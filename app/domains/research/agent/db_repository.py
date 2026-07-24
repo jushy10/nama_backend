@@ -4,10 +4,10 @@ from sqlalchemy.orm import Session
 
 from app.domains.research.agent import models
 from app.domains.research.agent.entities import AgentRecipe
-from app.domains.research.agent.interfaces import AgentRecipeRepositoryAdapter
+from app.domains.research.agent.repository import AgentRecipeRepository
 
 
-class AgentRecipeRepositoryAdapterImpl(AgentRecipeRepositoryAdapter):
+class DbAgentRecipeRepository(AgentRecipeRepository):
     def __init__(self, session: Session) -> None:
         self._session = session
 

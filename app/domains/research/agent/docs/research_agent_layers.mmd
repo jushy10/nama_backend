@@ -2,7 +2,7 @@ graph LR
     EP["endpoints/research_endpoints.py<br/>controller + presenter + wiring"] --> UC["ai/agent/use_cases.py<br/>RunResearchUsecase loop"]
     UC --> E["ai/agent/entities.py<br/>Message / ModelTurn / AgentStep"]
     UC --> P1["interfaces/ConversationModelAdapter"]
-    UC --> P2["interfaces/Tool"]
+    UC --> P2["tools.py Tool ABC"]
     AD["adapters/bedrock/<br/>conversation_model_adapter_impl.py"] -. implements .-> P1
     T["ai/agent/tools.py<br/>SearchStocksTool / MarketSentimentTool"] -. implements .-> P2
     T --> UC2["existing read use cases<br/>SearchStocks / GetMarketSentiment"]

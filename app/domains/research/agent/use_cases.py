@@ -13,11 +13,9 @@ from app.domains.research.agent.entities import (
     UserMessage,
 )
 from app.domains.research.agent.errors import EmptyQuestion, MissingAgentRecipe
-from app.domains.research.agent.interfaces import (
-    AgentRecipeRepositoryAdapter,
-    ConversationModelAdapter,
-    Tool,
-)
+from app.domains.research.agent.interfaces import ConversationModelAdapter
+from app.domains.research.agent.repository import AgentRecipeRepository
+from app.domains.research.agent.tools import Tool
 from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 
 logger = logging.getLogger(__name__)
@@ -39,7 +37,7 @@ class RunResearchUsecase:
         self,
         model: ConversationModelAdapter,
         tools: Sequence[Tool],
-        recipe_repo: AgentRecipeRepositoryAdapter,
+        recipe_repo: AgentRecipeRepository,
         agent_name: str,
         quota: ConsumeGenerationQuota | None = None,
     ) -> None:
@@ -50,7 +48,7 @@ class RunResearchUsecase:
         self._agent_name = agent_name
         self._quota = quota
 
-    def execute(self, question: str, client_id: str | None = None) -> ResearchResult:
+    def run(self, question: str, client_id: str | None = None) -> ResearchResult:
         question = (question or "").strip()
         if not question:
             raise EmptyQuestion()
