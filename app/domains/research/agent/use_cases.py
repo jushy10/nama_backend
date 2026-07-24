@@ -15,7 +15,7 @@ from app.domains.research.agent.entities import (
 from app.domains.research.agent.errors import EmptyQuestion, MissingAgentRecipe
 from app.domains.research.agent.interfaces import ConversationModelAdapter
 from app.domains.research.agent.repository import AgentRecipeRepository
-from app.domains.research.agent.tools import Tool
+from app.domains.research.agent.tool import Tool
 from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 
 logger = logging.getLogger(__name__)

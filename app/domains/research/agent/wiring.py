@@ -18,7 +18,8 @@ from app.domains.research.agent.errors import (
 )
 from app.domains.research.agent.db_repository import DbAgentRecipeRepository
 from app.domains.research.agent.interfaces import ConversationModelAdapter
-from app.domains.research.agent.tools import MarketSentimentTool, SearchStocksTool, Tool
+from app.domains.research.agent.tool import Tool
+from app.domains.research.agent.tools import MarketSentimentTool, SearchStocksTool
 from app.domains.research.agent.use_cases import RunResearchUsecase
 from app.domains.research.rate_limit_quota.use_cases import ConsumeGenerationQuota
 from app.domains.macro.sentiment.use_cases import GetMarketSentiment

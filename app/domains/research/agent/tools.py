@@ -1,7 +1,7 @@
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from app.domains.research.agent.entities import ToolSpec
+from app.domains.research.agent.tool import Tool
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.macro.sentiment.use_cases import GetMarketSentiment
 from app.domains.listings.universe.entities import (
@@ -11,17 +11,6 @@ from app.domains.listings.universe.entities import (
     StockSort,
 )
 from app.domains.listings.universe.use_cases import SearchStocks
-
-class Tool(ABC):
-    @property
-    @abstractmethod
-    def spec(self) -> ToolSpec:
-        raise NotImplementedError
-
-    @abstractmethod
-    def run(self, arguments: dict) -> str:
-        raise NotImplementedError
-
 
 # Cap on rows returned to the model — keeps the prompt (and token bill) bounded.
 _MAX_SCREEN_ROWS = 15
@@ -262,4 +251,4 @@ def _positive_int_or_none(value) -> int | None:
     return value if value > 0 else None
 
 
-__all__ = ("Tool", "SearchStocksTool", "MarketSentimentTool")
+__all__ = ("SearchStocksTool", "MarketSentimentTool")

@@ -3,7 +3,7 @@ import pytest
 from app.domains.research.agent.entities import AgentRecipe, ModelTurn, ToolCall, ToolSpec
 from app.domains.research.agent.errors import EmptyQuestion, MissingAgentRecipe
 from app.domains.research.agent.repository import AgentRecipeRepository
-from app.domains.research.agent.tools import Tool
+from app.domains.research.agent.tool import Tool
 from app.domains.research.agent.use_cases import (
     _EMPTY_ANSWER_FALLBACK,
     RunResearchUsecase,
