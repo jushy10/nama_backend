@@ -30,6 +30,17 @@ class ToolMessage(ToolResult):
 
 
 @dataclass(frozen=True)
+class ToolError(ToolResult):
+    """A failed tool call, reported to the model as data (not prose) so it can adjust:
+    a stable ``error`` code, plus what it asked for and what it could ask for instead."""
+
+    error: str  # "unknown_tool" | "tool_failed"
+    tool: str
+    detail: str | None = None
+    available_tools: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
 class VixReading:
     value: float
     change: float | None

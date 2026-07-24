@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app.domains.research.agent.entities import (
@@ -194,7 +196,9 @@ def test_unknown_tool_becomes_an_error_outcome_not_a_crash():
     assert result.answer == "recovered"
     assert len(result.steps) == 1
     assert result.steps[0].is_error is True
-    assert "Unknown tool" in result.steps[0].output
+    payload = json.loads(result.steps[0].output)
+    assert payload["error"] == "unknown_tool" and payload["tool"] == "does_not_exist"
+    assert payload["available_tools"] == ["echo"]
 
 
 def test_a_raising_tool_becomes_an_error_outcome_not_a_crash():
@@ -208,7 +212,8 @@ def test_a_raising_tool_becomes_an_error_outcome_not_a_crash():
     result = _research(model, [boom]).run("q")
     assert result.answer == "handled"
     assert result.steps[0].is_error is True
-    assert "failed" in result.steps[0].output
+    payload = json.loads(result.steps[0].output)
+    assert payload["error"] == "tool_failed" and "kaboom" in payload["detail"]
 
 
 # --- The step budget bounds the loop -----------------------------------------------------------

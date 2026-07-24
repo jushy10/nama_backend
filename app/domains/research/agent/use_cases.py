@@ -10,7 +10,9 @@ from app.domains.research.agent.entities import (
     Message,
     ResearchResult,
     ToolCall,
+    ToolError,
     ToolOutcome,
+    ToolResult,
     ToolResultsMessage,
     UserMessage,
 )
@@ -109,14 +111,19 @@ class RunResearchUseCase:
     def _run_tool(self, call: ToolCall) -> AgentStep:
         tool = self._tools.get(call.name)
         if tool is None:
-            known = ", ".join(self._tools)
-            message = f"Unknown tool '{call.name}'. Available tools: {known}."
-            return AgentStep(call.name, call.arguments, message, is_error=True)
+            error = ToolError(
+                error="unknown_tool", tool=call.name, available_tools=tuple(self._tools)
+            )
+            return self._step(call, error, is_error=True)
         try:
-            # The one place a tool payload becomes model-facing text.
-            output = json.dumps(asdict(tool.run(call.arguments)), default=str)
-            return AgentStep(call.name, call.arguments, output)
+            return self._step(call, tool.run(call.arguments))
         except Exception as exc:  # a tool should not raise, but never let one stall the loop
             logger.warning("research tool %s raised: %s", call.name, exc)
-            message = f"Tool '{call.name}' failed: {exc}"
-            return AgentStep(call.name, call.arguments, message, is_error=True)
+            error = ToolError(error="tool_failed", tool=call.name, detail=str(exc))
+            return self._step(call, error, is_error=True)
+
+    @staticmethod
+    def _step(call: ToolCall, result: ToolResult, *, is_error: bool = False) -> AgentStep:
+        # The one place a tool payload — success or error — becomes model-facing text.
+        output = json.dumps(asdict(result), default=str)
+        return AgentStep(call.name, call.arguments, output, is_error=is_error)
