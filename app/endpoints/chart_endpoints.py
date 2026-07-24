@@ -3,32 +3,17 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.domains.pricing.charts.chart_window import ChartRange, resolve_window
-from app.domains.pricing.charts.indicators import (
-    EmaSeries,
-    HorizonTrend,
-    INDICATOR_NAMES,
-    Indicator,
-    IndicatorSet,
-    IndicatorSpec,
-    SupportLevelSeries,
-    TrendAssessment,
-)
-from app.domains.pricing.charts.schemas import (
-    CandleResponse,
+from app.domains.pricing.charts import wiring
+from app.domains.pricing.charts.api_schemas import (
     CandleSeriesResponse,
-    EmaLineResponse,
-    EmaPointResponse,
     EmaResponse,
-    HorizonTrendResponse,
-    IndicatorLineResponse,
-    IndicatorPointResponse,
-    IndicatorResponse,
     IndicatorsResponse,
-    SupportLevelResponse,
     SupportLevelsResponse,
     TrendResponse,
 )
+from app.domains.pricing.charts.chart_window import ChartRange, resolve_window
+from app.domains.pricing.charts.indicators import INDICATOR_NAMES, IndicatorSpec
+from app.domains.pricing.charts.interfaces import CandleAdapter
 from app.domains.pricing.charts.use_cases import (
     GetStockCandles,
     GetStockEma,
@@ -36,20 +21,19 @@ from app.domains.pricing.charts.use_cases import (
     GetStockSupportLevels,
     GetStockTrend,
 )
-from app.domains.pricing.charts.interfaces import CandleAdapter
-from app.domains.shared.entities import CandleSeries, Timeframe
-from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
+from app.domains.shared.entities import Timeframe
 from app.endpoints.wiring import get_price_provider
 
 router = APIRouter(tags=["charts"])
 
 
 def get_stock_candles(
-    # The market-routing provider implements CandleAdapter, so one instance serves the chart
-    # for either market — a US symbol reads Alpaca bars, a Canadian-suffixed one Yahoo bars.
+    # Depends shim over the slice's wiring. The market-routing provider implements
+    # CandleAdapter, so one instance serves the chart for either market — a US symbol
+    # reads Alpaca bars, a Canadian-suffixed one Yahoo bars.
     provider: CandleAdapter = Depends(get_price_provider),
 ) -> GetStockCandles:
-    return GetStockCandles(provider)
+    return wiring.build_get_stock_candles(provider)
 
 
 def get_stock_ema(
@@ -57,7 +41,7 @@ def get_stock_ema(
     # routing provider (US→Alpaca / CA→Yahoo) backs this endpoint too.
     provider: CandleAdapter = Depends(get_price_provider),
 ) -> GetStockEma:
-    return GetStockEma(provider)
+    return wiring.build_get_stock_ema(provider)
 
 
 def get_stock_support_levels(
@@ -65,7 +49,7 @@ def get_stock_support_levels(
     # so the routing provider backs this endpoint too.
     provider: CandleAdapter = Depends(get_price_provider),
 ) -> GetStockSupportLevels:
-    return GetStockSupportLevels(provider)
+    return wiring.build_get_stock_support_levels(provider)
 
 
 def get_stock_trend(
@@ -73,7 +57,7 @@ def get_stock_trend(
     # so the routing provider backs this endpoint too.
     provider: CandleAdapter = Depends(get_price_provider),
 ) -> GetStockTrend:
-    return GetStockTrend(provider)
+    return wiring.build_get_stock_trend(provider)
 
 
 def get_stock_indicators(
@@ -81,7 +65,7 @@ def get_stock_indicators(
     # derived from the OHLCV bars, so the routing provider backs it too.
     provider: CandleAdapter = Depends(get_price_provider),
 ) -> GetStockIndicators:
-    return GetStockIndicators(provider)
+    return wiring.build_get_stock_indicators(provider)
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
@@ -102,138 +86,15 @@ def _resolve_request_window(
 
 
 @contextmanager
-def _translate_domain_errors():
+def _translate_value_errors():
+    # Bad request input (invalid symbol / inverted window / bad periods) surfaces as a
+    # ValueError from the use case — an inline 400, deliberately kept in the endpoint.
+    # Domain errors (StockNotFound → 404, StockDataUnavailable → 502) are translated by
+    # the central handlers in endpoints/error_handlers.py.
     try:
         yield
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    except StockNotFound as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except StockDataUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
-
-
-def _present_candles(series: CandleSeries) -> CandleSeriesResponse:
-    return CandleSeriesResponse(
-        symbol=series.symbol,
-        timeframe=series.timeframe.value,
-        count=len(series.candles),
-        candles=[
-            CandleResponse(
-                time=int(c.timestamp.timestamp()),
-                timestamp=c.timestamp,
-                open=c.open,
-                high=c.high,
-                low=c.low,
-                close=c.close,
-                volume=c.volume,
-                direction="up" if c.is_bullish else "down",
-            )
-            for c in series.candles
-        ],
-    )
-
-
-def _present_ema(series: EmaSeries) -> EmaResponse:
-    return EmaResponse(
-        symbol=series.symbol,
-        timeframe=series.timeframe.value,
-        lines=[
-            EmaLineResponse(
-                period=line.period,
-                count=len(line.points),
-                latest=line.latest.value if line.latest else None,
-                points=[
-                    EmaPointResponse(
-                        time=int(point.timestamp.timestamp()),
-                        timestamp=point.timestamp,
-                        value=point.value,
-                    )
-                    for point in line.points
-                ],
-            )
-            for line in series.lines
-        ],
-    )
-
-
-def _present_support_levels(series: SupportLevelSeries) -> SupportLevelsResponse:
-    return SupportLevelsResponse(
-        symbol=series.symbol,
-        timeframe=series.timeframe.value,
-        reference_price=series.reference_price,
-        count=len(series.levels),
-        levels=[
-            SupportLevelResponse(
-                price=level.price,
-                touches=level.touches,
-                last_touched=level.last_touched,
-                strength=level.strength.value,
-                distance_percent=level.distance_percent,
-            )
-            for level in series.levels
-        ],
-    )
-
-
-def _present_horizon(horizon: HorizonTrend | None) -> HorizonTrendResponse | None:
-    if horizon is None:
-        return None
-    return HorizonTrendResponse(
-        period=horizon.period,
-        lookback=horizon.lookback,
-        direction=horizon.direction.value,
-        effective_direction=horizon.effective_direction.value,
-        slope_percent=horizon.slope_percent,
-        change_percent=horizon.change_percent,
-        price_vs_ema_percent=horizon.price_vs_ema_percent,
-        ema=horizon.ema,
-    )
-
-
-def _present_trend(assessment: TrendAssessment) -> TrendResponse:
-    return TrendResponse(
-        symbol=assessment.symbol,
-        timeframe=assessment.timeframe.value,
-        reference_price=assessment.reference_price,
-        reading=assessment.reading.value,
-        short_term=_present_horizon(assessment.short_term),
-        medium_term=_present_horizon(assessment.medium_term),
-        long_term=_present_horizon(assessment.long_term),
-    )
-
-
-def _present_indicator(indicator: Indicator) -> IndicatorResponse:
-    return IndicatorResponse(
-        name=indicator.name,
-        label=indicator.label,
-        overlay=indicator.overlay,
-        lines=[
-            IndicatorLineResponse(
-                key=line.key,
-                count=len(line.points),
-                latest=line.latest.value if line.latest else None,
-                points=[
-                    IndicatorPointResponse(
-                        time=int(point.timestamp.timestamp()),
-                        timestamp=point.timestamp,
-                        value=point.value,
-                    )
-                    for point in line.points
-                ],
-            )
-            for line in indicator.lines
-        ],
-    )
-
-
-def _present_indicators(result: IndicatorSet) -> IndicatorsResponse:
-    return IndicatorsResponse(
-        symbol=result.symbol,
-        timeframe=result.timeframe.value,
-        count=len(result.indicators),
-        indicators=[_present_indicator(indicator) for indicator in result.indicators],
-    )
 
 
 @router.get("/stocks/ticker/{ticker}/candles", response_model=CandleSeriesResponse)
@@ -256,9 +117,9 @@ def get_stock_candles_endpoint(
     use_case: GetStockCandles = Depends(get_stock_candles),
 ) -> CandleSeriesResponse:
     start, end = _resolve_request_window(range_, start, end)
-    with _translate_domain_errors():
-        series = use_case.execute(ticker, timeframe, start=start, end=end)
-    return _present_candles(series)
+    with _translate_value_errors():
+        series = use_case.run(ticker, timeframe, start=start, end=end)
+    return CandleSeriesResponse.from_series(series)
 
 
 # EMA overlay bounds: a chart draws a handful of moving-average lines, each a
@@ -317,11 +178,11 @@ def get_stock_ema_endpoint(
 ) -> EmaResponse:
     periods = _normalize_ema_periods(period)
     start, end = _resolve_request_window(range_, start, end)
-    with _translate_domain_errors():
-        series = use_case.execute(
+    with _translate_value_errors():
+        series = use_case.run(
             ticker, timeframe, periods=periods, start=start, end=end
         )
-    return _present_ema(series)
+    return EmaResponse.from_ema(series)
 
 
 @router.get(
@@ -365,8 +226,8 @@ def get_stock_support_levels_endpoint(
     use_case: GetStockSupportLevels = Depends(get_stock_support_levels),
 ) -> SupportLevelsResponse:
     start, end = _resolve_request_window(range_, start, end)
-    with _translate_domain_errors():
-        series = use_case.execute(
+    with _translate_value_errors():
+        series = use_case.run(
             ticker,
             timeframe,
             window=window,
@@ -375,7 +236,7 @@ def get_stock_support_levels_endpoint(
             start=start,
             end=end,
         )
-    return _present_support_levels(series)
+    return SupportLevelsResponse.from_support_levels(series)
 
 
 # Trend horizon bounds: a lookback of at least a couple of bars, up to the deepest
@@ -451,8 +312,8 @@ def get_stock_trend_endpoint(
     use_case: GetStockTrend = Depends(get_stock_trend),
 ) -> TrendResponse:
     start, end = _resolve_request_window(range_, start, end)
-    with _translate_domain_errors():
-        assessment = use_case.execute(
+    with _translate_value_errors():
+        assessment = use_case.run(
             ticker,
             timeframe,
             short_period=short_period,
@@ -463,7 +324,7 @@ def get_stock_trend_endpoint(
             start=start,
             end=end,
         )
-    return _present_trend(assessment)
+    return TrendResponse.from_assessment(assessment)
 
 
 # Indicator-request bounds: a `name:period` token's period must be a sane lookback,
@@ -545,6 +406,6 @@ def get_stock_indicators_endpoint(
 ) -> IndicatorsResponse:
     specs = _parse_indicator_specs(indicator)
     start, end = _resolve_request_window(range_, start, end)
-    with _translate_domain_errors():
-        result = use_case.execute(ticker, timeframe, specs=specs, start=start, end=end)
-    return _present_indicators(result)
+    with _translate_value_errors():
+        result = use_case.run(ticker, timeframe, specs=specs, start=start, end=end)
+    return IndicatorsResponse.from_indicator_set(result)

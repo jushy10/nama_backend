@@ -356,6 +356,21 @@ error translation (the inline `ValueError` → 400 on an unknown `?index=` stays
 table-less and live-per-request, so the persistence pair is N/A, it declares no ports of
 its own (it consumes the shared-kernel `BulkQuoteAdapter` and the universe slice's
 search port), and no slice `errors.py` — it raises only the shared-kernel errors);
+`pricing/charts` (fully, for its applicable steps — `run` on all five use cases
+(candles / EMA / support levels / trend / indicators), `api_schemas.py` with `from_*`
+presenters, framework-free `wiring.py` whose `build_<action>(provider)` factories take
+the `CandleAdapter` as a parameter — the provider is the per-symbol market-routing
+price router owned by `app/endpoints/wiring.py` (`get_price_provider`, riding the
+Alpaca missing-keys 503 gate), resolved by the endpoint shims (`get_stock_candles` /
+`get_stock_ema` / `get_stock_support_levels` / `get_stock_trend` /
+`get_stock_indicators`) via `Depends(get_price_provider)` — and thin endpoints with
+central error translation (the inline `ValueError` → 400 on bad symbol / inverted
+window / bad periods stays, as do the endpoint-level request parsers for EMA periods
+and `name:period` indicator tokens); table-less and live-per-request, so the
+persistence pair is N/A, `interfaces/` was already vendor-only (`CandleAdapter` ←
+`alpaca` / `yfinance` / `market_routing`), the pure-domain `indicators.py` /
+`chart_window.py` helpers stay beside the entities untouched, and no slice
+`errors.py` — it raises only `ValueError` and the shared-kernel errors);
 `research/rate_limit_quota`
 partially — it has the persistence pair and the `models.py` helpers pattern, but its
 use case still exposes `execute` (checklist step 3 pending).

@@ -1211,7 +1211,7 @@ def test_candles_use_case_normalizes_symbol_and_forwards_window():
     fake = FakeCandleProvider(series=a_series())
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     end = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    GetStockCandles(fake).execute("  aapl ", Timeframe.HOUR_1, start=start, end=end)
+    GetStockCandles(fake).run("  aapl ", Timeframe.HOUR_1, start=start, end=end)
     assert fake.received == [("AAPL", Timeframe.HOUR_1, start, end)]
 
 
@@ -1219,7 +1219,7 @@ def test_candles_use_case_normalizes_symbol_and_forwards_window():
 def test_candles_use_case_rejects_invalid_symbols(bad):
     fake = FakeCandleProvider(series=a_series())
     with pytest.raises(ValueError):
-        GetStockCandles(fake).execute(bad, Timeframe.DAY_1)
+        GetStockCandles(fake).run(bad, Timeframe.DAY_1)
     assert fake.received == []  # provider untouched on invalid input
 
 
@@ -1228,21 +1228,21 @@ def test_candles_use_case_rejects_inverted_window():
     start = datetime(2026, 6, 1, tzinfo=timezone.utc)
     end = datetime(2026, 1, 1, tzinfo=timezone.utc)
     with pytest.raises(ValueError):
-        GetStockCandles(fake).execute("AAPL", Timeframe.DAY_1, start=start, end=end)
+        GetStockCandles(fake).run("AAPL", Timeframe.DAY_1, start=start, end=end)
     assert fake.received == []
 
 
 def test_candles_use_case_propagates_not_found():
     fake = FakeCandleProvider(raises=StockNotFound("ZZZZ"))
     with pytest.raises(StockNotFound):
-        GetStockCandles(fake).execute("ZZZZ", Timeframe.DAY_1)
+        GetStockCandles(fake).run("ZZZZ", Timeframe.DAY_1)
 
 
 def test_ema_use_case_warms_up_before_the_window():
     fake = FakeCandleProvider(series=a_rising_series())
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     end = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    GetStockEma(fake).execute(
+    GetStockEma(fake).run(
         "  aapl ", Timeframe.HOUR_1, periods=[2, 3], start=start, end=end
     )
     # Symbol normalized; the fetch reaches back a warmup before `start` (max
@@ -1263,7 +1263,7 @@ def test_ema_use_case_trims_warmup_bars_to_the_visible_window():
     )
     fake = FakeCandleProvider(series=a_series(candles))
     visible_start = base + timedelta(days=5)
-    result = GetStockEma(fake).execute(
+    result = GetStockEma(fake).run(
         "AAPL",
         Timeframe.DAY_1,
         periods=[3],
@@ -1279,7 +1279,7 @@ def test_ema_use_case_trims_warmup_bars_to_the_visible_window():
 def test_ema_use_case_rejects_invalid_symbols(bad):
     fake = FakeCandleProvider(series=a_rising_series())
     with pytest.raises(ValueError):
-        GetStockEma(fake).execute(bad, Timeframe.DAY_1, periods=[20])
+        GetStockEma(fake).run(bad, Timeframe.DAY_1, periods=[20])
     assert fake.received == []  # provider untouched on invalid input
 
 
@@ -1288,7 +1288,7 @@ def test_ema_use_case_rejects_inverted_window():
     start = datetime(2026, 6, 1, tzinfo=timezone.utc)
     end = datetime(2026, 1, 1, tzinfo=timezone.utc)
     with pytest.raises(ValueError):
-        GetStockEma(fake).execute(
+        GetStockEma(fake).run(
             "AAPL", Timeframe.DAY_1, periods=[20], start=start, end=end
         )
     assert fake.received == []
@@ -1297,11 +1297,11 @@ def test_ema_use_case_rejects_inverted_window():
 def test_ema_use_case_propagates_not_found():
     fake = FakeCandleProvider(raises=StockNotFound("ZZZZ"))
     with pytest.raises(StockNotFound):
-        GetStockEma(fake).execute("ZZZZ", Timeframe.DAY_1, periods=[20])
+        GetStockEma(fake).run("ZZZZ", Timeframe.DAY_1, periods=[20])
 
 
 def test_ema_use_case_computes_one_line_per_period():
-    result = GetStockEma(FakeCandleProvider(series=a_rising_series())).execute(
+    result = GetStockEma(FakeCandleProvider(series=a_rising_series())).run(
         "AAPL", Timeframe.DAY_1, periods=[2, 3]
     )
     assert [line.period for line in result.lines] == [2, 3]
@@ -1311,7 +1311,7 @@ def test_support_levels_use_case_normalizes_symbol_and_forwards_window():
     fake = FakeCandleProvider(series=a_support_series())
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     end = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    GetStockSupportLevels(fake).execute(
+    GetStockSupportLevels(fake).run(
         "  aapl ", Timeframe.HOUR_1, start=start, end=end
     )
     assert fake.received == [("AAPL", Timeframe.HOUR_1, start, end)]
@@ -1321,7 +1321,7 @@ def test_support_levels_use_case_normalizes_symbol_and_forwards_window():
 def test_support_levels_use_case_rejects_invalid_symbols(bad):
     fake = FakeCandleProvider(series=a_support_series())
     with pytest.raises(ValueError):
-        GetStockSupportLevels(fake).execute(bad, Timeframe.DAY_1)
+        GetStockSupportLevels(fake).run(bad, Timeframe.DAY_1)
     assert fake.received == []  # provider untouched on invalid input
 
 
@@ -1330,7 +1330,7 @@ def test_support_levels_use_case_rejects_inverted_window():
     start = datetime(2026, 6, 1, tzinfo=timezone.utc)
     end = datetime(2026, 1, 1, tzinfo=timezone.utc)
     with pytest.raises(ValueError):
-        GetStockSupportLevels(fake).execute(
+        GetStockSupportLevels(fake).run(
             "AAPL", Timeframe.DAY_1, start=start, end=end
         )
     assert fake.received == []
@@ -1339,14 +1339,14 @@ def test_support_levels_use_case_rejects_inverted_window():
 def test_support_levels_use_case_propagates_not_found():
     fake = FakeCandleProvider(raises=StockNotFound("ZZZZ"))
     with pytest.raises(StockNotFound):
-        GetStockSupportLevels(fake).execute("ZZZZ", Timeframe.DAY_1)
+        GetStockSupportLevels(fake).run("ZZZZ", Timeframe.DAY_1)
 
 
 def test_support_levels_use_case_detects_from_fetched_candles():
     # Double-bottom at 3.0, series ending at 5.0 -> one moderate support level.
     result = GetStockSupportLevels(
         FakeCandleProvider(series=a_support_series())
-    ).execute("AAPL", Timeframe.DAY_1, window=2)
+    ).run("AAPL", Timeframe.DAY_1, window=2)
     assert result.reference_price == 5.0
     assert [level.price for level in result.levels] == [3.0]
     assert result.levels[0].touches == 2
@@ -1357,7 +1357,7 @@ def test_trend_use_case_normalizes_symbol_and_warms_up_before_the_window():
     fake = FakeCandleProvider(series=a_rising_series(n=20))
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     end = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    GetStockTrend(fake).execute(
+    GetStockTrend(fake).run(
         "  aapl ",
         Timeframe.HOUR_1,
         short_period=3,
@@ -1379,7 +1379,7 @@ def test_trend_use_case_normalizes_symbol_and_warms_up_before_the_window():
 def test_trend_use_case_rejects_invalid_symbols(bad):
     fake = FakeCandleProvider(series=a_rising_series(n=20))
     with pytest.raises(ValueError):
-        GetStockTrend(fake).execute(bad, Timeframe.DAY_1)
+        GetStockTrend(fake).run(bad, Timeframe.DAY_1)
     assert fake.received == []  # provider untouched on invalid input
 
 
@@ -1395,7 +1395,7 @@ def test_trend_use_case_rejects_invalid_symbols(bad):
 def test_trend_use_case_rejects_bad_periods(periods):
     fake = FakeCandleProvider(series=a_rising_series(n=20))
     with pytest.raises(ValueError):
-        GetStockTrend(fake).execute("AAPL", Timeframe.DAY_1, **periods)
+        GetStockTrend(fake).run("AAPL", Timeframe.DAY_1, **periods)
     assert fake.received == []  # validated before any fetch
 
 
@@ -1404,19 +1404,19 @@ def test_trend_use_case_rejects_inverted_window():
     start = datetime(2026, 6, 1, tzinfo=timezone.utc)
     end = datetime(2026, 1, 1, tzinfo=timezone.utc)
     with pytest.raises(ValueError):
-        GetStockTrend(fake).execute("AAPL", Timeframe.DAY_1, start=start, end=end)
+        GetStockTrend(fake).run("AAPL", Timeframe.DAY_1, start=start, end=end)
     assert fake.received == []
 
 
 def test_trend_use_case_propagates_not_found():
     fake = FakeCandleProvider(raises=StockNotFound("ZZZZ"))
     with pytest.raises(StockNotFound):
-        GetStockTrend(fake).execute("ZZZZ", Timeframe.DAY_1)
+        GetStockTrend(fake).run("ZZZZ", Timeframe.DAY_1)
 
 
 def test_trend_use_case_classifies_from_fetched_candles():
     # A strictly rising series -> all three horizons up and aligned -> strong uptrend.
-    result = GetStockTrend(FakeCandleProvider(series=a_rising_series(n=20))).execute(
+    result = GetStockTrend(FakeCandleProvider(series=a_rising_series(n=20))).run(
         "AAPL", Timeframe.DAY_1, short_period=3, medium_period=5, long_period=8
     )
     assert result.short_term.direction is TrendDirection.UP
