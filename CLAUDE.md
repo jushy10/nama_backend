@@ -640,7 +640,15 @@ by a shared bearer token: each `@router.post` depends on `require_cron_token`
 $CRON_SYNC_TOKEN` (constant-time compared) and is **fail-closed** — a `503` when the token is
 unset, a `401` on a missing/wrong token. The GitHub sync workflows don't hit this HTTP surface
 (they run the sweeps as one-off ECS tasks via `python -m app.sync`, which call the `run_*_sync`
-runners directly), so the guard only gates a manual/HTTP trigger. Build
+runners directly), so the guard only gates a manual/HTTP trigger. The **API docs are
+split in two**: FastAPI's built-in docs are disabled, and `app/endpoints/docs_endpoints.py`
+serves `/docs` + `/openapi.json` (the public read API — every route except `/internal/*`)
+and `/internal/docs` + `/internal/openapi.json` (the staff-only cron surface), both filtered
+off the live route table by the `/internal/` path prefix so the split can't drift from the
+routing. The internal pair is guarded by **HTTP Basic** (`INTERNAL_DOCS_USERNAME` /
+`INTERNAL_DOCS_PASSWORD`, fail-closed 503 when unset, constant-time compared) — Basic
+rather than the cron bearer because Swagger UI fetches `openapi.json` with a plain browser
+request, and the browser re-attaches Basic credentials to it after the prompt. Build
 providers lazily so the app boots without every key. Never hardcode or commit
 secrets.
 

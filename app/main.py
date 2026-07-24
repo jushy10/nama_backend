@@ -82,6 +82,7 @@ from app.endpoints.earnings_calendar_endpoints import (
 )
 from app.endpoints.seo_endpoints import router as seo_router
 from app.endpoints.research_endpoints import router as research_router
+from app.endpoints.docs_endpoints import router as docs_router
 
 # The web server (uvicorn/gunicorn) installs handlers only on its own `uvicorn*`
 # loggers and leaves the root logger at its default WARNING level, so an app-level
@@ -117,7 +118,18 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="nama_backend", lifespan=lifespan)
+# The built-in docs are disabled because the doc surface is split in two:
+# /docs + /openapi.json (public — everything except /internal/*) and
+# /internal/docs + /internal/openapi.json (staff — only the cron sync surface,
+# behind HTTP Basic). Both are served by app/endpoints/docs_endpoints.py off
+# this same route table, so the split can't drift from the actual routing.
+app = FastAPI(
+    title="nama_backend",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 # Install the per-client (per-IP) rate limiter (defined in app/rate_limit.py so
 # endpoint modules can attach per-route limits without importing this module).
@@ -316,6 +328,12 @@ app.include_router(seo_router)
 # sentiment), so every figure it states is grounded in a real read. Metered per step, so it
 # carries the tight per-IP AI limit. See app/endpoints/research_endpoints.py.
 app.include_router(research_router)
+# The split docs surface (replacing the disabled built-ins, see the FastAPI(...)
+# call above): GET /docs + /openapi.json for the public read API, and
+# GET /internal/docs + /internal/openapi.json for the staff-only cron surface,
+# guarded by HTTP Basic (INTERNAL_DOCS_USERNAME / INTERNAL_DOCS_PASSWORD,
+# fail-closed when unset). See app/endpoints/docs_endpoints.py.
+app.include_router(docs_router)
 
 
 @app.get("/healthz")
