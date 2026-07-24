@@ -569,7 +569,10 @@ Naming: every adapter implementation lives in its vendor's folder as `<concern>_
 > requested** — it's a live Yahoo call and Yahoo intermittently blocks data-centre IPs,
 > so a blocked read is a 200 with a null block, never a failed card. Built
 > on the same skeleton as the other sub-slices (own `entities.py` / `interfaces/` /
-> `use_cases.py` / `schemas.py`, endpoint in `app/endpoints/ticker_endpoints.py`)
+> `use_cases.py` / `api_schemas.py` / a framework-free `wiring.py`, plus the
+> anchor-level persistence pair `repository.py` (`TickerRepository` +
+> `StoredTickerFacts`) / `db_repository.py` (`DbTickerRepository`); endpoint in
+> `app/endpoints/ticker_endpoints.py`)
 > but deliberately
 > **thinner: no table of its own, no cron** — the card is built around
 > the live quote, so nothing beyond the exchange is worth persisting. The use case pulls
@@ -578,11 +581,12 @@ Naming: every adapter implementation lives in its vendor's folder as `<concern>_
 > the quote is primary; the full-snapshot port only backs the one-time exchange fill),
 > `StockFundamentalsProvider` + `CompanyProfileProvider` (Finnhub, `None` without a key),
 > and the `QuarterlyEarningsAdapter` (the quarterly slice's DB cache, backing the trailing
-> P/E's TTM) — wired by reusing
-> the shared factories from `wiring.py`; the composite result (`TickerCard`)
-> is a dataclass beside the use case, not a slice entity, since it just bundles shared
+> P/E's TTM) — the slice's `wiring.py` `build_*` factories take those shared
+> providers as parameters (resolved by the endpoint shims via the factories in
+> `app/endpoints/wiring.py`); the composite result (`TickerCard`)
+> is a slice entity in `entities.py`, bundling shared
 > entities around the slice's domain rules (it also carries the `include` set so the
-> presenter can tell "not requested" from "requested but unavailable"). The quote is the
+> `from_card` presenter can tell "not requested" from "requested but unavailable"). The quote is the
 > only primary read (errors propagate); name/exchange/fundamentals/performance/options and
 > the trailing-P/E TTM are enrichment and never sink the card — an uncached symbol just
 > serves a **null `metrics.pe`**, not a 404. Caveat: the `put_call_ratio` pools only the

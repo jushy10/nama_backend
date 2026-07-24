@@ -5,15 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.adapters.yfinance.eps_history_adapter_impl import EpsHistoryAdapterImpl
 from app.domains.financials.earnings.quarterly.interfaces import QuarterlyEarningsAdapter
 from app.endpoints.quarterly_earnings_endpoints import (
     get_quarterly_earnings_provider,
 )
-from app.domains.shared.entities import Quote, StockPerformance
-from app.domains.etfs.repository_adapter_impl import EtfLookupRepositoryAdapterImpl
-from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
-from app.domains.shared.interfaces import AnalystEstimatesAdapter, StockPerformanceAdapter
+from app.domains.shared.exceptions import StockDataUnavailable
+from app.domains.shared.interfaces import AnalystEstimatesAdapter
 from app.adapters.bedrock.screener_query_adapter_impl import (
     ScreenerQueryAdapterImpl,
 )
@@ -22,26 +19,17 @@ from app.endpoints.wiring import (
     get_options_provider,
     get_price_provider,
 )
-from app.domains.shared.schemas import StockPerformanceResponse
-from app.domains.pricing.ticker.ticker_repository_adapter_impl import TickerRepositoryAdapterImpl
-from app.domains.pricing.ticker.entities import PeHistory, PeHistoryStats, TickerOptionsMetrics
-from app.domains.pricing.ticker.interfaces import OptionChainAdapter
-from app.domains.pricing.ticker.schemas import (
-    DividendResponse,
-    ExtendedHoursResponse,
-    OptionsMetricsResponse,
-    PeHistoryPointResponse,
+from app.domains.pricing.ticker import wiring as ticker_wiring
+from app.domains.pricing.ticker.api_schemas import (
     PeHistoryResponse,
-    PeHistoryStatsResponse,
     TickerCardResponse,
-    TickerMetricsResponse,
     TickerTypeResponse,
 )
+from app.domains.pricing.ticker.interfaces import OptionChainAdapter
 from app.domains.pricing.ticker.use_cases import (
     ClassifyTicker,
     GetStockPeHistory,
     GetTickerCard,
-    TickerCard,
 )
 from app.domains.listings.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.domains.listings.universe.entities import (
@@ -85,161 +73,12 @@ def get_ticker_card_use_case(
     estimates: AnalystEstimatesAdapter = Depends(get_estimates_provider),
     db: Session = Depends(get_db),
 ) -> GetTickerCard:
-    # The market-routing provider backs the quote, the trailing performance windows, and the
-    # one-time exchange lookup — a US symbol goes to the Alpaca singleton (real-time), a
-    # Canadian-suffixed one (.TO/.V/…) to the keyless Yahoo feed (delayed, best-effort). The
-    # repository serves the anchor read — the stored name, exchange, screen facts, and the
-    # annual/fundamentals slices' materialized figures (growth, cash, margins, ratios,
-    # dividend) — off the stocks row, so the card needs no live fundamentals/profile vendor.
-    # The options chain is the keyless yfinance singleton — always wired, best-effort at read —
-    # the quarterly-earnings provider is the same DB cache the earnings endpoint reads (backing
-    # the trailing P/E's TTM sum), and the estimates provider is the DB-only annual-forward
-    # projection (backing forward P/E and P/S — the only fundamentals not on the anchor), read
-    # best-effort only when 'metrics' is requested.
-    performance = provider if isinstance(provider, StockPerformanceAdapter) else None
-    return GetTickerCard(
-        provider,
-        performance=performance,
-        stocks=provider,
-        repository=TickerRepositoryAdapterImpl(db),
-        options=options,
-        earnings=earnings,
-        estimates=estimates,
-        # The card's asset_type is a single indexed membership check against the etfs
-        # table (same request-scoped session as the anchor read) — "etf" for a screened
-        # fund, else "equity".
-        etfs=EtfLookupRepositoryAdapterImpl(db),
-    )
-
-
-def _round2(value: float | None) -> float | None:
-    return None if value is None else round(value, 2)
-
-
-def _dividend_yield(
-    dividend_per_share: float | None, price: float | None
-) -> float | None:
-    if dividend_per_share is None or not price or price <= 0:
-        return None
-    return round(dividend_per_share / price * 100, 2)
-
-
-def _present_performance(
-    perf: StockPerformance | None,
-) -> StockPerformanceResponse | None:
-    if perf is None:
-        return None
-    return StockPerformanceResponse(
-        one_week=perf.one_week,
-        one_month=perf.one_month,
-        three_month=perf.three_month,
-        six_month=perf.six_month,
-        ytd=perf.ytd,
-        one_year=perf.one_year,
-    )
-
-
-def _present_options_metrics(
-    metrics: TickerOptionsMetrics | None,
-) -> OptionsMetricsResponse | None:
-    if metrics is None:
-        return None
-    # Rounded here at the edge like the dividend: these are display figures
-    # (percents, a ratio) and the chain arithmetic carries float noise.
-    return OptionsMetricsResponse(
-        implied_volatility=_round2(metrics.implied_volatility),
-        expected_move_percent=_round2(metrics.expected_move_percent),
-        expected_move_by=metrics.expected_move_by,
-        insurance_cost_percent=_round2(metrics.insurance_cost_percent),
-        insurance_expires=metrics.insurance_expires,
-        put_call_ratio=_round2(metrics.put_call_ratio),
-    )
-
-
-def _present_extended_hours(quote: Quote) -> ExtendedHoursResponse | None:
-    ext = quote.extended_hours
-    if ext is None:
-        return None
-    return ExtendedHoursResponse(
-        session=ext.session.value,
-        price=ext.price,
-        change=ext.change,
-        change_percent=ext.change_percent,
-        regular_price=ext.regular_close,
-        regular_change=quote.regular_change,
-        regular_change_percent=quote.regular_change_percent,
-        as_of=ext.as_of,
-    )
-
-
-def _present(card: TickerCard) -> TickerCardResponse:
-    dividend = None
-    if "dividend" in card.include:
-        # The dividend per share rides the anchor read (fundamentals slice); the yield is
-        # priced here on the live quote (annual dividend / price), the same "store the input,
-        # price it live" split the P/E and FCF yield use. Rounded here at the edge — a dividend
-        # card shows cents / basis-point-ish precision.
-        dividend = DividendResponse(
-            yield_percentage=_dividend_yield(card.dividend_per_share, card.quote.price),
-            per_share=_round2(card.dividend_per_share),
-        )
-    metrics = None
-    if "metrics" in card.include:
-        # The trailing P/E rides the valuation (the quarterly slice's TTM sum on the
-        # adjusted EPS basis, deliberately NOT a GAAP-ish TTM read); the margins and every
-        # other figure here ride the same anchor read — no live vendor call.
-        valuation = card.valuation
-        metrics = TickerMetricsResponse(
-            # The price-anchored multiples (P/E, P/B, P/S, PEG, the FCF/OCF reads) all ride
-            # the valuation — live price / the anchor's stored per-share inputs — so they sit
-            # on one live quote. The entity owns the positivity guards; the presenter just reads.
-            pe=valuation.trailing_pe if valuation else None,
-            pb=valuation.pb if valuation else None,
-            ps=valuation.ps if valuation else None,
-            peg=valuation.peg if valuation else None,
-            eps=_round2(valuation.ttm_eps) if valuation else None,
-            # Forward multiples off the annual slice's stored forward consensus (already
-            # rounded by the entity's forward_pe/forward_ps).
-            forward_pe=card.forward_pe,
-            forward_ps=card.forward_ps,
-            # Enterprise value + EV/EBITDA, priced live off the quote (the entity rounds
-            # ev_ebitda; EV is a large dollar figure served raw for the FE to scale).
-            enterprise_value=valuation.enterprise_value if valuation else None,
-            ev_ebitda=valuation.ev_to_ebitda if valuation else None,
-            price_to_fcf=valuation.price_to_fcf if valuation else None,
-            fcf_yield=valuation.fcf_yield if valuation else None,
-            ocf_yield=valuation.ocf_yield if valuation else None,
-            # The trailing ratios ride the anchor read; margins/ROE rounded here at the edge.
-            gross_margin=_round2(card.gross_margin),
-            operating_margin=_round2(card.operating_margin),
-            net_margin=_round2(card.net_margin),
-            roe=_round2(card.roe),
-            current_ratio=_round2(card.current_ratio),
-            debt_to_equity=_round2(card.debt_to_equity),
-            beta=_round2(card.beta),
-            # The YoY figures (trailing + forward) ride the anchor read (already rounded percent).
-            revenue_growth_yoy=card.revenue_growth_yoy,
-            eps_growth_yoy=card.eps_growth_yoy,
-            fcf_growth_yoy=card.fcf_growth_yoy,
-            forward_revenue_growth_yoy=card.forward_revenue_growth_yoy,
-            forward_eps_growth_yoy=card.forward_eps_growth_yoy,
-        )
-    return TickerCardResponse(
-        ticker=card.quote.symbol,
-        name=card.name,
-        exchange=card.exchange,
-        asset_type=card.asset_type,
-        price=card.quote.price,
-        change=card.quote.change,
-        change_percent=card.quote.change_percent,
-        extended_hours=_present_extended_hours(card.quote),
-        market_cap=card.market_cap,
-        sector=card.sector,
-        industry=card.industry,
-        dividend=dividend,
-        performance=_present_performance(card.performance),
-        metrics=metrics,
-        options_metrics=_present_options_metrics(card.options_metrics),
+    # Depends shim over the slice's wiring — exists for the db lifecycle, the shared
+    # provider singletons (the market-routing price router with its Alpaca 503 gate, the
+    # keyless options chain, the quarterly DB cache, the DB-only estimates projection),
+    # and the dependency_overrides test seam.
+    return ticker_wiring.build_get_ticker_card(
+        db, provider, options, earnings, estimates
     )
 
 
@@ -259,69 +98,27 @@ def get_ticker_card_endpoint(
     use_case: GetTickerCard = Depends(get_ticker_card_use_case),
 ) -> TickerCardResponse:
     try:
-        card = use_case.execute(ticker, include=include)
+        # Bad request input (malformed symbol / unknown include) surfaces as a ValueError —
+        # an inline 400, deliberately kept in the endpoint. Domain errors (StockNotFound →
+        # 404, StockDataUnavailable → 502) are translated by the central handlers.
+        card = use_case.run(ticker, include=include)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    except StockNotFound as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except StockDataUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
     # A valuation card, not a ticking price: the consensus legs move on analyst
     # revisions and the multiple doesn't need tick precision, so cache briefly —
     # a burst of viewers collapses onto one response.
     response.headers["Cache-Control"] = "public, max-age=300"
-    return _present(card)
-
-
-@lru_cache
-def _eps_history_provider() -> EpsHistoryAdapterImpl:
-    # Keyless yfinance singleton (like the options provider): it shares the module-level
-    # pacing state and is best-effort at read, so it's always constructable — no key gate.
-    return EpsHistoryAdapterImpl()
+    return TickerCardResponse.from_card(card)
 
 
 def get_pe_history_use_case(
     provider=Depends(get_price_provider),
 ) -> GetStockPeHistory:
-    # The market-routing provider supplies the daily closes (it implements CandleAdapter — the
-    # same instance the candle chart uses, US→Alpaca / CA→Yahoo), and the deep reported-EPS
-    # history rides the keyless yfinance adapter. The card's Alpaca 503 gate is inherited for a
-    # US symbol (the closes are primary here); the EPS leg is best-effort, so no key to gate on.
-    return GetStockPeHistory(provider, _eps_history_provider())
-
-
-def _present_pe_stats(stats: PeHistoryStats | None) -> PeHistoryStatsResponse | None:
-    if stats is None:
-        return None
-    return PeHistoryStatsResponse(
-        current_pe=stats.current_pe,
-        median_pe=stats.median_pe,
-        p25_pe=stats.p25_pe,
-        p75_pe=stats.p75_pe,
-        min_pe=stats.min_pe,
-        max_pe=stats.max_pe,
-        current_percentile=stats.current_percentile,
-        discount_to_median_percent=stats.discount_to_median_percent,
-        signal=stats.signal.value,
-        sample_size=stats.sample_size,
-    )
-
-
-def _present_pe_history(history: PeHistory) -> PeHistoryResponse:
-    return PeHistoryResponse(
-        ticker=history.symbol,
-        count=len(history.points),
-        points=[
-            PeHistoryPointResponse(
-                date=point.report_date,
-                price=round(point.price, 2),
-                ttm_eps=round(point.ttm_eps, 2),
-                pe=point.pe,
-            )
-            for point in history.points
-        ],
-        stats=_present_pe_stats(history.stats),
-    )
+    # Depends shim over the slice's wiring: the market-routing provider supplies the daily
+    # closes (it implements CandleAdapter — the same instance the candle chart uses,
+    # US→Alpaca / CA→Yahoo, inheriting the Alpaca 503 gate for a US symbol); the deep
+    # reported-EPS leg is the slice's keyless yfinance singleton.
+    return ticker_wiring.build_get_stock_pe_history(provider)
 
 
 @router.get(
@@ -333,17 +130,17 @@ def get_pe_history_endpoint(
     use_case: GetStockPeHistory = Depends(get_pe_history_use_case),
 ) -> PeHistoryResponse:
     try:
-        history = use_case.execute(ticker)
+        history = use_case.run(ticker)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    except StockNotFound as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except StockDataUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
     # A historical series that only extends when a new quarter reports (its latest point
     # tailed by today's close) — cache an hour, like the other slow-moving card reads.
     response.headers["Cache-Control"] = "public, max-age=3600"
-    return _present_pe_history(history)
+    return PeHistoryResponse.from_history(history)
+
+
+def _round2(value: float | None) -> float | None:
+    return None if value is None else round(value, 2)
 
 
 def get_peer_comparison_use_case(
@@ -410,9 +207,9 @@ def get_peer_comparison_endpoint(
 
 
 def get_classify_ticker_use_case(db: Session = Depends(get_db)) -> ClassifyTicker:
-    # Pure DB read: a single indexed membership check against the etfs table — no
-    # vendor, no key, request-scoped session — so it's always constructable.
-    return ClassifyTicker(EtfLookupRepositoryAdapterImpl(db))
+    # Depends shim over the slice's wiring — a pure DB read (a single indexed membership
+    # check against the etfs table), always constructable.
+    return ticker_wiring.build_classify_ticker(db)
 
 
 @router.get("/stocks/type/{ticker}", response_model=TickerTypeResponse)
@@ -422,13 +219,13 @@ def get_ticker_type_endpoint(
     use_case: ClassifyTicker = Depends(get_classify_ticker_use_case),
 ) -> TickerTypeResponse:
     try:
-        result = use_case.classify(ticker)
+        result = use_case.run(ticker)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     # ETF-universe membership only shifts when the screen re-syncs (rare), so cache
     # generously — a burst of classifier calls collapses onto one read.
     response.headers["Cache-Control"] = "public, max-age=3600"
-    return TickerTypeResponse(ticker=result.ticker, asset_type=result.asset_type)
+    return TickerTypeResponse.from_classification(result)
 
 
 # --- The universe search + filter menus (the /stocks/ticker collection) -------------------

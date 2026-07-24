@@ -3,10 +3,10 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.domains.listings.anchor import models
-from app.domains.pricing.ticker.interfaces import StoredTickerFacts, TickerRepositoryAdapter
+from app.domains.pricing.ticker.repository import StoredTickerFacts, TickerRepository
 
 
-class TickerRepositoryAdapterImpl(TickerRepositoryAdapter):
+class DbTickerRepository(TickerRepository):
     def __init__(self, session: Session) -> None:
         self._session = session
 

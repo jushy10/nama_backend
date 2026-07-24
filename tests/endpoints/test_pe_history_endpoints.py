@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.endpoints import ticker_endpoints as endpoints
+from app.endpoints.error_handlers import register_error_handlers
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.pricing.ticker.entities import PeHistory, PeHistoryPoint
 
@@ -14,7 +15,7 @@ class _FakeUseCase:
         self._error = error
         self.calls: list[str] = []
 
-    def execute(self, symbol: str) -> PeHistory:
+    def run(self, symbol: str) -> PeHistory:
         self.calls.append(symbol)
         if self._error is not None:
             raise self._error
@@ -24,6 +25,7 @@ class _FakeUseCase:
 def _client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
+    register_error_handlers(app)  # the endpoint keeps only the ValueError -> 400 inline
     app.dependency_overrides[endpoints.get_pe_history_use_case] = lambda: fake
     return TestClient(app)
 

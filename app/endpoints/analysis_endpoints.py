@@ -28,7 +28,6 @@ from app.adapters.db.db_only_context_adapter_impls import (
     RatingChangeAdapterImpl,
     RecommendationAdapterImpl,
 )
-from app.adapters.yfinance.eps_history_adapter_impl import EpsHistoryAdapterImpl
 from app.domains.research.analysis.ai_analysis_cache_adapter_impl import (
     earnings_analysis_cache,
     fundamentals_analysis_cache,
@@ -83,7 +82,7 @@ from app.domains.research.analysis.use_cases import (
     GetStockAnalysis,
     GetStockInfo,
 )
-from app.domains.pricing.ticker.use_cases import GetStockPeHistory
+from app.domains.pricing.ticker import wiring as ticker_wiring
 from app.domains.financials.earnings.annual.annual_earnings_repository_adapter_impl import AnnualEarningsRepositoryAdapterImpl
 from app.domains.financials.earnings.quarterly.quarterly_earnings_repository_adapter_impl import (
     QuarterlyEarningsRepositoryAdapterImpl,
@@ -404,15 +403,6 @@ def get_fundamentals_analysis_provider() -> FundamentalsAnalysisAdapter:
         ) from exc
 
 
-@lru_cache(maxsize=1)
-def _eps_history_provider() -> EpsHistoryAdapterImpl:
-    # Keyless yfinance singleton (like the options provider): shares the module-level pacing
-    # state and is best-effort at read, so it's always constructable — no key to gate on. Backs
-    # the fundamentals analysis's P/E-history context (the same adapter the pe-history endpoint
-    # uses).
-    return EpsHistoryAdapterImpl()
-
-
 def get_fundamentals_analysis(
     stock_info: GetStockInfo = Depends(get_stock_info),
     analyzer: FundamentalsAnalysisAdapter = Depends(get_fundamentals_analysis_provider),
@@ -439,7 +429,7 @@ def get_fundamentals_analysis(
         analyzer,
         StockSearchRepositoryAdapterImpl(db),
         QuarterlyEarningsAdapterImpl(QuarterlyEarningsRepositoryAdapterImpl(db)),
-        pe_history=GetStockPeHistory(candles, _eps_history_provider()),
+        pe_history=ticker_wiring.build_get_stock_pe_history(candles),
         cache=fundamentals_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("fundamentals"),
         quota=analysis_generation_quota(db),

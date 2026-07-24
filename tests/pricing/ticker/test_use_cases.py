@@ -24,15 +24,14 @@ from app.domains.pricing.ticker.entities import (
     TickerOptionsMetrics,
     TickerValuation,
 )
-from app.domains.pricing.ticker.interfaces import OptionChainAdapter
-from app.domains.pricing.ticker.interfaces import StoredTickerFacts, TickerRepositoryAdapter
-from app.domains.pricing.ticker.use_cases import (
+from app.domains.pricing.ticker.entities import (
     ASSET_TYPE_EQUITY,
     ASSET_TYPE_ETF,
-    ClassifyTicker,
-    GetTickerCard,
     TickerClassification,
 )
+from app.domains.pricing.ticker.interfaces import OptionChainAdapter
+from app.domains.pricing.ticker.repository import StoredTickerFacts, TickerRepository
+from app.domains.pricing.ticker.use_cases import ClassifyTicker, GetTickerCard
 
 
 def _a_quote(symbol: str, price: float) -> Quote:
@@ -103,7 +102,7 @@ class _FakeStocks(StockDataAdapter):
         )
 
 
-class _FakeRepo(TickerRepositoryAdapter):
+class _FakeRepo(TickerRepository):
     def __init__(
         self,
         name: str | None = None,
@@ -465,7 +464,7 @@ def test_assembles_the_full_card_when_everything_is_included():
 
     card = GetTickerCard(
         quotes, _FakePerformance(), repository=repo
-    ).execute("MU", include=["dividend", "performance", "metrics"])
+    ).run("MU", include=["dividend", "performance", "metrics"])
 
     assert card.quote.symbol == "MU"
     assert card.quote.price == 100.0
@@ -489,7 +488,7 @@ def test_unrequested_blocks_cost_no_provider_call():
 
     card = GetTickerCard(
         _FakeQuotes(), performance, repository=repo
-    ).execute("MU")
+    ).run("MU")
 
     assert performance.calls == []  # never touched
     assert card.include == frozenset()
@@ -507,7 +506,7 @@ def test_performance_only_include_builds_no_valuation():
 
     card = GetTickerCard(
         _FakeQuotes(), performance
-    ).execute("MU", include=["performance"])
+    ).run("MU", include=["performance"])
 
     assert performance.calls == ["MU"]
     assert card.performance is not None
@@ -526,7 +525,7 @@ def test_dividend_and_margins_ride_the_anchor():
 
     card = GetTickerCard(
         _FakeQuotes(price=100.0), repository=repo
-    ).execute("MU", include=["dividend", "metrics"])
+    ).run("MU", include=["dividend", "metrics"])
 
     assert card.dividend_per_share == 0.46
     assert card.gross_margin == 52.1
@@ -549,7 +548,7 @@ def test_stored_anchor_facts_flow_onto_the_card():
 
     card = GetTickerCard(
         _FakeQuotes(), repository=repo
-    ).execute("MU")
+    ).run("MU")
 
     assert card.market_cap == 1.09e12
     assert card.sector == "technology"
@@ -561,7 +560,7 @@ def test_stored_anchor_facts_flow_onto_the_card():
 def test_asset_type_is_etf_when_the_symbol_is_in_the_etf_universe():
     etfs = _FakeEtfs(is_member=True)
 
-    card = GetTickerCard(_FakeQuotes(), etfs=etfs).execute("VOO")
+    card = GetTickerCard(_FakeQuotes(), etfs=etfs).run("VOO")
 
     assert card.asset_type == ASSET_TYPE_ETF
     assert etfs.calls == ["VOO"]  # a single membership check on the normalized symbol
@@ -570,7 +569,7 @@ def test_asset_type_is_etf_when_the_symbol_is_in_the_etf_universe():
 def test_asset_type_is_equity_for_a_stock():
     etfs = _FakeEtfs(is_member=False)
 
-    card = GetTickerCard(_FakeQuotes(), etfs=etfs).execute("MU")
+    card = GetTickerCard(_FakeQuotes(), etfs=etfs).run("MU")
 
     assert card.asset_type == ASSET_TYPE_EQUITY
 
@@ -578,7 +577,7 @@ def test_asset_type_is_equity_for_a_stock():
 def test_classify_ticker_is_etf_for_a_fund():
     etfs = _FakeEtfs(is_member=True)
 
-    result = ClassifyTicker(etfs).classify("voo")
+    result = ClassifyTicker(etfs).run("voo")
 
     assert result == TickerClassification(ticker="VOO", asset_type=ASSET_TYPE_ETF)
     # Normalizes to upper-case, then a single membership check on it — no quote.
@@ -588,7 +587,7 @@ def test_classify_ticker_is_etf_for_a_fund():
 def test_classify_ticker_is_equity_for_a_stock():
     etfs = _FakeEtfs(is_member=False)
 
-    result = ClassifyTicker(etfs).classify("AAPL")
+    result = ClassifyTicker(etfs).run("AAPL")
 
     assert result == TickerClassification(ticker="AAPL", asset_type=ASSET_TYPE_EQUITY)
 
@@ -596,12 +595,12 @@ def test_classify_ticker_is_equity_for_a_stock():
 def test_classify_ticker_rejects_a_malformed_symbol():
     # Same normalization guard as the card: empty / non-alpha / too long is a ValueError.
     with pytest.raises(ValueError):
-        ClassifyTicker(_FakeEtfs()).classify("")
+        ClassifyTicker(_FakeEtfs()).run("")
 
 
 def test_asset_type_defaults_to_equity_without_an_etfs_lookup():
     # No etfs repository wired (a bare use case): the card still resolves a non-null asset_type.
-    card = GetTickerCard(_FakeQuotes()).execute("MU")
+    card = GetTickerCard(_FakeQuotes()).run("MU")
     assert card.asset_type == ASSET_TYPE_EQUITY
 
 
@@ -610,7 +609,7 @@ def test_includes_accept_comma_separated_and_mixed_case_values():
 
     card = GetTickerCard(
         _FakeQuotes(), performance
-    ).execute("MU", include=["Dividend, METRICS"])
+    ).run("MU", include=["Dividend, METRICS"])
 
     assert card.include == {"dividend", "metrics"}
     assert performance.calls == []  # performance not requested
@@ -620,7 +619,7 @@ def test_unknown_include_is_rejected_before_touching_a_port():
     quotes = _FakeQuotes()
 
     with pytest.raises(ValueError, match="Unknown include"):
-        GetTickerCard(quotes).execute("MU", include=["earnings"])
+        GetTickerCard(quotes).run("MU", include=["earnings"])
 
     assert quotes.calls == []  # rejected at the edge, like a bad symbol
 
@@ -628,7 +627,7 @@ def test_unknown_include_is_rejected_before_touching_a_port():
 def test_normalizes_the_symbol_before_calling_the_ports():
     quotes = _FakeQuotes()
 
-    GetTickerCard(quotes).execute("  mu ", include=["metrics"])
+    GetTickerCard(quotes).run("  mu ", include=["metrics"])
 
     assert quotes.calls == ["MU"]  # trimmed + upper-cased once, at the edge
 
@@ -641,7 +640,7 @@ def test_accepts_a_canadian_symbol_and_preserves_its_venue_suffix():
 
     for raw, expected in ((" shop.to ", "SHOP.TO"), ("cp.to", "CP.TO"), ("x.ne", "X.NE")):
         quotes.calls.clear()
-        GetTickerCard(quotes).execute(raw)
+        GetTickerCard(quotes).run(raw)
         assert quotes.calls == [expected]
 
 
@@ -649,14 +648,14 @@ def test_rejects_bad_symbols_before_touching_a_port():
     quotes = _FakeQuotes()
     for bad in ("   ", "123", "TOOLONG", "BR.K"):
         with pytest.raises(ValueError):
-            GetTickerCard(quotes).execute(bad)
+            GetTickerCard(quotes).run(bad)
     assert quotes.calls == []
 
 
 def test_unwired_enrichment_leaves_the_blocks_none():
     # No performance provider and no anchor repository (a bare use case): the card
     # still serves, its enrichment blocks simply absent even when requested.
-    card = GetTickerCard(_FakeQuotes()).execute(
+    card = GetTickerCard(_FakeQuotes()).run(
         "MU", include=["dividend", "performance"]
     )
 
@@ -675,7 +674,7 @@ def test_enrichment_failures_never_sink_the_card(error):
     card = GetTickerCard(
         _FakeQuotes(),
         _FakePerformance(error=error),
-    ).execute("MU", include=["dividend", "performance"])
+    ).run("MU", include=["dividend", "performance"])
 
     assert card.performance is None  # swallowed, not raised
     assert card.quote.symbol == "MU"  # the card still serves
@@ -690,7 +689,7 @@ def test_stored_facts_are_served_without_vendor_calls():
 
     card = GetTickerCard(
         _FakeQuotes(), stocks=stocks, repository=repo
-    ).execute("MU")
+    ).run("MU")
 
     assert card.name == "Micron Technology"  # served off the anchor
     assert card.exchange == "NASDAQ"
@@ -707,7 +706,7 @@ def test_exchange_miss_fetches_once_and_stores():
 
     card = GetTickerCard(
         _FakeQuotes(), stocks=stocks, repository=repo
-    ).execute("MU")
+    ).run("MU")
 
     assert card.name is None  # no stored name, and no profile fallback anymore
     assert card.exchange == "NASDAQ"
@@ -722,7 +721,7 @@ def test_exchange_fetch_failure_never_sinks_the_card():
 
     card = GetTickerCard(
         _FakeQuotes(), stocks=stocks, repository=repo
-    ).execute("MU")
+    ).run("MU")
 
     assert card.name is None  # no stored name
     assert card.exchange is None  # swallowed, not raised
@@ -735,7 +734,7 @@ def test_facts_unknown_at_the_vendors_are_not_stored():
 
     card = GetTickerCard(
         _FakeQuotes(), stocks=stocks, repository=repo
-    ).execute("MU")
+    ).run("MU")
 
     assert card.name is None  # no stored name on the row
     assert card.exchange is None  # the feed didn't know it either
@@ -746,7 +745,7 @@ def test_facts_unknown_at_the_vendors_are_not_stored():
 def test_facts_absent_without_wiring():
     # No repository (or vendors): the card still serves, the facts simply null — the
     # name too, now that it's anchor-only (no profile fallback).
-    card = GetTickerCard(_FakeQuotes()).execute("MU")
+    card = GetTickerCard(_FakeQuotes()).run("MU")
     assert card.name is None
     assert card.exchange is None
 
@@ -755,7 +754,7 @@ def test_quote_failure_propagates():
     # The quote is primary — the endpoint maps this to HTTP, nothing is swallowed.
     quotes = _FakeQuotes(error=StockDataUnavailable("MU", "alpaca down"))
     with pytest.raises(StockDataUnavailable):
-        GetTickerCard(quotes).execute("MU")
+        GetTickerCard(quotes).run("MU")
 
 
 # ──────────────────────── the trailing P/E (consensus TTM) ────────────────────────
@@ -768,7 +767,7 @@ def test_metrics_carries_the_trailing_pe_off_the_quarterly_ttm():
 
     card = GetTickerCard(
         _FakeQuotes(price=100.0), earnings=earnings
-    ).execute("MU", include=["metrics"])
+    ).run("MU", include=["metrics"])
 
     assert earnings.calls == ["MU"]
     assert card.valuation.ttm_eps == pytest.approx(9.0)
@@ -780,7 +779,7 @@ def test_unrequested_metrics_cost_no_earnings_call():
 
     card = GetTickerCard(
         _FakeQuotes(), earnings=earnings
-    ).execute("MU")
+    ).run("MU")
 
     assert earnings.calls == []  # pay-per-use, like the fundamentals read
     assert card.valuation is None
@@ -793,7 +792,7 @@ def test_too_few_cached_quarters_yield_a_null_trailing_pe():
 
     card = GetTickerCard(
         _FakeQuotes(), earnings=earnings
-    ).execute("MU", include=["metrics"])
+    ).run("MU", include=["metrics"])
 
     assert card.valuation.ttm_eps is None
     assert card.valuation.trailing_pe is None
@@ -810,14 +809,14 @@ def test_earnings_failure_never_sinks_the_card(error):
 
     card = GetTickerCard(
         _FakeQuotes(), earnings=earnings
-    ).execute("MU", include=["metrics"])
+    ).run("MU", include=["metrics"])
 
     assert card.valuation.trailing_pe is None
     assert card.quote.symbol == "MU"  # the card still serves
 
 
 def test_unwired_earnings_provider_leaves_the_trailing_pe_none():
-    card = GetTickerCard(_FakeQuotes()).execute(
+    card = GetTickerCard(_FakeQuotes()).run(
         "MU", include=["metrics"]
     )
     assert card.valuation.ttm_eps is None
@@ -832,7 +831,7 @@ def test_metrics_carries_the_fcf_multiples_off_the_anchor():
 
     card = GetTickerCard(
         _FakeQuotes(price=100.0), repository=repo
-    ).execute("MU", include=["metrics"])
+    ).run("MU", include=["metrics"])
 
     assert card.valuation.fcf_per_share == pytest.approx(4.0)
     assert card.valuation.ocf_per_share == pytest.approx(6.0)
@@ -854,7 +853,7 @@ def test_metrics_carries_enterprise_value_and_ev_ebitda_off_the_anchor():
 
     card = GetTickerCard(
         _FakeQuotes(price=100.0), repository=repo
-    ).execute("MU", include=["metrics"])
+    ).run("MU", include=["metrics"])
 
     assert card.valuation.enterprise_value == pytest.approx(115_000_000_000.0)
     assert card.valuation.ev_to_ebitda == pytest.approx(11.5)
@@ -871,7 +870,7 @@ def test_fcf_multiples_and_trailing_pe_ride_the_anchor_and_earnings():
         _FakeQuotes(price=100.0),
         repository=repo,
         earnings=earnings,
-    ).execute("MU", include=["metrics"])
+    ).run("MU", include=["metrics"])
 
     assert card.valuation.fcf_yield == pytest.approx(4.0)
     assert card.valuation.ocf_yield == pytest.approx(6.0)
@@ -886,7 +885,7 @@ def test_fcf_multiples_are_none_when_the_anchor_lacks_cash_figures():
 
     card = GetTickerCard(
         _FakeQuotes(price=100.0), earnings=earnings
-    ).execute("MU", include=["metrics"])
+    ).run("MU", include=["metrics"])
 
     assert card.valuation.fcf_per_share is None
     assert card.valuation.ocf_per_share is None
@@ -901,7 +900,7 @@ def _card_with_options(options: _FakeOptions, include=("options_metrics",)):
         _FakeQuotes(price=100.0),
         options=options,
         today=lambda: _TODAY,
-    ).execute("MU", include=list(include))
+    ).run("MU", include=list(include))
 
 
 def test_options_metrics_samples_the_month_and_quarter_expiries():
@@ -964,7 +963,7 @@ def test_options_failure_never_sinks_the_card():
 
 
 def test_unwired_options_provider_leaves_the_block_none():
-    card = GetTickerCard(_FakeQuotes()).execute(
+    card = GetTickerCard(_FakeQuotes()).run(
         "MU", include=["options_metrics"]
     )
     assert card.options_metrics is None

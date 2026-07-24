@@ -636,7 +636,7 @@ class GetFundamentalsAnalysis:
         if self._pe_history is None:
             return None
         try:
-            return self._pe_history.execute(symbol).stats
+            return self._pe_history.run(symbol).stats
         except (StockNotFound, StockDataUnavailable):
             return None
 
