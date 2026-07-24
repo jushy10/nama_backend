@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.domains.coverage.news import models
 from app.domains.coverage.news.entities import NewsArticle, StockNews
 from app.domains.coverage.news.models import StockNewsRecord
-from app.domains.coverage.news.interfaces import NewsRepositoryAdapter, RefreshTarget
+from app.domains.coverage.news.repository import NewsRepository, RefreshTarget
 
 # The feed is capped per stock so the higher-volume news history stays bounded (unlike
 # the recommendations cache, which accumulates a slow monthly series unpruned). A stock
@@ -37,7 +37,7 @@ def _to_news(symbol: str, rows: list[StockNewsRecord]) -> StockNews:
     return StockNews(symbol=symbol, articles=tuple(articles))
 
 
-class NewsRepositoryAdapterImpl(NewsRepositoryAdapter):
+class DbNewsRepository(NewsRepository):
     def __init__(self, session: Session, *, now=None) -> None:
         self._session = session
         # Injectable clock keeps the fetch stamp deterministic in tests.

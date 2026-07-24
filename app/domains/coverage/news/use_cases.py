@@ -7,22 +7,18 @@ from app.domains.shared.entities import normalize_symbol
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.coverage.news.entities import StockNews
 from app.domains.coverage.news.interfaces import NewsAdapter
-from app.domains.coverage.news.interfaces import NewsRepositoryAdapter
+from app.domains.coverage.news.repository import NewsRepository
 from app.domains.shared.progress import iter_with_progress
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_symbol(symbol: str) -> str:
-    return normalize_symbol(symbol)
 
 
 class GetStockNews:
     def __init__(self, provider: NewsAdapter) -> None:
         self._provider = provider
 
-    def execute(self, symbol: str) -> StockNews:
-        return self._provider.get_news(_normalize_symbol(symbol))
+    def run(self, symbol: str) -> StockNews:
+        return self._provider.get_news(normalize_symbol(symbol))
 
 
 @dataclass(frozen=True)
@@ -33,11 +29,11 @@ class NewsSyncReport:
 
 
 class SyncStockNews:
-    def __init__(self, provider: NewsAdapter, repository: NewsRepositoryAdapter) -> None:
+    def __init__(self, provider: NewsAdapter, repository: NewsRepository) -> None:
         self._provider = provider
         self._repository = repository
 
-    def execute(self, *, limit: int | None = None) -> NewsSyncReport:
+    def run(self, *, limit: int | None = None) -> NewsSyncReport:
         effective = None if limit is None else max(1, limit)
         refreshed = 0
         failed = 0

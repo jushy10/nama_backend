@@ -23,7 +23,7 @@ from app.endpoints.cron.background_sync import (
 from app.endpoints.cron.auth import require_cron_token
 from app.domains.markets.heatmap.use_cases import GetStockHeatMap
 from app.domains.markets.boards.use_cases import GetMarketOverview, GetSectorPerformance
-from app.domains.coverage.news.news_repository_adapter_impl import NewsRepositoryAdapterImpl
+from app.domains.coverage.news.db_repository import DbNewsRepository
 from app.domains.listings.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.endpoints.wiring import bedrock_recovery_model_id, get_provider
 
@@ -59,7 +59,7 @@ def run_market_brief_sync(limit: int | None) -> MarketBriefSyncReport:
             MarketBriefRepositoryAdapterImpl(db),
             # DB-only news reader (never a live fetch) — the daily news sync keeps it warm,
             # so the movers' catalyst headlines cost the generation no extra vendor call.
-            news=NewsRepositoryAdapterImpl(db),
+            news=DbNewsRepository(db),
         )
         brief = use_case.execute()
         report = MarketBriefSyncReport(

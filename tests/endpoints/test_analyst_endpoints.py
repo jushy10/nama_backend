@@ -4,8 +4,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.endpoints import analyst_endpoints as endpoints
+from app.endpoints.error_handlers import register_error_handlers
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.coverage.recommendations.entities import (
+    AnalystInfo,
     AnalystPriceTargets,
     AnalystRatingChanges,
     AnalystRecommendations,
@@ -13,7 +15,6 @@ from app.domains.coverage.recommendations.entities import (
     RatingChange,
     RecommendationTrend,
 )
-from app.domains.coverage.recommendations.use_cases import AnalystInfo
 
 
 class _FakeUseCase:
@@ -22,7 +23,7 @@ class _FakeUseCase:
         self._error = error
         self.calls: list[str] = []
 
-    def execute(self, symbol: str) -> AnalystInfo:
+    def run(self, symbol: str) -> AnalystInfo:
         self.calls.append(symbol)
         if self._error is not None:
             raise self._error
@@ -32,7 +33,9 @@ class _FakeUseCase:
 def _client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
-    app.dependency_overrides[endpoints.get_analyst_info_use_case] = lambda: fake
+    register_error_handlers(app)  # the endpoint has no try/except; the handlers translate
+    # Overriding the shim replaces the whole construction chain (db session included).
+    app.dependency_overrides[endpoints.get_get_stock_analyst_info] = lambda: fake
     return TestClient(app)
 
 

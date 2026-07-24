@@ -4,20 +4,8 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.adapters.yfinance.rating_change_adapter_impl import (
-    RatingChangeAdapterImpl,
-)
-from app.adapters.yfinance.recommendation_adapter_impl import (
-    RecommendationAdapterImpl,
-)
-from app.domains.coverage.recommendations.repository_adapter_impl import (
-    RatingChangesRepositoryAdapterImpl,
-    RecommendationsRepositoryAdapterImpl,
-)
-from app.domains.coverage.recommendations.use_cases import (
-    RecommendationsSyncReport,
-    SyncRecommendations,
-)
+from app.domains.coverage.recommendations import wiring
+from app.domains.coverage.recommendations.use_cases import RecommendationsSyncReport
 from app.endpoints.cron.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
@@ -36,12 +24,7 @@ _sync_lock = threading.Lock()
 def run_recommendations_sync(limit: int | None) -> RecommendationsSyncReport:
     db = SessionLocal()
     try:
-        report = SyncRecommendations(
-            RecommendationAdapterImpl(),
-            RecommendationsRepositoryAdapterImpl(db),
-            rating_change_provider=RatingChangeAdapterImpl(),
-            rating_change_repository=RatingChangesRepositoryAdapterImpl(db),
-        ).execute(limit=limit)
+        report = wiring.build_sync_recommendations(db).run(limit=limit)
         logger.info(
             "recommendations sync done: refreshed=%d rating_changes=%d failed=%d limit=%s",
             report.refreshed,

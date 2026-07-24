@@ -94,16 +94,16 @@ from app.endpoints.market_endpoints import (
 )
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.markets.boards.use_cases import GetMarketOverview, GetSectorPerformance
-from app.domains.coverage.news.news_repository_adapter_impl import NewsRepositoryAdapterImpl
+from app.domains.coverage.news.db_repository import DbNewsRepository
 from app.domains.shared.interfaces import (
     AllTimeHighAdapter,
     AnalystEstimatesAdapter,
     StockDataAdapter,
     StockPerformanceAdapter,
 )
-from app.domains.coverage.recommendations.repository_adapter_impl import (
-    RatingChangesRepositoryAdapterImpl,
-    RecommendationsRepositoryAdapterImpl,
+from app.domains.coverage.recommendations.db_repository import (
+    DbRatingChangesRepository,
+    DbRecommendationsRepository,
 )
 from app.domains.listings.universe.repository_adapter_impl import StockSearchRepositoryAdapterImpl
 from app.endpoints.wiring import (
@@ -206,7 +206,7 @@ def get_stock_analysis(
         analyzer,
         QuarterlyEarningsAdapterImpl(QuarterlyEarningsRepositoryAdapterImpl(db)),
         AnnualEarningsAdapterImpl(AnnualEarningsRepositoryAdapterImpl(db)),
-        RecommendationAdapterImpl(RecommendationsRepositoryAdapterImpl(db)),
+        RecommendationAdapterImpl(DbRecommendationsRepository(db)),
         StockSearchRepositoryAdapterImpl(db),
         cache=cache,
         cache_ttl=analysis_cache_ttl("stock"),
@@ -260,7 +260,7 @@ def get_sector_analysis(
         cache_ttl=analysis_cache_ttl("sector"),
         constituents=StockSearchRepositoryAdapterImpl(db),
         quotes=provider,  # the Alpaca singleton also implements BulkQuoteAdapter
-        news=NewsRepositoryAdapterImpl(db),
+        news=DbNewsRepository(db),
     )
 
 
@@ -377,8 +377,8 @@ def get_ratings_findings(
 ) -> GetRatingsFindings:
     return GetRatingsFindings(
         analyzer,
-        RecommendationAdapterImpl(RecommendationsRepositoryAdapterImpl(db)),
-        RatingChangeAdapterImpl(RatingChangesRepositoryAdapterImpl(db)),
+        RecommendationAdapterImpl(DbRecommendationsRepository(db)),
+        RatingChangeAdapterImpl(DbRatingChangesRepository(db)),
         cache=ratings_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("ratings"),
         quota=analysis_generation_quota(db),

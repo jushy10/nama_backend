@@ -14,9 +14,9 @@ from app.domains.coverage.recommendations.interfaces import (
     RatingChangeAdapter,
     RecommendationAdapter,
 )
-from app.domains.coverage.recommendations.interfaces import (
-    RatingChangesRepositoryAdapter,
-    RecommendationsRepositoryAdapter,
+from app.domains.coverage.recommendations.repository import (
+    RatingChangesRepository,
+    RecommendationsRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ class AnnualEarningsAdapterImpl(AnnualEarningsAdapter):
 
 
 class RecommendationAdapterImpl(RecommendationAdapter):
-    def __init__(self, repo: RecommendationsRepositoryAdapter) -> None:
+    def __init__(self, repo: RecommendationsRepository) -> None:
         self._repo = repo
 
     def get_recommendations(self, symbol: str) -> AnalystRecommendations:
@@ -66,7 +66,7 @@ class RecommendationAdapterImpl(RecommendationAdapter):
 
 
 class RatingChangeAdapterImpl(RatingChangeAdapter):
-    def __init__(self, repo: RatingChangesRepositoryAdapter) -> None:
+    def __init__(self, repo: RatingChangesRepository) -> None:
         self._repo = repo
 
     def get_rating_changes(self, symbol: str) -> AnalystRatingChanges:

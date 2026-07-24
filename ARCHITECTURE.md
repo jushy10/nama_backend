@@ -311,6 +311,10 @@ converge and it's updated, read these as superseded **for refactored/new slices*
   import entities" → the presenter lives **on the DTO** as a `from_<entity>(...)`
   classmethod in `api_schemas.py`, which imports entities read-only for that mapping.
 
-Converged so far: `research/agent` (the exemplar, fully); `research/rate_limit_quota`
+Converged so far: `research/agent` (the exemplar, fully); `coverage/news` and
+`coverage/recommendations` (fully — persistence pair, vendor-only `interfaces/`, `run`,
+`api_schemas.py` with `from_*` presenters, framework-free `wiring.py`, thin endpoints
+with central error translation; no slice `errors.py` — they raise only the shared-kernel
+errors, which stay in `app/domains/shared/exceptions.py`); `research/rate_limit_quota`
 partially — it has the persistence pair and the `models.py` helpers pattern, but its
 use case still exposes `execute` (checklist step 3 pending).

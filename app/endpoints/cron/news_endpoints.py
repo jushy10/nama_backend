@@ -4,15 +4,14 @@ import threading
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.db import SessionLocal
-from app.adapters.yfinance.news_adapter_impl import NewsAdapterImpl
 from app.endpoints.cron.background_sync import (
     SyncRunner,
     SyncTriggerResponse,
     trigger_sync,
 )
 from app.endpoints.cron.auth import require_cron_token
-from app.domains.coverage.news.news_repository_adapter_impl import NewsRepositoryAdapterImpl
-from app.domains.coverage.news.use_cases import NewsSyncReport, SyncStockNews
+from app.domains.coverage.news import wiring
+from app.domains.coverage.news.use_cases import NewsSyncReport
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["news-cron"])
@@ -25,9 +24,7 @@ _sync_lock = threading.Lock()
 def run_news_sync(limit: int | None) -> NewsSyncReport:
     db = SessionLocal()
     try:
-        report = SyncStockNews(
-            NewsAdapterImpl(), NewsRepositoryAdapterImpl(db)
-        ).execute(limit=limit)
+        report = wiring.build_sync_stock_news(db).run(limit=limit)
         logger.info(
             "news sync done: refreshed=%d failed=%d limit=%s",
             report.refreshed,

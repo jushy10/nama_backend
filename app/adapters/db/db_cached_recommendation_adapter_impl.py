@@ -2,7 +2,7 @@ import logging
 
 from app.domains.coverage.recommendations.entities import AnalystRecommendations
 from app.domains.coverage.recommendations.interfaces import RecommendationAdapter
-from app.domains.coverage.recommendations.interfaces import RecommendationsRepositoryAdapter
+from app.domains.coverage.recommendations.repository import RecommendationsRepository
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,7 @@ class RecommendationAdapterImpl(RecommendationAdapter):
     def __init__(
         self,
         inner: RecommendationAdapter,
-        repo: RecommendationsRepositoryAdapter,
+        repo: RecommendationsRepository,
     ) -> None:
         self._inner = inner
         self._repo = repo

@@ -8,17 +8,16 @@ from app.domains.shared.entities import normalize_symbol
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
 from app.domains.shared.progress import iter_with_progress
 from app.domains.coverage.recommendations.entities import (
+    AnalystInfo,
     AnalystRatingChanges,
-    AnalystRecommendations,
-    FirmRating,
 )
 from app.domains.coverage.recommendations.interfaces import (
     RatingChangeAdapter,
     RecommendationAdapter,
 )
-from app.domains.coverage.recommendations.interfaces import (
-    RatingChangesRepositoryAdapter,
-    RecommendationsRepositoryAdapter,
+from app.domains.coverage.recommendations.repository import (
+    RatingChangesRepository,
+    RecommendationsRepository,
     RefreshTarget,
 )
 
@@ -27,14 +26,6 @@ logger = logging.getLogger(__name__)
 
 def _normalize_symbol(symbol: str) -> str:
     return normalize_symbol(symbol)
-
-
-@dataclass(frozen=True)
-class AnalystInfo:
-    symbol: str
-    recommendations: AnalystRecommendations
-    rating_changes: AnalystRatingChanges
-    top_firms: tuple[FirmRating, ...] = ()
 
 
 class GetStockAnalystInfo:
@@ -49,7 +40,7 @@ class GetStockAnalystInfo:
         self._rating_changes = rating_changes
         self._now = now  # injectable clock for tests; None → real now per call
 
-    def execute(self, symbol: str) -> AnalystInfo:
+    def run(self, symbol: str) -> AnalystInfo:
         symbol = _normalize_symbol(symbol)
         # Trends are primary: their exceptions propagate to the endpoint's error mapping.
         recommendations = self._recommendations.get_recommendations(symbol)
@@ -84,17 +75,17 @@ class SyncRecommendations:
     def __init__(
         self,
         provider: RecommendationAdapter,
-        repository: RecommendationsRepositoryAdapter,
+        repository: RecommendationsRepository,
         *,
         rating_change_provider: RatingChangeAdapter | None = None,
-        rating_change_repository: RatingChangesRepositoryAdapter | None = None,
+        rating_change_repository: RatingChangesRepository | None = None,
     ) -> None:
         self._provider = provider
         self._repository = repository
         self._rating_change_provider = rating_change_provider
         self._rating_change_repository = rating_change_repository
 
-    def execute(self, *, limit: int | None = None) -> RecommendationsSyncReport:
+    def run(self, *, limit: int | None = None) -> RecommendationsSyncReport:
         effective = None if limit is None else max(1, limit)
         refreshed = 0
         failed = 0

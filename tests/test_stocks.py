@@ -118,7 +118,7 @@ from app.domains.coverage.recommendations.entities import (
 )
 from app.domains.coverage.recommendations.interfaces import RecommendationAdapter
 from app.domains.coverage.news.entities import NewsArticle, StockNews
-from app.domains.coverage.news.interfaces import NewsRepositoryAdapter
+from app.domains.coverage.news.repository import NewsRepository
 from app.domains.listings.universe.entities import (
     AnchorMetrics,
     IndustryValuation,
@@ -3355,7 +3355,7 @@ class _FakeBulkQuotes:
         return out
 
 
-class _FakeNewsRepo(NewsRepositoryAdapter):
+class _FakeNewsRepo(NewsRepository):
     def __init__(self, news_by_symbol=None):
         self._news = news_by_symbol or {}
         self.requested: list[str] = []
