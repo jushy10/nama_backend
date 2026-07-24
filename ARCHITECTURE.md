@@ -294,17 +294,18 @@ After each step: full `pytest` green before moving on.
 
 ---
 
-## Known divergences from `CLAUDE.md` (as of 2026-07-23)
+## Known divergences from `CLAUDE.md` (as of 2026-07-24)
 
-`CLAUDE.md` still documents the pre-refactor conventions in places. Until slices
-converge and it's updated, read these as superseded **for refactored/new slices**:
+`CLAUDE.md` still documents the pre-refactor conventions for slices that have not
+converged yet (each slice's convergence PR updates its `CLAUDE.md` section). Until
+then, read these as superseded **for refactored/new slices**:
 
 - "use cases expose a single `execute(...)`" → the method is **`run(...)`**.
 - "every abstraction is a plain-named `*Adapter` ABC … under `interfaces/`" → true
   only for **vendor** ports; persistence is the `repository.py`/`db_repository.py`
   pair, in-slice families are abstract-beside-concrete pairs.
-- "Persistence … `NewsRepositoryAdapter` / `NewsRepositoryAdapterImpl` in
-  `<x>_repository_adapter_impl.py`" → `<Concept>Repository` / `Db<Concept>Repository`
+- Persistence named `<X>RepositoryAdapter` / `<X>RepositoryAdapterImpl` in
+  `<x>_repository_adapter_impl.py` → `<Concept>Repository` / `Db<Concept>Repository`
   in `repository.py` / `db_repository.py`.
 - Slice DTO file `schemas.py` → `api_schemas.py`.
 - "Presenter — `_present_*` functions in the endpoint module" and "DTOs must not
@@ -329,6 +330,10 @@ once here so status entries never repeat them):
 - Slice wiring may reuse another slice's `build_*` factory (wiring may import wiring).
 - Support types a repository port needs (`RefreshTarget`, read models like
   `StoredTickerFacts`) live beside the port in `repository.py`.
+- Cron sweep runners in `app/endpoints/cron/` build their sync use case through the
+  slice's wiring; the runner function keeps its name (`app/sync` imports it by name).
+- Operational constants (retry backoff, vendor request pacing) live in the slice's
+  `wiring.py` — the composition root — not in the cron module or the use case.
 
 | Slice | Status |
 |---|---|
