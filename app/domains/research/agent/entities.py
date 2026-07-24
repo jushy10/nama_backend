@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 # Every research answer ships this disclaimer — authored by the service, never the model.
 RESEARCH_DISCLAIMER = (
@@ -13,6 +13,57 @@ class ToolSpec:
     name: str
     description: str
     input_schema: dict
+
+
+class ToolResult:
+    """Marker base for the model-facing tool payloads. What a tool run returns is
+    serialized verbatim as the tool_result the model reads — so each payload class
+    is the deliberate selection of what the model gets to see."""
+
+
+@dataclass(frozen=True)
+class ToolMessage(ToolResult):
+    """A structured non-answer — 'nothing matched', 'source unavailable' — so the
+    model can tell an empty result from a broken tool."""
+
+    message: str
+
+
+@dataclass(frozen=True)
+class VixReading:
+    value: float
+    change: float | None
+    regime: str
+    as_of: date
+
+
+@dataclass(frozen=True)
+class FearGreedReading:
+    score: float
+    label: str
+    cnn_rating: str
+
+
+@dataclass(frozen=True)
+class MarketSentimentResult(ToolResult):
+    vix: VixReading | None
+    fear_greed: FearGreedReading | None
+
+
+@dataclass(frozen=True)
+class StockScreenRow:
+    ticker: str
+    name: str | None
+    sector: str | None
+    market_cap: float | None
+    pe_ratio: float | None
+    revenue_growth_yoy: float | None
+
+
+@dataclass(frozen=True)
+class StockScreenResult(ToolResult):
+    total: int
+    results: tuple[StockScreenRow, ...]
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,12 @@
 import pytest
 
-from app.domains.research.agent.entities import AgentRecipe, ModelTurn, ToolCall, ToolSpec
+from app.domains.research.agent.entities import (
+    AgentRecipe,
+    ModelTurn,
+    ToolCall,
+    ToolMessage,
+    ToolSpec,
+)
 from app.domains.research.agent.errors import EmptyQuestion, MissingAgentRecipe
 from app.domains.research.agent.repository import AgentRecipeRepository
 from app.domains.research.agent.tool import Tool
@@ -55,11 +61,11 @@ class _FakeTool(Tool):
     def spec(self) -> ToolSpec:
         return ToolSpec(name=self._name, description="test tool", input_schema={"type": "object"})
 
-    def run(self, arguments: dict) -> str:
+    def run(self, arguments: dict) -> ToolMessage:
         self.calls.append(arguments)
         if self._raises is not None:
             raise self._raises
-        return self._output
+        return ToolMessage(self._output)
 
 
 def _call(name, arguments=None, call_id="c1"):
@@ -141,10 +147,11 @@ def test_runs_a_requested_tool_and_feeds_the_result_back():
     assert tool.calls == [{"x": 1}]
     assert len(result.steps) == 1
     step = result.steps[0]
+    # The payload reaches the transcript as JSON — serialized once, in the loop.
     assert (step.tool, step.arguments, step.output, step.is_error) == (
         "echo",
         {"x": 1},
-        "echoed-value",
+        '{"message": "echoed-value"}',
         False,
     )
     # The second model call sees the running transcript: user, assistant(tool_use), tool_results.
