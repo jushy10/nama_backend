@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 from app.domains.financials.earnings_calendar.entities import EarningsCalendar
-from app.domains.financials.earnings_calendar.interfaces import EarningsCalendarRepositoryAdapter
+from app.domains.financials.earnings_calendar.repository import EarningsCalendarRepository
 
 
 class GetEarningsCalendar:
@@ -18,13 +18,13 @@ class GetEarningsCalendar:
     MAX_ITEMS = 2000
 
     def __init__(
-        self, repository: EarningsCalendarRepositoryAdapter, *, today=None
+        self, repository: EarningsCalendarRepository, *, today=None
     ) -> None:
         self._repository = repository
         # Injectable clock keeps the default window deterministic in tests.
         self._today = today or (lambda: datetime.now(timezone.utc).date())
 
-    def execute(
+    def run(
         self, from_date: date | None = None, to_date: date | None = None
     ) -> EarningsCalendar:
         start = from_date or self._today()

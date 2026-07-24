@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.domains.financials.earnings.quarterly.entities import EarningsSession
 from app.domains.financials.earnings_calendar.entities import EarningsCalendarItem
-from app.domains.financials.earnings_calendar.interfaces import EarningsCalendarRepositoryAdapter
+from app.domains.financials.earnings_calendar.repository import EarningsCalendarRepository
 from app.domains.financials.earnings.quarterly.models import StockQuarterlyEarningsRecord
 from app.domains.listings.anchor.models import StockRecord
 
@@ -21,7 +21,7 @@ def _session_from_str(value: str | None) -> EarningsSession:
         return EarningsSession.UNKNOWN
 
 
-class EarningsCalendarRepositoryAdapterImpl(EarningsCalendarRepositoryAdapter):
+class DbEarningsCalendarRepository(EarningsCalendarRepository):
     def __init__(self, session: Session) -> None:
         self._session = session
 
