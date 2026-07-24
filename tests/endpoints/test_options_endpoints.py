@@ -5,9 +5,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.endpoints import options_endpoints as endpoints
+from app.endpoints.error_handlers import register_error_handlers
 from app.domains.shared.exceptions import StockDataUnavailable, StockNotFound
-from app.domains.pricing.options.entities import ExpiryChain, OptionContract, OptionType
-from app.domains.pricing.options.use_cases import OptionsFlow
+from app.domains.pricing.options import api_schemas
+from app.domains.pricing.options.entities import (
+    ExpiryChain,
+    OptionContract,
+    OptionType,
+    OptionsFlow,
+)
 
 _EXPIRY = date(2026, 7, 31)
 _FAR = date(2026, 9, 18)
@@ -19,7 +25,7 @@ class _FakeUseCase:
         self._error = error
         self.calls: list[tuple[str, date | None]] = []
 
-    def execute(self, symbol, expiration=None):
+    def run(self, symbol, expiration=None):
         self.calls.append((symbol, expiration))
         if self._error is not None:
             raise self._error
@@ -29,7 +35,8 @@ class _FakeUseCase:
 def _client(fake: _FakeUseCase) -> TestClient:
     app = FastAPI()
     app.include_router(endpoints.router)
-    app.dependency_overrides[endpoints.get_options_flow_use_case] = lambda: fake
+    register_error_handlers(app)  # the endpoint keeps only the ValueError → 400 inline
+    app.dependency_overrides[endpoints.get_get_options_flow] = lambda: fake
     return TestClient(app)
 
 
@@ -89,7 +96,7 @@ def test_unusual_list_is_capped():
     chain = ExpiryChain(expiration=_EXPIRY, spot=120.0, contracts=many)
     fake = _FakeUseCase(result=OptionsFlow(symbol="AAPL", expirations=(_EXPIRY,), chain=chain))
     body = _client(fake).get("/stocks/ticker/AAPL/options").json()
-    assert len(body["unusual"]) == endpoints._MAX_UNUSUAL
+    assert len(body["unusual"]) == api_schemas._MAX_UNUSUAL
     assert len(body["calls"]) == 40  # the full chain is not capped
 
 

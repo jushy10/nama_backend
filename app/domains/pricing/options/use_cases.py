@@ -1,23 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
 from app.domains.shared.entities import normalize_symbol
-from app.domains.pricing.options.entities import ExpiryChain
+from app.domains.pricing.options.entities import OptionsFlow
 from app.domains.pricing.options.interfaces import OptionsChainAdapter
-
-
-def _normalize_symbol(symbol: str) -> str:
-    return normalize_symbol(symbol)
-
-
-@dataclass(frozen=True)
-class OptionsFlow:
-    symbol: str
-    expirations: tuple[date, ...]
-    chain: ExpiryChain | None  # None only when the symbol lists no options
 
 
 class GetOptionsFlow:
@@ -31,8 +19,8 @@ class GetOptionsFlow:
         # pin it the way the yfinance adapters pin theirs.
         self._today = today or date.today
 
-    def execute(self, symbol: str, expiration: date | None = None) -> OptionsFlow:
-        normalized = _normalize_symbol(symbol)
+    def run(self, symbol: str, expiration: date | None = None) -> OptionsFlow:
+        normalized = normalize_symbol(symbol)
         expirations = self._options.get_expirations(normalized)  # primary; errors propagate
         if not expirations:
             return OptionsFlow(symbol=normalized, expirations=(), chain=None)

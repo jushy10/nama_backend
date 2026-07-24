@@ -142,7 +142,7 @@ def test_default_selects_nearest_upcoming_expiry():
     provider = _FakeProvider(
         expirations=(near, far), chains={near: _chain(near), far: _chain(far)}
     )
-    flow = GetOptionsFlow(provider, today=_today).execute("aapl")
+    flow = GetOptionsFlow(provider, today=_today).run("aapl")
     assert flow.symbol == "AAPL"  # normalized
     assert provider.chain_requests == [near]  # only the shown expiry is fetched
     assert flow.chain.expiration == near
@@ -154,7 +154,7 @@ def test_explicit_expiration_is_honored():
     provider = _FakeProvider(
         expirations=(near, far), chains={near: _chain(near), far: _chain(far)}
     )
-    flow = GetOptionsFlow(provider, today=_today).execute("AAPL", expiration=far)
+    flow = GetOptionsFlow(provider, today=_today).run("AAPL", expiration=far)
     assert provider.chain_requests == [far]
     assert flow.chain.expiration == far
 
@@ -163,12 +163,12 @@ def test_unknown_expiration_is_rejected():
     near = date(2026, 7, 31)
     provider = _FakeProvider(expirations=(near,), chains={near: _chain(near)})
     with pytest.raises(ValueError):
-        GetOptionsFlow(provider, today=_today).execute("AAPL", expiration=date(2026, 1, 1))
+        GetOptionsFlow(provider, today=_today).run("AAPL", expiration=date(2026, 1, 1))
 
 
 def test_no_listed_options_is_an_empty_flow_not_an_error():
     provider = _FakeProvider(expirations=())
-    flow = GetOptionsFlow(provider, today=_today).execute("ZZZZ")
+    flow = GetOptionsFlow(provider, today=_today).run("ZZZZ")
     assert flow.chain is None
     assert flow.expirations == ()
     assert provider.chain_requests == []  # nothing to fetch
@@ -177,17 +177,17 @@ def test_no_listed_options_is_an_empty_flow_not_an_error():
 def test_all_expiries_past_falls_back_to_the_latest():
     p1, p2 = date(2026, 6, 5), date(2026, 6, 19)  # both before _today()
     provider = _FakeProvider(expirations=(p1, p2), chains={p1: _chain(p1), p2: _chain(p2)})
-    flow = GetOptionsFlow(provider, today=_today).execute("AAPL")
+    flow = GetOptionsFlow(provider, today=_today).run("AAPL")
     assert provider.chain_requests == [p2]  # the latest, not a failure
 
 
 def test_bad_symbol_is_rejected():
     provider = _FakeProvider(expirations=())
     with pytest.raises(ValueError):
-        GetOptionsFlow(provider, today=_today).execute("123")
+        GetOptionsFlow(provider, today=_today).run("123")
 
 
 def test_vendor_failure_propagates():
     provider = _FakeProvider(error=StockDataUnavailable("AAPL", "blocked"))
     with pytest.raises(StockDataUnavailable):
-        GetOptionsFlow(provider, today=_today).execute("AAPL")
+        GetOptionsFlow(provider, today=_today).run("AAPL")

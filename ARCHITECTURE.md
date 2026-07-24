@@ -371,6 +371,18 @@ persistence pair is N/A, `interfaces/` was already vendor-only (`CandleAdapter` 
 `alpaca` / `yfinance` / `market_routing`), the pure-domain `indicators.py` /
 `chart_window.py` helpers stay beside the entities untouched, and no slice
 `errors.py` — it raises only `ValueError` and the shared-kernel errors);
+`pricing/options` (fully, for its applicable steps — `run`, the `OptionsFlow`
+composite result moved from `use_cases.py` into `entities.py` (the exemplar's
+`ResearchResult` placement, so `api_schemas.py` imports entities only),
+`api_schemas.py` with `from_*` presenters (which own the edge rounding, the
+IV percent rendering, and the `_MAX_UNUSUAL` highlight cap), framework-free
+`wiring.py` with the `@lru_cache`d keyless yfinance chain provider and
+`build_get_options_flow()`, and a thin endpoint (`get_get_options_flow` shim)
+with central error translation (the inline `ValueError` → 400 on a bad symbol /
+unlisted expiration stays, as does the 120s Cache-Control header); table-less
+and live-per-request, so the persistence pair is N/A, `interfaces/` was already
+vendor-only (`OptionsChainAdapter` ← `app/adapters/yfinance/`), and no slice
+`errors.py` — it raises only `ValueError` and the shared-kernel errors);
 `research/rate_limit_quota`
 partially — it has the persistence pair and the `models.py` helpers pattern, but its
 use case still exposes `execute` (checklist step 3 pending).
