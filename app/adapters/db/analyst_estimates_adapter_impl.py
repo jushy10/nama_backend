@@ -1,4 +1,4 @@
-from app.domains.financials.earnings.annual.interfaces import AnnualEarningsRepositoryAdapter
+from app.domains.financials.earnings.annual.repository import AnnualEarningsRepository
 from app.domains.shared.entities import AnalystEstimates
 from app.domains.shared.exceptions import StockDataUnavailable
 from app.domains.shared.interfaces import AnalystEstimatesAdapter
@@ -14,7 +14,7 @@ _EMPTY = AnalystEstimates(
 
 
 class AnalystEstimatesAdapterImpl(AnalystEstimatesAdapter):
-    def __init__(self, repository: AnnualEarningsRepositoryAdapter) -> None:
+    def __init__(self, repository: AnnualEarningsRepository) -> None:
         self._repository = repository
 
     def get_estimates(self, symbol: str) -> AnalystEstimates:

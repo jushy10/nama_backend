@@ -83,7 +83,9 @@ from app.domains.research.analysis.use_cases import (
     GetStockInfo,
 )
 from app.domains.pricing.ticker import wiring as ticker_wiring
-from app.domains.financials.earnings.annual.annual_earnings_repository_adapter_impl import AnnualEarningsRepositoryAdapterImpl
+from app.domains.financials.earnings.annual.db_repository import (
+    DbAnnualEarningsRepository,
+)
 from app.domains.financials.earnings.quarterly.db_repository import (
     DbQuarterlyEarningsRepository,
 )
@@ -204,7 +206,7 @@ def get_stock_analysis(
         stock_info,
         analyzer,
         QuarterlyEarningsAdapterImpl(DbQuarterlyEarningsRepository(db)),
-        AnnualEarningsAdapterImpl(AnnualEarningsRepositoryAdapterImpl(db)),
+        AnnualEarningsAdapterImpl(DbAnnualEarningsRepository(db)),
         RecommendationAdapterImpl(DbRecommendationsRepository(db)),
         StockSearchRepositoryAdapterImpl(db),
         cache=cache,
@@ -340,7 +342,7 @@ def get_earnings_analysis(
     return GetEarningsAnalysis(
         analyzer,
         QuarterlyEarningsAdapterImpl(DbQuarterlyEarningsRepository(db)),
-        AnnualEarningsAdapterImpl(AnnualEarningsRepositoryAdapterImpl(db)),
+        AnnualEarningsAdapterImpl(DbAnnualEarningsRepository(db)),
         cache=earnings_analysis_cache(db),
         cache_ttl=analysis_cache_ttl("earnings"),
         quota=analysis_generation_quota(db),

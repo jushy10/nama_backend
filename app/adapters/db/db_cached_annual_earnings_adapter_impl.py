@@ -2,7 +2,7 @@ import logging
 
 from app.domains.financials.earnings.annual.entities import AnnualEarningsTimeline
 from app.domains.financials.earnings.annual.interfaces import AnnualEarningsAdapter
-from app.domains.financials.earnings.annual.interfaces import AnnualEarningsRepositoryAdapter
+from app.domains.financials.earnings.annual.repository import AnnualEarningsRepository
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,7 @@ class AnnualEarningsAdapterImpl(AnnualEarningsAdapter):
     def __init__(
         self,
         inner: AnnualEarningsAdapter,
-        repo: AnnualEarningsRepositoryAdapter,
+        repo: AnnualEarningsRepository,
     ) -> None:
         self._inner = inner
         self._repo = repo

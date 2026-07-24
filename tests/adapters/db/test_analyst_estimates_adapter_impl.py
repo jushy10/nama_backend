@@ -9,7 +9,7 @@ from app.domains.financials.earnings.annual.entities import (
     AnnualEarnings,
     AnnualEarningsTimeline,
 )
-from app.domains.financials.earnings.annual.interfaces import AnnualEarningsRepositoryAdapter
+from app.domains.financials.earnings.annual.repository import AnnualEarningsRepository
 from app.domains.shared.exceptions import StockDataUnavailable
 
 
@@ -36,7 +36,7 @@ def _upcoming(year: int, eps: float | None, revenue: float | None) -> AnnualEarn
     )
 
 
-class FakeRepo(AnnualEarningsRepositoryAdapter):
+class FakeRepo(AnnualEarningsRepository):
     def __init__(self, timeline: AnnualEarningsTimeline | None = None, fail=False):
         self._timeline = timeline
         self._fail = fail

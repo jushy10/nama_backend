@@ -278,10 +278,17 @@ Naming: every adapter implementation lives in its vendor's folder as `<concern>_
 
 > **The annual-earnings sub-slice — `app/domains/financials/earnings/annual/`.** The yearly analogue of
 > the quarterly slice, built to mirror it: a fully self-contained slice with its **own
-> `entities.py`** (`AnnualEarnings` + `AnnualEarningsTimeline`), plus
-> `ports` / `repository` / `db_repository` / `models` / `use_cases` / `schemas` (both HTTP
-> endpoints live in `app/endpoints/`: the read `annual_earnings_endpoints.py` and the
-> `cron_annual_earnings_endpoints.py`, so the slice carries no HTTP code). It serves a stock's
+> `entities.py`** (`AnnualEarnings` + `AnnualEarningsTimeline`).
+> **Converged to the ARCHITECTURE.md canonical slice shape** (mirroring quarterly):
+> `repository.py` (`AnnualEarningsRepository` + `RefreshTarget`) / `db_repository.py`
+> (`DbAnnualEarningsRepository`) / `models` / `use_cases` (single public method **`run`**) /
+> `api_schemas.py` (DTOs with `from_*` presenter classmethods) / `wiring.py` (framework-free
+> `build_get_annual_earnings` / `build_annual_earnings_provider` / `build_sync_annual_earnings`),
+> with `interfaces/` holding only the vendor port (`AnnualEarningsAdapter`) (both HTTP
+> endpoints live in `app/endpoints/`: the read `annual_earnings_endpoints.py` — a thin
+> `get_<action>` Depends shim over the wiring, domain errors translated by the central
+> `error_handlers.py` — and the `cron/annual_earnings_endpoints.py`, so the slice carries no
+> HTTP code). It serves a stock's
 > 4 most-recent reported fiscal years (reported diluted EPS + revenue + **net income**, plus
 > `eps_actual_consensus` — the year's actual on the analyst-consensus/adjusted basis, summed
 > from its four quarterly "Reported EPS" announcements so a client can anchor a P/E walk on
@@ -311,7 +318,7 @@ Naming: every adapter implementation lives in its vendor's folder as `<concern>_
 > positive-prior guard as the trailing PEG). These are *trailing* (reported actuals, the backward-looking
 > cousin of `AnalystEstimates.forward_*_growth`). Served top-level on the read endpoint **and**
 > persisted as a moving snapshot on the shared `stocks` anchor — the single write point,
-> `AnnualEarningsRepositoryAdapterImpl.upsert`, overwrites the pair on every refresh (cron sync *and*
+> `DbAnnualEarningsRepository.upsert`, overwrites the pair on every refresh (cron sync *and*
 > lazy fill both funnel through it), so a stock carries just the current pair (dropping to
 > `null` if a degraded window leaves fewer than two reported years). One figure per stock, not
 > a per-year history — the anchor is one row per stock.

@@ -8,7 +8,7 @@ from app.domains.financials.earnings.annual.entities import (
     AnnualEarningsTimeline,
 )
 from app.domains.financials.earnings.annual.interfaces import AnnualEarningsAdapter
-from app.domains.financials.earnings.annual.interfaces import AnnualEarningsRepositoryAdapter
+from app.domains.financials.earnings.annual.repository import AnnualEarningsRepository
 from app.domains.shared.exceptions import StockDataUnavailable
 
 
@@ -33,7 +33,7 @@ def _empty(symbol: str) -> AnnualEarningsTimeline:
     return AnnualEarningsTimeline(symbol, ())
 
 
-class FakeRepo(AnnualEarningsRepositoryAdapter):
+class FakeRepo(AnnualEarningsRepository):
     def __init__(self) -> None:
         self.rows: dict[str, AnnualEarningsTimeline] = {}
         self.get_calls = 0
